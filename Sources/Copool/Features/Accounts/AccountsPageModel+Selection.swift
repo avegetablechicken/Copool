@@ -1,6 +1,29 @@
 import Foundation
 import SwiftUI
 
+private enum AccountsSmartSwitchTarget {
+    case local(AccountSummary)
+    case sub2API(Sub2APIAccountSummary, AccountSummary)
+
+    var account: AccountSummary {
+        switch self {
+        case .local(let account):
+            return account
+        case .sub2API(_, let account):
+            return account
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .local(let account):
+            return account.label
+        case .sub2API(let source, _):
+            return source.displayEmail
+        }
+    }
+}
+
 extension AccountsPageModel {
     func switchAccount(id: String) async {
         AccountSwitchDebugLog.write(
@@ -84,33 +107,30 @@ extension AccountsPageModel {
     func smartSwitch() async {
         do {
             let accountsBefore = try await coordinator.listAccounts()
+            let targets = smartSwitchTargets(localAccounts: accountsBefore)
             AccountSwitchDebugLog.write(
                 "accountsPage.smartSwitch.begin",
-                "before=\(AccountSwitchDebugLog.describe(accounts: accountsBefore))"
+                "before=\(AccountSwitchDebugLog.describe(accounts: targets.map(\.account)))"
             )
-            let sorted = AccountRanking.sortByRemaining(accountsBefore)
-            guard let best = sorted.first else {
+            guard let best = targets.max(by: {
+                AccountRanking.remainingScore(for: $0.account)
+                    < AccountRanking.remainingScore(for: $1.account)
+            }) else {
                 notice = NoticeMessage(style: .info, text: L10n.tr("accounts.notice.no_switch_target"))
                 return
             }
-            if best.isCurrent {
+            if best.account.isCurrent {
                 notice = NoticeMessage(style: .info, text: L10n.tr("accounts.notice.already_best"))
                 return
             }
 
-            let switchResult = try await coordinator.switchAccountAndReload(id: best.id)
-            let accounts = switchResult.accounts
-            let selectedAccount = switchResult.selectedAccount
-            AccountSwitchDebugLog.write(
-                "accountsPage.smartSwitch.loaded",
-                "selected=\(AccountSwitchDebugLog.describe(account: selectedAccount)) \(AccountSwitchDebugLog.describe(accounts: accounts))"
-            )
-            applyAccountsForAccountSwitch(accounts)
-            await refreshPendingWorkspaceAuthorizations(from: accounts, preferredSourceAccountID: selectedAccount.id)
-            publishLocalAccounts(accounts)
-            var switchNotice = buildSwitchNotice(execution: switchResult.execution)
-            switchNotice.text = L10n.tr("accounts.notice.smart_switched_prefix_format", selectedAccount.label, switchNotice.text)
-            notice = switchNotice
+            switch best {
+            case .local(let account):
+                await switchAccount(id: account.id)
+            case .sub2API(let account, _):
+                await switchSub2APIProvider(account: account)
+            }
+            prefixSmartSwitchNotice(targetLabel: best.label)
         } catch {
             AccountSwitchDebugLog.write(
                 "accountsPage.smartSwitch.error",
@@ -118,6 +138,48 @@ extension AccountsPageModel {
             )
             notice = NoticeMessage(style: .error, text: error.localizedDescription)
         }
+    }
+
+    private func smartSwitchTargets(localAccounts: [AccountSummary]) -> [AccountsSmartSwitchTarget] {
+        let isOpenAICurrent = currentCodexModelProviderID.caseInsensitiveCompare("openai") == .orderedSame
+        var targets = localAccounts.map { account in
+            var account = account
+            account.isCurrent = account.isCurrent && isOpenAICurrent
+            return AccountsSmartSwitchTarget.local(account)
+        }
+
+        guard codexModelProviderSwitchService != nil else {
+            return targets
+        }
+
+        let accountsByProvider = Dictionary(grouping: sub2APIAccounts) {
+            $0.providerID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        }
+        for accounts in accountsByProvider.values {
+            guard let bestSub2APIAccount = accounts.max(by: {
+                AccountRanking.remainingScore(for: $0.accountSummary)
+                    < AccountRanking.remainingScore(for: $1.accountSummary)
+            }),
+            let providerID = bestSub2APIAccount.providerID?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !providerID.isEmpty else {
+                continue
+            }
+            var providerAccount = bestSub2APIAccount.accountSummary
+            providerAccount.isCurrent = providerID.caseInsensitiveCompare(currentCodexModelProviderID) == .orderedSame
+            targets.append(.sub2API(bestSub2APIAccount, providerAccount))
+        }
+        return targets
+    }
+
+    private func prefixSmartSwitchNotice(targetLabel: String) {
+        guard var switchNotice = notice else { return }
+        if case .error = switchNotice.style { return }
+        switchNotice.text = L10n.tr(
+            "accounts.notice.smart_switched_prefix_format",
+            targetLabel,
+            switchNotice.text
+        )
+        notice = switchNotice
     }
 
     func toggleAllAccountsCollapsed() {

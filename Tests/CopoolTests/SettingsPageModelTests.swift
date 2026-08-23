@@ -712,6 +712,80 @@ final class SettingsPageModelTests: XCTestCase {
         XCTAssertEqual(model.sub2APIProviderDraft.providers.first?.cachedAccounts, [cachedAccount])
     }
 
+    func testSmartSwitchIncludesSub2APIProviderCandidate() async throws {
+        let providerSwitchService = SettingsStubCodexModelProviderSwitchService()
+        let localAccount = StoredAccount(
+            id: "local-account",
+            label: "local@example.com",
+            email: "local@example.com",
+            accountID: "chatgpt-account",
+            planType: "pro",
+            teamName: nil,
+            teamAlias: nil,
+            authJSON: .object([:]),
+            addedAt: 1,
+            updatedAt: 1,
+            usage: UsageSnapshot(
+                fetchedAt: 1,
+                planType: "pro",
+                fiveHour: UsageWindow(usedPercent: 90, windowSeconds: 18_000, resetAt: nil),
+                oneWeek: UsageWindow(usedPercent: 90, windowSeconds: 604_800, resetAt: nil),
+                credits: nil
+            ),
+            usageError: nil
+        )
+        let sub2APIAccount = Sub2APIAccountSummary(
+            id: 42,
+            name: "openai-2026",
+            email: "sub2api@example.com",
+            accountID: "sub2api-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: UsageSnapshot(
+                fetchedAt: 1,
+                planType: "pro",
+                fiveHour: UsageWindow(usedPercent: 10, windowSeconds: 18_000, resetAt: nil),
+                oneWeek: UsageWindow(usedPercent: 10, windowSeconds: 604_800, resetAt: nil),
+                credits: nil
+            ),
+            usageError: nil,
+            providerID: "ShareCoder"
+        )
+        let storeRepository = SettingsTestAccountsStoreRepository(
+            store: AccountsStore(accounts: [localAccount], currentAccountID: localAccount.id)
+        )
+        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let coordinator = AccountsCoordinator(
+            storeRepository: storeRepository,
+            settingsRepository: settingsRepository,
+            authRepository: SettingsTestAuthRepository(),
+            usageService: SettingsTestUsageService(),
+            chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+            codexCLIService: SettingsStubCodexCLIService(),
+            editorAppService: SettingsStubEditorAppService(),
+            opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+            dateProvider: SettingsFixedDateProvider(now: 1)
+        )
+        let model = AccountsPageModel(
+            coordinator: coordinator,
+            sub2APIAccountService: SettingsStubSub2APIAccountService(
+                accounts: [sub2APIAccount],
+                providerID: "openai",
+                configuredProvider: "ShareCoder"
+            ),
+            codexModelProviderSwitchService: providerSwitchService,
+            initialAccounts: try await coordinator.listAccounts(refreshWorkspaceMetadata: false),
+            initialSub2APIAccounts: [sub2APIAccount]
+        )
+
+        await model.smartSwitch()
+
+        XCTAssertEqual(providerSwitchService.switchedProviderIDs, ["ShareCoder"])
+        XCTAssertEqual(model.currentCodexModelProviderID, "ShareCoder")
+        XCTAssertTrue(try XCTUnwrap(model.makeSub2APIAccountCardViewStates().first).card.account.isCurrent)
+    }
+
 }
 
 private func makeSub2APISettings(
