@@ -90,9 +90,10 @@ extension AccountsPageModel {
             publishSub2APIAccounts()
             try? await persistSub2APIAccountCache()
             applyCodexModelProviderID(providerID)
-            notice = NoticeMessage(
-                style: .success,
-                text: L10n.tr("accounts.notice.provider_switched_format", providerID)
+            let execution = try await coordinator.applyModelProviderSwitchSettings()
+            notice = buildSwitchNotice(
+                execution: execution,
+                switchMessage: L10n.tr("accounts.notice.provider_switched_format", providerID)
             )
         } catch {
             notice = NoticeMessage(style: .error, text: error.localizedDescription)

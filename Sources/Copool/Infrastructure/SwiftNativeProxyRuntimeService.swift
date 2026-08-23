@@ -15,7 +15,10 @@ actor SwiftNativeProxyRuntimeService: ProxyRuntimeService {
     let authRepository: AuthRepository
     let onAccountsStoreChanged: (@Sendable () -> Void)?
     let switchAccount: (@Sendable (String) async throws -> Void)?
+    let switchModelProvider: (@Sendable (String) async throws -> Void)?
     let dateProvider: DateProviding
+    let environment: [String: String]
+    let providerEnvironmentFallback: @Sendable (String) -> String?
 
     private var server: SimpleHTTPServer?
     private var runningPort: Int?
@@ -23,7 +26,7 @@ actor SwiftNativeProxyRuntimeService: ProxyRuntimeService {
     private var activeAccountLabel: String?
     private var lastError: String?
     var cachedCandidates: [ProxyCandidate]?
-    var cachedCandidatesStoreModificationDate: Date?
+    var cachedCandidateSourceDates: ProxyCandidateSourceDates?
     var stickyAccountID: String?
     var cooldownUntilByAccountID: [String: Int64] = [:]
 
@@ -36,7 +39,12 @@ actor SwiftNativeProxyRuntimeService: ProxyRuntimeService {
         authRepository: AuthRepository,
         onAccountsStoreChanged: (@Sendable () -> Void)? = nil,
         switchAccount: (@Sendable (String) async throws -> Void)? = nil,
-        dateProvider: DateProviding = SystemDateProvider()
+        switchModelProvider: (@Sendable (String) async throws -> Void)? = nil,
+        dateProvider: DateProviding = SystemDateProvider(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        providerEnvironmentFallback: @escaping @Sendable (String) -> String? = {
+            LoginShellEnvironmentResolver.value(for: $0)
+        }
     ) {
         self.paths = paths
         self.storeRepository = storeRepository
@@ -44,7 +52,10 @@ actor SwiftNativeProxyRuntimeService: ProxyRuntimeService {
         self.authRepository = authRepository
         self.onAccountsStoreChanged = onAccountsStoreChanged
         self.switchAccount = switchAccount
+        self.switchModelProvider = switchModelProvider
         self.dateProvider = dateProvider
+        self.environment = environment
+        self.providerEnvironmentFallback = providerEnvironmentFallback
     }
 
     func status() async -> ApiProxyStatus {
@@ -614,20 +625,45 @@ actor SwiftNativeProxyRuntimeService: ProxyRuntimeService {
         activeAccountLabel = candidate.label
         stickyAccountID = candidate.accountID
         cooldownUntilByAccountID.removeValue(forKey: candidate.accountID)
-        guard storeBefore.accounts.contains(where: { $0.id == candidate.id }) else {
-            throw AppError.invalidData(L10n.tr("error.accounts.account_not_found_for_switch"))
+
+        var selectionSynced = false
+        if shouldSyncCurrentAuthOnSuccessfulProxyResponse() {
+            let currentProvider = CodexModelProviderResolver.resolve(configPath: paths.codexConfigPath)
+            switch candidate.route {
+            case .chatGPTOAuth:
+                guard let account = storeBefore.accounts.first(where: { $0.id == candidate.id }) else {
+                    throw AppError.invalidData(L10n.tr("error.accounts.account_not_found_for_switch"))
+                }
+                let needsSync = !currentProvider.isOfficialOpenAI
+                    || storeBefore.currentAccountID != candidate.id
+                    || authRepository.currentAuthAccountKey() != account.accountKey
+                if needsSync {
+                    guard let switchAccount else {
+                        throw AppError.invalidData("Proxy runtime is missing the account switch handler.")
+                    }
+                    try await switchAccount(candidate.id)
+                    onAccountsStoreChanged?()
+                    selectionSynced = true
+                }
+            case .modelProvider(let providerID, _):
+                if currentProvider.id.caseInsensitiveCompare(providerID) != .orderedSame {
+                    guard let switchModelProvider else {
+                        throw AppError.invalidData("Proxy runtime is missing the provider switch handler.")
+                    }
+                    try await switchModelProvider(providerID)
+                    selectionSynced = true
+                }
+            }
         }
-        guard let switchAccount else {
-            throw AppError.invalidData("Proxy runtime is missing the account switch handler.")
+
+        let storeAfter = selectionSynced ? try storeRepository.loadStore() : storeBefore
+        if selectionSynced {
+            cachedCandidateSourceDates = nil
         }
-        try await switchAccount(candidate.id)
-        let storeAfter = try storeRepository.loadStore()
-        cachedCandidatesStoreModificationDate = nil
-        onAccountsStoreChanged?()
         lastError = nil
         AccountSwitchDebugLog.write(
             "proxy.recordSuccessfulCandidate.end",
-            "candidateCardID=\(candidate.id) after=\(AccountSwitchDebugLog.describe(store: storeAfter, currentAuthAccountKey: authRepository.currentAuthAccountKey()))"
+            "candidateCardID=\(candidate.id) selectionSynced=\(selectionSynced) after=\(AccountSwitchDebugLog.describe(store: storeAfter, currentAuthAccountKey: authRepository.currentAuthAccountKey()))"
         )
     }
 

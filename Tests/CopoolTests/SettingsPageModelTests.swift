@@ -630,6 +630,7 @@ final class SettingsPageModelTests: XCTestCase {
 
     func testAccountsPageSwitchesToSub2APIAccountProvider() async throws {
         let providerSwitchService = SettingsStubCodexModelProviderSwitchService()
+        let opencodeSyncService = SettingsRecordingOpencodeAuthSyncService()
         var changedProviderID: String?
         let account = Sub2APIAccountSummary(
             id: 42,
@@ -643,7 +644,12 @@ final class SettingsPageModelTests: XCTestCase {
             usageError: nil,
             providerID: "ShareCoder"
         )
-        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        var providerSettings = AppSettings.defaultValue
+        providerSettings.launchCodexAfterSwitch = false
+        providerSettings.syncOpencodeOpenaiAuth = true
+        providerSettings.restartEditorsOnSwitch = true
+        providerSettings.restartEditorTargets = [.cursor]
+        let settingsRepository = TestSettingsRepository(settings: providerSettings)
         let model = AccountsPageModel(
             coordinator: AccountsCoordinator(
                 storeRepository: SettingsTestAccountsStoreRepository(),
@@ -653,7 +659,7 @@ final class SettingsPageModelTests: XCTestCase {
                 chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
                 codexCLIService: SettingsStubCodexCLIService(),
                 editorAppService: SettingsStubEditorAppService(),
-                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                opencodeAuthSyncService: opencodeSyncService,
                 dateProvider: SettingsFixedDateProvider(now: 1)
             ),
             sub2APIAccountService: SettingsStubSub2APIAccountService(
@@ -674,12 +680,16 @@ final class SettingsPageModelTests: XCTestCase {
         XCTAssertEqual(providerSwitchService.switchedProviderIDs, ["ShareCoder"])
         XCTAssertEqual(model.currentCodexModelProviderID, "ShareCoder")
         XCTAssertEqual(changedProviderID, "ShareCoder")
+        XCTAssertEqual(opencodeSyncService.callCount, 0)
         let card = try XCTUnwrap(model.makeSub2APIAccountCardViewStates().first?.card)
         XCTAssertTrue(card.account.isCurrent)
         XCTAssertEqual(card.presentation.teamNameTag, "SUB2API")
         XCTAssertEqual(
             model.notice?.text,
-            L10n.tr("accounts.notice.provider_switched_format", "ShareCoder")
+            [
+                L10n.tr("accounts.notice.provider_switched_format", "ShareCoder"),
+                L10n.tr("accounts.notice.editor_restarted_format", EditorAppID.cursor.rawValue),
+            ].joined(separator: " · ")
         )
         XCTAssertNil(model.switchingAccountID)
     }
@@ -1005,6 +1015,18 @@ private struct SettingsStubCodexCLIService: CodexCLIServiceProtocol {
 private struct SettingsStubOpencodeAuthSyncService: OpencodeAuthSyncServiceProtocol {
     func syncFromCodexAuth(_ authJSON: JSONValue) throws {
         _ = authJSON
+    }
+}
+
+private final class SettingsRecordingOpencodeAuthSyncService:
+    OpencodeAuthSyncServiceProtocol,
+    @unchecked Sendable
+{
+    private(set) var callCount = 0
+
+    func syncFromCodexAuth(_ authJSON: JSONValue) throws {
+        _ = authJSON
+        callCount += 1
     }
 }
 

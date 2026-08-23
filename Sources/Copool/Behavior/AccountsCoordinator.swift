@@ -179,6 +179,17 @@ actor AccountsCoordinator {
         return result
     }
 
+    func applyModelProviderSwitchSettings(
+        workspacePath: String? = nil
+    ) throws -> SwitchAccountExecutionResult {
+        let settings = try settingsRepository.loadSettings()
+        return try applySwitchSideEffects(
+            for: nil,
+            settings: settings,
+            workspacePath: workspacePath
+        )
+    }
+
     func applyCurrentSelection(
         cardID: String,
         selection: CurrentAccountSelection,
@@ -291,13 +302,13 @@ actor AccountsCoordinator {
     }
 
     private func applySwitchSideEffects(
-        for account: StoredAccount,
+        for account: StoredAccount?,
         settings: AppSettings,
         workspacePath: String?
     ) throws -> SwitchAccountExecutionResult {
         var result = SwitchAccountExecutionResult.idle
 
-        if settings.syncOpencodeOpenaiAuth {
+        if settings.syncOpencodeOpenaiAuth, let account {
             do {
                 try opencodeAuthSyncService.syncFromCodexAuth(account.authJSON)
                 result.opencodeSynced = true

@@ -88,6 +88,213 @@ final class SwiftNativeProxyRuntimeServiceTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.accountID), ["acct-earlier", "acct-later"])
     }
 
+    func testLoadCandidatesIncludesImportedSub2APIProviderUsingLoginShellFallback() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let configPath = tempDir.appendingPathComponent("config.toml")
+        try """
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://sub2.test/v1"
+        wire_api = "responses"
+        env_key = "MY_SUB2API_API_KEY"
+        requires_openai_auth = false
+        """.write(to: configPath, atomically: true, encoding: .utf8)
+
+        let importedAccount = Sub2APIAccountSummary(
+            id: 42,
+            name: "remote-account",
+            email: "remote@example.com",
+            accountID: "remote-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil,
+            providerID: "my"
+        )
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "admin@example.com",
+                    allowInsecureTLS: true,
+                    importedAccountIDs: [42],
+                    cachedAccounts: [importedAccount]
+                )
+            ]
+        )
+        let paths = FileSystemPaths(
+            applicationSupportDirectory: tempDir,
+            accountStorePath: tempDir.appendingPathComponent("accounts.json"),
+            settingsStorePath: tempDir.appendingPathComponent("settings.json"),
+            codexAuthPath: tempDir.appendingPathComponent("auth.json"),
+            codexConfigPath: configPath,
+            proxyDaemonDataDirectory: tempDir.appendingPathComponent("proxyd", isDirectory: true),
+            proxyDaemonKeyPath: tempDir.appendingPathComponent("proxyd/api-proxy.key"),
+            cloudflaredLogDirectory: tempDir.appendingPathComponent("cloudflared-logs", isDirectory: true)
+        )
+        let runtime = SwiftNativeProxyRuntimeService(
+            paths: paths,
+            storeRepository: InMemoryAccountsStoreRepository(store: AccountsStore()),
+            settingsRepository: MockSettingsRepository(settings: settings),
+            authRepository: MockAuthRepository(),
+            environment: [:],
+            providerEnvironmentFallback: { environmentKey in
+                environmentKey == "MY_SUB2API_API_KEY" ? "provider-api-key" : nil
+            }
+        )
+
+        let candidates = try await runtime.withIsolation { runtime in
+            try runtime.loadCandidates()
+        }
+
+        XCTAssertEqual(candidates.count, 1)
+        XCTAssertEqual(candidates[0].label, "my")
+        XCTAssertEqual(candidates[0].accessToken, "provider-api-key")
+        XCTAssertTrue(candidates[0].isPreferredCurrent)
+        XCTAssertTrue(candidates[0].allowInsecureTLS)
+        XCTAssertEqual(
+            candidates[0].route,
+            .modelProvider(providerID: "my", baseURL: "https://sub2.test/v1")
+        )
+    }
+
+    func testModelProviderCandidateUsesProviderResponsesEndpointWithoutChatGPTAccountHeader() async throws {
+        let runtime = makeRuntime(store: AccountsStore())
+        let candidate = ProxyCandidate(
+            id: "sub2api-provider:my",
+            label: "my",
+            accountID: "sub2api-provider:my",
+            accountKey: "sub2api-provider:my",
+            accessToken: "provider-api-key",
+            authJSON: .null,
+            addedAt: 42,
+            isPreferredCurrent: true,
+            oneWeekUsed: nil,
+            fiveHourUsed: nil,
+            route: .modelProvider(providerID: "my", baseURL: "https://sub2.test/v1")
+        )
+
+        let request = try await runtime.withIsolation { runtime in
+            try runtime.makeUpstreamRequest(
+                payload: ["model": "gpt-5.4", "input": []],
+                candidate: candidate,
+                downstreamHeaders: [:]
+            )
+        }
+
+        XCTAssertEqual(request.url?.absoluteString, "https://sub2.test/v1/responses")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer provider-api-key")
+        XCTAssertNil(request.value(forHTTPHeaderField: "ChatGPT-Account-Id"))
+    }
+
+    func testParsesCodexVersionOnlyFromRecognizedUserAgentProducts() {
+        XCTAssertEqual(
+            SwiftNativeProxyRuntimeService.parseCodexVersion(
+                fromUserAgent: "codex_exec/7.8.9 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
+            ),
+            "7.8.9"
+        )
+        XCTAssertEqual(
+            SwiftNativeProxyRuntimeService.parseCodexVersion(
+                fromUserAgent: "codex_cli_rs/6.7.8 (Mac OS 26.0.1; arm64)"
+            ),
+            "6.7.8"
+        )
+        XCTAssertNil(
+            SwiftNativeProxyRuntimeService.parseCodexVersion(
+                fromUserAgent: "openai-python/1.101.0 Python/3.13"
+            )
+        )
+        XCTAssertNil(
+            SwiftNativeProxyRuntimeService.parseCodexVersion(
+                fromUserAgent: "codex_exec/not-a-version"
+            )
+        )
+    }
+
+    func testUpstreamVersionPrefersExplicitHeaderThenCodexUserAgentThenFallback() async throws {
+        let runtime = makeRuntime(store: AccountsStore())
+        let candidate = ProxyCandidate(
+            id: "sub2api-provider:my",
+            label: "my",
+            accountID: "sub2api-provider:my",
+            accountKey: "sub2api-provider:my",
+            accessToken: "provider-api-key",
+            authJSON: .null,
+            addedAt: 42,
+            isPreferredCurrent: true,
+            oneWeekUsed: nil,
+            fiveHourUsed: nil,
+            route: .modelProvider(providerID: "my", baseURL: "https://sub2.test/v1")
+        )
+
+        let versions = try await runtime.withIsolation { runtime in
+            let explicit = try runtime.makeUpstreamRequest(
+                payload: ["model": "gpt-5.4", "input": []],
+                candidate: candidate,
+                downstreamHeaders: [
+                    "version": "9.9.9",
+                    "user-agent": "codex_exec/7.8.9 (Mac OS 26.0.1; arm64)",
+                ]
+            )
+            let inferred = try runtime.makeUpstreamRequest(
+                payload: ["model": "gpt-5.4", "input": []],
+                candidate: candidate,
+                downstreamHeaders: [
+                    "user-agent": "codex_exec/7.8.9 (Mac OS 26.0.1; arm64)",
+                ]
+            )
+            let fallback = try runtime.makeUpstreamRequest(
+                payload: ["model": "gpt-5.4", "input": []],
+                candidate: candidate,
+                downstreamHeaders: ["user-agent": "openai-python/1.101.0"]
+            )
+            return (
+                explicit.value(forHTTPHeaderField: "Version"),
+                inferred.value(forHTTPHeaderField: "Version"),
+                fallback.value(forHTTPHeaderField: "Version")
+            )
+        }
+
+        XCTAssertEqual(versions.0, "9.9.9")
+        XCTAssertEqual(versions.1, "7.8.9")
+        XCTAssertEqual(versions.2, SwiftNativeProxyRuntimeService.defaultCodexClientVersion)
+    }
+
+    func testRecordSuccessfulProviderCandidateUsesProviderSwitchHandler() async throws {
+        let recorder = ProviderSwitchRecorder()
+        let runtime = makeRuntime(
+            storeRepository: InMemoryAccountsStoreRepository(store: AccountsStore()),
+            switchModelProvider: { providerID in
+                recorder.record(providerID)
+            }
+        )
+        let candidate = ProxyCandidate(
+            id: "sub2api-provider:my",
+            label: "my",
+            accountID: "sub2api-provider:my",
+            accountKey: "sub2api-provider:my",
+            accessToken: "provider-api-key",
+            authJSON: .null,
+            addedAt: 42,
+            isPreferredCurrent: false,
+            oneWeekUsed: nil,
+            fiveHourUsed: nil,
+            route: .modelProvider(providerID: "my", baseURL: "https://sub2.test/v1")
+        )
+
+        try await runtime.recordSuccessfulCandidate(candidate)
+
+        XCTAssertEqual(recorder.providerIDs, ["my"])
+    }
+
     func testCurrentCandidatesPrefersStickyAccountAfterSuccessfulSelection() async throws {
         let runtime = makeRuntime(
             store: AccountsStore(
@@ -314,6 +521,141 @@ final class SwiftNativeProxyRuntimeServiceTests: XCTestCase {
                 localProxyHostAPIOnly: false
             )
         )
+    }
+
+    func testHostAPIOnlyRecordsActiveCandidateWithoutSwitchingSelection() async throws {
+        let account = makeStoredAccount(
+            id: "a",
+            label: "Account A",
+            accountID: "acct-a",
+            addedAt: 1
+        )
+        let repository = InMemoryAccountsStoreRepository(
+            store: AccountsStore(accounts: [account])
+        )
+        var settings = AppSettings.defaultValue
+        settings.localProxyHostAPIOnly = true
+        let switchRecorder = AccountSwitchRecorder()
+        let runtime = makeRuntime(
+            storeRepository: repository,
+            settingsRepository: MockSettingsRepository(settings: settings),
+            switchAccount: { cardID in
+                switchRecorder.record(cardID)
+            }
+        )
+        let candidate = ProxyCandidate(
+            id: account.id,
+            label: account.label,
+            accountID: account.accountID,
+            accountKey: account.accountKey,
+            accessToken: "token-acct-a",
+            authJSON: account.authJSON,
+            addedAt: account.addedAt,
+            isPreferredCurrent: false,
+            oneWeekUsed: nil,
+            fiveHourUsed: nil
+        )
+
+        try await runtime.recordSuccessfulCandidate(candidate)
+        let status = await runtime.status()
+
+        XCTAssertEqual(switchRecorder.cardIDs, [])
+        XCTAssertNil(repository.store.currentAccountID)
+        XCTAssertEqual(status.activeAccountID, "acct-a")
+        XCTAssertEqual(status.activeAccountLabel, "Account A")
+    }
+
+    func testRepeatedSuccessForCurrentAccountDoesNotResyncSelection() async throws {
+        let account = makeStoredAccount(
+            id: "a",
+            label: "Account A",
+            accountID: "acct-a",
+            addedAt: 1
+        )
+        let repository = InMemoryAccountsStoreRepository(
+            store: AccountsStore(accounts: [account], currentAccountID: account.id)
+        )
+        let authRepository = RecordingAuthRepository(currentAuth: account.authJSON)
+        let switchRecorder = AccountSwitchRecorder()
+        let runtime = makeRuntime(
+            storeRepository: repository,
+            authRepository: authRepository,
+            switchAccount: { cardID in
+                switchRecorder.record(cardID)
+            }
+        )
+        let candidate = ProxyCandidate(
+            id: account.id,
+            label: account.label,
+            accountID: account.accountID,
+            accountKey: account.accountKey,
+            accessToken: "token-acct-a",
+            authJSON: account.authJSON,
+            addedAt: account.addedAt,
+            isPreferredCurrent: true,
+            oneWeekUsed: nil,
+            fiveHourUsed: nil
+        )
+
+        try await runtime.recordSuccessfulCandidate(candidate)
+        try await runtime.recordSuccessfulCandidate(candidate)
+
+        XCTAssertEqual(switchRecorder.cardIDs, [])
+        XCTAssertEqual(authRepository.writeCurrentAuthCallCount, 0)
+    }
+
+    func testRepeatedSuccessForCurrentProviderDoesNotResyncProvider() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let configPath = tempDir.appendingPathComponent("config.toml")
+        try """
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://sub2.test/v1"
+        """.write(to: configPath, atomically: true, encoding: .utf8)
+
+        let providerRecorder = ProviderSwitchRecorder()
+        let runtime = SwiftNativeProxyRuntimeService(
+            paths: FileSystemPaths(
+                applicationSupportDirectory: tempDir,
+                accountStorePath: tempDir.appendingPathComponent("accounts.json"),
+                settingsStorePath: tempDir.appendingPathComponent("settings.json"),
+                codexAuthPath: tempDir.appendingPathComponent("auth.json"),
+                codexConfigPath: configPath,
+                proxyDaemonDataDirectory: tempDir.appendingPathComponent("proxyd", isDirectory: true),
+                proxyDaemonKeyPath: tempDir.appendingPathComponent("proxyd/api-proxy.key"),
+                cloudflaredLogDirectory: tempDir.appendingPathComponent("cloudflared-logs", isDirectory: true)
+            ),
+            storeRepository: InMemoryAccountsStoreRepository(store: AccountsStore()),
+            settingsRepository: MockSettingsRepository(),
+            authRepository: MockAuthRepository(),
+            switchModelProvider: { providerID in
+                providerRecorder.record(providerID)
+            },
+            environment: [:],
+            providerEnvironmentFallback: { _ in nil }
+        )
+        let candidate = ProxyCandidate(
+            id: "sub2api-provider:my",
+            label: "my",
+            accountID: "sub2api-provider:my",
+            accountKey: "sub2api-provider:my",
+            accessToken: "provider-api-key",
+            authJSON: .null,
+            addedAt: 42,
+            isPreferredCurrent: true,
+            oneWeekUsed: nil,
+            fiveHourUsed: nil,
+            route: .modelProvider(providerID: "my", baseURL: "https://sub2.test/v1")
+        )
+
+        try await runtime.recordSuccessfulCandidate(candidate)
+        try await runtime.recordSuccessfulCandidate(candidate)
+
+        XCTAssertEqual(providerRecorder.providerIDs, [])
     }
 
     func testResolvesUpstreamRouteFamilyByModel() {
@@ -1023,10 +1365,13 @@ final class SwiftNativeProxyRuntimeServiceTests: XCTestCase {
 
     private func makeRuntime(
         storeRepository: AccountsStoreRepository,
+        settingsRepository: SettingsRepository = MockSettingsRepository(),
         authRepository: AuthRepository = ExtractingAuthRepository(),
         onAccountsStoreChanged: (@Sendable () -> Void)? = nil,
         switchAccount: (@Sendable (String) async throws -> Void)? = nil,
-        dateProvider: DateProviding = SystemDateProvider()
+        switchModelProvider: (@Sendable (String) async throws -> Void)? = nil,
+        dateProvider: DateProviding = SystemDateProvider(),
+        environment: [String: String] = [:]
     ) -> SwiftNativeProxyRuntimeService {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let resolvedSwitchAccount = switchAccount ?? { cardID in
@@ -1056,11 +1401,13 @@ final class SwiftNativeProxyRuntimeServiceTests: XCTestCase {
                 cloudflaredLogDirectory: tempDir.appendingPathComponent("cloudflared-logs", isDirectory: true)
             ),
             storeRepository: storeRepository,
-            settingsRepository: MockSettingsRepository(),
+            settingsRepository: settingsRepository,
             authRepository: authRepository,
             onAccountsStoreChanged: onAccountsStoreChanged,
             switchAccount: resolvedSwitchAccount,
-            dateProvider: dateProvider
+            switchModelProvider: switchModelProvider,
+            dateProvider: dateProvider,
+            environment: environment
         )
     }
 
@@ -1144,12 +1491,48 @@ private final class CountingStoreRepository: AccountsStoreRepository, @unchecked
 }
 
 private final class MockSettingsRepository: SettingsRepository, @unchecked Sendable {
+    private var settings: AppSettings
+
+    init(settings: AppSettings = .defaultValue) {
+        self.settings = settings
+    }
+
     func loadSettings() throws -> AppSettings {
-        .defaultValue
+        settings
     }
 
     func saveSettings(_ settings: AppSettings) throws {
-        _ = settings
+        self.settings = settings
+    }
+}
+
+private final class ProviderSwitchRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedProviderIDs: [String] = []
+
+    var providerIDs: [String] {
+        lock.withLock { recordedProviderIDs }
+    }
+
+    func record(_ providerID: String) {
+        lock.withLock {
+            recordedProviderIDs.append(providerID)
+        }
+    }
+}
+
+private final class AccountSwitchRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedCardIDs: [String] = []
+
+    var cardIDs: [String] {
+        lock.withLock { recordedCardIDs }
+    }
+
+    func record(_ cardID: String) {
+        lock.withLock {
+            recordedCardIDs.append(cardID)
+        }
     }
 }
 
@@ -1197,15 +1580,20 @@ private final class CountingAuthRepository: AuthRepository, @unchecked Sendable 
 
 private final class RecordingAuthRepository: AuthRepository, @unchecked Sendable {
     private(set) var writeCurrentAuthCallCount = 0
+    private var currentAuth: JSONValue?
 
-    func readCurrentAuth() throws -> JSONValue { .null }
-    func readCurrentAuthOptional() throws -> JSONValue? { nil }
+    init(currentAuth: JSONValue? = nil) {
+        self.currentAuth = currentAuth
+    }
+
+    func readCurrentAuth() throws -> JSONValue { currentAuth ?? .null }
+    func readCurrentAuthOptional() throws -> JSONValue? { currentAuth }
     func readAuth(from url: URL) throws -> JSONValue {
         _ = url
         return .null
     }
     func writeCurrentAuth(_ auth: JSONValue) throws {
-        _ = auth
+        currentAuth = auth
         writeCurrentAuthCallCount += 1
     }
     func removeCurrentAuth() throws {}

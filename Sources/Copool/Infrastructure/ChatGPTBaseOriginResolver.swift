@@ -1,8 +1,72 @@
 import Foundation
 
+enum LoginShellEnvironmentResolver {
+    private static let valueStart = "\u{001E}COPOOL_ENV_VALUE\u{001E}"
+    private static let valueEnd = "\u{001F}COPOOL_ENV_VALUE\u{001F}"
+
+    static func value(for variableName: String) -> String? {
+        guard isValidEnvironmentVariableName(variableName) else { return nil }
+
+        let configuredShell = ProcessInfo.processInfo.environment["SHELL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let shellPath = configuredShell.flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        guard FileManager.default.isExecutableFile(atPath: shellPath) else { return nil }
+
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: shellPath)
+        process.arguments = [
+            "-lic",
+            "printf '\(valueStart)%s\(valueEnd)' \"${(P)1}\"",
+            "copool-provider-env",
+            variableName,
+        ]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+
+        let completed = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in completed.signal() }
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        guard completed.wait(timeout: .now() + 3) == .success else {
+            process.terminate()
+            return nil
+        }
+        guard process.terminationStatus == 0,
+              let data = try? output.fileHandleForReading.readToEnd(),
+              let text = String(data: data, encoding: .utf8),
+              let startRange = text.range(
+                  of: valueStart,
+                  options: String.CompareOptions.backwards
+              ),
+              let endRange = text.range(
+                  of: valueEnd,
+                  range: startRange.upperBound..<text.endIndex
+              ) else {
+            return nil
+        }
+
+        let value = String(text[startRange.upperBound..<endRange.lowerBound])
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    private static func isValidEnvironmentVariableName(_ value: String) -> Bool {
+        guard let first = value.first, first == "_" || first.isLetter else { return false }
+        return value.dropFirst().allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
+    }
+}
+
 struct CodexModelProviderDefinition: Equatable, Sendable {
     var id: String
     var baseURL: String?
+    var wireAPI: String? = nil
+    var envKey: String? = nil
+    var requiresOpenAIAuth: Bool? = nil
 
     var isOfficialOpenAI: Bool {
         id.caseInsensitiveCompare("openai") == .orderedSame
@@ -23,12 +87,7 @@ enum CodexModelProviderResolver {
             .flatMap { document.profileModelProviders[$0] }
             ?? document.defaultModelProvider
             ?? "openai"
-        return CodexModelProviderDefinition(
-            id: providerID,
-            baseURL: document.modelProviderBaseURLs.first {
-                $0.key.caseInsensitiveCompare(providerID) == .orderedSame
-            }?.value
-        )
+        return definition(for: providerID, document: document)
     }
 
     static func definitions(configPath: URL) -> [CodexModelProviderDefinition] {
@@ -36,9 +95,42 @@ enum CodexModelProviderResolver {
             return []
         }
         let document = CodexConfigDocument(raw: raw)
-        return document.modelProviderBaseURLs.map { providerID, baseURL in
-            CodexModelProviderDefinition(id: providerID, baseURL: baseURL)
+        let providerIDs = (
+            Array(document.modelProviderBaseURLs.keys)
+                + Array(document.modelProviderWireAPIs.keys)
+                + Array(document.modelProviderEnvKeys.keys)
+                + Array(document.modelProviderRequiresOpenAIAuth.keys)
+        ).reduce(into: [String]()) { result, providerID in
+            guard !result.contains(where: {
+                $0.caseInsensitiveCompare(providerID) == .orderedSame
+            }) else { return }
+            result.append(providerID)
         }
+        return providerIDs.map { providerID in
+            definition(for: providerID, document: document)
+        }
+    }
+
+    private static func definition(
+        for providerID: String,
+        document: CodexConfigDocument
+    ) -> CodexModelProviderDefinition {
+        CodexModelProviderDefinition(
+            id: providerID,
+            baseURL: value(for: providerID, in: document.modelProviderBaseURLs),
+            wireAPI: value(for: providerID, in: document.modelProviderWireAPIs),
+            envKey: value(for: providerID, in: document.modelProviderEnvKeys),
+            requiresOpenAIAuth: value(
+                for: providerID,
+                in: document.modelProviderRequiresOpenAIAuth
+            )
+        )
+    }
+
+    private static func value<T>(for providerID: String, in values: [String: T]) -> T? {
+        values.first {
+            $0.key.caseInsensitiveCompare(providerID) == .orderedSame
+        }?.value
     }
 
     static func providerID(matchingBaseURL rawURL: String, configPath: URL) -> String? {
@@ -132,6 +224,9 @@ private struct CodexConfigDocument {
     var activeProfile: String?
     var profileModelProviders: [String: String] = [:]
     var modelProviderBaseURLs: [String: String] = [:]
+    var modelProviderWireAPIs: [String: String] = [:]
+    var modelProviderEnvKeys: [String: String] = [:]
+    var modelProviderRequiresOpenAIAuth: [String: Bool] = [:]
 
     init(raw: String) {
         var section: [String] = []
@@ -159,9 +254,20 @@ private struct CodexConfigDocument {
                     profileModelProviders[path[1]] = assignment.value
                 }
             case let path where path.count == 2 && path[0] == "model_providers":
-                if assignment.key == "base_url" {
+                switch assignment.key {
+                case "base_url":
                     modelProviderBaseURLs[path[1]] = assignment.value
                         .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                case "wire_api":
+                    modelProviderWireAPIs[path[1]] = assignment.value
+                case "env_key":
+                    modelProviderEnvKeys[path[1]] = assignment.value
+                case "requires_openai_auth":
+                    if let value = Bool(assignment.value.lowercased()) {
+                        modelProviderRequiresOpenAIAuth[path[1]] = value
+                    }
+                default:
+                    break
                 }
             default:
                 continue

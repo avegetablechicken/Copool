@@ -10,6 +10,10 @@ final class AppContainer {
         var handler: (@Sendable () -> Void)?
     }
 
+    private final class CodexProviderChangeHandlerBox: @unchecked Sendable {
+        var handler: (@Sendable (String) -> Void)?
+    }
+
     let accountsModel: AccountsPageModel
     let settingsModel: SettingsPageModel
     let trayModel: TrayMenuModel
@@ -66,6 +70,7 @@ final class AppContainer {
             let opencodeSyncService = OpencodeAuthSyncService()
             let launchAtStartupService = LaunchAtStartupService()
             let accountsStoreChangeHandlerBox = AccountsStoreChangeHandlerBox()
+            let codexProviderChangeHandlerBox = CodexProviderChangeHandlerBox()
             let accountsCoordinator = AccountsCoordinator(
                 storeRepository: storeRepository,
                 settingsRepository: settingsRepository,
@@ -87,7 +92,13 @@ final class AppContainer {
                         accountsStoreChangeHandlerBox.handler?()
                     },
                     switchAccount: { cardID in
-                        _ = try await accountsCoordinator.switchAccountAndApplySettings(id: cardID)
+                        try codexModelProviderSwitchService.switchProvider(to: "openai")
+                        codexProviderChangeHandlerBox.handler?("openai")
+                        try await accountsCoordinator.switchAccount(id: cardID)
+                    },
+                    switchModelProvider: { providerID in
+                        try codexModelProviderSwitchService.switchProvider(to: providerID)
+                        codexProviderChangeHandlerBox.handler?(providerID)
                     }
                 ),
                 cloudflaredService: CloudflaredService(paths: paths),
@@ -204,6 +215,12 @@ final class AppContainer {
                     #endif
                 }
             )
+            codexProviderChangeHandlerBox.handler = { [weak accountsModel, weak settingsModel] providerID in
+                Task { @MainActor in
+                    accountsModel?.acceptExternalCodexModelProviderID(providerID)
+                    settingsModel?.acceptExternalCodexModelProviderID(providerID)
+                }
+            }
 
             let container = AppContainer(
                 settingsCoordinator: settingsCoordinator,

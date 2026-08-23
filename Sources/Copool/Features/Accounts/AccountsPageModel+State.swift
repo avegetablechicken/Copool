@@ -10,11 +10,19 @@ extension AccountsPageModel {
         return .content(accounts)
     }
 
-    func buildSwitchNotice(execution: SwitchAccountExecutionResult) -> NoticeMessage {
+    func buildSwitchNotice(
+        execution: SwitchAccountExecutionResult,
+        switchMessage: String? = nil
+    ) -> NoticeMessage {
         var style: NoticeStyle = .success
         var segments: [String] = []
 
-        if execution.usedFallbackCLI {
+        if let switchMessage {
+            segments.append(switchMessage)
+            if execution.usedFallbackCLI {
+                style = .info
+            }
+        } else if execution.usedFallbackCLI {
             style = .info
             segments.append(L10n.tr("accounts.notice.switch_done_fallback"))
         } else {

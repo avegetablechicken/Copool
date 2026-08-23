@@ -1534,16 +1534,16 @@ async fn forward_codex_request_with_candidate(
         .map(ToString::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let version = headers
-        .get("version")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(CODEX_CLIENT_VERSION);
     let user_agent = headers
         .get("user-agent")
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(CODEX_USER_AGENT);
+    let explicit_version = headers
+        .get("version")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    let version = resolve_codex_client_version(explicit_version, user_agent);
 
     let serialized =
         serde_json::to_vec(payload).map_err(|error| format!("序列化上游请求失败: {error}"))?;
@@ -1567,6 +1567,49 @@ async fn forward_codex_request_with_candidate(
         .send()
         .await
         .map_err(|error| format!("请求 Codex 上游失败 {upstream_url}: {error}"))
+}
+
+fn parse_codex_version_from_user_agent(user_agent: &str) -> Option<&str> {
+    const PREFIXES: [&str; 2] = ["codex_exec/", "codex_cli_rs/"];
+
+    user_agent.split_whitespace().find_map(|token| {
+        let prefix = PREFIXES.iter().find(|prefix| {
+            token
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        })?;
+        let version = token.get(prefix.len()..)?;
+        is_valid_codex_version(version).then_some(version)
+    })
+}
+
+fn resolve_codex_client_version<'a>(
+    explicit_version: Option<&'a str>,
+    user_agent: &'a str,
+) -> &'a str {
+    explicit_version
+        .filter(|value| !value.is_empty())
+        .or_else(|| parse_codex_version_from_user_agent(user_agent))
+        .unwrap_or(CODEX_CLIENT_VERSION)
+}
+
+fn is_valid_codex_version(value: &str) -> bool {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '+'))
+    {
+        return false;
+    }
+
+    let core_end = value
+        .find(|ch| ch == '-' || ch == '+')
+        .unwrap_or(value.len());
+    let components = value[..core_end].split('.').collect::<Vec<_>>();
+    components.len() >= 2
+        && components.iter().all(|component| {
+            !component.is_empty() && component.chars().all(|ch| ch.is_ascii_digit())
+        })
 }
 
 async fn load_proxy_candidates(
@@ -3092,22 +3135,61 @@ mod tests {
     use super::convert_openai_chat_request_to_codex;
     use super::extract_completed_response_from_sse;
     use super::map_client_model_to_upstream;
-    use super::MODELS;
-    use super::normalize_openai_responses_request;
     use super::normalize_model_for_client;
-    use super::ProxyCandidate;
+    use super::normalize_openai_responses_request;
+    use super::parse_codex_version_from_user_agent;
     use super::parse_proxy_request_body_limit_mib;
+    use super::resolve_codex_client_version;
     use super::resolve_proxy_request_body_limit_bytes_from_mib_value;
     use super::rewrite_response_models_for_client;
     use super::rewrite_sse_event_data_models_for_client;
     use super::translate_sse_event_to_chat_chunk;
     use super::usage_refresh_candidates_for_tick;
     use super::ChatStreamState;
+    use super::ProxyCandidate;
+    use super::SseEvent;
+    use super::CODEX_CLIENT_VERSION;
+    use super::DEFAULT_PROXY_REQUEST_BODY_LIMIT_BYTES;
+    use super::MODELS;
     use crate::models::UsageSnapshot;
     use crate::models::UsageWindow;
-    use super::SseEvent;
-    use super::DEFAULT_PROXY_REQUEST_BODY_LIMIT_BYTES;
     use serde_json::json;
+
+    #[test]
+    fn parses_codex_version_only_from_recognized_user_agent_products() {
+        assert_eq!(
+            parse_codex_version_from_user_agent(
+                "codex_exec/7.8.9 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
+            ),
+            Some("7.8.9")
+        );
+        assert_eq!(
+            parse_codex_version_from_user_agent("codex_cli_rs/6.7.8 (Linux; x86_64)"),
+            Some("6.7.8")
+        );
+        assert_eq!(
+            parse_codex_version_from_user_agent("openai-python/1.101.0 Python/3.13"),
+            None
+        );
+        assert_eq!(
+            parse_codex_version_from_user_agent("codex_exec/not-a-version"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolves_codex_version_from_explicit_header_then_user_agent_then_fallback() {
+        let user_agent = "codex_exec/7.8.9 (Mac OS 26.0.1; arm64)";
+        assert_eq!(
+            resolve_codex_client_version(Some("9.9.9"), user_agent),
+            "9.9.9"
+        );
+        assert_eq!(resolve_codex_client_version(None, user_agent), "7.8.9");
+        assert_eq!(
+            resolve_codex_client_version(None, "openai-python/1.101.0"),
+            CODEX_CLIENT_VERSION
+        );
+    }
 
     #[test]
     fn converts_chat_request_to_codex_payload() {

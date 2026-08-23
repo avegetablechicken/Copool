@@ -79,6 +79,24 @@ final class UsageServiceTests: XCTestCase {
         XCTAssertFalse(provider.isOfficialOpenAI)
     }
 
+    func testCodexModelProviderResolverReadsProxyRoutingMetadata() {
+        let provider = CodexModelProviderResolver.resolve(raw: """
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://sub2.test/v1"
+        wire_api = "responses"
+        env_key = "MY_SUB2API_API_KEY"
+        requires_openai_auth = false
+        """)
+
+        XCTAssertEqual(provider.id, "my")
+        XCTAssertEqual(provider.baseURL, "https://sub2.test/v1")
+        XCTAssertEqual(provider.wireAPI, "responses")
+        XCTAssertEqual(provider.envKey, "MY_SUB2API_API_KEY")
+        XCTAssertEqual(provider.requiresOpenAIAuth, false)
+    }
+
     func testCodexProviderResolverMatchesLegacyAdminURLForMigration() throws {
         let configPath = try makeCodexConfig("""
         model_provider = "my"

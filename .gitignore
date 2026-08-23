@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+Sources/Copool/Resources/proxyd-src/proxyd/target/
 build/
 dist/
 DerivedData/
