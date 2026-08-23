@@ -32,15 +32,15 @@
 "settings.usage_progress_display" = "Weergave van voortgangsbalk";
 "settings.usage_progress_display.used" = "Gebruikt";
 "settings.usage_progress_display.remaining" = "Resterend";
-"settings.section.sub2api" = "Niet-officiële Codex-provider";
+"settings.section.sub2api" = "Niet-officiële Provider";
 "settings.sub2api.enabled" = "Sub2api-limiet gebruiken";
 "settings.sub2api.default_provider" = "Huidige standaardprovider";
-"settings.sub2api.provider_id" = "Provider-ID";
-"settings.sub2api.provider_id_placeholder" = "my";
+"settings.sub2api.provider_id" = "Naam";
+"settings.sub2api.provider_id_placeholder" = "Moet overeenkomen met de Provider-naam in de Codex-config";
 "settings.sub2api.admin_base_url" = "Beheer-API-URL";
 "settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
 "settings.sub2api.username" = "Gebruikersnaam of e-mail";
-"settings.sub2api.username_placeholder" = "you@example.com";
+"settings.sub2api.username_placeholder" = "Sub2api-beheerdersaccount";
 "settings.sub2api.password" = "Wachtwoord";
 "settings.sub2api.password_placeholder" = "Beheerderswachtwoord";
 "settings.sub2api.allow_insecure_tls" = "Zelfondertekend TLS-certificaat toestaan";
@@ -77,6 +77,7 @@
 "settings.notice.remote_servers_saved" = "Configuratie van remote servers opgeslagen";
 "settings.notice.sub2api_saved" = "Sub2api-providerinstellingen opgeslagen";
 "error.sub2api.configuration_incomplete" = "Vul de ingeschakelde Sub2api-providerinstellingen volledig in.";
+"error.sub2api.duplicate_provider" = "Elke Sub2api-Providernaam kan maar één keer worden geconfigureerd.";
 "error.sub2api.invalid_base_url" = "De Sub2api-beheer-API-URL is ongeldig en kon niet uit de provider-URL worden afgeleid.";
 "error.sub2api.request_failed_format" = "Sub2api-aanvraag mislukt: %@";
 "error.sub2api.missing_token" = "De Sub2api-aanmeldreactie bevat geen beheerderstoken.";
@@ -99,6 +100,8 @@
 "error.sub2api.provider_not_confirmed" = "De huidige Codex-provider is nog niet bevestigd als Sub2api-provider.";
 "settings.sub2api.confirmed_providers" = "Bevestigde providers";
 "settings.sub2api.clear_confirmed_providers" = "Bevestigde providerkoppelingen wissen";
+"settings.sub2api.add_provider" = "Sub2api-Provider toevoegen";
+"settings.sub2api.remove_provider" = "Sub2api-Provider verwijderen";
 "error.sub2api.missing_accounts" = "De Sub2api-accountlijst bevat geen accountgegevens.";
 "error.sub2api.account_not_found" = "Het Sub2api-account is niet gevonden.";
 "accounts.action.importing" = "Importeren...";

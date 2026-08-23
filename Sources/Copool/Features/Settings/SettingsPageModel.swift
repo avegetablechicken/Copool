@@ -13,7 +13,7 @@ final class SettingsPageModel: ObservableObject {
 
     @Published var settings: AppSettings = .defaultValue
     @Published var installedEditorApps: [InstalledEditorApp] = []
-    @Published var sub2APIProviderDraft: Sub2APIProviderConfiguration = .defaultValue
+    @Published var sub2APIProviderDraft: Sub2APISettingsConfiguration = .defaultValue
     @Published var defaultCodexProviderID = "openai"
     @Published var isSavingSub2APIProvider = false
     @Published var notice: NoticeMessage? {

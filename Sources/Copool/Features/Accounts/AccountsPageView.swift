@@ -47,30 +47,6 @@ struct AccountsPageView: View {
         ) { result in
             handleImportAuthFile(result)
         }
-        .alert(
-            L10n.tr(
-                "accounts.sub2api.confirm_provider_title_format",
-                model.pendingSub2APIProviderConfirmation ?? ""
-            ),
-            isPresented: Binding(
-                get: { model.pendingSub2APIProviderConfirmation != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        model.cancelPendingSub2APIProviderConfirmation()
-                    }
-                }
-            ),
-            presenting: model.pendingSub2APIProviderConfirmation
-        ) { providerID in
-            Button("common.cancel", role: .cancel) {
-                model.cancelPendingSub2APIProviderConfirmation()
-            }
-            Button("accounts.sub2api.confirm_provider_action") {
-                Task { await model.confirmSub2APIProviderAndImport(providerID: providerID) }
-            }
-        } message: { providerID in
-            Text(L10n.tr("accounts.sub2api.confirm_provider_message_format", providerID))
-        }
         .onAppear {
             triggerInitialCardEntranceIfNeeded(for: contentAccountCount)
         }

@@ -98,10 +98,17 @@ final class AppContainer {
                 settingsRepository: settingsRepository,
                 launchAtStartupService: launchAtStartupService
             )
-            let initialSettings = try settingsRepository.loadSettings()
+            var initialSettings = try settingsRepository.loadSettings()
+            let migratedSub2APISettings = migrateSub2APISettings(
+                initialSettings.sub2APIProvider,
+                configPath: paths.codexConfigPath
+            )
+            if migratedSub2APISettings != initialSettings.sub2APIProvider {
+                initialSettings.sub2APIProvider = migratedSub2APISettings
+                try settingsRepository.saveSettings(initialSettings)
+            }
             let initialSub2APIAccounts = initialSub2APIAccountsSnapshot(
-                settings: initialSettings,
-                service: sub2APIAccountService
+                settings: initialSettings
             )
             var applySettingsToContainer: ((AppSettings) -> Void)?
             var applyCodexProviderToContainer: ((String) -> Void)?
@@ -164,6 +171,9 @@ final class AppContainer {
                 usageProgressDisplayMode: initialSettings.usageProgressDisplayMode,
                 onLocalAccountsChanged: { accounts in
                     trayModel.acceptLocalAccountsSnapshot(accounts)
+                },
+                onSub2APIAccountsChanged: { accounts in
+                    trayModel.acceptSub2APIAccountsSnapshot(accounts)
                 },
                 onSettingsUpdated: { settings in
                     applySettingsToContainer?(settings)
@@ -285,16 +295,37 @@ final class AppContainer {
     }
 
     private static func initialSub2APIAccountsSnapshot(
-        settings: AppSettings,
-        service: Sub2APIAccountServiceProtocol
+        settings: AppSettings
     ) -> [Sub2APIAccountSummary] {
-        let configuration = settings.sub2APIProvider.normalized()
-        let providerID = service.configuredProviderID()
-            ?? (configuration.associatedProviderIDs.count == 1
-                ? configuration.associatedProviderIDs[0]
-                : nil)
-        return configuration.cachedAccounts.map {
-            $0.settingProvider(providerID)
+        settings.sub2APIProvider.normalized().providers.flatMap { configuration in
+            configuration.cachedAccounts.map {
+                $0.settingProvider(configuration.providerID)
+            }
         }
+    }
+
+    static func migrateSub2APISettings(
+        _ settings: Sub2APISettingsConfiguration,
+        configPath: URL
+    ) -> Sub2APISettingsConfiguration {
+        var settings = settings.normalized()
+        settings.providers = settings.providers.map { rawConfiguration in
+            var configuration = rawConfiguration.normalized()
+            if !configuration.legacyAdminBaseURL.isEmpty,
+               let providerID = CodexModelProviderResolver.providerID(
+                   matchingBaseURL: configuration.legacyAdminBaseURL,
+                   configPath: configPath
+               ) {
+                configuration.providerID = providerID
+            }
+            if !configuration.providerID.isEmpty {
+                configuration.legacyAdminBaseURL = ""
+                configuration.cachedAccounts = configuration.cachedAccounts.map {
+                    $0.settingProvider(configuration.providerID)
+                }
+            }
+            return configuration
+        }
+        return settings.normalized()
     }
 }

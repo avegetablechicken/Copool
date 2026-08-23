@@ -20,9 +20,9 @@ private struct MacSettingsPageContent: View {
         VStack(spacing: 0) {
             Form {
                 SettingsGeneralSection(model: model)
-                SettingsSub2APISection(model: model)
                 SettingsLanguageSection(model: model)
                 SettingsSwitchBehaviorSection(model: model)
+                SettingsSub2APISection(model: model)
             }
             .formStyle(.grouped)
             .scrollIndicators(.hidden)
@@ -39,71 +39,95 @@ private struct SettingsSub2APISection: View {
     @ObservedObject var model: SettingsPageModel
 
     var body: some View {
-        Section("settings.section.sub2api") {
-            LabeledContent("settings.sub2api.default_provider") {
-                Text(model.defaultCodexProviderID)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+        Group {
+            Section("settings.section.sub2api") {
+                HStack(spacing: 10) {
+                    Image(systemName: "server.rack")
+                        .foregroundStyle(.tint)
+                    Text("Sub2api")
+                        .font(.headline)
+                    Spacer(minLength: 0)
+                    Text(String(model.sub2APIProviderDraft.providers.count))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            LabeledContent("settings.sub2api.confirmed_providers") {
-                HStack(spacing: 8) {
-                    Text(confirmedProvidersText)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                    Button(action: model.clearSub2APIProviderAssociations) {
-                        Image(systemName: "link.badge.minus")
+            ForEach($model.sub2APIProviderDraft.providers) { $configuration in
+                Section {
+                    TextField(
+                        "settings.sub2api.provider_id",
+                        text: $configuration.providerID,
+                        prompt: Text("settings.sub2api.provider_id_placeholder")
+                    )
+                    .textFieldStyle(.roundedBorder)
+
+                    TextField(
+                        "settings.sub2api.username",
+                        text: $configuration.username,
+                        prompt: Text("settings.sub2api.username_placeholder")
+                    )
+                    .textContentType(.username)
+                    .textFieldStyle(.roundedBorder)
+
+                    SecureField(
+                        "settings.sub2api.password",
+                        text: $configuration.password
+                    )
+                    .textContentType(.password)
+                    .textFieldStyle(.roundedBorder)
+
+                    Toggle(
+                        "settings.sub2api.allow_insecure_tls",
+                        isOn: $configuration.allowInsecureTLS
+                    )
+                    .toggleStyle(.switch)
+                } header: {
+                    HStack(spacing: 8) {
+                        Rectangle()
+                            .fill(Color.accentColor)
+                            .frame(width: 3, height: 18)
+                        Image(systemName: "server.rack")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(configurationTitle(configuration.providerID))
+                        Spacer(minLength: 0)
+                        Button(role: .destructive) {
+                            model.removeSub2APIProviderConfiguration(id: configuration.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.tr("settings.sub2api.remove_provider"))
+                    }
+                    .padding(.leading, 12)
+                }
+            }
+
+            Section {
+                HStack {
+                    Button(action: model.addSub2APIProviderConfiguration) {
+                        Image(systemName: "plus")
                     }
                     .buttonStyle(.plain)
-                    .disabled(model.sub2APIProviderDraft.associatedProviderIDs.isEmpty)
-                    .help(L10n.tr("settings.sub2api.clear_confirmed_providers"))
+                    .help(L10n.tr("settings.sub2api.add_provider"))
+
+                    Spacer(minLength: 0)
+                    Button(action: model.saveSub2APIProvider) {
+                        Label("common.save", systemImage: "square.and.arrow.down")
+                    }
+                    .copoolActionButtonStyle(prominent: true)
+                    .disabled(model.isSavingSub2APIProvider)
                 }
-            }
-
-            TextField(
-                "settings.sub2api.admin_base_url",
-                text: $model.sub2APIProviderDraft.adminBaseURL,
-                prompt: Text("settings.sub2api.admin_base_url_placeholder")
-            )
-            .textFieldStyle(.roundedBorder)
-
-            TextField(
-                "settings.sub2api.username",
-                text: $model.sub2APIProviderDraft.username,
-                prompt: Text("settings.sub2api.username_placeholder")
-            )
-            .textContentType(.username)
-            .textFieldStyle(.roundedBorder)
-
-            SecureField(
-                "settings.sub2api.password",
-                text: $model.sub2APIProviderDraft.password,
-                prompt: Text("settings.sub2api.password_placeholder")
-            )
-            .textContentType(.password)
-            .textFieldStyle(.roundedBorder)
-
-            Toggle(
-                "settings.sub2api.allow_insecure_tls",
-                isOn: $model.sub2APIProviderDraft.allowInsecureTLS
-            )
-            .toggleStyle(.switch)
-
-            HStack {
-                Spacer(minLength: 0)
-                Button(action: model.saveSub2APIProvider) {
-                    Label("common.save", systemImage: "square.and.arrow.down")
-                }
-                .copoolActionButtonStyle(prominent: true)
-                .disabled(model.isSavingSub2APIProvider)
             }
         }
     }
 
-    private var confirmedProvidersText: String {
-        let providerIDs = model.sub2APIProviderDraft.associatedProviderIDs
-        return providerIDs.isEmpty ? L10n.tr("common.none") : providerIDs.joined(separator: ", ")
+    private func configurationTitle(_ providerID: String) -> String {
+        let providerID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return providerID.isEmpty ? "Sub2api" : providerID
     }
+
 }
 
 private struct SettingsGeneralSection: View {

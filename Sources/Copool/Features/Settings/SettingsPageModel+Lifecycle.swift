@@ -4,7 +4,19 @@ import Foundation
 extension SettingsPageModel {
     func acceptExternalSettings(_ settings: AppSettings) {
         self.settings = settings
-        sub2APIProviderDraft = settings.sub2APIProvider
+        guard hasLoaded else {
+            sub2APIProviderDraft = settings.sub2APIProvider
+            return
+        }
+
+        let incoming = settings.sub2APIProvider.normalized()
+        var draft = sub2APIProviderDraft
+        for index in draft.providers.indices {
+            guard let saved = incoming.provider(for: draft.providers[index].providerID) else { continue }
+            draft.providers[index].importedAccountIDs = saved.importedAccountIDs
+            draft.providers[index].cachedAccounts = saved.cachedAccounts
+        }
+        sub2APIProviderDraft = draft
     }
 
     func acceptExternalCodexModelProviderID(_ providerID: String) {

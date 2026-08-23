@@ -408,7 +408,8 @@ struct Sub2APIAccountSummary: Codable, Equatable, Identifiable, Sendable {
     var providerID: String? = nil
 
     var cardID: String {
-        "sub2api-\(id)"
+        let provider = providerID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
+        return "sub2api-\(provider)-\(id)"
     }
 
     var displayEmail: String {

@@ -32,15 +32,15 @@
 "settings.usage_progress_display" = "Visualizzazione barra di avanzamento";
 "settings.usage_progress_display.used" = "Usato";
 "settings.usage_progress_display.remaining" = "Rimanente";
-"settings.section.sub2api" = "Provider Codex non ufficiale";
+"settings.section.sub2api" = "Provider non ufficiale";
 "settings.sub2api.enabled" = "Usa quota Sub2api";
 "settings.sub2api.default_provider" = "Provider predefinito attuale";
-"settings.sub2api.provider_id" = "ID provider";
-"settings.sub2api.provider_id_placeholder" = "my";
+"settings.sub2api.provider_id" = "Nome";
+"settings.sub2api.provider_id_placeholder" = "Deve corrispondere al nome Provider nella config Codex";
 "settings.sub2api.admin_base_url" = "URL API amministratore";
 "settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
 "settings.sub2api.username" = "Nome utente o email";
-"settings.sub2api.username_placeholder" = "you@example.com";
+"settings.sub2api.username_placeholder" = "Account amministratore Sub2api";
 "settings.sub2api.password" = "Password";
 "settings.sub2api.password_placeholder" = "Password amministratore";
 "settings.sub2api.allow_insecure_tls" = "Consenti certificato TLS autofirmato";
@@ -77,6 +77,7 @@
 "settings.notice.remote_servers_saved" = "Configurazione server remoti salvata";
 "settings.notice.sub2api_saved" = "Impostazioni provider Sub2api salvate";
 "error.sub2api.configuration_incomplete" = "Completa le impostazioni abilitate del provider Sub2api.";
+"error.sub2api.duplicate_provider" = "Ogni nome Provider Sub2api può essere configurato una sola volta.";
 "error.sub2api.invalid_base_url" = "L’URL API amministratore di Sub2api non è valido e non è stato possibile ricavarlo dall’URL del provider.";
 "error.sub2api.request_failed_format" = "Richiesta Sub2api non riuscita: %@";
 "error.sub2api.missing_token" = "La risposta di accesso Sub2api non include un token amministratore.";
@@ -99,6 +100,8 @@
 "error.sub2api.provider_not_confirmed" = "Il provider Codex corrente non è stato confermato come provider Sub2api.";
 "settings.sub2api.confirmed_providers" = "Provider confermati";
 "settings.sub2api.clear_confirmed_providers" = "Cancella associazioni provider confermate";
+"settings.sub2api.add_provider" = "Aggiungi Provider Sub2api";
+"settings.sub2api.remove_provider" = "Rimuovi Provider Sub2api";
 "error.sub2api.missing_accounts" = "La risposta dell’elenco Sub2api non include dati account.";
 "error.sub2api.account_not_found" = "Account Sub2api non trovato.";
 "accounts.action.importing" = "Importazione...";

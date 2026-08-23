@@ -193,11 +193,11 @@ private struct AccountsIOSContentHost: View {
                     onSwitchSub2APIProvider: { account in
                         Task { await model.switchSub2APIProvider(account: account) }
                     },
-                    onRefreshSub2APIAccount: { id in
-                        Task { await model.refreshSub2APIAccount(id: id) }
+                    onRefreshSub2APIAccount: { account in
+                        Task { await model.refreshSub2APIAccount(account) }
                     },
-                    onRemoveSub2APIAccount: { id in
-                        Task { await model.removeSub2APIAccount(id: id) }
+                    onRemoveSub2APIAccount: { account in
+                        Task { await model.removeSub2APIAccount(account) }
                     }
                 )
             }
@@ -243,11 +243,11 @@ private struct AccountsMacContentHost: View {
                     onSwitchSub2APIProvider: { account in
                         Task { await model.switchSub2APIProvider(account: account) }
                     },
-                    onRefreshSub2APIAccount: { id in
-                        Task { await model.refreshSub2APIAccount(id: id) }
+                    onRefreshSub2APIAccount: { account in
+                        Task { await model.refreshSub2APIAccount(account) }
                     },
-                    onRemoveSub2APIAccount: { id in
-                        Task { await model.removeSub2APIAccount(id: id) }
+                    onRemoveSub2APIAccount: { account in
+                        Task { await model.removeSub2APIAccount(account) }
                     }
                 )
             }

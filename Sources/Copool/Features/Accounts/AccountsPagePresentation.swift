@@ -154,7 +154,7 @@ extension AccountsPageModel {
             summary.isCurrent = providerID.caseInsensitiveCompare(currentCodexModelProviderID) == .orderedSame
         }
         let isCollapsed = isAccountCollapsed(account.cardID)
-        let isRefreshing = refreshingSub2APIAccountIDs.contains(account.id)
+        let isRefreshing = refreshingSub2APIAccountIDs.contains(account.cardID)
         let card = AccountCardViewState(
             account: summary,
             presentation: AccountCardPresentation(

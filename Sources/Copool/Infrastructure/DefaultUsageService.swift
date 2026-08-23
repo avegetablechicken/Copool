@@ -285,50 +285,43 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
     }
 
     func configuredProviderID() -> String? {
-        guard let configuration = try? settingsRepository.loadSettings().sub2APIProvider.normalized() else {
+        guard let settings = try? settingsRepository.loadSettings().sub2APIProvider.normalized() else {
             return nil
         }
-        let adminBaseURL = configuration.adminBaseURL
-        guard let adminOrigin = Self.originKey(adminBaseURL) else {
-            return currentDefaultProviderID()
-        }
-
-        let matches = CodexModelProviderResolver.definitions(configPath: configPath).filter {
-            guard let baseURL = $0.baseURL else { return false }
-            return Self.originKey(baseURL) == adminOrigin
-        }
-        if matches.count == 1 {
-            return matches[0].id
-        }
         let currentProviderID = currentDefaultProviderID()
-        return matches.first {
-            $0.id.caseInsensitiveCompare(currentProviderID) == .orderedSame
-        }?.id
+        return settings.provider(for: currentProviderID)?.providerID
+            ?? (settings.providers.count == 1 ? settings.providers[0].providerID : nil)
     }
 
     func isConnectionConfigured() -> Bool {
-        guard let configuration = try? settingsRepository.loadSettings().sub2APIProvider.normalized() else {
+        guard let settings = try? settingsRepository.loadSettings().sub2APIProvider.normalized(),
+              let configuration = settings.provider(for: currentDefaultProviderID()) else {
             return false
         }
-        return configuration.isEnabled && configuration.isComplete
+        return configuration.isEnabled
     }
 
-    func isCurrentDefaultProviderConfirmed() -> Bool {
-        guard let configuration = try? settingsRepository.loadSettings().sub2APIProvider.normalized() else {
+    func canQueryCurrentDefaultProvider() -> Bool {
+        guard let settings = try? settingsRepository.loadSettings().sub2APIProvider.normalized() else {
             return false
         }
         let provider = CodexModelProviderResolver.resolve(configPath: configPath)
-        return configuration.isEnabled
-            && configuration.isComplete
+        return settings.provider(for: provider.id)?.isEnabled == true
             && !provider.isOfficialOpenAI
-            && configuration.confirms(providerID: provider.id)
     }
 
     func fetchAccounts(accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary] {
-        guard isConnectionConfigured() else {
-            throw AppError.invalidData(L10n.tr("error.sub2api.configuration_incomplete"))
-        }
-        guard let route = providerRoute() else {
+        try await fetchAccounts(
+            providerID: currentDefaultProviderID(),
+            accountIDs: accountIDs
+        )
+    }
+
+    func fetchAccounts(
+        providerID: String,
+        accountIDs: [Int64]?
+    ) async throws -> [Sub2APIAccountSummary] {
+        guard let route = providerRoute(providerID: providerID) else {
             throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
         }
         let allAccounts = try await sub2APIClient.listOpenAIAccounts(
@@ -347,7 +340,7 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
             return requestedIDs.contains(account.id)
         }
         let fetchedAt = dateProvider.unixSecondsNow()
-        let accountProviderID = configuredProviderID() ?? route.provider.id
+        let accountProviderID = route.configuration.providerID
 
         return await withTaskGroup(of: Sub2APIAccountSummary.self) { group in
             for account in accounts {
@@ -388,41 +381,25 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
         }
     }
 
-    private func providerRoute() -> (
+    private func providerRoute(providerID: String) -> (
         configuration: Sub2APIProviderConfiguration,
         provider: CodexModelProviderDefinition
     )? {
-        guard let configuration = try? settingsRepository.loadSettings().sub2APIProvider.normalized(),
+        guard let settings = try? settingsRepository.loadSettings().sub2APIProvider.normalized() else {
+            return nil
+        }
+
+        guard let provider = CodexModelProviderResolver.definitions(configPath: configPath).first(where: {
+            $0.id.caseInsensitiveCompare(providerID) == .orderedSame
+        }) else {
+            return nil
+        }
+        guard let configuration = settings.provider(for: provider.id) else { return nil }
+        guard !provider.isOfficialOpenAI,
               configuration.isEnabled else {
             return nil
         }
-
-        let provider = CodexModelProviderResolver.resolve(configPath: configPath)
-        guard !provider.isOfficialOpenAI,
-              configuration.isComplete,
-              configuration.confirms(providerID: provider.id) else {
-            return nil
-        }
         return (configuration, provider)
-    }
-
-    private static func originKey(_ rawURL: String) -> String? {
-        guard let components = URLComponents(string: rawURL),
-              let scheme = components.scheme?.lowercased(),
-              let host = components.host?.lowercased() else {
-            return nil
-        }
-        let port: Int?
-        if let explicitPort = components.port {
-            port = explicitPort
-        } else if scheme == "https" {
-            port = 443
-        } else if scheme == "http" {
-            port = 80
-        } else {
-            port = nil
-        }
-        return "\(scheme)://\(host):\(port.map(String.init) ?? "")"
     }
 }
 
@@ -552,7 +529,7 @@ private actor Sub2APIUsageClient {
             throw AppError.invalidData(L10n.tr("error.sub2api.configuration_incomplete"))
         }
         let baseURL = try Self.resolveAdminBaseURL(
-            configuredValue: configuration.adminBaseURL,
+            configuredValue: "",
             providerBaseURL: provider.baseURL
         )
         let key = CredentialKey(

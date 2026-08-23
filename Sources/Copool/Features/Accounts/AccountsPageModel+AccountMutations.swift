@@ -181,41 +181,20 @@ extension AccountsPageModel {
             notice = NoticeMessage(style: .error, text: L10n.tr("error.sub2api.configuration_incomplete"))
             return
         }
-        guard sub2APIAccountService.isCurrentDefaultProviderConfirmed() else {
-            pendingSub2APIProviderConfirmation = sub2APIAccountService.currentDefaultProviderID()
+        guard let settings = try? await settingsCoordinator.currentSettings() else {
+            notice = NoticeMessage(style: .error, text: L10n.tr("error.sub2api.configuration_incomplete"))
+            return
+        }
+        let sub2APISettings = settings.sub2APIProvider.normalized()
+        guard !sub2APISettings.providers.isEmpty,
+              sub2APISettings.providers.allSatisfy({ $0.isEnabled }) else {
+            notice = NoticeMessage(style: .error, text: L10n.tr("error.sub2api.configuration_incomplete"))
             return
         }
         await performSub2APIImport(
             service: sub2APIAccountService,
             settingsCoordinator: settingsCoordinator
         )
-    }
-
-    func confirmSub2APIProviderAndImport(providerID: String) async {
-        guard let sub2APIAccountService,
-              let settingsCoordinator else { return }
-        pendingSub2APIProviderConfirmation = nil
-
-        do {
-            var settings = try await settingsCoordinator.currentSettings()
-            var configuration = settings.sub2APIProvider
-            configuration.providerID = ""
-            configuration.confirmedProviderIDs.append(providerID)
-            settings = try await settingsCoordinator.updateSettings(
-                AppSettingsPatch(sub2APIProvider: configuration)
-            )
-            onSettingsUpdated?(settings)
-            await performSub2APIImport(
-                service: sub2APIAccountService,
-                settingsCoordinator: settingsCoordinator
-            )
-        } catch {
-            notice = NoticeMessage(style: .error, text: error.localizedDescription)
-        }
-    }
-
-    func cancelPendingSub2APIProviderConfirmation() {
-        pendingSub2APIProviderConfirmation = nil
     }
 
     private func performSub2APIImport(
@@ -227,22 +206,40 @@ extension AccountsPageModel {
         defer { isImporting = false }
 
         do {
-            let providerID = service.configuredProviderID() ?? service.currentDefaultProviderID()
-            let accounts = try await service.fetchAccounts(accountIDs: nil).map {
-                $0.settingProvider(providerID)
-            }
             var settings = try await settingsCoordinator.currentSettings()
-            var configuration = settings.sub2APIProvider
-            configuration.importedAccountIDs = accounts.map(\.id)
-            configuration.cachedAccounts = accounts
+            var sub2APISettings = settings.sub2APIProvider.normalized()
+            guard !sub2APISettings.providers.isEmpty else {
+                throw AppError.invalidData(L10n.tr("error.sub2api.configuration_incomplete"))
+            }
+            var synchronizedAccounts = sub2APIAccounts
+            var synchronizedCount = 0
+            for rawConfiguration in sub2APISettings.providers {
+                var configuration = rawConfiguration
+                let providerID = configuration.providerID
+                let accounts = try await service.fetchAccounts(
+                    providerID: providerID,
+                    accountIDs: nil
+                ).map {
+                    $0.settingProvider(providerID)
+                }
+                configuration.importedAccountIDs = accounts.map(\.id)
+                configuration.cachedAccounts = accounts
+                sub2APISettings.upsert(configuration)
+                synchronizedAccounts.removeAll {
+                    $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+                }
+                synchronizedAccounts.append(contentsOf: accounts)
+                synchronizedCount += accounts.count
+            }
             settings = try await settingsCoordinator.updateSettings(
-                AppSettingsPatch(sub2APIProvider: configuration)
+                AppSettingsPatch(sub2APIProvider: sub2APISettings)
             )
-            sub2APIAccounts = accounts
+            sub2APIAccounts = synchronizedAccounts
+            publishSub2APIAccounts()
             onSettingsUpdated?(settings)
             notice = NoticeMessage(
                 style: .success,
-                text: L10n.tr("accounts.notice.sub2api_imported_format", String(accounts.count))
+                text: L10n.tr("accounts.notice.sub2api_imported_format", String(synchronizedCount))
             )
         } catch {
             notice = NoticeMessage(style: .error, text: error.localizedDescription)
@@ -255,93 +252,89 @@ extension AccountsPageModel {
             sub2APIAccounts = []
             return
         }
-        let configuration = settings.sub2APIProvider.normalized()
-        let ids = configuration.importedAccountIDs
-        guard !ids.isEmpty else {
-            sub2APIAccounts = []
-            return
+        var sub2APISettings = settings.sub2APIProvider.normalized()
+        let cachedAccounts = sub2APISettings.providers.flatMap { configuration in
+            configuration.cachedAccounts.map { $0.settingProvider(configuration.providerID) }
         }
-        let importedIDs = Set(ids)
-        let configuredProviderID = sub2APIAccountService?.configuredProviderID()
-        let inferredProviderID: String?
-        if let configuredProviderID {
-            inferredProviderID = configuredProviderID
-        } else if configuration.associatedProviderIDs.count == 1 {
-            inferredProviderID = configuration.associatedProviderIDs[0]
-        } else {
-            inferredProviderID = nil
-        }
-        let cachedAccounts = configuration.cachedAccounts
-            .filter { importedIDs.contains($0.id) }
-            .map { $0.settingProvider(inferredProviderID) }
         sub2APIAccounts = cachedAccounts
-
-        if cachedAccounts != configuration.cachedAccounts.filter({ importedIDs.contains($0.id) }) {
-            var updatedConfiguration = configuration
-            updatedConfiguration.cachedAccounts = cachedAccounts
-            if let updatedSettings = try? await settingsCoordinator.updateSettings(
-                AppSettingsPatch(sub2APIProvider: updatedConfiguration)
-            ) {
-                settings = updatedSettings
-                onSettingsUpdated?(settings)
-            }
-        }
+        publishSub2APIAccounts()
 
         guard let sub2APIAccountService,
-              sub2APIAccountService.isCurrentDefaultProviderConfirmed(),
-              let accounts = try? await sub2APIAccountService.fetchAccounts(accountIDs: ids) else {
+              sub2APIAccountService.canQueryCurrentDefaultProvider(),
+              let configuration = sub2APISettings.provider(
+                  for: sub2APIAccountService.currentDefaultProviderID()
+              ),
+              !configuration.importedAccountIDs.isEmpty,
+              let accounts = try? await sub2APIAccountService.fetchAccounts(
+                  accountIDs: configuration.importedAccountIDs
+              ) else {
             return
         }
+        let providerID = configuration.providerID
         let associatedAccounts = accounts.map {
-            $0.settingProvider(
-                sub2APIAccountService.configuredProviderID()
-                    ?? sub2APIAccountService.currentDefaultProviderID()
-            )
+            $0.settingProvider(providerID)
         }
-        sub2APIAccounts = associatedAccounts
+        sub2APIAccounts.removeAll {
+            $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+        }
+        sub2APIAccounts.append(contentsOf: associatedAccounts)
+        publishSub2APIAccounts()
         var updatedConfiguration = configuration
         updatedConfiguration.cachedAccounts = associatedAccounts
+        sub2APISettings.upsert(updatedConfiguration)
         if let updatedSettings = try? await settingsCoordinator.updateSettings(
-            AppSettingsPatch(sub2APIProvider: updatedConfiguration)
+            AppSettingsPatch(sub2APIProvider: sub2APISettings)
         ) {
             settings = updatedSettings
             onSettingsUpdated?(settings)
         }
     }
 
-    func refreshSub2APIAccount(id: Int64) async {
+    func refreshSub2APIAccount(_ account: Sub2APIAccountSummary) async {
         guard let sub2APIAccountService,
-              !refreshingSub2APIAccountIDs.contains(id) else { return }
-        refreshingSub2APIAccountIDs.insert(id)
-        defer { refreshingSub2APIAccountIDs.remove(id) }
+              !refreshingSub2APIAccountIDs.contains(account.cardID) else { return }
+        refreshingSub2APIAccountIDs.insert(account.cardID)
+        defer { refreshingSub2APIAccountIDs.remove(account.cardID) }
 
         do {
-            guard let refreshed = try await sub2APIAccountService.fetchAccounts(accountIDs: [id]).first else {
+            guard account.providerID?.caseInsensitiveCompare(
+                sub2APIAccountService.currentDefaultProviderID()
+            ) == .orderedSame else {
+                throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
+            }
+            guard let refreshed = try await sub2APIAccountService.fetchAccounts(
+                accountIDs: [account.id]
+            ).first else {
                 throw AppError.invalidData(L10n.tr("error.sub2api.account_not_found"))
             }
-            let associated = refreshed.settingProvider(
-                sub2APIAccountService.configuredProviderID()
-                    ?? sub2APIAccountService.currentDefaultProviderID()
-            )
-            sub2APIAccounts = sub2APIAccounts.map { $0.id == id ? associated : $0 }
+            let associated = refreshed.settingProvider(sub2APIAccountService.currentDefaultProviderID())
+            sub2APIAccounts = sub2APIAccounts.map { $0.cardID == account.cardID ? associated : $0 }
+            publishSub2APIAccounts()
             try await persistSub2APIAccountCache()
         } catch {
             notice = NoticeMessage(style: .error, text: error.localizedDescription)
         }
     }
 
-    func removeSub2APIAccount(id: Int64) async {
+    func removeSub2APIAccount(_ account: Sub2APIAccountSummary) async {
         guard let settingsCoordinator else { return }
         do {
             var settings = try await settingsCoordinator.currentSettings()
-            var configuration = settings.sub2APIProvider
-            configuration.importedAccountIDs.removeAll { $0 == id }
-            configuration.cachedAccounts.removeAll { $0.id == id }
+            var sub2APISettings = settings.sub2APIProvider.normalized()
+            guard var configuration = account.providerID.flatMap({
+                sub2APISettings.provider(for: $0)
+            }) ?? sub2APISettings.provider(containingAccountID: account.id) else {
+                return
+            }
+            configuration.importedAccountIDs.removeAll { $0 == account.id }
+            configuration.cachedAccounts.removeAll { $0.id == account.id }
+            sub2APISettings.upsert(configuration)
             settings = try await settingsCoordinator.updateSettings(
-                AppSettingsPatch(sub2APIProvider: configuration)
+                AppSettingsPatch(sub2APIProvider: sub2APISettings)
             )
-            sub2APIAccounts.removeAll { $0.id == id }
-            collapsedAccountIDs.remove("sub2api-\(id)")
+            sub2APIAccounts.removeAll { $0.cardID == account.cardID }
+            publishSub2APIAccounts()
+            collapsedAccountIDs.remove(account.cardID)
             onSettingsUpdated?(settings)
             notice = NoticeMessage(style: .info, text: L10n.tr("accounts.notice.sub2api_removed"))
         } catch {
@@ -352,25 +345,41 @@ extension AccountsPageModel {
     func refreshImportedSub2APIAccounts() async throws {
         guard let sub2APIAccountService, let settingsCoordinator else { return }
         let settings = try await settingsCoordinator.currentSettings()
-        let ids = settings.sub2APIProvider.importedAccountIDs
-        guard !ids.isEmpty else { return }
-        sub2APIAccounts = try await sub2APIAccountService.fetchAccounts(accountIDs: ids).map {
-            $0.settingProvider(
-                sub2APIAccountService.configuredProviderID()
-                    ?? sub2APIAccountService.currentDefaultProviderID()
-            )
+        let providerID = sub2APIAccountService.currentDefaultProviderID()
+        guard let configuration = settings.sub2APIProvider.provider(for: providerID),
+              !configuration.importedAccountIDs.isEmpty else { return }
+        let refreshed = try await sub2APIAccountService.fetchAccounts(
+            accountIDs: configuration.importedAccountIDs
+        ).map {
+            $0.settingProvider(providerID)
         }
+        sub2APIAccounts.removeAll {
+            $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+        }
+        sub2APIAccounts.append(contentsOf: refreshed)
+        publishSub2APIAccounts()
         try await persistSub2APIAccountCache()
     }
 
     func persistSub2APIAccountCache() async throws {
         guard let settingsCoordinator else { return }
         var settings = try await settingsCoordinator.currentSettings()
-        var configuration = settings.sub2APIProvider
-        configuration.cachedAccounts = sub2APIAccounts
+        var sub2APISettings = settings.sub2APIProvider.normalized()
+        for index in sub2APISettings.providers.indices {
+            let providerID = sub2APISettings.providers[index].providerID
+            let importedIDs = Set(sub2APISettings.providers[index].importedAccountIDs)
+            sub2APISettings.providers[index].cachedAccounts = sub2APIAccounts.filter {
+                $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+                    && importedIDs.contains($0.id)
+            }
+        }
         settings = try await settingsCoordinator.updateSettings(
-            AppSettingsPatch(sub2APIProvider: configuration)
+            AppSettingsPatch(sub2APIProvider: sub2APISettings)
         )
         onSettingsUpdated?(settings)
+    }
+
+    func publishSub2APIAccounts() {
+        onSub2APIAccountsChanged?(sub2APIAccounts)
     }
 }

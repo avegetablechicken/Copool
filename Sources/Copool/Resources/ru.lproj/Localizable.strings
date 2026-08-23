@@ -32,15 +32,15 @@
 "settings.usage_progress_display" = "Отображение индикатора прогресса";
 "settings.usage_progress_display.used" = "Использовано";
 "settings.usage_progress_display.remaining" = "Остаток";
-"settings.section.sub2api" = "Неофициальный провайдер Codex";
+"settings.section.sub2api" = "Неофициальный Provider";
 "settings.sub2api.enabled" = "Использовать квоту Sub2api";
 "settings.sub2api.default_provider" = "Текущий провайдер по умолчанию";
-"settings.sub2api.provider_id" = "ID провайдера";
-"settings.sub2api.provider_id_placeholder" = "my";
+"settings.sub2api.provider_id" = "Название";
+"settings.sub2api.provider_id_placeholder" = "Должно совпадать с именем Provider в конфигурации Codex";
 "settings.sub2api.admin_base_url" = "URL API администратора";
 "settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
 "settings.sub2api.username" = "Имя пользователя или почта";
-"settings.sub2api.username_placeholder" = "you@example.com";
+"settings.sub2api.username_placeholder" = "Учётная запись администратора Sub2api";
 "settings.sub2api.password" = "Пароль";
 "settings.sub2api.password_placeholder" = "Пароль администратора";
 "settings.sub2api.allow_insecure_tls" = "Разрешить самоподписанный TLS-сертификат";
@@ -77,6 +77,7 @@
 "settings.notice.remote_servers_saved" = "Конфигурация удаленных серверов сохранена";
 "settings.notice.sub2api_saved" = "Настройки провайдера Sub2api сохранены";
 "error.sub2api.configuration_incomplete" = "Заполните все включенные настройки провайдера Sub2api.";
+"error.sub2api.duplicate_provider" = "Каждое имя Provider Sub2api можно настроить только один раз.";
 "error.sub2api.invalid_base_url" = "URL API администратора Sub2api недействителен и не может быть выведен из URL провайдера.";
 "error.sub2api.request_failed_format" = "Ошибка запроса Sub2api: %@";
 "error.sub2api.missing_token" = "Ответ входа Sub2api не содержит токен администратора.";
@@ -99,6 +100,8 @@
 "error.sub2api.provider_not_confirmed" = "Текущий провайдер Codex ещё не подтверждён как провайдер Sub2api.";
 "settings.sub2api.confirmed_providers" = "Подтверждённые провайдеры";
 "settings.sub2api.clear_confirmed_providers" = "Очистить подтверждённые связи провайдеров";
+"settings.sub2api.add_provider" = "Добавить Provider Sub2api";
+"settings.sub2api.remove_provider" = "Удалить Provider Sub2api";
 "error.sub2api.missing_accounts" = "Ответ списка Sub2api не содержит данных аккаунтов.";
 "error.sub2api.account_not_found" = "Аккаунт Sub2api не найден.";
 "accounts.action.importing" = "Импорт...";

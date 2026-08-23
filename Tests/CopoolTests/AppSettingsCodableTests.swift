@@ -48,14 +48,17 @@ final class AppSettingsCodableTests: XCTestCase {
 
     func testSub2APIProviderConfigurationRoundTrips() throws {
         var settings = AppSettings.defaultValue
-        settings.sub2APIProvider = Sub2APIProviderConfiguration(
-            isEnabled: true,
-            providerID: " my ",
-            adminBaseURL: " https://sub2.test:6060/api/v1/ ",
-            username: " admin@example.com ",
-            password: "secret",
-            allowInsecureTLS: true,
-            importedAccountIDs: [2, 1, 2]
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            confirmedProviderIDs: ["my"],
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: " my ",
+                    username: " admin@example.com ",
+                    password: "secret",
+                    allowInsecureTLS: true,
+                    importedAccountIDs: [2, 1, 2]
+                )
+            ]
         )
 
         let decoded = try JSONDecoder().decode(
@@ -65,30 +68,38 @@ final class AppSettingsCodableTests: XCTestCase {
 
         XCTAssertEqual(
             decoded.sub2APIProvider,
-            Sub2APIProviderConfiguration(
-                isEnabled: true,
-                adminBaseURL: "https://sub2.test:6060/api/v1",
-                username: "admin@example.com",
-                password: "secret",
-                allowInsecureTLS: true,
-                importedAccountIDs: [1, 2]
+            Sub2APISettingsConfiguration(
+                confirmedProviderIDs: ["my"],
+                providers: [
+                    Sub2APIProviderConfiguration(
+                        id: settings.sub2APIProvider.providers[0].id,
+                        providerID: "my",
+                        username: "admin@example.com",
+                        password: "secret",
+                        allowInsecureTLS: true,
+                        importedAccountIDs: [1, 2]
+                    )
+                ]
             )
         )
     }
 
-    func testLegacyProviderIDDoesNotImplicitlyConfirmSub2APIIdentity() throws {
+    func testLegacySingleConfigurationMigratesWithoutImplicitConfirmation() throws {
         let data = Data(#"{"isEnabled":true,"providerID":"my","adminBaseURL":"https://sub2.test/api/v1","username":"admin@example.com","password":"secret","allowInsecureTLS":false}"#.utf8)
 
-        let configuration = try JSONDecoder().decode(Sub2APIProviderConfiguration.self, from: data).normalized()
+        let configuration = try JSONDecoder().decode(Sub2APISettingsConfiguration.self, from: data).normalized()
 
-        XCTAssertEqual(configuration.providerID, "")
+        XCTAssertEqual(configuration.providers.first?.providerID, "my")
+        XCTAssertEqual(configuration.providers.first?.legacyAdminBaseURL, "https://sub2.test/api/v1")
         XCTAssertFalse(configuration.confirms(providerID: "my"))
     }
 
     func testCompleteSub2APICredentialsEnableConnectionRegardlessOfLegacyToggle() throws {
-        let data = Data(#"{"isEnabled":false,"adminBaseURL":"https://sub2.test/api/v1","username":"admin@example.com","password":"secret","allowInsecureTLS":false}"#.utf8)
-
-        let configuration = try JSONDecoder().decode(Sub2APIProviderConfiguration.self, from: data).normalized()
+        let configuration = Sub2APIProviderConfiguration(
+            providerID: "my",
+            username: "admin@example.com",
+            password: "secret"
+        ).normalized()
 
         XCTAssertTrue(configuration.isEnabled)
         XCTAssertTrue(configuration.isComplete)

@@ -40,13 +40,21 @@ protocol Sub2APIAccountServiceProtocol: Sendable {
     func currentDefaultProviderID() -> String
     func configuredProviderID() -> String?
     func isConnectionConfigured() -> Bool
-    func isCurrentDefaultProviderConfirmed() -> Bool
+    func canQueryCurrentDefaultProvider() -> Bool
     func fetchAccounts(accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary]
+    func fetchAccounts(providerID: String, accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary]
 }
 
 extension Sub2APIAccountServiceProtocol {
     func configuredProviderID() -> String? {
         currentDefaultProviderID()
+    }
+
+    func fetchAccounts(providerID: String, accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary] {
+        guard providerID.caseInsensitiveCompare(currentDefaultProviderID()) == .orderedSame else {
+            throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
+        }
+        return try await fetchAccounts(accountIDs: accountIDs)
     }
 }
 

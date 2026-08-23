@@ -30,13 +30,16 @@ final class SettingsPageModelTests: XCTestCase {
             ),
             editorAppService: SettingsStubEditorAppService()
         )
-        model.sub2APIProviderDraft = Sub2APIProviderConfiguration(
-            isEnabled: true,
-            providerID: "my",
-            adminBaseURL: "https://sub2.test:6060/api/v1",
-            username: "admin@example.com",
-            password: "secret",
-            allowInsecureTLS: true
+        model.sub2APIProviderDraft = Sub2APISettingsConfiguration(
+            confirmedProviderIDs: ["my"],
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "admin@example.com",
+                    password: "secret",
+                    allowInsecureTLS: true
+                )
+            ]
         )
 
         model.saveSub2APIProvider()
@@ -51,8 +54,88 @@ final class SettingsPageModelTests: XCTestCase {
         XCTAssertEqual(model.notice?.text, L10n.tr("settings.notice.sub2api_saved"))
     }
 
-    func testAccountsPageImportsSub2APIAccountsAndPersistsIDs() async throws {
+    func testSettingsPageAddsAndSavesArbitrarySub2APIProviderConfigurations() async throws {
         let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let model = SettingsPageModel(
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: settingsRepository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            editorAppService: SettingsStubEditorAppService()
+        )
+
+        await model.load()
+        model.addSub2APIProviderConfiguration()
+        model.addSub2APIProviderConfiguration()
+        model.addSub2APIProviderConfiguration()
+        XCTAssertEqual(model.sub2APIProviderDraft.providers.count, 3)
+        let providerIDs = ["my", "ShareCoder", "custom-provider"]
+        for index in model.sub2APIProviderDraft.providers.indices {
+            model.sub2APIProviderDraft.providers[index].providerID = providerIDs[index]
+            model.sub2APIProviderDraft.providers[index].username = "admin-\(index)@example.com"
+            model.sub2APIProviderDraft.providers[index].password = "secret-\(index)"
+        }
+
+        model.saveSub2APIProvider()
+        while model.isSavingSub2APIProvider {
+            await Task.yield()
+        }
+
+        let saved = try settingsRepository.loadSettings().sub2APIProvider
+        XCTAssertEqual(Set(saved.providers.map(\.providerID)), Set(providerIDs))
+        XCTAssertTrue(saved.providers.allSatisfy { $0.legacyAdminBaseURL.isEmpty })
+    }
+
+    func testLegacySub2APIConfigurationUsesCodexBaseURLDuringMigration() throws {
+        let configPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("settings-sub2api-migration-\(UUID().uuidString).toml")
+        try """
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://my-sub2.test:6060"
+
+        [model_providers.ShareCoder]
+        base_url = "https://sharecoder.test"
+        """.write(to: configPath, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+        let account = Sub2APIAccountSummary(
+            id: 42,
+            name: "openai-2026",
+            email: "codex@example.com",
+            accountID: "account-42",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil
+        )
+        let legacy = Sub2APISettingsConfiguration(
+            confirmedProviderIDs: ["ShareCoder", "my"],
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "admin@example.com",
+                    password: "secret",
+                    importedAccountIDs: [42],
+                    cachedAccounts: [account],
+                    legacyAdminBaseURL: "https://sharecoder.test/api/v1"
+                )
+            ]
+        )
+
+        let migrated = AppContainer.migrateSub2APISettings(legacy, configPath: configPath)
+
+        XCTAssertEqual(migrated.providers.first?.providerID, "ShareCoder")
+        XCTAssertEqual(migrated.providers.first?.legacyAdminBaseURL, "")
+        XCTAssertEqual(migrated.providers.first?.cachedAccounts.first?.providerID, "ShareCoder")
+        XCTAssertEqual(Set(migrated.confirmedProviderIDs), ["ShareCoder", "my"])
+    }
+
+    func testAccountsPageImportsSub2APIAccountsAndPersistsIDs() async throws {
+        var initialSettings = AppSettings.defaultValue
+        initialSettings.sub2APIProvider = makeSub2APISettings(providerID: "my")
+        let settingsRepository = TestSettingsRepository(settings: initialSettings)
         let settingsCoordinator = SettingsCoordinator(
             settingsRepository: settingsRepository,
             launchAtStartupService: SettingsStubLaunchAtStartupService()
@@ -96,16 +179,138 @@ final class SettingsPageModelTests: XCTestCase {
         let associatedAccount = account.associatingProviderIfMissing("my")
         XCTAssertEqual(model.sub2APIAccounts, [associatedAccount])
         XCTAssertEqual(
-            try settingsRepository.loadSettings().sub2APIProvider.importedAccountIDs,
+            try settingsRepository.loadSettings().sub2APIProvider.provider(for: "my")?.importedAccountIDs,
             [42]
         )
         XCTAssertEqual(
-            try settingsRepository.loadSettings().sub2APIProvider.cachedAccounts,
+            try settingsRepository.loadSettings().sub2APIProvider.provider(for: "my")?.cachedAccounts,
             [associatedAccount]
         )
         guard case .content = model.makeContentPresentation().state else {
             return XCTFail("Sub2api accounts should make the page display content")
         }
+    }
+
+    func testAccountsPageSub2APIImportPreservesOtherProviderCaches() async throws {
+        let shareAccount = Sub2APIAccountSummary(
+            id: 7,
+            name: "sharecoder-account",
+            email: "share@example.com",
+            accountID: "share-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil,
+            providerID: "ShareCoder"
+        )
+        let myAccount = Sub2APIAccountSummary(
+            id: 42,
+            name: "my-account",
+            email: "my@example.com",
+            accountID: "my-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil
+        )
+        var refreshedShareAccount = shareAccount
+        refreshedShareAccount.email = "share-refreshed@example.com"
+        var initialSettings = AppSettings.defaultValue
+        initialSettings.sub2APIProvider = Sub2APISettingsConfiguration(
+            confirmedProviderIDs: ["my", "ShareCoder"],
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "my-admin@example.com",
+                    password: "my-secret"
+                ),
+                Sub2APIProviderConfiguration(
+                    providerID: "ShareCoder",
+                    username: "share-admin@example.com",
+                    password: "share-secret",
+                    importedAccountIDs: [7],
+                    cachedAccounts: [shareAccount]
+                ),
+            ]
+        )
+        let settingsRepository = TestSettingsRepository(settings: initialSettings)
+        let settingsCoordinator = SettingsCoordinator(
+            settingsRepository: settingsRepository,
+            launchAtStartupService: SettingsStubLaunchAtStartupService()
+        )
+        let model = AccountsPageModel(
+            coordinator: AccountsCoordinator(
+                storeRepository: SettingsTestAccountsStoreRepository(),
+                settingsRepository: settingsRepository,
+                authRepository: SettingsTestAuthRepository(),
+                usageService: SettingsTestUsageService(),
+                chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+                codexCLIService: SettingsStubCodexCLIService(),
+                editorAppService: SettingsStubEditorAppService(),
+                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                dateProvider: SettingsFixedDateProvider(now: 1)
+            ),
+            settingsCoordinator: settingsCoordinator,
+            sub2APIAccountService: SettingsStubSub2APIAccountService(
+                accounts: [myAccount],
+                providerID: "my",
+                accountsByProviderID: [
+                    "my": [myAccount],
+                    "ShareCoder": [refreshedShareAccount],
+                ]
+            ),
+            initialAccounts: [],
+            initialSub2APIAccounts: [shareAccount]
+        )
+
+        await model.importSub2APIAccounts()
+
+        let settings = try settingsRepository.loadSettings().sub2APIProvider
+        XCTAssertEqual(
+            settings.provider(for: "ShareCoder")?.cachedAccounts,
+            [refreshedShareAccount]
+        )
+        XCTAssertEqual(
+            settings.provider(for: "my")?.cachedAccounts,
+            [myAccount.settingProvider("my")]
+        )
+        XCTAssertEqual(Set(model.sub2APIAccounts.map(\.cardID)), [
+            shareAccount.cardID,
+            myAccount.settingProvider("my").cardID,
+        ])
+    }
+
+    func testAccountsPageSub2APIImportRequiresCurrentProviderConfiguration() async {
+        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let model = AccountsPageModel(
+            coordinator: AccountsCoordinator(
+                storeRepository: SettingsTestAccountsStoreRepository(),
+                settingsRepository: settingsRepository,
+                authRepository: SettingsTestAuthRepository(),
+                usageService: SettingsTestUsageService(),
+                chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+                codexCLIService: SettingsStubCodexCLIService(),
+                editorAppService: SettingsStubEditorAppService(),
+                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                dateProvider: SettingsFixedDateProvider(now: 1)
+            ),
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: settingsRepository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            sub2APIAccountService: SettingsStubSub2APIAccountService(
+                accounts: [],
+                providerID: "my",
+                isConnected: false
+            ),
+            initialAccounts: []
+        )
+
+        await model.importSub2APIAccounts()
+
+        XCTAssertEqual(model.notice?.text, L10n.tr("error.sub2api.configuration_incomplete"))
     }
 
     func testAccountsPageRestoresCachedSub2APIAccountsWithoutNetwork() async throws {
@@ -121,11 +326,9 @@ final class SettingsPageModelTests: XCTestCase {
             usageError: nil
         )
         var settings = AppSettings.defaultValue
-        settings.sub2APIProvider = Sub2APIProviderConfiguration(
-            username: "admin@example.com",
-            password: "secret",
+        settings.sub2APIProvider = makeSub2APISettings(
+            providerID: "ShareCoder",
             importedAccountIDs: [42],
-            confirmedProviderIDs: ["ShareCoder"],
             cachedAccounts: [account]
         )
         let settingsRepository = TestSettingsRepository(settings: settings)
@@ -172,11 +375,9 @@ final class SettingsPageModelTests: XCTestCase {
             usageError: nil
         )
         var settings = AppSettings.defaultValue
-        settings.sub2APIProvider = Sub2APIProviderConfiguration(
-            username: "admin@example.com",
-            password: "secret",
-            importedAccountIDs: [42],
-            confirmedProviderIDs: ["ShareCoder"]
+        settings.sub2APIProvider = makeSub2APISettings(
+            providerID: "ShareCoder",
+            importedAccountIDs: [42]
         )
         let settingsRepository = TestSettingsRepository(settings: settings)
         let settingsCoordinator = SettingsCoordinator(
@@ -199,8 +400,7 @@ final class SettingsPageModelTests: XCTestCase {
             settingsCoordinator: settingsCoordinator,
             sub2APIAccountService: SettingsStubSub2APIAccountService(
                 accounts: [account],
-                providerID: "ShareCoder",
-                isConfirmed: true
+                providerID: "ShareCoder"
             ),
             backgroundRefreshPolicy: .init(
                 initialRefreshDelay: .seconds(1),
@@ -214,13 +414,18 @@ final class SettingsPageModelTests: XCTestCase {
         let associatedAccount = account.settingProvider("ShareCoder")
         XCTAssertEqual(trayModel.sub2APIAccounts, [associatedAccount])
         XCTAssertEqual(
-            try settingsRepository.loadSettings().sub2APIProvider.cachedAccounts,
+            try settingsRepository.loadSettings().sub2APIProvider.provider(for: "ShareCoder")?.cachedAccounts,
             [associatedAccount]
         )
     }
 
-    func testAccountsPageAsksBeforeAssociatingCurrentProviderWithSub2API() async throws {
-        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+    func testAccountsPageSyncsConfiguredProviderWithoutConfirmation() async throws {
+        var initialSettings = AppSettings.defaultValue
+        initialSettings.sub2APIProvider = makeSub2APISettings(
+            providerID: "ShareCoder",
+            confirmed: false
+        )
+        let settingsRepository = TestSettingsRepository(settings: initialSettings)
         let settingsCoordinator = SettingsCoordinator(
             settingsRepository: settingsRepository,
             launchAtStartupService: SettingsStubLaunchAtStartupService()
@@ -252,25 +457,16 @@ final class SettingsPageModelTests: XCTestCase {
             sub2APIAccountService: SettingsStubSub2APIAccountService(
                 accounts: [account],
                 providerID: "ShareCoder",
-                isConfirmed: false,
-                isConnected: false
+                isConnected: true
             ),
             initialAccounts: []
         )
 
         await model.importSub2APIAccounts()
 
-        XCTAssertEqual(model.pendingSub2APIProviderConfirmation, "ShareCoder")
-        XCTAssertTrue(model.sub2APIAccounts.isEmpty)
-
-        await model.confirmSub2APIProviderAndImport(providerID: "ShareCoder")
-
         XCTAssertEqual(
             model.sub2APIAccounts,
             [account.associatingProviderIfMissing("ShareCoder")]
-        )
-        XCTAssertTrue(
-            try settingsRepository.loadSettings().sub2APIProvider.confirms(providerID: "ShareCoder")
         )
     }
 
@@ -356,7 +552,7 @@ final class SettingsPageModelTests: XCTestCase {
             planType: "pro",
             usage: nil,
             usageError: nil,
-            providerID: "my"
+            providerID: "ShareCoder"
         )
         let settingsRepository = TestSettingsRepository(settings: .defaultValue)
         let model = AccountsPageModel(
@@ -464,6 +660,78 @@ final class SettingsPageModelTests: XCTestCase {
 
         XCTAssertEqual(model.defaultCodexProviderID, "ShareCoder")
     }
+
+    func testBackgroundCacheUpdatePreservesEditedSub2APICredentials() {
+        let model = SettingsPageModel(
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: TestSettingsRepository(),
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            editorAppService: SettingsStubEditorAppService()
+        )
+        model.hasLoaded = true
+        model.sub2APIProviderDraft = Sub2APISettingsConfiguration(
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "ShareCoder",
+                    username: "editing@example.com",
+                    password: "editing-secret"
+                )
+            ]
+        )
+        let cachedAccount = Sub2APIAccountSummary(
+            id: 42,
+            name: "openai-2026",
+            email: "cached@example.com",
+            accountID: "account-42",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil,
+            providerID: "ShareCoder"
+        )
+        var incoming = AppSettings.defaultValue
+        incoming.sub2APIProvider = Sub2APISettingsConfiguration(
+            confirmedProviderIDs: ["ShareCoder"],
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "ShareCoder",
+                    username: "saved@example.com",
+                    password: "saved-secret",
+                    importedAccountIDs: [42],
+                    cachedAccounts: [cachedAccount]
+                )
+            ]
+        )
+
+        model.acceptExternalSettings(incoming)
+
+        XCTAssertEqual(model.sub2APIProviderDraft.providers.first?.username, "editing@example.com")
+        XCTAssertEqual(model.sub2APIProviderDraft.providers.first?.password, "editing-secret")
+        XCTAssertEqual(model.sub2APIProviderDraft.providers.first?.cachedAccounts, [cachedAccount])
+    }
+
+}
+
+private func makeSub2APISettings(
+    providerID: String,
+    confirmed: Bool = true,
+    importedAccountIDs: [Int64] = [],
+    cachedAccounts: [Sub2APIAccountSummary] = []
+) -> Sub2APISettingsConfiguration {
+    Sub2APISettingsConfiguration(
+        confirmedProviderIDs: confirmed ? [providerID] : [],
+        providers: [
+            Sub2APIProviderConfiguration(
+                providerID: providerID,
+                username: "admin@example.com",
+                password: "secret",
+                importedAccountIDs: importedAccountIDs,
+                cachedAccounts: cachedAccounts
+            )
+        ]
+    )
 }
 
 final class TestSettingsRepository: SettingsRepository, @unchecked Sendable {
@@ -588,8 +856,8 @@ private struct SettingsFixedDateProvider: DateProviding {
 private struct SettingsStubSub2APIAccountService: Sub2APIAccountServiceProtocol {
     let accounts: [Sub2APIAccountSummary]
     var providerID = "my"
+    var accountsByProviderID: [String: [Sub2APIAccountSummary]] = [:]
     var configuredProvider: String? = nil
-    var isConfirmed = true
     var isConnected = true
 
     func currentDefaultProviderID() -> String {
@@ -604,14 +872,25 @@ private struct SettingsStubSub2APIAccountService: Sub2APIAccountServiceProtocol 
         isConnected
     }
 
-    func isCurrentDefaultProviderConfirmed() -> Bool {
-        isConfirmed
+    func canQueryCurrentDefaultProvider() -> Bool {
+        isConnected
     }
 
     func fetchAccounts(accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary] {
         guard let accountIDs else { return accounts }
         let ids = Set(accountIDs)
         return accounts.filter { ids.contains($0.id) }
+    }
+
+    func fetchAccounts(
+        providerID: String,
+        accountIDs: [Int64]?
+    ) async throws -> [Sub2APIAccountSummary] {
+        let providerAccounts = accountsByProviderID[providerID]
+            ?? (providerID.caseInsensitiveCompare(self.providerID) == .orderedSame ? accounts : [])
+        guard let accountIDs else { return providerAccounts }
+        let ids = Set(accountIDs)
+        return providerAccounts.filter { ids.contains($0.id) }
     }
 }
 

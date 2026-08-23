@@ -14,8 +14,8 @@ struct AccountsPageContentSection: View {
     let onDeletePendingWorkspace: (String) -> Void
     let onDeleteAccount: (String) -> Void
     let onSwitchSub2APIProvider: (Sub2APIAccountSummary) -> Void
-    let onRefreshSub2APIAccount: (Int64) -> Void
-    let onRemoveSub2APIAccount: (Int64) -> Void
+    let onRefreshSub2APIAccount: (Sub2APIAccountSummary) -> Void
+    let onRemoveSub2APIAccount: (Sub2APIAccountSummary) -> Void
 
     var body: some View {
         switch presentation.state {
@@ -71,8 +71,8 @@ private struct AccountsGridSection: View {
     let onReauthenticateAccount: (String) -> Void
     let onDeleteAccount: (String) -> Void
     let onSwitchSub2APIProvider: (Sub2APIAccountSummary) -> Void
-    let onRefreshSub2APIAccount: (Int64) -> Void
-    let onRemoveSub2APIAccount: (Int64) -> Void
+    let onRefreshSub2APIAccount: (Sub2APIAccountSummary) -> Void
+    let onRemoveSub2APIAccount: (Sub2APIAccountSummary) -> Void
 
     private enum Item: Identifiable {
         case local(AccountCardViewState)
@@ -152,9 +152,9 @@ private struct AccountsGridSection: View {
                         frameWidth: cardFrameWidth,
                         index: index,
                         onSwitch: { onSwitchSub2APIProvider(state.source) },
-                        onRefresh: { onRefreshSub2APIAccount(state.source.id) },
+                        onRefresh: { onRefreshSub2APIAccount(state.source) },
                         onReauthenticate: {},
-                        onDelete: { onRemoveSub2APIAccount(state.source.id) }
+                        onDelete: { onRemoveSub2APIAccount(state.source) }
                     )
                 }
             }

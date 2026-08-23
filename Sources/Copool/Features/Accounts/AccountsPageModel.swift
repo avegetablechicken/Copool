@@ -11,6 +11,7 @@ final class AccountsPageModel: ObservableObject {
     let codexModelProviderSwitchService: CodexModelProviderSwitchServiceProtocol?
     let chooseAuthDocumentURL: (() -> URL?)?
     let onLocalAccountsChanged: (([AccountSummary]) -> Void)?
+    let onSub2APIAccountsChanged: (([Sub2APIAccountSummary]) -> Void)?
     let onSettingsUpdated: ((AppSettings) -> Void)?
     let onCodexModelProviderChanged: ((String) -> Void)?
     let runtimePlatform: RuntimePlatform
@@ -24,9 +25,7 @@ final class AccountsPageModel: ObservableObject {
     @Published var usageProgressDisplayMode: UsageProgressDisplayMode
     @Published var currentCodexModelProviderID: String
     @Published var sub2APIAccounts: [Sub2APIAccountSummary] = []
-    @Published var refreshingSub2APIAccountIDs: Set<Int64> = []
-    @Published var pendingSub2APIProviderConfirmation: String?
-
+    @Published var refreshingSub2APIAccountIDs: Set<String> = []
     @Published var state: ViewState<[AccountSummary]>
     @Published var notice: NoticeMessage? {
         didSet {
@@ -59,6 +58,7 @@ final class AccountsPageModel: ObservableObject {
         runtimePlatform: RuntimePlatform = PlatformCapabilities.currentPlatform,
         usageProgressDisplayMode: UsageProgressDisplayMode = .used,
         onLocalAccountsChanged: (([AccountSummary]) -> Void)? = nil,
+        onSub2APIAccountsChanged: (([Sub2APIAccountSummary]) -> Void)? = nil,
         onSettingsUpdated: ((AppSettings) -> Void)? = nil,
         onCodexModelProviderChanged: ((String) -> Void)? = nil,
         initialAccounts: [AccountSummary]? = nil,
@@ -74,6 +74,7 @@ final class AccountsPageModel: ObservableObject {
         self.runtimePlatform = runtimePlatform
         self.usageProgressDisplayMode = usageProgressDisplayMode
         self.onLocalAccountsChanged = onLocalAccountsChanged
+        self.onSub2APIAccountsChanged = onSub2APIAccountsChanged
         self.onSettingsUpdated = onSettingsUpdated
         self.onCodexModelProviderChanged = onCodexModelProviderChanged
         self.currentCodexModelProviderID = sub2APIAccountService?.currentDefaultProviderID() ?? "openai"

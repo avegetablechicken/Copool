@@ -32,15 +32,15 @@
 "settings.usage_progress_display" = "Visualización de la barra de progreso";
 "settings.usage_progress_display.used" = "Usado";
 "settings.usage_progress_display.remaining" = "Restante";
-"settings.section.sub2api" = "Proveedor Codex no oficial";
+"settings.section.sub2api" = "Provider no oficial";
 "settings.sub2api.enabled" = "Usar cuota de Sub2api";
 "settings.sub2api.default_provider" = "Proveedor predeterminado actual";
-"settings.sub2api.provider_id" = "ID del proveedor";
-"settings.sub2api.provider_id_placeholder" = "my";
+"settings.sub2api.provider_id" = "Nombre";
+"settings.sub2api.provider_id_placeholder" = "Debe coincidir con el nombre de Provider en la config de Codex";
 "settings.sub2api.admin_base_url" = "URL de API administrativa";
 "settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
 "settings.sub2api.username" = "Usuario o correo";
-"settings.sub2api.username_placeholder" = "you@example.com";
+"settings.sub2api.username_placeholder" = "Cuenta de administrador de Sub2api";
 "settings.sub2api.password" = "Contraseña";
 "settings.sub2api.password_placeholder" = "Contraseña de administrador";
 "settings.sub2api.allow_insecure_tls" = "Permitir certificado TLS autofirmado";
@@ -77,6 +77,7 @@
 "settings.notice.remote_servers_saved" = "Configuración de servidores remotos guardada";
 "settings.notice.sub2api_saved" = "Configuración del proveedor Sub2api guardada";
 "error.sub2api.configuration_incomplete" = "Complete la configuración habilitada del proveedor Sub2api.";
+"error.sub2api.duplicate_provider" = "Cada nombre de Provider Sub2api solo se puede configurar una vez.";
 "error.sub2api.invalid_base_url" = "La URL de API administrativa de Sub2api no es válida y no pudo derivarse de la URL del proveedor.";
 "error.sub2api.request_failed_format" = "Error en la solicitud de Sub2api: %@";
 "error.sub2api.missing_token" = "La respuesta de inicio de sesión de Sub2api no incluye un token de administrador.";
@@ -99,6 +100,8 @@
 "error.sub2api.provider_not_confirmed" = "El proveedor Codex actual no se ha confirmado como proveedor Sub2api.";
 "settings.sub2api.confirmed_providers" = "Proveedores confirmados";
 "settings.sub2api.clear_confirmed_providers" = "Borrar asociaciones de proveedores confirmados";
+"settings.sub2api.add_provider" = "Añadir Provider Sub2api";
+"settings.sub2api.remove_provider" = "Eliminar Provider Sub2api";
 "error.sub2api.missing_accounts" = "La respuesta de cuentas Sub2api no incluye datos.";
 "error.sub2api.account_not_found" = "No se encontró la cuenta Sub2api.";
 "accounts.action.importing" = "Importando...";

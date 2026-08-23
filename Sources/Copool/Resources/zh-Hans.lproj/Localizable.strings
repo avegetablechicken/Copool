@@ -32,15 +32,15 @@
 "settings.usage_progress_display" = "进度条显示";
 "settings.usage_progress_display.used" = "已用";
 "settings.usage_progress_display.remaining" = "剩余";
-"settings.section.sub2api" = "Codex 非官方 Provider";
+"settings.section.sub2api" = "非官方 Provider";
 "settings.sub2api.enabled" = "使用 Sub2api 额度";
 "settings.sub2api.default_provider" = "当前默认 Provider";
-"settings.sub2api.provider_id" = "Provider ID";
-"settings.sub2api.provider_id_placeholder" = "my";
+"settings.sub2api.provider_id" = "名称";
+"settings.sub2api.provider_id_placeholder" = "需与 Codex 配置中的 Provider 名称一致";
 "settings.sub2api.admin_base_url" = "管理员 API 地址";
 "settings.sub2api.admin_base_url_placeholder" = "https://主机:6060/api/v1";
 "settings.sub2api.username" = "用户名或邮箱";
-"settings.sub2api.username_placeholder" = "you@example.com";
+"settings.sub2api.username_placeholder" = "Sub2api 管理员账号";
 "settings.sub2api.password" = "密码";
 "settings.sub2api.password_placeholder" = "管理员密码";
 "settings.sub2api.allow_insecure_tls" = "允许自签名 TLS 证书";
@@ -77,6 +77,7 @@
 "settings.notice.remote_servers_saved" = "远程服务器配置已保存";
 "settings.notice.sub2api_saved" = "Sub2api Provider 设置已保存";
 "error.sub2api.configuration_incomplete" = "请先完整填写已启用的 Sub2api Provider 设置。";
+"error.sub2api.duplicate_provider" = "每个 Sub2api Provider 名称只能配置一次。";
 "error.sub2api.invalid_base_url" = "Sub2api 管理员 API 地址无效，且无法从 Provider 地址推导。";
 "error.sub2api.request_failed_format" = "Sub2api 请求失败：%@";
 "error.sub2api.missing_token" = "Sub2api 登录响应中没有管理员 Token。";
@@ -99,6 +100,8 @@
 "error.sub2api.provider_not_confirmed" = "尚未确认 Codex 当前 Provider 来自 Sub2api。";
 "settings.sub2api.confirmed_providers" = "已确认的 Provider";
 "settings.sub2api.clear_confirmed_providers" = "清除已确认的 Provider 关联";
+"settings.sub2api.add_provider" = "添加 Sub2api Provider";
+"settings.sub2api.remove_provider" = "删除 Sub2api Provider";
 "error.sub2api.missing_accounts" = "Sub2api 账号列表响应中没有账号数据。";
 "error.sub2api.account_not_found" = "未找到该 Sub2api 账号。";
 "accounts.action.importing" = "导入中...";

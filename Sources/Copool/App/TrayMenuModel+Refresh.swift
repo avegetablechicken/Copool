@@ -208,23 +208,30 @@ extension TrayMenuModel {
 
     func refreshSub2APIAccounts(using settings: AppSettings) async throws {
         guard let sub2APIAccountService else { return }
-        let configuration = settings.sub2APIProvider.normalized()
+        var sub2APISettings = settings.sub2APIProvider.normalized()
+        guard var configuration = sub2APISettings.provider(
+            for: sub2APIAccountService.currentDefaultProviderID()
+        ) else {
+            return
+        }
         guard !configuration.importedAccountIDs.isEmpty,
-              sub2APIAccountService.isCurrentDefaultProviderConfirmed() else {
+              sub2APIAccountService.canQueryCurrentDefaultProvider() else {
             return
         }
 
-        let providerID = sub2APIAccountService.configuredProviderID()
-            ?? sub2APIAccountService.currentDefaultProviderID()
+        let providerID = configuration.providerID
         let refreshed = try await sub2APIAccountService.fetchAccounts(
             accountIDs: configuration.importedAccountIDs
         ).map { $0.settingProvider(providerID) }
-        sub2APIAccounts = refreshed
+        sub2APIAccounts.removeAll {
+            $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+        }
+        sub2APIAccounts.append(contentsOf: refreshed)
 
-        var updatedConfiguration = configuration
-        updatedConfiguration.cachedAccounts = refreshed
+        configuration.cachedAccounts = refreshed
+        sub2APISettings.upsert(configuration)
         _ = try await settingsCoordinator.updateSettings(
-            AppSettingsPatch(sub2APIProvider: updatedConfiguration)
+            AppSettingsPatch(sub2APIProvider: sub2APISettings)
         )
     }
 

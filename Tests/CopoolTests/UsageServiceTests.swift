@@ -79,7 +79,7 @@ final class UsageServiceTests: XCTestCase {
         XCTAssertFalse(provider.isOfficialOpenAI)
     }
 
-    func testSub2APIConfiguredProviderMatchesAdminURLInsteadOfCurrentDefault() throws {
+    func testCodexProviderResolverMatchesLegacyAdminURLForMigration() throws {
         let configPath = try makeCodexConfig("""
         model_provider = "my"
 
@@ -91,22 +91,13 @@ final class UsageServiceTests: XCTestCase {
         """)
         defer { try? FileManager.default.removeItem(at: configPath) }
 
-        var settings = AppSettings.defaultValue
-        settings.sub2APIProvider = Sub2APIProviderConfiguration(
-            adminBaseURL: "https://sharecoder.test/api/v1",
-            username: "admin@example.com",
-            password: "secret",
-            confirmedProviderIDs: ["my", "ShareCoder"]
+        XCTAssertEqual(
+            CodexModelProviderResolver.providerID(
+                matchingBaseURL: "https://sharecoder.test/api/v1",
+                configPath: configPath
+            ),
+            "ShareCoder"
         )
-        let service = DefaultSub2APIAccountService(
-            configPath: configPath,
-            settingsRepository: StaticUsageSettingsRepository(settings: settings),
-            session: makeUsageMockSession(),
-            insecureSession: makeUsageMockSession()
-        )
-
-        XCTAssertEqual(service.currentDefaultProviderID(), "my")
-        XCTAssertEqual(service.configuredProviderID(), "ShareCoder")
     }
 
     func testCodexModelProviderSwitchServiceUpdatesRootProviderAndPreservesTables() throws {
@@ -172,11 +163,15 @@ final class UsageServiceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: configPath) }
 
         var settings = AppSettings.defaultValue
-        settings.sub2APIProvider = Sub2APIProviderConfiguration(
-            isEnabled: true,
-            username: "you@example.com",
-            password: "secret",
-            confirmedProviderIDs: ["my"]
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            confirmedProviderIDs: ["my"],
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "you@example.com",
+                    password: "secret"
+                )
+            ]
         )
         let recorder = UsageProviderRequestRecorder()
         await UsageMockURLProtocol.store.setHandler { request in
@@ -225,7 +220,7 @@ final class UsageServiceTests: XCTestCase {
         )
 
         XCTAssertTrue(service.isConnectionConfigured())
-        XCTAssertTrue(service.isCurrentDefaultProviderConfirmed())
+        XCTAssertTrue(service.canQueryCurrentDefaultProvider())
         let accounts = try await service.fetchAccounts(accountIDs: nil)
         XCTAssertEqual(accounts.count, 1)
         let account = try XCTUnwrap(accounts.first)
@@ -272,12 +267,15 @@ final class UsageServiceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: configPath) }
 
         var settings = AppSettings.defaultValue
-        settings.sub2APIProvider = Sub2APIProviderConfiguration(
-            isEnabled: true,
-            providerID: "my",
-            adminBaseURL: "https://sub2.test:6060/api/v1",
-            username: "you@example.com",
-            password: "secret"
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            confirmedProviderIDs: ["my"],
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "you@example.com",
+                    password: "secret"
+                )
+            ]
         )
         let recorder = UsageProviderRequestRecorder()
         await UsageMockURLProtocol.store.setHandler { request in
@@ -297,8 +295,8 @@ final class UsageServiceTests: XCTestCase {
             insecureSession: session
         )
 
-        XCTAssertTrue(service.isConnectionConfigured())
-        XCTAssertFalse(service.isCurrentDefaultProviderConfirmed())
+        XCTAssertFalse(service.isConnectionConfigured())
+        XCTAssertFalse(service.canQueryCurrentDefaultProvider())
         do {
             _ = try await service.fetchAccounts(accountIDs: nil)
             XCTFail("Expected provider mismatch")
@@ -310,7 +308,78 @@ final class UsageServiceTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
-    func testLegacyMyProviderIDStillRequiresExplicitConfirmation() throws {
+    func testMultipleSub2APIConfigurationsUseCurrentProviderCredentialsAndBaseURL() async throws {
+        let configPath = try makeCodexConfig("""
+        model_provider = "ShareCoder"
+
+        [model_providers.my]
+        base_url = "https://my-sub2.test:6060/v1"
+
+        [model_providers.ShareCoder]
+        base_url = "https://sharecoder.test/v1"
+        """)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            confirmedProviderIDs: ["my", "ShareCoder"],
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "my-admin@example.com",
+                    password: "my-secret"
+                ),
+                Sub2APIProviderConfiguration(
+                    providerID: "ShareCoder",
+                    username: "share-admin@example.com",
+                    password: "share-secret"
+                ),
+            ]
+        )
+        let recorder = UsageProviderRequestRecorder()
+        await UsageMockURLProtocol.store.setHandler { request in
+            recorder.record(request)
+            let url = try XCTUnwrap(request.url)
+            switch url.path {
+            case "/api/v1/auth/login":
+                return (
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(#"{"code":0,"data":{"access_token":"share-token"}}"#.utf8)
+                )
+            case "/api/v1/admin/accounts":
+                return (
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(#"{"code":0,"data":{"items":[],"total":0,"page":1,"page_size":200,"pages":1}}"#.utf8)
+                )
+            default:
+                XCTFail("Unexpected URL: \(url.absoluteString)")
+                return (
+                    HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil)!,
+                    Data()
+                )
+            }
+        }
+        let session = makeUsageMockSession()
+        let service = DefaultSub2APIAccountService(
+            configPath: configPath,
+            settingsRepository: StaticUsageSettingsRepository(settings: settings),
+            session: session,
+            insecureSession: session
+        )
+
+        let accounts = try await service.fetchAccounts(accountIDs: nil)
+        XCTAssertEqual(accounts, [])
+
+        let requests = recorder.snapshot()
+        XCTAssertEqual(requests.first?.url.host, "sharecoder.test")
+        let loginBody = try XCTUnwrap(requests.first?.body)
+        XCTAssertEqual(
+            try JSONSerialization.jsonObject(with: loginBody) as? NSDictionary,
+            ["email": "share-admin@example.com", "password": "share-secret"] as NSDictionary
+        )
+    }
+
+    func testConfiguredProviderDoesNotRequireExplicitConfirmation() throws {
         let configPath = try makeCodexConfig("""
         model_provider = "my"
 
@@ -320,12 +389,14 @@ final class UsageServiceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: configPath) }
 
         var settings = AppSettings.defaultValue
-        settings.sub2APIProvider = Sub2APIProviderConfiguration(
-            isEnabled: true,
-            providerID: "my",
-            adminBaseURL: "https://sub2.test:6060/api/v1",
-            username: "you@example.com",
-            password: "secret"
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "you@example.com",
+                    password: "secret"
+                )
+            ]
         )
         let session = makeUsageMockSession()
         let service = DefaultSub2APIAccountService(
@@ -337,7 +408,7 @@ final class UsageServiceTests: XCTestCase {
 
         XCTAssertEqual(service.currentDefaultProviderID(), "my")
         XCTAssertTrue(service.isConnectionConfigured())
-        XCTAssertFalse(service.isCurrentDefaultProviderConfirmed())
+        XCTAssertTrue(service.canQueryCurrentDefaultProvider())
     }
 
     func testBackgroundNetworkSessionDisablesPersistentHTTPStorage() {

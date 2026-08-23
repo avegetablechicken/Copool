@@ -32,15 +32,15 @@
 "settings.usage_progress_display" = "進捗バー表示";
 "settings.usage_progress_display.used" = "使用量";
 "settings.usage_progress_display.remaining" = "残量";
-"settings.section.sub2api" = "非公式 Codex プロバイダー";
+"settings.section.sub2api" = "非公式 Provider";
 "settings.sub2api.enabled" = "Sub2api の使用量を利用";
 "settings.sub2api.default_provider" = "現在のデフォルトプロバイダー";
-"settings.sub2api.provider_id" = "プロバイダー ID";
-"settings.sub2api.provider_id_placeholder" = "my";
+"settings.sub2api.provider_id" = "名前";
+"settings.sub2api.provider_id_placeholder" = "Codex 設定の Provider 名と一致させてください";
 "settings.sub2api.admin_base_url" = "管理 API URL";
 "settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
 "settings.sub2api.username" = "ユーザー名またはメール";
-"settings.sub2api.username_placeholder" = "you@example.com";
+"settings.sub2api.username_placeholder" = "Sub2api 管理者アカウント";
 "settings.sub2api.password" = "パスワード";
 "settings.sub2api.password_placeholder" = "管理者パスワード";
 "settings.sub2api.allow_insecure_tls" = "自己署名 TLS 証明書を許可";
@@ -77,6 +77,7 @@
 "settings.notice.remote_servers_saved" = "リモートサーバー設定を保存しました";
 "settings.notice.sub2api_saved" = "Sub2api プロバイダー設定を保存しました";
 "error.sub2api.configuration_incomplete" = "有効な Sub2api プロバイダー設定をすべて入力してください。";
+"error.sub2api.duplicate_provider" = "各 Sub2api Provider 名は一度だけ設定できます。";
 "error.sub2api.invalid_base_url" = "Sub2api 管理 API URL が無効で、プロバイダー URL からも特定できません。";
 "error.sub2api.request_failed_format" = "Sub2api リクエストに失敗しました: %@";
 "error.sub2api.missing_token" = "Sub2api のログイン応答に管理者トークンがありません。";
@@ -99,6 +100,8 @@
 "error.sub2api.provider_not_confirmed" = "現在の Codex プロバイダーは Sub2api として確認されていません。";
 "settings.sub2api.confirmed_providers" = "確認済みプロバイダー";
 "settings.sub2api.clear_confirmed_providers" = "確認済みプロバイダーの関連付けを消去";
+"settings.sub2api.add_provider" = "Sub2api Provider を追加";
+"settings.sub2api.remove_provider" = "Sub2api Provider を削除";
 "error.sub2api.missing_accounts" = "Sub2api アカウント一覧の応答にデータがありません。";
 "error.sub2api.account_not_found" = "Sub2api アカウントが見つかりません。";
 "accounts.action.importing" = "取り込み中...";

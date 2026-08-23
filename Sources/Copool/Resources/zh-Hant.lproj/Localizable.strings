@@ -32,15 +32,15 @@
 "settings.usage_progress_display" = "進度條顯示";
 "settings.usage_progress_display.used" = "已用";
 "settings.usage_progress_display.remaining" = "剩餘";
-"settings.section.sub2api" = "Codex 非官方 Provider";
+"settings.section.sub2api" = "非官方 Provider";
 "settings.sub2api.enabled" = "使用 Sub2api 額度";
 "settings.sub2api.default_provider" = "目前預設 Provider";
-"settings.sub2api.provider_id" = "Provider ID";
-"settings.sub2api.provider_id_placeholder" = "my";
+"settings.sub2api.provider_id" = "名稱";
+"settings.sub2api.provider_id_placeholder" = "需與 Codex 設定中的 Provider 名稱一致";
 "settings.sub2api.admin_base_url" = "管理員 API 位址";
 "settings.sub2api.admin_base_url_placeholder" = "https://主機:6060/api/v1";
 "settings.sub2api.username" = "使用者名稱或電子郵件";
-"settings.sub2api.username_placeholder" = "you@example.com";
+"settings.sub2api.username_placeholder" = "Sub2api 管理員帳號";
 "settings.sub2api.password" = "密碼";
 "settings.sub2api.password_placeholder" = "管理員密碼";
 "settings.sub2api.allow_insecure_tls" = "允許自簽 TLS 憑證";
@@ -77,6 +77,7 @@
 "settings.notice.remote_servers_saved" = "遠端伺服器設定已儲存";
 "settings.notice.sub2api_saved" = "Sub2api Provider 設定已儲存";
 "error.sub2api.configuration_incomplete" = "請先完整填寫已啟用的 Sub2api Provider 設定。";
+"error.sub2api.duplicate_provider" = "每個 Sub2api Provider 名稱只能設定一次。";
 "error.sub2api.invalid_base_url" = "Sub2api 管理員 API 位址無效，且無法從 Provider 位址推導。";
 "error.sub2api.request_failed_format" = "Sub2api 請求失敗：%@";
 "error.sub2api.missing_token" = "Sub2api 登入回應中沒有管理員 Token。";
@@ -99,6 +100,8 @@
 "error.sub2api.provider_not_confirmed" = "尚未確認 Codex 目前 Provider 來自 Sub2api。";
 "settings.sub2api.confirmed_providers" = "已確認的 Provider";
 "settings.sub2api.clear_confirmed_providers" = "清除已確認的 Provider 關聯";
+"settings.sub2api.add_provider" = "加入 Sub2api Provider";
+"settings.sub2api.remove_provider" = "刪除 Sub2api Provider";
 "error.sub2api.missing_accounts" = "Sub2api 帳號列表回應中沒有帳號資料。";
 "error.sub2api.account_not_found" = "找不到該 Sub2api 帳號。";
 "accounts.action.importing" = "匯入中...";

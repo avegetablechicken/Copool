@@ -40,6 +40,34 @@ enum CodexModelProviderResolver {
             CodexModelProviderDefinition(id: providerID, baseURL: baseURL)
         }
     }
+
+    static func providerID(matchingBaseURL rawURL: String, configPath: URL) -> String? {
+        guard let targetOrigin = originKey(rawURL) else { return nil }
+        let matches = definitions(configPath: configPath).filter { definition in
+            guard let baseURL = definition.baseURL else { return false }
+            return originKey(baseURL) == targetOrigin
+        }
+        return matches.count == 1 ? matches[0].id : nil
+    }
+
+    private static func originKey(_ rawURL: String) -> String? {
+        guard let components = URLComponents(string: rawURL),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased() else {
+            return nil
+        }
+        let port: Int?
+        if let explicitPort = components.port {
+            port = explicitPort
+        } else if scheme == "https" {
+            port = 443
+        } else if scheme == "http" {
+            port = 80
+        } else {
+            port = nil
+        }
+        return "\(scheme)://\(host):\(port.map(String.init) ?? "")"
+    }
 }
 
 final class CodexModelProviderSwitchService: CodexModelProviderSwitchServiceProtocol, @unchecked Sendable {

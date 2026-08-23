@@ -42,7 +42,7 @@ extension AccountsPageModel {
     }
 
     func switchSub2APIProvider(account: Sub2APIAccountSummary) async {
-        let switchProviderID = sub2APIAccountService?.configuredProviderID() ?? account.providerID
+        let switchProviderID = account.providerID ?? sub2APIAccountService?.configuredProviderID()
         guard let codexModelProviderSwitchService,
               let providerID = switchProviderID?.trimmingCharacters(in: .whitespacesAndNewlines),
               !providerID.isEmpty,
@@ -61,7 +61,10 @@ extension AccountsPageModel {
 
         do {
             try codexModelProviderSwitchService.switchProvider(to: providerID)
-            sub2APIAccounts = sub2APIAccounts.map { $0.settingProvider(providerID) }
+            sub2APIAccounts = sub2APIAccounts.map {
+                $0.cardID == account.cardID ? $0.settingProvider(providerID) : $0
+            }
+            publishSub2APIAccounts()
             try? await persistSub2APIAccountCache()
             applyCodexModelProviderID(providerID)
             notice = NoticeMessage(

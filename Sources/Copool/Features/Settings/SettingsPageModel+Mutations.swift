@@ -48,10 +48,20 @@ extension SettingsPageModel {
 
     func saveSub2APIProvider() {
         let configuration = sub2APIProviderDraft.normalized()
-        guard !configuration.isEnabled || configuration.isComplete else {
+        guard configuration.providers.allSatisfy({
+            !$0.providerID.isEmpty && $0.isComplete
+        }) else {
             notice = NoticeMessage(
                 style: .error,
                 text: L10n.tr("error.sub2api.configuration_incomplete")
+            )
+            return
+        }
+        let normalizedProviderIDs = configuration.providers.map { $0.providerID.lowercased() }
+        guard Set(normalizedProviderIDs).count == normalizedProviderIDs.count else {
+            notice = NoticeMessage(
+                style: .error,
+                text: L10n.tr("error.sub2api.duplicate_provider")
             )
             return
         }
@@ -61,14 +71,16 @@ extension SettingsPageModel {
             defer { isSavingSub2APIProvider = false }
             do {
                 var configuration = configuration
-                configuration.importedAccountIDs = try await settingsCoordinator
-                    .currentSettings()
-                    .sub2APIProvider
-                    .importedAccountIDs
-                configuration.cachedAccounts = try await settingsCoordinator
-                    .currentSettings()
-                    .sub2APIProvider
-                    .cachedAccounts
+                let current = try await settingsCoordinator.currentSettings().sub2APIProvider
+                configuration.providers = configuration.providers.map { draft in
+                    var draft = draft
+                    if let saved = current.provider(for: draft.providerID) {
+                        draft.importedAccountIDs = saved.importedAccountIDs
+                        draft.cachedAccounts = saved.cachedAccounts
+                    }
+                    draft.legacyAdminBaseURL = ""
+                    return draft
+                }
                 settings = try await settingsCoordinator.updateSettings(
                     AppSettingsPatch(sub2APIProvider: configuration)
                 )
@@ -84,10 +96,14 @@ extension SettingsPageModel {
         }
     }
 
-    func clearSub2APIProviderAssociations() {
-        sub2APIProviderDraft.providerID = ""
-        sub2APIProviderDraft.confirmedProviderIDs = []
-        saveSub2APIProvider()
+    func addSub2APIProviderConfiguration() {
+        sub2APIProviderDraft.providers.append(
+            Sub2APIProviderConfiguration()
+        )
+    }
+
+    func removeSub2APIProviderConfiguration(id: UUID) {
+        sub2APIProviderDraft.providers.removeAll { $0.id == id }
     }
 
     func updateToggle(_ intent: SettingsToggleIntent, to value: Bool) {

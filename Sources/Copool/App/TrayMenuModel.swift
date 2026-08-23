@@ -95,6 +95,12 @@ final class TrayMenuModel: ObservableObject, AccountsManualRefreshServiceProtoco
         self.accounts = accounts
     }
 
+    func acceptSub2APIAccountsSnapshot(_ accounts: [Sub2APIAccountSummary]) {
+        if sub2APIAccounts != accounts {
+            sub2APIAccounts = accounts
+        }
+    }
+
     func applySettings(_ settings: AppSettings) {
         autoSmartSwitchEnabled = settings.autoSmartSwitch
     }

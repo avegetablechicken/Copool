@@ -32,15 +32,15 @@
 "settings.usage_progress_display" = "Progress bar display";
 "settings.usage_progress_display.used" = "Used";
 "settings.usage_progress_display.remaining" = "Remaining";
-"settings.section.sub2api" = "Unofficial Codex Provider";
+"settings.section.sub2api" = "Unofficial Provider";
 "settings.sub2api.enabled" = "Use Sub2api quota";
 "settings.sub2api.default_provider" = "Current default provider";
-"settings.sub2api.provider_id" = "Provider ID";
-"settings.sub2api.provider_id_placeholder" = "my";
+"settings.sub2api.provider_id" = "Name";
+"settings.sub2api.provider_id_placeholder" = "Match the Provider name in Codex config";
 "settings.sub2api.admin_base_url" = "Admin API URL";
 "settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
 "settings.sub2api.username" = "Username or email";
-"settings.sub2api.username_placeholder" = "you@example.com";
+"settings.sub2api.username_placeholder" = "Sub2api administrator account";
 "settings.sub2api.password" = "Password";
 "settings.sub2api.password_placeholder" = "Administrator password";
 "settings.sub2api.allow_insecure_tls" = "Allow self-signed TLS certificate";
@@ -77,6 +77,7 @@
 "settings.notice.remote_servers_saved" = "Remote server config saved";
 "settings.notice.sub2api_saved" = "Sub2api provider settings saved";
 "error.sub2api.configuration_incomplete" = "Complete the enabled Sub2api provider settings before saving.";
+"error.sub2api.duplicate_provider" = "Each Sub2api provider name can only be configured once.";
 "error.sub2api.invalid_base_url" = "The Sub2api admin API URL is invalid and could not be derived from the provider base URL.";
 "error.sub2api.request_failed_format" = "Sub2api request failed: %@";
 "error.sub2api.missing_token" = "The Sub2api login response did not include an administrator token.";
@@ -99,6 +100,8 @@
 "error.sub2api.provider_not_confirmed" = "The current Codex provider has not been confirmed as a Sub2api provider.";
 "settings.sub2api.confirmed_providers" = "Confirmed providers";
 "settings.sub2api.clear_confirmed_providers" = "Clear confirmed provider associations";
+"settings.sub2api.add_provider" = "Add Sub2api provider";
+"settings.sub2api.remove_provider" = "Remove Sub2api provider";
 "error.sub2api.missing_accounts" = "The Sub2api account list response did not include account data.";
 "error.sub2api.account_not_found" = "The Sub2api account was not found.";
 "accounts.action.importing" = "Importing...";
