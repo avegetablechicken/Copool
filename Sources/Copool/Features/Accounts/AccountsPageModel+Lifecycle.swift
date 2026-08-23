@@ -72,6 +72,12 @@ extension AccountsPageModel {
         }
     }
 
+    func acceptExternalCodexModelProviderID(_ providerID: String) {
+        let providerID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !providerID.isEmpty, currentCodexModelProviderID != providerID else { return }
+        currentCodexModelProviderID = providerID
+    }
+
     func syncRemoteUsageRefreshActivity(refreshingAccountIDs: Set<String>) {
         if remoteUsageRefreshingAccountIDs != refreshingAccountIDs {
             remoteUsageRefreshingAccountIDs = refreshingAccountIDs

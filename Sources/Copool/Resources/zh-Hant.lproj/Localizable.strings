@@ -137,6 +137,7 @@
 "accounts.notice.smart_switched_prefix_format" = "已智慧切換到：%@ · %@";
 "accounts.notice.switch_done" = "帳號已切換";
 "accounts.notice.switch_done_fallback" = "帳號已切換（透過 codex app 指令）";
+"accounts.notice.provider_switched_format" = "已將 Codex provider 切換為 %@";
 "accounts.notice.sync_failed_format" = "Opencode 同步失敗：%@";
 "accounts.notice.sync_done" = "Opencode 授權已同步";
 "accounts.notice.editor_restart_failed_format" = "編輯器重啟失敗：%@";

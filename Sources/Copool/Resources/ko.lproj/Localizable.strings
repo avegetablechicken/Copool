@@ -137,6 +137,7 @@
 "accounts.notice.smart_switched_prefix_format" = "스마트 전환 대상: %@ · %@";
 "accounts.notice.switch_done" = "계정을 전환했습니다";
 "accounts.notice.switch_done_fallback" = "계정을 전환했습니다(codex app 명령 사용)";
+"accounts.notice.provider_switched_format" = "Codex provider를 %@로 전환했습니다";
 "accounts.notice.sync_failed_format" = "opencode 동기화 실패: %@";
 "accounts.notice.sync_done" = "opencode 인증 동기화 완료";
 "accounts.notice.editor_restart_failed_format" = "편집기 재시작 실패: %@";

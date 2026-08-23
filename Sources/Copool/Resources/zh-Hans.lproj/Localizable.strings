@@ -149,6 +149,7 @@
 "accounts.notice.smart_switched_prefix_format" = "智能切换到：%@ · %@";
 "accounts.notice.switch_done" = "已切换账号";
 "accounts.notice.switch_done_fallback" = "已切换账号（通过 codex app 命令启动）";
+"accounts.notice.provider_switched_format" = "已将 Codex provider 切换为 %@";
 "accounts.notice.sync_failed_format" = "同步 opencode 失败：%@";
 "accounts.notice.sync_done" = "已同步 opencode 认证";
 "accounts.notice.editor_restart_failed_format" = "编辑器重启失败：%@";

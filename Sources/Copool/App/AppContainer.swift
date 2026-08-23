@@ -54,6 +54,9 @@ final class AppContainer {
                 configPath: paths.codexConfigPath,
                 settingsRepository: settingsRepository
             )
+            let codexModelProviderSwitchService = CodexModelProviderSwitchService(
+                configPath: paths.codexConfigPath
+            )
             let workspaceMetadataService = DefaultWorkspaceMetadataService(configPath: paths.codexConfigPath)
             let chatGPTOAuthLoginService = OpenAIChatGPTOAuthLoginService(configPath: paths.codexConfigPath)
             let codexCLIService = CodexCLIService()
@@ -96,7 +99,12 @@ final class AppContainer {
                 launchAtStartupService: launchAtStartupService
             )
             let initialSettings = try settingsRepository.loadSettings()
+            let initialSub2APIAccounts = initialSub2APIAccountsSnapshot(
+                settings: initialSettings,
+                service: sub2APIAccountService
+            )
             var applySettingsToContainer: ((AppSettings) -> Void)?
+            var applyCodexProviderToContainer: ((String) -> Void)?
             try launchAtStartupService.syncWithStoreValue(initialSettings.launchAtStartup)
             let accountsWidgetDisplayModeStore = AccountsWidgetDisplayModeStore()
             let accountsWidgetSnapshotWriter = AccountsWidgetSnapshotWriter(
@@ -117,7 +125,7 @@ final class AppContainer {
                 remoteAccountsMutationSyncService: remoteAccountsMutationSyncService,
                 backgroundRefreshPolicy: .forPlatform(PlatformCapabilities.currentPlatform),
                 initialAccounts: initialAccounts,
-                initialSub2APIAccounts: initialSettings.sub2APIProvider.cachedAccounts
+                initialSub2APIAccounts: initialSub2APIAccounts
             )
             accountsStoreChangeHandlerBox.handler = { [weak trayModel] in
                 guard let trayModel else { return }
@@ -135,6 +143,7 @@ final class AppContainer {
                 manualRefreshService: trayModel,
                 localAccountsMutationSyncService: trayModel,
                 sub2APIAccountService: sub2APIAccountService,
+                codexModelProviderSwitchService: codexModelProviderSwitchService,
                 chooseAuthDocumentURL: {
                     #if canImport(AppKit)
                     let panel = NSOpenPanel()
@@ -159,8 +168,11 @@ final class AppContainer {
                 onSettingsUpdated: { settings in
                     applySettingsToContainer?(settings)
                 },
+                onCodexModelProviderChanged: { providerID in
+                    applyCodexProviderToContainer?(providerID)
+                },
                 initialAccounts: initialAccounts,
-                initialSub2APIAccounts: initialSettings.sub2APIProvider.cachedAccounts
+                initialSub2APIAccounts: initialSub2APIAccounts
             )
             let settingsModel = SettingsPageModel(
                 settingsCoordinator: settingsCoordinator,
@@ -188,6 +200,9 @@ final class AppContainer {
             )
             applySettingsToContainer = { settings in
                 container.applySettings(settings)
+            }
+            applyCodexProviderToContainer = { providerID in
+                container.applyCodexModelProvider(providerID)
             }
             return container
         } catch {
@@ -257,10 +272,29 @@ final class AppContainer {
         }
     }
 
+    func applyCodexModelProvider(_ providerID: String) {
+        accountsModel.acceptExternalCodexModelProviderID(providerID)
+        settingsModel.acceptExternalCodexModelProviderID(providerID)
+    }
+
     private static func initialAccountsSnapshot(
         using storeRepository: StoreFileRepository
     ) throws -> [AccountSummary] {
         let store = try storeRepository.loadStore()
         return store.accountSummaries()
+    }
+
+    private static func initialSub2APIAccountsSnapshot(
+        settings: AppSettings,
+        service: Sub2APIAccountServiceProtocol
+    ) -> [Sub2APIAccountSummary] {
+        let configuration = settings.sub2APIProvider.normalized()
+        let providerID = service.configuredProviderID()
+            ?? (configuration.associatedProviderIDs.count == 1
+                ? configuration.associatedProviderIDs[0]
+                : nil)
+        return configuration.cachedAccounts.map {
+            $0.settingProvider(providerID)
+        }
     }
 }

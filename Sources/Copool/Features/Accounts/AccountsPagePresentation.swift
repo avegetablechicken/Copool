@@ -53,6 +53,16 @@ struct AccountCardViewState: Equatable, Identifiable {
             && lhs.account.workspaceStatus == rhs.account.workspaceStatus
             && lhs.account.displayStatus == rhs.account.displayStatus
             && lhs.account.isCurrent == rhs.account.isCurrent
+            && lhs.account.sourceTag == rhs.account.sourceTag
+    }
+}
+
+struct Sub2APIAccountCardViewState: Equatable, Identifiable {
+    let source: Sub2APIAccountSummary
+    let card: AccountCardViewState
+
+    var id: String {
+        card.id
     }
 }
 
@@ -112,10 +122,14 @@ extension AccountsPageModel {
         locale: Locale = .autoupdatingCurrent
     ) -> AccountCardViewState {
         let isCollapsed = isAccountCollapsed(account.id)
+        var displayAccount = account
+        if currentCodexModelProviderID.caseInsensitiveCompare("openai") != .orderedSame {
+            displayAccount.isCurrent = false
+        }
         return AccountCardViewState(
-            account: account,
+            account: displayAccount,
             presentation: AccountCardPresentation(
-                account: account,
+                account: displayAccount,
                 isCollapsed: isCollapsed,
                 locale: locale,
                 usageProgressDisplayMode: usageProgressDisplayMode
@@ -129,6 +143,42 @@ extension AccountsPageModel {
             isUsageRefreshActive: isUsageRefreshActive(forAccountID: account.id),
             usageProgressDisplayMode: usageProgressDisplayMode
         )
+    }
+
+    func makeSub2APIAccountCardViewState(
+        for account: Sub2APIAccountSummary,
+        locale: Locale = .autoupdatingCurrent
+    ) -> Sub2APIAccountCardViewState {
+        var summary = account.accountSummary
+        if let providerID = account.providerID {
+            summary.isCurrent = providerID.caseInsensitiveCompare(currentCodexModelProviderID) == .orderedSame
+        }
+        let isCollapsed = isAccountCollapsed(account.cardID)
+        let isRefreshing = refreshingSub2APIAccountIDs.contains(account.id)
+        let card = AccountCardViewState(
+            account: summary,
+            presentation: AccountCardPresentation(
+                account: summary,
+                isCollapsed: isCollapsed,
+                locale: locale,
+                usageProgressDisplayMode: usageProgressDisplayMode
+            ),
+            isCollapsed: isCollapsed,
+            switching: switchingAccountID == account.cardID,
+            refreshing: isRefreshing,
+            showsRefreshButton: runtimePlatform == .macOS,
+            showsReauthenticateButton: false,
+            isRefreshEnabled: !isRefreshing,
+            isUsageRefreshActive: isRefreshing,
+            usageProgressDisplayMode: usageProgressDisplayMode
+        )
+        return Sub2APIAccountCardViewState(source: account, card: card)
+    }
+
+    func makeSub2APIAccountCardViewStates(
+        locale: Locale = .autoupdatingCurrent
+    ) -> [Sub2APIAccountCardViewState] {
+        sub2APIAccounts.map { makeSub2APIAccountCardViewState(for: $0, locale: locale) }
     }
 
     func makeAccountCardViewState(

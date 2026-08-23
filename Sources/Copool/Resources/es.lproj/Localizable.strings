@@ -137,6 +137,7 @@
 "accounts.notice.smart_switched_prefix_format" = "Cambio inteligente a: %@ · %@";
 "accounts.notice.switch_done" = "Cuenta cambiada";
 "accounts.notice.switch_done_fallback" = "Cuenta cambiada (mediante comando codex app)";
+"accounts.notice.provider_switched_format" = "Proveedor de Codex cambiado a %@";
 "accounts.notice.sync_failed_format" = "Falló la sincronización de Opencode: %@";
 "accounts.notice.sync_done" = "Auth de Opencode sincronizada";
 "accounts.notice.editor_restart_failed_format" = "Falló el reinicio del editor: %@";

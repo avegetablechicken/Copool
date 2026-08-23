@@ -8,9 +8,11 @@ final class AccountsPageModel: ObservableObject {
     let manualRefreshService: AccountsManualRefreshServiceProtocol?
     let localAccountsMutationSyncService: AccountsLocalMutationSyncServiceProtocol?
     let sub2APIAccountService: Sub2APIAccountServiceProtocol?
+    let codexModelProviderSwitchService: CodexModelProviderSwitchServiceProtocol?
     let chooseAuthDocumentURL: (() -> URL?)?
     let onLocalAccountsChanged: (([AccountSummary]) -> Void)?
     let onSettingsUpdated: ((AppSettings) -> Void)?
+    let onCodexModelProviderChanged: ((String) -> Void)?
     let runtimePlatform: RuntimePlatform
 
     private let noticeScheduler = NoticeAutoDismissScheduler()
@@ -20,6 +22,7 @@ final class AccountsPageModel: ObservableObject {
 
     var hasLoaded = false
     @Published var usageProgressDisplayMode: UsageProgressDisplayMode
+    @Published var currentCodexModelProviderID: String
     @Published var sub2APIAccounts: [Sub2APIAccountSummary] = []
     @Published var refreshingSub2APIAccountIDs: Set<Int64> = []
     @Published var pendingSub2APIProviderConfirmation: String?
@@ -51,11 +54,13 @@ final class AccountsPageModel: ObservableObject {
         manualRefreshService: AccountsManualRefreshServiceProtocol? = nil,
         localAccountsMutationSyncService: AccountsLocalMutationSyncServiceProtocol? = nil,
         sub2APIAccountService: Sub2APIAccountServiceProtocol? = nil,
+        codexModelProviderSwitchService: CodexModelProviderSwitchServiceProtocol? = nil,
         chooseAuthDocumentURL: (() -> URL?)? = nil,
         runtimePlatform: RuntimePlatform = PlatformCapabilities.currentPlatform,
         usageProgressDisplayMode: UsageProgressDisplayMode = .used,
         onLocalAccountsChanged: (([AccountSummary]) -> Void)? = nil,
         onSettingsUpdated: ((AppSettings) -> Void)? = nil,
+        onCodexModelProviderChanged: ((String) -> Void)? = nil,
         initialAccounts: [AccountSummary]? = nil,
         initialSub2APIAccounts: [Sub2APIAccountSummary] = []
     ) {
@@ -64,11 +69,14 @@ final class AccountsPageModel: ObservableObject {
         self.manualRefreshService = manualRefreshService
         self.localAccountsMutationSyncService = localAccountsMutationSyncService
         self.sub2APIAccountService = sub2APIAccountService
+        self.codexModelProviderSwitchService = codexModelProviderSwitchService
         self.chooseAuthDocumentURL = chooseAuthDocumentURL
         self.runtimePlatform = runtimePlatform
         self.usageProgressDisplayMode = usageProgressDisplayMode
         self.onLocalAccountsChanged = onLocalAccountsChanged
         self.onSettingsUpdated = onSettingsUpdated
+        self.onCodexModelProviderChanged = onCodexModelProviderChanged
+        self.currentCodexModelProviderID = sub2APIAccountService?.currentDefaultProviderID() ?? "openai"
         self.sub2APIAccounts = initialSub2APIAccounts
         self.state = initialAccounts.map { initialAccounts in
             Self.makeViewState(accounts: AccountRanking.sortForDisplay(initialAccounts))

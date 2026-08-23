@@ -17,6 +17,10 @@ extension AccountsPageModel {
         }
 
         do {
+            if runtimePlatform == .macOS, let codexModelProviderSwitchService {
+                try codexModelProviderSwitchService.switchProvider(to: "openai")
+                applyCodexModelProviderID("openai")
+            }
             let switchResult = try await coordinator.switchAccountAndReload(id: id)
             let accounts = switchResult.accounts
             let selectedAccount = switchResult.selectedAccount
@@ -35,6 +39,43 @@ extension AccountsPageModel {
             )
             notice = NoticeMessage(style: .error, text: error.localizedDescription)
         }
+    }
+
+    func switchSub2APIProvider(account: Sub2APIAccountSummary) async {
+        let switchProviderID = sub2APIAccountService?.configuredProviderID() ?? account.providerID
+        guard let codexModelProviderSwitchService,
+              let providerID = switchProviderID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !providerID.isEmpty,
+              switchingAccountID == nil else {
+            return
+        }
+
+        withAccountsSwitchAnimation {
+            switchingAccountID = account.cardID
+        }
+        defer {
+            withAccountsSwitchAnimation {
+                switchingAccountID = nil
+            }
+        }
+
+        do {
+            try codexModelProviderSwitchService.switchProvider(to: providerID)
+            sub2APIAccounts = sub2APIAccounts.map { $0.settingProvider(providerID) }
+            try? await persistSub2APIAccountCache()
+            applyCodexModelProviderID(providerID)
+            notice = NoticeMessage(
+                style: .success,
+                text: L10n.tr("accounts.notice.provider_switched_format", providerID)
+            )
+        } catch {
+            notice = NoticeMessage(style: .error, text: error.localizedDescription)
+        }
+    }
+
+    private func applyCodexModelProviderID(_ providerID: String) {
+        acceptExternalCodexModelProviderID(providerID)
+        onCodexModelProviderChanged?(providerID)
     }
 
     func smartSwitch() async {

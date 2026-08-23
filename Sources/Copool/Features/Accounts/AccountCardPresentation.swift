@@ -41,7 +41,8 @@ struct AccountCardPresentation: Equatable {
         let planLabel = account.normalizedPlanLabel
         self.planLabel = planLabel
         accent = Self.accent(for: planLabel)
-        teamNameTag = account.shouldDisplayWorkspaceTag ? account.displayTeamName : nil
+        teamNameTag = account.sourceTag
+            ?? (account.shouldDisplayWorkspaceTag ? account.displayTeamName : nil)
         statusLabel = account.isWorkspaceDeactivated ? L10n.tr("accounts.card.status.deactivated") : nil
         displayAccountName = Self.displayName(for: account, isCollapsed: isCollapsed)
         creditsText = Self.creditsText(for: account)

@@ -137,6 +137,7 @@
 "accounts.notice.smart_switched_prefix_format" = "Slim geschakeld naar: %@ · %@";
 "accounts.notice.switch_done" = "Account gewisseld";
 "accounts.notice.switch_done_fallback" = "Account gewisseld (via codex app-opdracht)";
+"accounts.notice.provider_switched_format" = "Codex-provider gewijzigd naar %@";
 "accounts.notice.sync_failed_format" = "Opencode-synchronisatie mislukt: %@";
 "accounts.notice.sync_done" = "Opencode-auth gesynchroniseerd";
 "accounts.notice.editor_restart_failed_format" = "Editor herstarten mislukt: %@";

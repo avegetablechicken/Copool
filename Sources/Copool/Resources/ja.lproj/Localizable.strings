@@ -137,6 +137,7 @@
 "accounts.notice.smart_switched_prefix_format" = "スマート切替先: %@ · %@";
 "accounts.notice.switch_done" = "アカウントを切り替えました";
 "accounts.notice.switch_done_fallback" = "アカウントを切り替えました（codex app コマンド経由）";
+"accounts.notice.provider_switched_format" = "Codex provider を %@ に切り替えました";
 "accounts.notice.sync_failed_format" = "opencode 同期に失敗: %@";
 "accounts.notice.sync_done" = "opencode 認証を同期しました";
 "accounts.notice.editor_restart_failed_format" = "エディタ再起動に失敗: %@";

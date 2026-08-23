@@ -180,10 +180,7 @@ private struct AccountsIOSContentHost: View {
                 AccountsPageContentSection(
                     presentation: model.makeContentPresentation(),
                     cards: model.makeAccountCardViewStates(),
-                    sub2APIAccounts: model.sub2APIAccounts,
-                    collapsedSub2APIAccountIDs: model.collapsedAccountIDs,
-                    refreshingSub2APIAccountIDs: model.refreshingSub2APIAccountIDs,
-                    usageProgressDisplayMode: model.usageProgressDisplayMode,
+                    sub2APICards: model.makeSub2APIAccountCardViewStates(),
                     availableViewportSize: viewportSize,
                     areCardsPresented: areCardsPresented,
                     onSwitchAccount: onSwitchAccount,
@@ -193,6 +190,9 @@ private struct AccountsIOSContentHost: View {
                     onCancelAuthorizeWorkspace: onCancelAuthorizeWorkspace,
                     onDeletePendingWorkspace: onDeletePendingWorkspace,
                     onDeleteAccount: onDeleteAccount,
+                    onSwitchSub2APIProvider: { account in
+                        Task { await model.switchSub2APIProvider(account: account) }
+                    },
                     onRefreshSub2APIAccount: { id in
                         Task { await model.refreshSub2APIAccount(id: id) }
                     },
@@ -227,10 +227,7 @@ private struct AccountsMacContentHost: View {
                 AccountsPageContentSection(
                     presentation: model.makeContentPresentation(),
                     cards: model.makeAccountCardViewStates(),
-                    sub2APIAccounts: model.sub2APIAccounts,
-                    collapsedSub2APIAccountIDs: model.collapsedAccountIDs,
-                    refreshingSub2APIAccountIDs: model.refreshingSub2APIAccountIDs,
-                    usageProgressDisplayMode: model.usageProgressDisplayMode,
+                    sub2APICards: model.makeSub2APIAccountCardViewStates(),
                     availableViewportSize: CGSize(
                         width: pageContentWidth,
                         height: LayoutRules.defaultPanelHeight
@@ -243,6 +240,9 @@ private struct AccountsMacContentHost: View {
                     onCancelAuthorizeWorkspace: onCancelAuthorizeWorkspace,
                     onDeletePendingWorkspace: onDeletePendingWorkspace,
                     onDeleteAccount: onDeleteAccount,
+                    onSwitchSub2APIProvider: { account in
+                        Task { await model.switchSub2APIProvider(account: account) }
+                    },
                     onRefreshSub2APIAccount: { id in
                         Task { await model.refreshSub2APIAccount(id: id) }
                     },

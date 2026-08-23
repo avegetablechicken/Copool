@@ -7,6 +7,12 @@ extension SettingsPageModel {
         sub2APIProviderDraft = settings.sub2APIProvider
     }
 
+    func acceptExternalCodexModelProviderID(_ providerID: String) {
+        let providerID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !providerID.isEmpty, defaultCodexProviderID != providerID else { return }
+        defaultCodexProviderID = providerID
+    }
+
     func loadIfNeeded() async {
         if !hasLoaded {
             await load()

@@ -3,10 +3,7 @@ import SwiftUI
 struct AccountsPageContentSection: View {
     let presentation: AccountsPageContentPresentation
     let cards: [AccountCardViewState]
-    let sub2APIAccounts: [Sub2APIAccountSummary]
-    let collapsedSub2APIAccountIDs: Set<String>
-    let refreshingSub2APIAccountIDs: Set<Int64>
-    let usageProgressDisplayMode: UsageProgressDisplayMode
+    let sub2APICards: [Sub2APIAccountCardViewState]
     let availableViewportSize: CGSize
     let areCardsPresented: Bool
     let onSwitchAccount: (String) -> Void
@@ -16,6 +13,7 @@ struct AccountsPageContentSection: View {
     let onCancelAuthorizeWorkspace: () -> Void
     let onDeletePendingWorkspace: (String) -> Void
     let onDeleteAccount: (String) -> Void
+    let onSwitchSub2APIProvider: (Sub2APIAccountSummary) -> Void
     let onRefreshSub2APIAccount: (Int64) -> Void
     let onRemoveSub2APIAccount: (Int64) -> Void
 
@@ -45,10 +43,7 @@ struct AccountsPageContentSection: View {
 
                 AccountsGridSection(
                     cards: self.cards,
-                    sub2APIAccounts: sub2APIAccounts,
-                    collapsedSub2APIAccountIDs: collapsedSub2APIAccountIDs,
-                    refreshingSub2APIAccountIDs: refreshingSub2APIAccountIDs,
-                    usageProgressDisplayMode: usageProgressDisplayMode,
+                    sub2APICards: sub2APICards,
                     isOverviewMode: presentation.isOverviewMode,
                     availableViewportSize: availableViewportSize,
                     areCardsPresented: areCardsPresented,
@@ -56,6 +51,7 @@ struct AccountsPageContentSection: View {
                     onRefreshAccountUsage: onRefreshAccountUsage,
                     onReauthenticateAccount: onReauthenticateAccount,
                     onDeleteAccount: onDeleteAccount,
+                    onSwitchSub2APIProvider: onSwitchSub2APIProvider,
                     onRefreshSub2APIAccount: onRefreshSub2APIAccount,
                     onRemoveSub2APIAccount: onRemoveSub2APIAccount
                 )
@@ -64,95 +60,9 @@ struct AccountsPageContentSection: View {
     }
 }
 
-private struct Sub2APIAccountCard: View {
-    let account: Sub2APIAccountSummary
-    let isCollapsed: Bool
-    let isRefreshing: Bool
-    let usageProgressDisplayMode: UsageProgressDisplayMode
-    let onRefresh: () -> Void
-    let onRemove: () -> Void
-
-    private var presentation: AccountCardPresentation {
-        AccountCardPresentation(
-            account: account.accountSummary,
-            isCollapsed: isCollapsed,
-            locale: .autoupdatingCurrent,
-            usageProgressDisplayMode: usageProgressDisplayMode
-        )
-    }
-
-    private var palette: AccountCardPalette {
-        AccountCardPalette(accent: presentation.accent, isCurrent: false)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if isCollapsed {
-                AccountCompactHeaderContent(
-                    planLabel: presentation.planLabel,
-                    workspaceLabel: "SUB2API",
-                    statusLabel: nil,
-                    accountName: account.displayEmail,
-                    accentColor: palette.toneColor,
-                    titleFont: .headline,
-                    titleColor: .primary,
-                    spacing: 8
-                )
-                AccountCardCompactUsageSection(presentation: presentation)
-            } else {
-                HStack(spacing: 6) {
-                    AccountTagView(
-                        text: presentation.planLabel,
-                        backgroundColor: palette.toneColor.opacity(0.18),
-                        foregroundColor: palette.toneColor
-                    )
-                    AccountTagView(
-                        text: "SUB2API",
-                        backgroundColor: palette.toneColor.opacity(0.18),
-                        foregroundColor: palette.toneColor
-                    )
-                    Spacer(minLength: 0)
-                    AccountDeleteButton(action: onRemove)
-                        .help(L10n.tr("accounts.sub2api.remove"))
-                }
-
-                Text(account.displayEmail)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                AccountCardExpandedUsageSection(presentation: presentation)
-            }
-        }
-        .padding(isCollapsed ? 8 : 10)
-        .accountCardSurface(cornerRadius: 12)
-        .overlay(alignment: .bottomTrailing) {
-            AccountCardBottomOverlay(
-                isCollapsed: isCollapsed,
-                isCurrent: false,
-                showsSwitchButton: false,
-                switching: false,
-                refreshing: isRefreshing,
-                showsRefreshButton: true,
-                showsReauthenticateButton: false,
-                isRefreshEnabled: !isRefreshing,
-                usageError: isRefreshing ? nil : account.usageError,
-                palette: palette,
-                onSwitch: {},
-                onRefresh: onRefresh,
-                onReauthenticate: {}
-            )
-        }
-    }
-}
-
 private struct AccountsGridSection: View {
     let cards: [AccountCardViewState]
-    let sub2APIAccounts: [Sub2APIAccountSummary]
-    let collapsedSub2APIAccountIDs: Set<String>
-    let refreshingSub2APIAccountIDs: Set<Int64>
-    let usageProgressDisplayMode: UsageProgressDisplayMode
+    let sub2APICards: [Sub2APIAccountCardViewState]
     let isOverviewMode: Bool
     let availableViewportSize: CGSize
     let areCardsPresented: Bool
@@ -160,19 +70,20 @@ private struct AccountsGridSection: View {
     let onRefreshAccountUsage: (String) -> Void
     let onReauthenticateAccount: (String) -> Void
     let onDeleteAccount: (String) -> Void
+    let onSwitchSub2APIProvider: (Sub2APIAccountSummary) -> Void
     let onRefreshSub2APIAccount: (Int64) -> Void
     let onRemoveSub2APIAccount: (Int64) -> Void
 
     private enum Item: Identifiable {
         case local(AccountCardViewState)
-        case sub2API(Sub2APIAccountSummary)
+        case sub2API(Sub2APIAccountCardViewState)
 
         var id: String {
             switch self {
             case .local(let card):
                 return "local-\(card.id)"
-            case .sub2API(let account):
-                return account.cardID
+            case .sub2API(let state):
+                return state.id
             }
         }
 
@@ -180,14 +91,14 @@ private struct AccountsGridSection: View {
             switch self {
             case .local(let card):
                 return card.account
-            case .sub2API(let account):
-                return account.accountSummary
+            case .sub2API(let state):
+                return state.card.account
             }
         }
     }
 
     private var items: [Item] {
-        (cards.map(Item.local) + sub2APIAccounts.map(Item.sub2API)).sorted {
+        (cards.map(Item.local) + sub2APICards.map(Item.sub2API)).sorted {
             AccountRanking.sortsBeforeForDisplay($0.accountSummary, $1.accountSummary)
         }
     }
@@ -234,18 +145,17 @@ private struct AccountsGridSection: View {
                         onReauthenticate: { onReauthenticateAccount(card.id) },
                         onDelete: { onDeleteAccount(card.id) }
                     )
-                case .sub2API(let account):
-                    Sub2APIAccountCard(
-                        account: account,
-                        isCollapsed: collapsedSub2APIAccountIDs.contains(account.cardID),
-                        isRefreshing: refreshingSub2APIAccountIDs.contains(account.id),
-                        usageProgressDisplayMode: usageProgressDisplayMode,
-                        onRefresh: { onRefreshSub2APIAccount(account.id) },
-                        onRemove: { onRemoveSub2APIAccount(account.id) }
+                case .sub2API(let state):
+                    AccountCardGridItem(
+                        card: state.card,
+                        areCardsPresented: areCardsPresented,
+                        frameWidth: cardFrameWidth,
+                        index: index,
+                        onSwitch: { onSwitchSub2APIProvider(state.source) },
+                        onRefresh: { onRefreshSub2APIAccount(state.source.id) },
+                        onReauthenticate: {},
+                        onDelete: { onRemoveSub2APIAccount(state.source.id) }
                     )
-                    .frame(width: cardFrameWidth)
-                    .copoolCardEntrance(index: index, isPresented: areCardsPresented)
-                    .modifier(AccountCardFrameModifier())
                 }
             }
         }

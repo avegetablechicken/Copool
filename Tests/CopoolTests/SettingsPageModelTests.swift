@@ -93,14 +93,15 @@ final class SettingsPageModelTests: XCTestCase {
 
         await model.importSub2APIAccounts()
 
-        XCTAssertEqual(model.sub2APIAccounts, [account])
+        let associatedAccount = account.associatingProviderIfMissing("my")
+        XCTAssertEqual(model.sub2APIAccounts, [associatedAccount])
         XCTAssertEqual(
             try settingsRepository.loadSettings().sub2APIProvider.importedAccountIDs,
             [42]
         )
         XCTAssertEqual(
             try settingsRepository.loadSettings().sub2APIProvider.cachedAccounts,
-            [account]
+            [associatedAccount]
         )
         guard case .content = model.makeContentPresentation().state else {
             return XCTFail("Sub2api accounts should make the page display content")
@@ -124,6 +125,7 @@ final class SettingsPageModelTests: XCTestCase {
             username: "admin@example.com",
             password: "secret",
             importedAccountIDs: [42],
+            confirmedProviderIDs: ["ShareCoder"],
             cachedAccounts: [account]
         )
         let settingsRepository = TestSettingsRepository(settings: settings)
@@ -151,7 +153,10 @@ final class SettingsPageModelTests: XCTestCase {
         XCTAssertEqual(model.sub2APIAccounts, [account])
         await model.loadImportedSub2APIAccounts()
 
-        XCTAssertEqual(model.sub2APIAccounts, [account])
+        XCTAssertEqual(
+            model.sub2APIAccounts,
+            [account.associatingProviderIfMissing("ShareCoder")]
+        )
     }
 
     func testTrayRecurringRefreshUpdatesSub2APIAccountsAndCache() async throws {
@@ -206,10 +211,11 @@ final class SettingsPageModelTests: XCTestCase {
 
         await trayModel.refreshRecurringUsage(tick: 0)
 
-        XCTAssertEqual(trayModel.sub2APIAccounts, [account])
+        let associatedAccount = account.settingProvider("ShareCoder")
+        XCTAssertEqual(trayModel.sub2APIAccounts, [associatedAccount])
         XCTAssertEqual(
             try settingsRepository.loadSettings().sub2APIProvider.cachedAccounts,
-            [account]
+            [associatedAccount]
         )
     }
 
@@ -259,7 +265,10 @@ final class SettingsPageModelTests: XCTestCase {
 
         await model.confirmSub2APIProviderAndImport(providerID: "ShareCoder")
 
-        XCTAssertEqual(model.sub2APIAccounts, [account])
+        XCTAssertEqual(
+            model.sub2APIAccounts,
+            [account.associatingProviderIfMissing("ShareCoder")]
+        )
         XCTAssertTrue(
             try settingsRepository.loadSettings().sub2APIProvider.confirms(providerID: "ShareCoder")
         )
@@ -333,6 +342,128 @@ final class SettingsPageModelTests: XCTestCase {
 
         XCTAssertEqual(callbackMode, .remaining)
     }
+
+    func testAccountsPageSwitchesToSub2APIAccountProvider() async throws {
+        let providerSwitchService = SettingsStubCodexModelProviderSwitchService()
+        var changedProviderID: String?
+        let account = Sub2APIAccountSummary(
+            id: 42,
+            name: "openai-2026",
+            email: "codex@example.com",
+            accountID: "chatgpt-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil,
+            providerID: "my"
+        )
+        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let model = AccountsPageModel(
+            coordinator: AccountsCoordinator(
+                storeRepository: SettingsTestAccountsStoreRepository(),
+                settingsRepository: settingsRepository,
+                authRepository: SettingsTestAuthRepository(),
+                usageService: SettingsTestUsageService(),
+                chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+                codexCLIService: SettingsStubCodexCLIService(),
+                editorAppService: SettingsStubEditorAppService(),
+                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                dateProvider: SettingsFixedDateProvider(now: 1)
+            ),
+            sub2APIAccountService: SettingsStubSub2APIAccountService(
+                accounts: [account],
+                providerID: "my",
+                configuredProvider: "ShareCoder"
+            ),
+            codexModelProviderSwitchService: providerSwitchService,
+            onCodexModelProviderChanged: { providerID in
+                changedProviderID = providerID
+            },
+            initialAccounts: [],
+            initialSub2APIAccounts: [account]
+        )
+
+        await model.switchSub2APIProvider(account: account)
+
+        XCTAssertEqual(providerSwitchService.switchedProviderIDs, ["ShareCoder"])
+        XCTAssertEqual(model.currentCodexModelProviderID, "ShareCoder")
+        XCTAssertEqual(changedProviderID, "ShareCoder")
+        let card = try XCTUnwrap(model.makeSub2APIAccountCardViewStates().first?.card)
+        XCTAssertTrue(card.account.isCurrent)
+        XCTAssertEqual(card.presentation.teamNameTag, "SUB2API")
+        XCTAssertEqual(
+            model.notice?.text,
+            L10n.tr("accounts.notice.provider_switched_format", "ShareCoder")
+        )
+        XCTAssertNil(model.switchingAccountID)
+    }
+
+    func testAccountsPageSwitchesProviderToOpenAIForLocalAccount() async throws {
+        let providerSwitchService = SettingsStubCodexModelProviderSwitchService()
+        let account = StoredAccount(
+            id: "local-account",
+            label: "local@example.com",
+            email: "local@example.com",
+            accountID: "chatgpt-account",
+            planType: "pro",
+            teamName: nil,
+            teamAlias: nil,
+            authJSON: .object([:]),
+            addedAt: 1,
+            updatedAt: 1,
+            usage: nil,
+            usageError: nil
+        )
+        let storeRepository = SettingsTestAccountsStoreRepository(
+            store: AccountsStore(accounts: [account])
+        )
+        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let coordinator = AccountsCoordinator(
+            storeRepository: storeRepository,
+            settingsRepository: settingsRepository,
+            authRepository: SettingsTestAuthRepository(),
+            usageService: SettingsTestUsageService(),
+            chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+            codexCLIService: SettingsStubCodexCLIService(),
+            editorAppService: SettingsStubEditorAppService(),
+            opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+            dateProvider: SettingsFixedDateProvider(now: 1)
+        )
+        let model = AccountsPageModel(
+            coordinator: coordinator,
+            sub2APIAccountService: SettingsStubSub2APIAccountService(
+                accounts: [],
+                providerID: "ShareCoder",
+                configuredProvider: "ShareCoder"
+            ),
+            codexModelProviderSwitchService: providerSwitchService,
+            initialAccounts: try await coordinator.listAccounts(refreshWorkspaceMetadata: false)
+        )
+
+        XCTAssertFalse(try XCTUnwrap(model.makeAccountCardViewStates().first).account.isCurrent)
+
+        await model.switchAccount(id: account.id)
+
+        XCTAssertEqual(providerSwitchService.switchedProviderIDs, ["openai"])
+        XCTAssertEqual(model.currentCodexModelProviderID, "openai")
+        XCTAssertTrue(try XCTUnwrap(model.makeAccountCardViewStates().first).account.isCurrent)
+        XCTAssertEqual(try storeRepository.loadStore().currentAccountID, account.id)
+    }
+
+    func testSettingsPageAcceptsProviderChangedByAccountCard() {
+        let model = SettingsPageModel(
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: TestSettingsRepository(),
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            editorAppService: SettingsStubEditorAppService()
+        )
+
+        model.acceptExternalCodexModelProviderID("ShareCoder")
+
+        XCTAssertEqual(model.defaultCodexProviderID, "ShareCoder")
+    }
 }
 
 final class TestSettingsRepository: SettingsRepository, @unchecked Sendable {
@@ -372,7 +503,11 @@ private struct SettingsStubEditorAppService: EditorAppServiceProtocol {
 }
 
 private final class SettingsTestAccountsStoreRepository: AccountsStoreRepository, @unchecked Sendable {
-    private var store = AccountsStore()
+    private var store: AccountsStore
+
+    init(store: AccountsStore = AccountsStore()) {
+        self.store = store
+    }
 
     func loadStore() throws -> AccountsStore {
         store
@@ -453,11 +588,16 @@ private struct SettingsFixedDateProvider: DateProviding {
 private struct SettingsStubSub2APIAccountService: Sub2APIAccountServiceProtocol {
     let accounts: [Sub2APIAccountSummary]
     var providerID = "my"
+    var configuredProvider: String? = nil
     var isConfirmed = true
     var isConnected = true
 
     func currentDefaultProviderID() -> String {
         providerID
+    }
+
+    func configuredProviderID() -> String? {
+        configuredProvider ?? providerID
     }
 
     func isConnectionConfigured() -> Bool {
@@ -472,5 +612,16 @@ private struct SettingsStubSub2APIAccountService: Sub2APIAccountServiceProtocol 
         guard let accountIDs else { return accounts }
         let ids = Set(accountIDs)
         return accounts.filter { ids.contains($0.id) }
+    }
+}
+
+private final class SettingsStubCodexModelProviderSwitchService:
+    CodexModelProviderSwitchServiceProtocol,
+    @unchecked Sendable
+{
+    private(set) var switchedProviderIDs: [String] = []
+
+    func switchProvider(to providerID: String) throws {
+        switchedProviderIDs.append(providerID)
     }
 }

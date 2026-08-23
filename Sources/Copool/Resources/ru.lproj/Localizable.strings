@@ -137,6 +137,7 @@
 "accounts.notice.smart_switched_prefix_format" = "Умное переключение на: %@ · %@";
 "accounts.notice.switch_done" = "Аккаунт переключен";
 "accounts.notice.switch_done_fallback" = "Аккаунт переключен (через команду codex app)";
+"accounts.notice.provider_switched_format" = "Провайдер Codex переключен на %@";
 "accounts.notice.sync_failed_format" = "Сбой синхронизации Opencode: %@";
 "accounts.notice.sync_done" = "Auth Opencode синхронизирована";
 "accounts.notice.editor_restart_failed_format" = "Не удалось перезапустить редактор: %@";

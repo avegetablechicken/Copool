@@ -149,6 +149,7 @@
 "accounts.notice.smart_switched_prefix_format" = "Smart switched to: %@ · %@";
 "accounts.notice.switch_done" = "Switched account";
 "accounts.notice.switch_done_fallback" = "Switched account (via codex app command)";
+"accounts.notice.provider_switched_format" = "Switched Codex provider to %@";
 "accounts.notice.sync_failed_format" = "Opencode sync failed: %@";
 "accounts.notice.sync_done" = "Opencode auth synced";
 "accounts.notice.editor_restart_failed_format" = "Editor restart failed: %@";
