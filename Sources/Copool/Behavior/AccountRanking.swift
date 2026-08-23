@@ -20,19 +20,21 @@ enum AccountRanking {
     }
 
     static func sortForDisplay(_ accounts: [AccountSummary]) -> [AccountSummary] {
-        accounts.sorted { left, right in
-            if left.isCurrent != right.isCurrent {
-                return left.isCurrent
-            }
+        accounts.sorted(by: sortsBeforeForDisplay)
+    }
 
-            let leftScore = remainingScore(for: left)
-            let rightScore = remainingScore(for: right)
-            if leftScore != rightScore {
-                return leftScore > rightScore
-            }
-
-            return left.addedAt < right.addedAt
+    static func sortsBeforeForDisplay(_ left: AccountSummary, _ right: AccountSummary) -> Bool {
+        if left.isCurrent != right.isCurrent {
+            return left.isCurrent
         }
+
+        let leftScore = remainingScore(for: left)
+        let rightScore = remainingScore(for: right)
+        if leftScore != rightScore {
+            return leftScore > rightScore
+        }
+
+        return left.addedAt < right.addedAt
     }
 
     static func pickBestAccount(_ accounts: [AccountSummary]) -> AccountSummary? {

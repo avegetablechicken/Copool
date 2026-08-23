@@ -175,10 +175,21 @@ private struct AccountsGridSection: View {
                 return account.cardID
             }
         }
+
+        var accountSummary: AccountSummary {
+            switch self {
+            case .local(let card):
+                return card.account
+            case .sub2API(let account):
+                return account.accountSummary
+            }
+        }
     }
 
     private var items: [Item] {
-        cards.map(Item.local) + sub2APIAccounts.map(Item.sub2API)
+        (cards.map(Item.local) + sub2APIAccounts.map(Item.sub2API)).sorted {
+            AccountRanking.sortsBeforeForDisplay($0.accountSummary, $1.accountSummary)
+        }
     }
 
     private var gridContext: LayoutRules.AccountsGridContext {
