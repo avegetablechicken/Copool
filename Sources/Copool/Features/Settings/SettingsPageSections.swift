@@ -37,6 +37,7 @@ private struct MacSettingsPageContent: View {
 
 private struct SettingsSub2APISection: View {
     @ObservedObject var model: SettingsPageModel
+    @State private var expandedConfigurationIDs: Set<UUID> = []
 
     var body: some View {
         Group {
@@ -55,44 +56,33 @@ private struct SettingsSub2APISection: View {
 
             ForEach($model.sub2APIProviderDraft.providers) { $configuration in
                 Section {
-                    TextField(
-                        "settings.sub2api.provider_id",
-                        text: $configuration.providerID,
-                        prompt: Text("settings.sub2api.provider_id_placeholder")
-                    )
-                    .textFieldStyle(.roundedBorder)
-
-                    TextField(
-                        "settings.sub2api.username",
-                        text: $configuration.username,
-                        prompt: Text("settings.sub2api.username_placeholder")
-                    )
-                    .textContentType(.username)
-                    .textFieldStyle(.roundedBorder)
-
-                    SecureField(
-                        "settings.sub2api.password",
-                        text: $configuration.password
-                    )
-                    .textContentType(.password)
-                    .textFieldStyle(.roundedBorder)
-
-                    Toggle(
-                        "settings.sub2api.allow_insecure_tls",
-                        isOn: $configuration.allowInsecureTLS
-                    )
-                    .toggleStyle(.switch)
-                } header: {
                     HStack(spacing: 8) {
-                        Rectangle()
-                            .fill(Color.accentColor)
-                            .frame(width: 3, height: 18)
-                        Image(systemName: "server.rack")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(configurationTitle(configuration.providerID))
-                        Spacer(minLength: 0)
+                        Button {
+                            toggleConfiguration(configuration.id)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(
+                                    systemName: expandedConfigurationIDs.contains(configuration.id)
+                                        ? "chevron.down"
+                                        : "chevron.right"
+                                )
+                                .font(.caption.weight(.semibold))
+                                .frame(width: 12)
+                                Rectangle()
+                                    .fill(Color.accentColor)
+                                    .frame(width: 3, height: 18)
+                                Image(systemName: "server.rack")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(configurationTitle(configuration.providerID))
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
                         Button(role: .destructive) {
+                            expandedConfigurationIDs.remove(configuration.id)
                             model.removeSub2APIProviderConfiguration(id: configuration.id)
                         } label: {
                             Image(systemName: "trash")
@@ -101,7 +91,38 @@ private struct SettingsSub2APISection: View {
                         .help(L10n.tr("settings.sub2api.remove_provider"))
                     }
                     .padding(.leading, 12)
+
+                    if expandedConfigurationIDs.contains(configuration.id) {
+                        TextField(
+                            "settings.sub2api.provider_id",
+                            text: $configuration.providerID,
+                            prompt: Text("settings.sub2api.provider_id_placeholder")
+                        )
+                        .textFieldStyle(.roundedBorder)
+
+                        TextField(
+                            "settings.sub2api.username",
+                            text: $configuration.username,
+                            prompt: Text("settings.sub2api.username_placeholder")
+                        )
+                        .textContentType(.username)
+                        .textFieldStyle(.roundedBorder)
+
+                        SecureField(
+                            "settings.sub2api.password",
+                            text: $configuration.password
+                        )
+                        .textContentType(.password)
+                        .textFieldStyle(.roundedBorder)
+
+                        Toggle(
+                            "settings.sub2api.allow_insecure_tls",
+                            isOn: $configuration.allowInsecureTLS
+                        )
+                        .toggleStyle(.switch)
+                    }
                 }
+                .padding(.vertical, -4)
             }
 
             Section {
@@ -119,6 +140,16 @@ private struct SettingsSub2APISection: View {
                     .copoolActionButtonStyle(prominent: true)
                     .disabled(model.isSavingSub2APIProvider)
                 }
+            }
+        }
+    }
+
+    private func toggleConfiguration(_ id: UUID) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            if expandedConfigurationIDs.contains(id) {
+                expandedConfigurationIDs.remove(id)
+            } else {
+                expandedConfigurationIDs.insert(id)
             }
         }
     }
