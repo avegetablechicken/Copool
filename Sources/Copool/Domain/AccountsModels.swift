@@ -394,6 +394,47 @@ struct AccountSummary: Equatable, Identifiable {
     }
 }
 
+struct Sub2APIAccountSummary: Codable, Equatable, Identifiable, Sendable {
+    var id: Int64
+    var name: String
+    var email: String?
+    var accountID: String?
+    var accountType: String
+    var status: String
+    var planType: String?
+    var usage: UsageSnapshot?
+    var usageError: String?
+
+    var cardID: String {
+        "sub2api-\(id)"
+    }
+
+    var displayEmail: String {
+        guard let email = email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else {
+            return "--"
+        }
+        return email
+    }
+
+    var accountSummary: AccountSummary {
+        AccountSummary(
+            id: cardID,
+            label: displayEmail,
+            email: email,
+            accountID: accountID ?? String(id),
+            planType: planType,
+            teamName: nil,
+            teamAlias: nil,
+            addedAt: id,
+            updatedAt: usage?.fetchedAt ?? 0,
+            usage: usage,
+            usageError: usageError,
+            isCurrent: false
+        )
+    }
+}
+
 extension AccountsStore {
     func accountSummaries() -> [AccountSummary] {
         return accounts.map { account in
@@ -418,7 +459,7 @@ extension AccountsStore {
     }
 }
 
-struct UsageSnapshot: Codable, Equatable {
+struct UsageSnapshot: Codable, Equatable, Sendable {
     var fetchedAt: Int64
     var planType: String?
     var fiveHour: UsageWindow?
@@ -426,13 +467,13 @@ struct UsageSnapshot: Codable, Equatable {
     var credits: CreditSnapshot?
 }
 
-struct UsageWindow: Codable, Equatable {
+struct UsageWindow: Codable, Equatable, Sendable {
     var usedPercent: Double
     var windowSeconds: Int64
     var resetAt: Int64?
 }
 
-struct CreditSnapshot: Codable, Equatable {
+struct CreditSnapshot: Codable, Equatable, Sendable {
     var hasCredits: Bool
     var unlimited: Bool
     var balance: String?

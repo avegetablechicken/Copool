@@ -40,6 +40,7 @@ extension AccountsPageModel {
         do {
             let accounts = try await coordinator.listAccounts()
             await applyReloadedAccounts(accounts)
+            await loadImportedSub2APIAccounts()
 
             hasLoaded = true
         } catch {

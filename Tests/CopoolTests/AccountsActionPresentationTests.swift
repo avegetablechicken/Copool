@@ -2,6 +2,22 @@ import XCTest
 @testable import Copool
 
 final class AccountsActionPresentationTests: XCTestCase {
+    func testImportMenuIncludesSub2APIWhenServiceIsAvailable() {
+        let buttons = AccountsActionPresentation.desktopButtons(
+            isImporting: false,
+            isAdding: false,
+            canImportSub2API: true,
+            switchingAccountID: nil,
+            canRefreshUsage: true,
+            isRefreshSpinnerActive: false
+        )
+
+        XCTAssertEqual(
+            buttons[0].menuItems.map(\.intent),
+            [.importCurrentAuth, .importAuthFile, .importSub2APIAccounts]
+        )
+    }
+
     func testDesktopButtonsReflectBusyState() {
         let buttons = AccountsActionPresentation.desktopButtons(
             isImporting: true,

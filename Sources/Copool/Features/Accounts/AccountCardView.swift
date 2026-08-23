@@ -112,6 +112,7 @@ struct AccountCardView: View {
             AccountCardBottomOverlay(
                 isCollapsed: card.isCollapsed,
                 isCurrent: card.account.isCurrent,
+                showsSwitchButton: true,
                 switching: card.switching,
                 refreshing: card.refreshing,
                 showsRefreshButton: card.showsRefreshButton,

@@ -49,6 +49,10 @@ final class AppContainer {
             let authRepository = AuthFileRepository(paths: paths)
             let initialAccounts = try initialAccountsSnapshot(using: storeRepository)
             let usageService = DefaultUsageService(configPath: paths.codexConfigPath)
+            let sub2APIAccountService = DefaultSub2APIAccountService(
+                configPath: paths.codexConfigPath,
+                settingsRepository: settingsRepository
+            )
             let workspaceMetadataService = DefaultWorkspaceMetadataService(configPath: paths.codexConfigPath)
             let chatGPTOAuthLoginService = OpenAIChatGPTOAuthLoginService(configPath: paths.codexConfigPath)
             let codexCLIService = CodexCLIService()
@@ -127,6 +131,7 @@ final class AppContainer {
                 settingsCoordinator: settingsCoordinator,
                 manualRefreshService: trayModel,
                 localAccountsMutationSyncService: trayModel,
+                sub2APIAccountService: sub2APIAccountService,
                 chooseAuthDocumentURL: {
                     #if canImport(AppKit)
                     let panel = NSOpenPanel()
@@ -151,11 +156,13 @@ final class AppContainer {
                 onSettingsUpdated: { settings in
                     applySettingsToContainer?(settings)
                 },
-                initialAccounts: initialAccounts
+                initialAccounts: initialAccounts,
+                initialSub2APIAccounts: initialSettings.sub2APIProvider.cachedAccounts
             )
             let settingsModel = SettingsPageModel(
                 settingsCoordinator: settingsCoordinator,
                 editorAppService: editorAppService,
+                codexConfigPath: paths.codexConfigPath,
                 onSettingsUpdated: { settings in
                     applySettingsToContainer?(settings)
                 },
@@ -229,6 +236,7 @@ final class AppContainer {
     }
 
     func applySettings(_ settings: AppSettings) {
+        settingsModel.acceptExternalSettings(settings)
         widgetUsageProgressDisplayMode = settings.usageProgressDisplayMode
         accountsWidgetDisplayModeStore.save(rawValue: settings.usageProgressDisplayMode.rawValue)
         trayModel.applySettings(settings)

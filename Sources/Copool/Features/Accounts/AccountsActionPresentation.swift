@@ -3,6 +3,7 @@ import Foundation
 enum AccountsPageActionIntent: String, Hashable {
     case importCurrentAuth
     case importAuthFile
+    case importSub2APIAccounts
     case addAccount
     case cancelAddAccount
     case toggleUsageProgressDisplay
@@ -57,6 +58,7 @@ enum AccountsActionPresentation {
     static func desktopButtons(
         isImporting: Bool,
         isAdding: Bool,
+        canImportSub2API: Bool = false,
         switchingAccountID: String?,
         canRefreshUsage: Bool,
         isRefreshSpinnerActive: Bool
@@ -86,7 +88,7 @@ enum AccountsActionPresentation {
                         title: L10n.tr("accounts.action.import_auth_file"),
                         systemImage: "doc.badge.plus"
                     )
-                ]
+                ] + sub2APIImportMenuItems(isEnabled: canImportSub2API)
             ),
             AccountsActionButtonDescriptor(
                 intent: isAdding ? .cancelAddAccount : .addAccount,
@@ -130,7 +132,8 @@ enum AccountsActionPresentation {
 
     static func leadingToolbarButtons(
         isImporting: Bool,
-        isAdding: Bool
+        isAdding: Bool,
+        canImportSub2API: Bool = false
     ) -> [AccountsActionButtonDescriptor<AccountsPageActionIntent>] {
         [
             AccountsActionButtonDescriptor(
@@ -164,7 +167,7 @@ enum AccountsActionPresentation {
                         title: L10n.tr("accounts.action.import_auth_file"),
                         systemImage: "doc.badge.plus"
                     )
-                ]
+                ] + sub2APIImportMenuItems(isEnabled: canImportSub2API)
             ),
             AccountsActionButtonDescriptor(
                 intent: isAdding ? .cancelAddAccount : .addAccount,
@@ -178,6 +181,19 @@ enum AccountsActionPresentation {
                 contentStyle: .icon,
                 surfaceStyle: .neutral,
                 menuItems: []
+            )
+        ]
+    }
+
+    private static func sub2APIImportMenuItems(
+        isEnabled: Bool
+    ) -> [AccountsActionMenuItem<AccountsPageActionIntent>] {
+        guard isEnabled else { return [] }
+        return [
+            AccountsActionMenuItem(
+                intent: .importSub2APIAccounts,
+                title: L10n.tr("accounts.action.import_sub2api"),
+                systemImage: "server.rack"
             )
         ]
     }

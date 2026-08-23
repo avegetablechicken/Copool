@@ -5,6 +5,7 @@ import Combine
 final class SettingsPageModel: ObservableObject {
     let settingsCoordinator: SettingsCoordinator
     let editorAppService: EditorAppServiceProtocol
+    let codexConfigPath: URL?
     let onSettingsUpdated: @MainActor (AppSettings) -> Void
     let onQuitRequested: @MainActor () -> Void
 
@@ -12,6 +13,9 @@ final class SettingsPageModel: ObservableObject {
 
     @Published var settings: AppSettings = .defaultValue
     @Published var installedEditorApps: [InstalledEditorApp] = []
+    @Published var sub2APIProviderDraft: Sub2APIProviderConfiguration = .defaultValue
+    @Published var defaultCodexProviderID = "openai"
+    @Published var isSavingSub2APIProvider = false
     @Published var notice: NoticeMessage? {
         didSet {
             noticeScheduler.schedule(notice) { [weak self] in
@@ -25,11 +29,13 @@ final class SettingsPageModel: ObservableObject {
     init(
         settingsCoordinator: SettingsCoordinator,
         editorAppService: EditorAppServiceProtocol,
+        codexConfigPath: URL? = nil,
         onSettingsUpdated: @escaping @MainActor (AppSettings) -> Void = { _ in },
         onQuitRequested: @escaping @MainActor () -> Void = {}
     ) {
         self.settingsCoordinator = settingsCoordinator
         self.editorAppService = editorAppService
+        self.codexConfigPath = codexConfigPath
         self.onSettingsUpdated = onSettingsUpdated
         self.onQuitRequested = onQuitRequested
     }

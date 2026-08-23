@@ -14,6 +14,113 @@ enum UsageProgressDisplayMode: String, Codable, Equatable, CaseIterable, Sendabl
     }
 }
 
+struct Sub2APIProviderConfiguration: Codable, Equatable, Sendable {
+    var isEnabled: Bool
+    var providerID: String
+    var adminBaseURL: String
+    var username: String
+    var password: String
+    var allowInsecureTLS: Bool
+    var importedAccountIDs: [Int64]
+    var confirmedProviderIDs: [String]
+    var cachedAccounts: [Sub2APIAccountSummary]
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case providerID
+        case adminBaseURL
+        case username
+        case password
+        case allowInsecureTLS
+        case importedAccountIDs
+        case confirmedProviderIDs
+        case cachedAccounts
+    }
+
+    init(
+        isEnabled: Bool = false,
+        providerID: String = "",
+        adminBaseURL: String = "",
+        username: String = "",
+        password: String = "",
+        allowInsecureTLS: Bool = false,
+        importedAccountIDs: [Int64] = [],
+        confirmedProviderIDs: [String] = [],
+        cachedAccounts: [Sub2APIAccountSummary] = []
+    ) {
+        self.isEnabled = isEnabled
+        self.providerID = providerID
+        self.adminBaseURL = adminBaseURL
+        self.username = username
+        self.password = password
+        self.allowInsecureTLS = allowInsecureTLS
+        self.importedAccountIDs = importedAccountIDs
+        self.confirmedProviderIDs = confirmedProviderIDs
+        self.cachedAccounts = cachedAccounts
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        providerID = try container.decodeIfPresent(String.self, forKey: .providerID) ?? ""
+        adminBaseURL = try container.decodeIfPresent(String.self, forKey: .adminBaseURL) ?? ""
+        username = try container.decodeIfPresent(String.self, forKey: .username) ?? ""
+        password = try container.decodeIfPresent(String.self, forKey: .password) ?? ""
+        allowInsecureTLS = try container.decodeIfPresent(Bool.self, forKey: .allowInsecureTLS) ?? false
+        importedAccountIDs = try container.decodeIfPresent([Int64].self, forKey: .importedAccountIDs) ?? []
+        confirmedProviderIDs = try container.decodeIfPresent([String].self, forKey: .confirmedProviderIDs) ?? []
+        cachedAccounts = try container.decodeIfPresent([Sub2APIAccountSummary].self, forKey: .cachedAccounts) ?? []
+    }
+
+    func normalized() -> Sub2APIProviderConfiguration {
+        var value = self
+        value.providerID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        value.adminBaseURL = adminBaseURL
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        value.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        value.isEnabled = !value.username.isEmpty && !value.password.isEmpty
+        value.importedAccountIDs = Array(Set(importedAccountIDs.filter { $0 > 0 })).sorted()
+        let importedIDs = Set(value.importedAccountIDs)
+        value.cachedAccounts = cachedAccounts.reduce(into: [Sub2APIAccountSummary]()) { result, account in
+            guard importedIDs.contains(account.id), !result.contains(where: { $0.id == account.id }) else {
+                return
+            }
+            result.append(account)
+        }
+        let legacyProviderID = value.providerID
+        value.providerID = ""
+        value.confirmedProviderIDs = confirmedProviderIDs.reduce(into: [String]()) { result, rawValue in
+            let providerID = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !providerID.isEmpty,
+                  providerID.caseInsensitiveCompare(legacyProviderID) != .orderedSame,
+                  !result.contains(where: { $0.caseInsensitiveCompare(providerID) == .orderedSame }) else {
+                return
+            }
+            result.append(providerID)
+        }
+        return value
+    }
+
+    var isComplete: Bool {
+        let value = normalized()
+        return !value.username.isEmpty
+            && !value.password.isEmpty
+    }
+
+    var associatedProviderIDs: [String] {
+        normalized().confirmedProviderIDs
+    }
+
+    func confirms(providerID: String) -> Bool {
+        associatedProviderIDs.contains {
+            $0.caseInsensitiveCompare(providerID) == .orderedSame
+        }
+    }
+
+    static let defaultValue = Sub2APIProviderConfiguration()
+}
+
 struct AppSettings: Codable, Equatable {
     var launchAtStartup: Bool
     var launchCodexAfterSwitch: Bool
@@ -26,6 +133,7 @@ struct AppSettings: Codable, Equatable {
     var proxyConfiguration: ProxyConfiguration
     var remoteServers: [RemoteServerConfig]
     var usageProgressDisplayMode: UsageProgressDisplayMode
+    var sub2APIProvider: Sub2APIProviderConfiguration
     var locale: String
 
     enum CodingKeys: String, CodingKey {
@@ -40,6 +148,7 @@ struct AppSettings: Codable, Equatable {
         case proxyConfiguration
         case remoteServers
         case usageProgressDisplayMode
+        case sub2APIProvider
         case locale
     }
 
@@ -55,6 +164,7 @@ struct AppSettings: Codable, Equatable {
         proxyConfiguration: ProxyConfiguration = .defaultValue,
         remoteServers: [RemoteServerConfig],
         usageProgressDisplayMode: UsageProgressDisplayMode = .used,
+        sub2APIProvider: Sub2APIProviderConfiguration = .defaultValue,
         locale: String
     ) {
         self.launchAtStartup = launchAtStartup
@@ -68,6 +178,7 @@ struct AppSettings: Codable, Equatable {
         self.proxyConfiguration = proxyConfiguration.normalized()
         self.remoteServers = remoteServers
         self.usageProgressDisplayMode = usageProgressDisplayMode
+        self.sub2APIProvider = sub2APIProvider.normalized()
         self.locale = AppLocale.resolve(locale).identifier
     }
 
@@ -87,6 +198,10 @@ struct AppSettings: Codable, Equatable {
             UsageProgressDisplayMode.self,
             forKey: .usageProgressDisplayMode
         ) ?? .used
+        sub2APIProvider = try container.decodeIfPresent(
+            Sub2APIProviderConfiguration.self,
+            forKey: .sub2APIProvider
+        )?.normalized() ?? .defaultValue
         locale = AppLocale.resolve(try container.decode(String.self, forKey: .locale)).identifier
     }
 
@@ -103,6 +218,7 @@ struct AppSettings: Codable, Equatable {
         try container.encode(proxyConfiguration, forKey: .proxyConfiguration)
         try container.encode(remoteServers, forKey: .remoteServers)
         try container.encode(usageProgressDisplayMode, forKey: .usageProgressDisplayMode)
+        try container.encode(sub2APIProvider.normalized(), forKey: .sub2APIProvider)
         try container.encode(locale, forKey: .locale)
     }
 
@@ -119,6 +235,7 @@ struct AppSettings: Codable, Equatable {
             proxyConfiguration: .defaultValue,
             remoteServers: [],
             usageProgressDisplayMode: .used,
+            sub2APIProvider: .defaultValue,
             locale: AppLocale.systemDefault.identifier
         )
     }
@@ -136,5 +253,6 @@ struct AppSettingsPatch {
     var proxyConfiguration: ProxyConfiguration? = nil
     var remoteServers: [RemoteServerConfig]? = nil
     var usageProgressDisplayMode: UsageProgressDisplayMode? = nil
+    var sub2APIProvider: Sub2APIProviderConfiguration? = nil
     var locale: String? = nil
 }

@@ -7,6 +7,7 @@ final class AccountsPageModel: ObservableObject {
     let settingsCoordinator: SettingsCoordinator?
     let manualRefreshService: AccountsManualRefreshServiceProtocol?
     let localAccountsMutationSyncService: AccountsLocalMutationSyncServiceProtocol?
+    let sub2APIAccountService: Sub2APIAccountServiceProtocol?
     let chooseAuthDocumentURL: (() -> URL?)?
     let onLocalAccountsChanged: (([AccountSummary]) -> Void)?
     let onSettingsUpdated: ((AppSettings) -> Void)?
@@ -19,6 +20,9 @@ final class AccountsPageModel: ObservableObject {
 
     var hasLoaded = false
     @Published var usageProgressDisplayMode: UsageProgressDisplayMode
+    @Published var sub2APIAccounts: [Sub2APIAccountSummary] = []
+    @Published var refreshingSub2APIAccountIDs: Set<Int64> = []
+    @Published var pendingSub2APIProviderConfirmation: String?
 
     @Published var state: ViewState<[AccountSummary]>
     @Published var notice: NoticeMessage? {
@@ -46,22 +50,26 @@ final class AccountsPageModel: ObservableObject {
         settingsCoordinator: SettingsCoordinator? = nil,
         manualRefreshService: AccountsManualRefreshServiceProtocol? = nil,
         localAccountsMutationSyncService: AccountsLocalMutationSyncServiceProtocol? = nil,
+        sub2APIAccountService: Sub2APIAccountServiceProtocol? = nil,
         chooseAuthDocumentURL: (() -> URL?)? = nil,
         runtimePlatform: RuntimePlatform = PlatformCapabilities.currentPlatform,
         usageProgressDisplayMode: UsageProgressDisplayMode = .used,
         onLocalAccountsChanged: (([AccountSummary]) -> Void)? = nil,
         onSettingsUpdated: ((AppSettings) -> Void)? = nil,
-        initialAccounts: [AccountSummary]? = nil
+        initialAccounts: [AccountSummary]? = nil,
+        initialSub2APIAccounts: [Sub2APIAccountSummary] = []
     ) {
         self.coordinator = coordinator
         self.settingsCoordinator = settingsCoordinator
         self.manualRefreshService = manualRefreshService
         self.localAccountsMutationSyncService = localAccountsMutationSyncService
+        self.sub2APIAccountService = sub2APIAccountService
         self.chooseAuthDocumentURL = chooseAuthDocumentURL
         self.runtimePlatform = runtimePlatform
         self.usageProgressDisplayMode = usageProgressDisplayMode
         self.onLocalAccountsChanged = onLocalAccountsChanged
         self.onSettingsUpdated = onSettingsUpdated
+        self.sub2APIAccounts = initialSub2APIAccounts
         self.state = initialAccounts.map { initialAccounts in
             Self.makeViewState(accounts: AccountRanking.sortForDisplay(initialAccounts))
         } ?? .loading
@@ -71,9 +79,19 @@ final class AccountsPageModel: ObservableObject {
         !isAdding
     }
 
+    var canImportSub2APIAccounts: Bool {
+        sub2APIAccountService != nil && settingsCoordinator != nil
+    }
+
     var areAllAccountsCollapsed: Bool {
-        guard case .content(let accounts) = state else { return false }
-        let ids = Set(accounts.filter { !$0.isWorkspaceDeactivated }.map(\.id))
+        let localIDs: Set<String>
+        if case .content(let accounts) = state {
+            localIDs = Set(accounts.filter { !$0.isWorkspaceDeactivated }.map(\.id))
+        } else {
+            localIDs = []
+        }
+        let ids = localIDs
+            .union(sub2APIAccounts.map(\.cardID))
         guard !ids.isEmpty else { return false }
         return collapsedAccountIDs.isSuperset(of: ids)
     }
@@ -86,7 +104,10 @@ final class AccountsPageModel: ObservableObject {
     }
 
     var isRefreshing: Bool {
-        isManualRefreshing || isRemoteUsageRefreshing || !refreshingAccountIDs.isEmpty
+        isManualRefreshing
+            || isRemoteUsageRefreshing
+            || !refreshingAccountIDs.isEmpty
+            || !refreshingSub2APIAccountIDs.isEmpty
     }
 
     var isRefreshSpinnerActive: Bool {
@@ -103,6 +124,7 @@ final class AccountsPageModel: ObservableObject {
         AccountsActionPresentation.desktopButtons(
             isImporting: isImporting,
             isAdding: isAdding,
+            canImportSub2API: canImportSub2APIAccounts,
             switchingAccountID: switchingAccountID,
             canRefreshUsage: canRefreshUsageAction,
             isRefreshSpinnerActive: isRefreshSpinnerActive
@@ -112,7 +134,8 @@ final class AccountsPageModel: ObservableObject {
     var leadingToolbarButtons: [AccountsActionButtonDescriptor<AccountsPageActionIntent>] {
         let buttons = AccountsActionPresentation.leadingToolbarButtons(
             isImporting: isImporting,
-            isAdding: isAdding
+            isAdding: isAdding,
+            canImportSub2API: canImportSub2APIAccounts
         )
         return buttons
     }
@@ -157,6 +180,8 @@ final class AccountsPageModel: ObservableObject {
         case .importAuthFile:
             guard let url = chooseAuthDocumentURL?() else { return }
             await importAuthDocument(from: url, setAsCurrent: false)
+        case .importSub2APIAccounts:
+            await importSub2APIAccounts()
         case .addAccount:
             await addAccountViaLogin()
         case .cancelAddAccount:

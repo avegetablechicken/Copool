@@ -150,10 +150,15 @@ extension AccountsPageModel {
     }
 
     func makeContentPresentation() -> AccountsPageContentPresentation {
-        let contentState = state.mapContent { accounts in
-            accounts
-                .filter(\.isVisibleInMainList)
-                .map(\.id)
+        let contentState: ViewState<[String]>
+        if !sub2APIAccounts.isEmpty, case .empty = state {
+            contentState = .content([])
+        } else {
+            contentState = state.mapContent { accounts in
+                accounts
+                    .filter(\.isVisibleInMainList)
+                    .map(\.id)
+            }
         }
         let accountPendingCards = currentPendingCards()
         let pendingAuthorizationCards = pendingWorkspaceAuthorizations.map { candidate in

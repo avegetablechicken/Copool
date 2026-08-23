@@ -21,6 +21,8 @@ Copool 是一个面向 macOS 和 iOS 的 SwiftUI 应用，用于管理 Codex/Cha
 - 纯 SwiftUI 分层架构（`App`、`Features`、`UI`、`Behavior`、`Infrastructure`、`Domain`、`Layout`）
 - Account import/switch/delete and usage refresh (5h / 1week)
 - 账号导入/切换/删除与用量刷新（5h / 1week）
+- Import and refresh Sub2api OpenAI/Codex upstream accounts when it is the configured default model provider
+- 当 Sub2api 为已配置的默认模型 Provider 时，导入并刷新其 OpenAI/Codex 上游账号
 - Smart switch based on remaining quota score
 - 基于剩余额度评分的智能切换
 - Local API proxy runtime (Swift native server) with model compatibility mapping

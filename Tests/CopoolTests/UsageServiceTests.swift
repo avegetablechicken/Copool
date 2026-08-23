@@ -57,6 +57,206 @@ final class UsageServiceTests: XCTestCase {
         }
     }
 
+    func testCodexModelProviderResolverUsesActiveProfileProviderAndBaseURL() {
+        let provider = CodexModelProviderResolver.resolve(raw: """
+        model_provider = "openai"
+        profile = "work"
+
+        [profiles.work]
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://sub2.test:6060/v1/"
+        """)
+
+        XCTAssertEqual(
+            provider,
+            CodexModelProviderDefinition(
+                id: "my",
+                baseURL: "https://sub2.test:6060/v1"
+            )
+        )
+        XCTAssertFalse(provider.isOfficialOpenAI)
+    }
+
+    func testCustomDefaultProviderListsAccountsAndMapsSub2APIQuota() async throws {
+        let configPath = try makeCodexConfig("""
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://sub2.test:6060/v1"
+        """)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APIProviderConfiguration(
+            isEnabled: true,
+            username: "you@example.com",
+            password: "secret",
+            confirmedProviderIDs: ["my"]
+        )
+        let recorder = UsageProviderRequestRecorder()
+        await UsageMockURLProtocol.store.setHandler { request in
+            recorder.record(request)
+            let url = try XCTUnwrap(request.url)
+            switch url.path {
+            case "/api/v1/auth/login":
+                return (
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(#"{"code":0,"message":"success","data":{"access_token":"admin-token"}}"#.utf8)
+                )
+            case "/api/v1/admin/accounts":
+                let page = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "page" })?.value
+                let body: String
+                if page == "2" {
+                    body = #"{"code":0,"message":"success","data":{"items":[{"id":2,"name":"spark-shadow","platform":"openai","type":"oauth","status":"active","error_message":null,"parent_account_id":1},{"id":3,"name":"paused@example.com","platform":"openai","type":"oauth","status":"inactive","error_message":null,"parent_account_id":null}],"total":3,"page":2,"page_size":200,"pages":2}}"#
+                } else {
+                    body = #"{"code":0,"message":"success","data":{"items":[{"id":1,"name":"openai-2026","platform":"openai","type":"oauth","status":"active","error_message":null,"parent_account_id":null}],"total":3,"page":1,"page_size":200,"pages":2}}"#
+                }
+                return (
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(body.utf8)
+                )
+            case "/api/v1/admin/openai/accounts/1/quota":
+                return (
+                    HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    Data(#"{"code":0,"message":"success","data":{"email":"you@example.com","plan_type":"prolite","rate_limit":{"primary_window":{"used_percent":38,"limit_window_seconds":604800,"reset_at":1787810131}},"additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_at":1787449578}}}]}}"#.utf8)
+                )
+            default:
+                XCTFail("Unexpected URL: \(url.absoluteString)")
+                return (
+                    HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil)!,
+                    Data()
+                )
+            }
+        }
+
+        let session = makeUsageMockSession()
+        let service = DefaultSub2APIAccountService(
+            configPath: configPath,
+            settingsRepository: StaticUsageSettingsRepository(settings: settings),
+            session: session,
+            insecureSession: session,
+            dateProvider: UsageFixedDateProvider(now: 1_787_431_578)
+        )
+
+        XCTAssertTrue(service.isConnectionConfigured())
+        XCTAssertTrue(service.isCurrentDefaultProviderConfirmed())
+        let accounts = try await service.fetchAccounts(accountIDs: nil)
+        XCTAssertEqual(accounts.count, 1)
+        let account = try XCTUnwrap(accounts.first)
+        let usage = try XCTUnwrap(account.usage)
+        XCTAssertEqual(account.displayEmail, "you@example.com")
+        XCTAssertEqual(account.accountSummary.normalizedPlanLabel, "TEAM")
+        XCTAssertNil(account.accountSummary.displayTeamName)
+
+        XCTAssertEqual(usage.fetchedAt, 1_787_431_578)
+        XCTAssertEqual(usage.planType, "prolite")
+        XCTAssertEqual(usage.fiveHour?.usedPercent, 0)
+        XCTAssertEqual(usage.fiveHour?.windowSeconds, 18_000)
+        XCTAssertEqual(usage.fiveHour?.resetAt, 1_787_449_578)
+        XCTAssertEqual(usage.oneWeek?.usedPercent, 38)
+        XCTAssertEqual(usage.oneWeek?.windowSeconds, 604_800)
+        XCTAssertEqual(usage.oneWeek?.resetAt, 1_787_810_131)
+
+        let requests = recorder.snapshot()
+        XCTAssertEqual(requests.map { $0.url.path }, [
+            "/api/v1/auth/login",
+            "/api/v1/admin/accounts",
+            "/api/v1/admin/accounts",
+            "/api/v1/admin/openai/accounts/1/quota"
+        ])
+        let listQueryItems = URLComponents(url: requests[1].url, resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertEqual(listQueryItems?.first(where: { $0.name == "platform" })?.value, "openai")
+        XCTAssertEqual(listQueryItems?.first(where: { $0.name == "type" })?.value, "oauth")
+        XCTAssertEqual(listQueryItems?.first(where: { $0.name == "status" })?.value, "active")
+        let loginBody = try XCTUnwrap(requests.first?.body)
+        XCTAssertEqual(
+            try JSONSerialization.jsonObject(with: loginBody) as? NSDictionary,
+            ["email": "you@example.com", "password": "secret"] as NSDictionary
+        )
+        XCTAssertEqual(requests.last?.authorization, "Bearer admin-token")
+    }
+
+    func testConfiguredSub2APIIsNotQueriedWhenItIsNotTheDefaultProvider() async throws {
+        let configPath = try makeCodexConfig("""
+        model_provider = "other"
+
+        [model_providers.my]
+        base_url = "https://sub2.test:6060/v1"
+        """)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APIProviderConfiguration(
+            isEnabled: true,
+            providerID: "my",
+            adminBaseURL: "https://sub2.test:6060/api/v1",
+            username: "you@example.com",
+            password: "secret"
+        )
+        let recorder = UsageProviderRequestRecorder()
+        await UsageMockURLProtocol.store.setHandler { request in
+            recorder.record(request)
+            let url = try XCTUnwrap(request.url)
+            return (
+                HTTPURLResponse(url: url, statusCode: 500, httpVersion: nil, headerFields: nil)!,
+                Data()
+            )
+        }
+
+        let session = makeUsageMockSession()
+        let service = DefaultSub2APIAccountService(
+            configPath: configPath,
+            settingsRepository: StaticUsageSettingsRepository(settings: settings),
+            session: session,
+            insecureSession: session
+        )
+
+        XCTAssertTrue(service.isConnectionConfigured())
+        XCTAssertFalse(service.isCurrentDefaultProviderConfirmed())
+        do {
+            _ = try await service.fetchAccounts(accountIDs: nil)
+            XCTFail("Expected provider mismatch")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, L10n.tr("error.sub2api.provider_not_confirmed"))
+        }
+
+        let requests = recorder.snapshot()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testLegacyMyProviderIDStillRequiresExplicitConfirmation() throws {
+        let configPath = try makeCodexConfig("""
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://sub2.test:6060/v1"
+        """)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APIProviderConfiguration(
+            isEnabled: true,
+            providerID: "my",
+            adminBaseURL: "https://sub2.test:6060/api/v1",
+            username: "you@example.com",
+            password: "secret"
+        )
+        let session = makeUsageMockSession()
+        let service = DefaultSub2APIAccountService(
+            configPath: configPath,
+            settingsRepository: StaticUsageSettingsRepository(settings: settings),
+            session: session,
+            insecureSession: session
+        )
+
+        XCTAssertEqual(service.currentDefaultProviderID(), "my")
+        XCTAssertTrue(service.isConnectionConfigured())
+        XCTAssertFalse(service.isCurrentDefaultProviderConfirmed())
+    }
+
     func testBackgroundNetworkSessionDisablesPersistentHTTPStorage() {
         let configuration = BackgroundNetworkSession.shared.configuration
 
@@ -65,6 +265,19 @@ final class UsageServiceTests: XCTestCase {
         XCTAssertNil(configuration.urlCache)
         XCTAssertNil(configuration.httpCookieStorage)
         XCTAssertFalse(configuration.httpShouldSetCookies)
+    }
+
+    private func makeCodexConfig(_ contents: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("copool-codex-config-\(UUID().uuidString).toml")
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    private func makeUsageMockSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UsageMockURLProtocol.self]
+        return URLSession(configuration: configuration)
     }
 
     func testUsageDebugRequestSummaryIncludesRequestDetails() throws {
@@ -100,6 +313,71 @@ final class UsageServiceTests: XCTestCase {
 
         XCTAssertEqual(body, #"{"detail":{"code":"deactivated_workspace"}}"#)
     }
+}
+
+private struct StaticUsageSettingsRepository: SettingsRepository {
+    let settings: AppSettings
+
+    func loadSettings() throws -> AppSettings {
+        settings
+    }
+
+    func saveSettings(_ settings: AppSettings) throws {
+        _ = settings
+    }
+}
+
+private struct UsageFixedDateProvider: DateProviding {
+    let now: Int64
+
+    func unixSecondsNow() -> Int64 {
+        now
+    }
+}
+
+private final class UsageProviderRequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests: [UsageProviderRecordedRequest] = []
+
+    func record(_ request: URLRequest) {
+        guard let url = request.url else { return }
+        let body = request.httpBody ?? request.httpBodyStream.flatMap(Self.readBody)
+        let recorded = UsageProviderRecordedRequest(
+            url: url,
+            authorization: request.value(forHTTPHeaderField: "Authorization"),
+            body: body
+        )
+        lock.lock()
+        requests.append(recorded)
+        lock.unlock()
+    }
+
+    func snapshot() -> [UsageProviderRecordedRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests
+    }
+
+    private static func readBody(from stream: InputStream) -> Data? {
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1_024)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 { return nil }
+            if count == 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
+}
+
+private struct UsageProviderRecordedRequest {
+    var url: URL
+    var authorization: String?
+    var body: Data?
 }
 
 private final class UsageMockURLProtocol: URLProtocol, @unchecked Sendable {

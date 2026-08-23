@@ -180,6 +180,10 @@ private struct AccountsIOSContentHost: View {
                 AccountsPageContentSection(
                     presentation: model.makeContentPresentation(),
                     cards: model.makeAccountCardViewStates(),
+                    sub2APIAccounts: model.sub2APIAccounts,
+                    collapsedSub2APIAccountIDs: model.collapsedAccountIDs,
+                    refreshingSub2APIAccountIDs: model.refreshingSub2APIAccountIDs,
+                    usageProgressDisplayMode: model.usageProgressDisplayMode,
                     availableViewportSize: viewportSize,
                     areCardsPresented: areCardsPresented,
                     onSwitchAccount: onSwitchAccount,
@@ -188,7 +192,13 @@ private struct AccountsIOSContentHost: View {
                     onAuthorizeWorkspace: onAuthorizeWorkspace,
                     onCancelAuthorizeWorkspace: onCancelAuthorizeWorkspace,
                     onDeletePendingWorkspace: onDeletePendingWorkspace,
-                    onDeleteAccount: onDeleteAccount
+                    onDeleteAccount: onDeleteAccount,
+                    onRefreshSub2APIAccount: { id in
+                        Task { await model.refreshSub2APIAccount(id: id) }
+                    },
+                    onRemoveSub2APIAccount: { id in
+                        Task { await model.removeSub2APIAccount(id: id) }
+                    }
                 )
             }
             .padding(.top, LayoutRules.iOSAccountsContentTopPadding(safeAreaTop: safeAreaInsets.top))
@@ -217,6 +227,10 @@ private struct AccountsMacContentHost: View {
                 AccountsPageContentSection(
                     presentation: model.makeContentPresentation(),
                     cards: model.makeAccountCardViewStates(),
+                    sub2APIAccounts: model.sub2APIAccounts,
+                    collapsedSub2APIAccountIDs: model.collapsedAccountIDs,
+                    refreshingSub2APIAccountIDs: model.refreshingSub2APIAccountIDs,
+                    usageProgressDisplayMode: model.usageProgressDisplayMode,
                     availableViewportSize: CGSize(
                         width: pageContentWidth,
                         height: LayoutRules.defaultPanelHeight
@@ -228,7 +242,13 @@ private struct AccountsMacContentHost: View {
                     onAuthorizeWorkspace: onAuthorizeWorkspace,
                     onCancelAuthorizeWorkspace: onCancelAuthorizeWorkspace,
                     onDeletePendingWorkspace: onDeletePendingWorkspace,
-                    onDeleteAccount: onDeleteAccount
+                    onDeleteAccount: onDeleteAccount,
+                    onRefreshSub2APIAccount: { id in
+                        Task { await model.refreshSub2APIAccount(id: id) }
+                    },
+                    onRemoveSub2APIAccount: { id in
+                        Task { await model.removeSub2APIAccount(id: id) }
+                    }
                 )
             }
             .padding(.bottom, 12)

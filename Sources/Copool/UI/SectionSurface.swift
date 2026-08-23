@@ -231,6 +231,7 @@ struct FrostedRoundedSurfaceModifier: ViewModifier {
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(FrostedChromeTokens.separatorColor.opacity(prominent ? 0.85 : 1), lineWidth: 1)
+                    .allowsHitTesting(false)
             }
     }
 

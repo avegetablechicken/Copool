@@ -36,6 +36,13 @@ protocol UsageService: Sendable {
     func fetchUsage(accessToken: String, accountID: String) async throws -> UsageSnapshot
 }
 
+protocol Sub2APIAccountServiceProtocol: Sendable {
+    func currentDefaultProviderID() -> String
+    func isConnectionConfigured() -> Bool
+    func isCurrentDefaultProviderConfirmed() -> Bool
+    func fetchAccounts(accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary]
+}
+
 protocol WorkspaceMetadataService: Sendable {
     func fetchWorkspaceMetadata(accessToken: String) async throws -> [WorkspaceMetadata]
 }

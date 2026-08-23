@@ -46,6 +46,50 @@ extension SettingsPageModel {
         onQuitRequested()
     }
 
+    func saveSub2APIProvider() {
+        let configuration = sub2APIProviderDraft.normalized()
+        guard !configuration.isEnabled || configuration.isComplete else {
+            notice = NoticeMessage(
+                style: .error,
+                text: L10n.tr("error.sub2api.configuration_incomplete")
+            )
+            return
+        }
+
+        isSavingSub2APIProvider = true
+        Task {
+            defer { isSavingSub2APIProvider = false }
+            do {
+                var configuration = configuration
+                configuration.importedAccountIDs = try await settingsCoordinator
+                    .currentSettings()
+                    .sub2APIProvider
+                    .importedAccountIDs
+                configuration.cachedAccounts = try await settingsCoordinator
+                    .currentSettings()
+                    .sub2APIProvider
+                    .cachedAccounts
+                settings = try await settingsCoordinator.updateSettings(
+                    AppSettingsPatch(sub2APIProvider: configuration)
+                )
+                sub2APIProviderDraft = settings.sub2APIProvider
+                onSettingsUpdated(settings)
+                notice = NoticeMessage(
+                    style: .success,
+                    text: L10n.tr("settings.notice.sub2api_saved")
+                )
+            } catch {
+                notice = NoticeMessage(style: .error, text: error.localizedDescription)
+            }
+        }
+    }
+
+    func clearSub2APIProviderAssociations() {
+        sub2APIProviderDraft.providerID = ""
+        sub2APIProviderDraft.confirmedProviderIDs = []
+        saveSub2APIProvider()
+    }
+
     func updateToggle(_ intent: SettingsToggleIntent, to value: Bool) {
         switch intent {
         case .launchAtStartup:

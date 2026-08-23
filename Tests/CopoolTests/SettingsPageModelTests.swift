@@ -21,6 +21,191 @@ final class SettingsPageModelTests: XCTestCase {
         XCTAssertTrue(didQuit)
     }
 
+    func testSaveSub2APIProviderPersistsUsernameAndPassword() async throws {
+        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let model = SettingsPageModel(
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: settingsRepository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            editorAppService: SettingsStubEditorAppService()
+        )
+        model.sub2APIProviderDraft = Sub2APIProviderConfiguration(
+            isEnabled: true,
+            providerID: "my",
+            adminBaseURL: "https://sub2.test:6060/api/v1",
+            username: "admin@example.com",
+            password: "secret",
+            allowInsecureTLS: true
+        )
+
+        model.saveSub2APIProvider()
+        while model.isSavingSub2APIProvider {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(
+            try settingsRepository.loadSettings().sub2APIProvider,
+            model.sub2APIProviderDraft
+        )
+        XCTAssertEqual(model.notice?.text, L10n.tr("settings.notice.sub2api_saved"))
+    }
+
+    func testAccountsPageImportsSub2APIAccountsAndPersistsIDs() async throws {
+        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let settingsCoordinator = SettingsCoordinator(
+            settingsRepository: settingsRepository,
+            launchAtStartupService: SettingsStubLaunchAtStartupService()
+        )
+        let account = Sub2APIAccountSummary(
+            id: 42,
+            name: "codex@example.com",
+            email: "codex@example.com",
+            accountID: "chatgpt-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: UsageSnapshot(
+                fetchedAt: 1,
+                planType: "pro",
+                fiveHour: UsageWindow(usedPercent: 20, windowSeconds: 18_000, resetAt: 100),
+                oneWeek: UsageWindow(usedPercent: 30, windowSeconds: 604_800, resetAt: 200),
+                credits: nil
+            ),
+            usageError: nil
+        )
+        let model = AccountsPageModel(
+            coordinator: AccountsCoordinator(
+                storeRepository: SettingsTestAccountsStoreRepository(),
+                settingsRepository: settingsRepository,
+                authRepository: SettingsTestAuthRepository(),
+                usageService: SettingsTestUsageService(),
+                chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+                codexCLIService: SettingsStubCodexCLIService(),
+                editorAppService: SettingsStubEditorAppService(),
+                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                dateProvider: SettingsFixedDateProvider(now: 1)
+            ),
+            settingsCoordinator: settingsCoordinator,
+            sub2APIAccountService: SettingsStubSub2APIAccountService(accounts: [account]),
+            initialAccounts: []
+        )
+
+        await model.importSub2APIAccounts()
+
+        XCTAssertEqual(model.sub2APIAccounts, [account])
+        XCTAssertEqual(
+            try settingsRepository.loadSettings().sub2APIProvider.importedAccountIDs,
+            [42]
+        )
+        XCTAssertEqual(
+            try settingsRepository.loadSettings().sub2APIProvider.cachedAccounts,
+            [account]
+        )
+        guard case .content = model.makeContentPresentation().state else {
+            return XCTFail("Sub2api accounts should make the page display content")
+        }
+    }
+
+    func testAccountsPageRestoresCachedSub2APIAccountsWithoutNetwork() async throws {
+        let account = Sub2APIAccountSummary(
+            id: 42,
+            name: "openai-2026",
+            email: "codex@example.com",
+            accountID: "chatgpt-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil
+        )
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APIProviderConfiguration(
+            username: "admin@example.com",
+            password: "secret",
+            importedAccountIDs: [42],
+            cachedAccounts: [account]
+        )
+        let settingsRepository = TestSettingsRepository(settings: settings)
+        let model = AccountsPageModel(
+            coordinator: AccountsCoordinator(
+                storeRepository: SettingsTestAccountsStoreRepository(),
+                settingsRepository: settingsRepository,
+                authRepository: SettingsTestAuthRepository(),
+                usageService: SettingsTestUsageService(),
+                chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+                codexCLIService: SettingsStubCodexCLIService(),
+                editorAppService: SettingsStubEditorAppService(),
+                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                dateProvider: SettingsFixedDateProvider(now: 1)
+            ),
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: settingsRepository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            sub2APIAccountService: nil,
+            initialAccounts: [],
+            initialSub2APIAccounts: [account]
+        )
+
+        XCTAssertEqual(model.sub2APIAccounts, [account])
+        await model.loadImportedSub2APIAccounts()
+
+        XCTAssertEqual(model.sub2APIAccounts, [account])
+    }
+
+    func testAccountsPageAsksBeforeAssociatingCurrentProviderWithSub2API() async throws {
+        let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let settingsCoordinator = SettingsCoordinator(
+            settingsRepository: settingsRepository,
+            launchAtStartupService: SettingsStubLaunchAtStartupService()
+        )
+        let account = Sub2APIAccountSummary(
+            id: 7,
+            name: "sharecoder@example.com",
+            email: nil,
+            accountID: nil,
+            accountType: "oauth",
+            status: "active",
+            planType: nil,
+            usage: nil,
+            usageError: nil
+        )
+        let model = AccountsPageModel(
+            coordinator: AccountsCoordinator(
+                storeRepository: SettingsTestAccountsStoreRepository(),
+                settingsRepository: settingsRepository,
+                authRepository: SettingsTestAuthRepository(),
+                usageService: SettingsTestUsageService(),
+                chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+                codexCLIService: SettingsStubCodexCLIService(),
+                editorAppService: SettingsStubEditorAppService(),
+                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                dateProvider: SettingsFixedDateProvider(now: 1)
+            ),
+            settingsCoordinator: settingsCoordinator,
+            sub2APIAccountService: SettingsStubSub2APIAccountService(
+                accounts: [account],
+                providerID: "ShareCoder",
+                isConfirmed: false,
+                isConnected: false
+            ),
+            initialAccounts: []
+        )
+
+        await model.importSub2APIAccounts()
+
+        XCTAssertEqual(model.pendingSub2APIProviderConfirmation, "ShareCoder")
+        XCTAssertTrue(model.sub2APIAccounts.isEmpty)
+
+        await model.confirmSub2APIProviderAndImport(providerID: "ShareCoder")
+
+        XCTAssertEqual(model.sub2APIAccounts, [account])
+        XCTAssertTrue(
+            try settingsRepository.loadSettings().sub2APIProvider.confirms(providerID: "ShareCoder")
+        )
+    }
+
     func testAccountsPageModelToggleUsageProgressDisplayPersistsAndShowsNotice() async {
         let settingsRepository = TestSettingsRepository(settings: .defaultValue)
         let settingsCoordinator = SettingsCoordinator(
@@ -203,5 +388,30 @@ private struct SettingsFixedDateProvider: DateProviding {
 
     func unixSecondsNow() -> Int64 {
         now
+    }
+}
+
+private struct SettingsStubSub2APIAccountService: Sub2APIAccountServiceProtocol {
+    let accounts: [Sub2APIAccountSummary]
+    var providerID = "my"
+    var isConfirmed = true
+    var isConnected = true
+
+    func currentDefaultProviderID() -> String {
+        providerID
+    }
+
+    func isConnectionConfigured() -> Bool {
+        isConnected
+    }
+
+    func isCurrentDefaultProviderConfirmed() -> Bool {
+        isConfirmed
+    }
+
+    func fetchAccounts(accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary] {
+        guard let accountIDs else { return accounts }
+        let ids = Set(accountIDs)
+        return accounts.filter { ids.contains($0.id) }
     }
 }

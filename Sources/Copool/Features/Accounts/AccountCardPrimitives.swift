@@ -190,6 +190,7 @@ struct AccountCardCompactUsageSection: View {
 struct AccountCardBottomOverlay: View {
     let isCollapsed: Bool
     let isCurrent: Bool
+    let showsSwitchButton: Bool
     let switching: Bool
     let refreshing: Bool
     let showsRefreshButton: Bool
@@ -213,6 +214,7 @@ struct AccountCardBottomOverlay: View {
 
                 AccountTrailingActionCluster(
                     isCurrent: isCurrent,
+                    showsSwitchButton: showsSwitchButton,
                     switching: switching,
                     refreshing: refreshing,
                     showsRefreshButton: showsRefreshButton,
@@ -371,6 +373,7 @@ private struct AccountReauthenticateButton: View {
 
 private struct AccountTrailingActionCluster: View {
     let isCurrent: Bool
+    let showsSwitchButton: Bool
     let switching: Bool
     let refreshing: Bool
     let showsRefreshButton: Bool
@@ -393,7 +396,7 @@ private struct AccountTrailingActionCluster: View {
                         foregroundColor: palette.toneColor
                     )
                     .frame(height: AccountCardOverlayLayout.compactActionControlHeight, alignment: .bottom)
-                } else {
+                } else if showsSwitchButton {
                     AccountSwitchButton(
                         switching: switching,
                         labelStyle: .iconOnly,
