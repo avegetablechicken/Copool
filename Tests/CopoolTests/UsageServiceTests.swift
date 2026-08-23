@@ -79,6 +79,89 @@ final class UsageServiceTests: XCTestCase {
         XCTAssertFalse(provider.isOfficialOpenAI)
     }
 
+    func testSub2APIConfiguredProviderMatchesAdminURLInsteadOfCurrentDefault() throws {
+        let configPath = try makeCodexConfig("""
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://local-sub2.test:6060"
+
+        [model_providers.ShareCoder]
+        base_url = "https://sharecoder.test"
+        """)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APIProviderConfiguration(
+            adminBaseURL: "https://sharecoder.test/api/v1",
+            username: "admin@example.com",
+            password: "secret",
+            confirmedProviderIDs: ["my", "ShareCoder"]
+        )
+        let service = DefaultSub2APIAccountService(
+            configPath: configPath,
+            settingsRepository: StaticUsageSettingsRepository(settings: settings),
+            session: makeUsageMockSession(),
+            insecureSession: makeUsageMockSession()
+        )
+
+        XCTAssertEqual(service.currentDefaultProviderID(), "my")
+        XCTAssertEqual(service.configuredProviderID(), "ShareCoder")
+    }
+
+    func testCodexModelProviderSwitchServiceUpdatesRootProviderAndPreservesTables() throws {
+        let configPath = try makeCodexConfig("""
+        model_provider = "openai" # selected provider
+
+        [model_providers.ShareCoder]
+        base_url = "https://sub2.test/v1"
+        """)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+
+        try CodexModelProviderSwitchService(configPath: configPath).switchProvider(to: "ShareCoder")
+
+        let raw = try String(contentsOf: configPath, encoding: .utf8)
+        XCTAssertTrue(raw.contains("model_provider = \"ShareCoder\" # selected provider"))
+        XCTAssertTrue(raw.contains("[model_providers.ShareCoder]"))
+        XCTAssertEqual(CodexModelProviderResolver.resolve(raw: raw).id, "ShareCoder")
+    }
+
+    func testCodexModelProviderSwitchServiceUpdatesActiveProfileOverride() throws {
+        let configPath = try makeCodexConfig("""
+        model_provider = "openai"
+        profile = "work"
+
+        [profiles.work]
+        model_provider = "my"
+
+        [model_providers.ShareCoder]
+        base_url = "https://sub2.test/v1"
+        """)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+
+        try CodexModelProviderSwitchService(configPath: configPath).switchProvider(to: "ShareCoder")
+
+        let raw = try String(contentsOf: configPath, encoding: .utf8)
+        XCTAssertTrue(raw.contains("model_provider = \"openai\""))
+        XCTAssertTrue(raw.contains("[profiles.work]\nmodel_provider = \"ShareCoder\""))
+        XCTAssertEqual(CodexModelProviderResolver.resolve(raw: raw).id, "ShareCoder")
+    }
+
+    func testCodexModelProviderSwitchServiceAddsRootProviderBeforeFirstTable() throws {
+        let configPath = try makeCodexConfig("""
+        # Keep provider definitions intact.
+        [model_providers.ShareCoder]
+        base_url = "https://sub2.test/v1"
+        """)
+        defer { try? FileManager.default.removeItem(at: configPath) }
+
+        try CodexModelProviderSwitchService(configPath: configPath).switchProvider(to: "ShareCoder")
+
+        let raw = try String(contentsOf: configPath, encoding: .utf8)
+        XCTAssertTrue(raw.contains("model_provider = \"ShareCoder\"\n[model_providers.ShareCoder]"))
+        XCTAssertEqual(CodexModelProviderResolver.resolve(raw: raw).id, "ShareCoder")
+    }
+
     func testCustomDefaultProviderListsAccountsAndMapsSub2APIQuota() async throws {
         let configPath = try makeCodexConfig("""
         model_provider = "my"

@@ -214,9 +214,11 @@ extension TrayMenuModel {
             return
         }
 
+        let providerID = sub2APIAccountService.configuredProviderID()
+            ?? sub2APIAccountService.currentDefaultProviderID()
         let refreshed = try await sub2APIAccountService.fetchAccounts(
             accountIDs: configuration.importedAccountIDs
-        )
+        ).map { $0.settingProvider(providerID) }
         sub2APIAccounts = refreshed
 
         var updatedConfiguration = configuration

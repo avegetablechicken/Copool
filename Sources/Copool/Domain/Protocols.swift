@@ -38,9 +38,20 @@ protocol UsageService: Sendable {
 
 protocol Sub2APIAccountServiceProtocol: Sendable {
     func currentDefaultProviderID() -> String
+    func configuredProviderID() -> String?
     func isConnectionConfigured() -> Bool
     func isCurrentDefaultProviderConfirmed() -> Bool
     func fetchAccounts(accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary]
+}
+
+extension Sub2APIAccountServiceProtocol {
+    func configuredProviderID() -> String? {
+        currentDefaultProviderID()
+    }
+}
+
+protocol CodexModelProviderSwitchServiceProtocol: Sendable {
+    func switchProvider(to providerID: String) throws
 }
 
 protocol WorkspaceMetadataService: Sendable {

@@ -284,6 +284,28 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
         CodexModelProviderResolver.resolve(configPath: configPath).id
     }
 
+    func configuredProviderID() -> String? {
+        guard let configuration = try? settingsRepository.loadSettings().sub2APIProvider.normalized() else {
+            return nil
+        }
+        let adminBaseURL = configuration.adminBaseURL
+        guard let adminOrigin = Self.originKey(adminBaseURL) else {
+            return currentDefaultProviderID()
+        }
+
+        let matches = CodexModelProviderResolver.definitions(configPath: configPath).filter {
+            guard let baseURL = $0.baseURL else { return false }
+            return Self.originKey(baseURL) == adminOrigin
+        }
+        if matches.count == 1 {
+            return matches[0].id
+        }
+        let currentProviderID = currentDefaultProviderID()
+        return matches.first {
+            $0.id.caseInsensitiveCompare(currentProviderID) == .orderedSame
+        }?.id
+    }
+
     func isConnectionConfigured() -> Bool {
         guard let configuration = try? settingsRepository.loadSettings().sub2APIProvider.normalized() else {
             return false
@@ -325,6 +347,7 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
             return requestedIDs.contains(account.id)
         }
         let fetchedAt = dateProvider.unixSecondsNow()
+        let accountProviderID = configuredProviderID() ?? route.provider.id
 
         return await withTaskGroup(of: Sub2APIAccountSummary.self) { group in
             for account in accounts {
@@ -340,14 +363,16 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
                             usage: result.usage,
                             email: result.email,
                             accountID: result.accountID,
-                            usageError: nil
+                            usageError: nil,
+                            providerID: accountProviderID
                         )
                     } catch {
                         return account.summary(
                             usage: nil,
                             email: nil,
                             accountID: nil,
-                            usageError: error.localizedDescription
+                            usageError: error.localizedDescription,
+                            providerID: accountProviderID
                         )
                     }
                 }
@@ -379,6 +404,25 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
             return nil
         }
         return (configuration, provider)
+    }
+
+    private static func originKey(_ rawURL: String) -> String? {
+        guard let components = URLComponents(string: rawURL),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased() else {
+            return nil
+        }
+        let port: Int?
+        if let explicitPort = components.port {
+            port = explicitPort
+        } else if scheme == "https" {
+            port = 443
+        } else if scheme == "http" {
+            port = 80
+        } else {
+            port = nil
+        }
+        return "\(scheme)://\(host):\(port.map(String.init) ?? "")"
     }
 }
 
@@ -896,7 +940,8 @@ private struct Sub2APIRemoteAccount: Decodable, Sendable {
         usage: UsageSnapshot?,
         email: String?,
         accountID: String?,
-        usageError: String?
+        usageError: String?,
+        providerID: String
     ) -> Sub2APIAccountSummary {
         Sub2APIAccountSummary(
             id: id,
@@ -907,7 +952,8 @@ private struct Sub2APIRemoteAccount: Decodable, Sendable {
             status: status,
             planType: usage?.planType,
             usage: usage,
-            usageError: usageError ?? errorMessage
+            usageError: usageError ?? errorMessage,
+            providerID: providerID
         )
     }
 }

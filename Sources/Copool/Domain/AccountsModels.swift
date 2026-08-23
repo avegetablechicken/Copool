@@ -341,6 +341,7 @@ struct AccountSummary: Equatable, Identifiable {
     var displayStatus: AccountDisplayStatus = .list
     var isCurrent: Bool
     var principalID: String? = nil
+    var sourceTag: String? = nil
 
     var accountKey: String {
         AccountIdentity.key(for: self)
@@ -404,6 +405,7 @@ struct Sub2APIAccountSummary: Codable, Equatable, Identifiable, Sendable {
     var planType: String?
     var usage: UsageSnapshot?
     var usageError: String?
+    var providerID: String? = nil
 
     var cardID: String {
         "sub2api-\(id)"
@@ -430,8 +432,33 @@ struct Sub2APIAccountSummary: Codable, Equatable, Identifiable, Sendable {
             updatedAt: usage?.fetchedAt ?? 0,
             usage: usage,
             usageError: usageError,
-            isCurrent: false
+            isCurrent: false,
+            sourceTag: "SUB2API"
         )
+    }
+
+    func associatingProviderIfMissing(_ providerID: String?) -> Sub2APIAccountSummary {
+        if let currentProviderID = self.providerID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !currentProviderID.isEmpty {
+            return self
+        }
+        guard let providerID = providerID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !providerID.isEmpty else {
+            return self
+        }
+        var copy = self
+        copy.providerID = providerID
+        return copy
+    }
+
+    func settingProvider(_ providerID: String?) -> Sub2APIAccountSummary {
+        guard let providerID = providerID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !providerID.isEmpty else {
+            return self
+        }
+        var copy = self
+        copy.providerID = providerID
+        return copy
     }
 }
 

@@ -30,6 +30,51 @@ enum CodexModelProviderResolver {
             }?.value
         )
     }
+
+    static func definitions(configPath: URL) -> [CodexModelProviderDefinition] {
+        guard let raw = try? String(contentsOf: configPath, encoding: .utf8), !raw.isEmpty else {
+            return []
+        }
+        let document = CodexConfigDocument(raw: raw)
+        return document.modelProviderBaseURLs.map { providerID, baseURL in
+            CodexModelProviderDefinition(id: providerID, baseURL: baseURL)
+        }
+    }
+}
+
+final class CodexModelProviderSwitchService: CodexModelProviderSwitchServiceProtocol, @unchecked Sendable {
+    private let configPath: URL
+    private let fileManager: FileManager
+
+    init(configPath: URL, fileManager: FileManager = .default) {
+        self.configPath = configPath
+        self.fileManager = fileManager
+    }
+
+    func switchProvider(to providerID: String) throws {
+        let providerID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !providerID.isEmpty else {
+            throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
+        }
+
+        let raw: String
+        if fileManager.fileExists(atPath: configPath.path) {
+            raw = try String(contentsOf: configPath, encoding: .utf8)
+        } else {
+            raw = ""
+        }
+        let updated = try CodexConfigDocument.updatingModelProvider(in: raw, to: providerID)
+        let directory = configPath.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let existingPermissions = try? fileManager.attributesOfItem(atPath: configPath.path)[.posixPermissions]
+        try Data(updated.utf8).write(to: configPath, options: .atomic)
+        if let existingPermissions {
+            try fileManager.setAttributes(
+                [.posixPermissions: existingPermissions],
+                ofItemAtPath: configPath.path
+            )
+        }
+    }
 }
 
 enum ChatGPTBaseOriginResolver {
@@ -94,6 +139,55 @@ private struct CodexConfigDocument {
                 continue
             }
         }
+    }
+
+    static func updatingModelProvider(in raw: String, to providerID: String) throws -> String {
+        let document = CodexConfigDocument(raw: raw)
+        let targetSection: [String]
+        if let profile = document.activeProfile,
+           document.profileModelProviders[profile] != nil {
+            targetSection = ["profiles", profile]
+        } else {
+            targetSection = []
+        }
+
+        var lines = raw.components(separatedBy: "\n")
+        if lines.count == 1, lines[0].isEmpty {
+            lines = []
+        }
+        var section: [String] = []
+        var insertionIndex = lines.last == "" ? max(0, lines.count - 1) : lines.count
+
+        for index in lines.indices {
+            let rawLine = lines[index]
+            let content = strippingComment(from: rawLine)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if content.hasPrefix("["), content.hasSuffix("]") {
+                if targetSection.isEmpty, insertionIndex == lines.count {
+                    insertionIndex = index
+                }
+                section = parsePath(String(content.dropFirst().dropLast()))
+                continue
+            }
+
+            guard section == targetSection,
+                  let assignment = parseAssignment(content),
+                  assignment.key == "model_provider" else {
+                continue
+            }
+            lines[index] = replacingAssignmentValue(
+                in: rawLine,
+                key: "model_provider",
+                value: providerID
+            )
+            return preservingTrailingNewline(of: raw, in: lines)
+        }
+
+        guard targetSection.isEmpty else {
+            throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
+        }
+        lines.insert("model_provider = \(quoted(providerID))", at: insertionIndex)
+        return preservingTrailingNewline(of: raw, in: lines)
     }
 
     private static func parseAssignment(_ line: String) -> (key: String, value: String)? {
@@ -177,5 +271,31 @@ private struct CodexConfigDocument {
             return value
         }
         return String(value.dropFirst().dropLast())
+    }
+
+    private static func replacingAssignmentValue(
+        in line: String,
+        key: String,
+        value: String
+    ) -> String {
+        let indentation = String(line.prefix { $0 == " " || $0 == "\t" })
+        let comment = firstUnquotedCharacter("#", in: line).map { index in
+            String(line[index...])
+        }
+        let suffix = comment.map { " \($0)" } ?? ""
+        return "\(indentation)\(key) = \(quoted(value))\(suffix)"
+    }
+
+    private static func quoted(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
+
+    private static func preservingTrailingNewline(of original: String, in lines: [String]) -> String {
+        let joined = lines.joined(separator: "\n")
+        guard original.hasSuffix("\n"), !joined.hasSuffix("\n") else { return joined }
+        return joined + "\n"
     }
 }
