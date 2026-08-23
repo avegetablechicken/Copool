@@ -66,6 +66,12 @@ extension AccountsPageModel {
         applyAccounts(accounts)
     }
 
+    func syncSub2APIFromBackgroundRefresh(_ accounts: [Sub2APIAccountSummary]) {
+        if sub2APIAccounts != accounts {
+            sub2APIAccounts = accounts
+        }
+    }
+
     func syncRemoteUsageRefreshActivity(refreshingAccountIDs: Set<String>) {
         if remoteUsageRefreshingAccountIDs != refreshingAccountIDs {
             remoteUsageRefreshingAccountIDs = refreshingAccountIDs

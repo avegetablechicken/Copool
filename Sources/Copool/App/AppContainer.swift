@@ -20,6 +20,7 @@ final class AppContainer {
     private let proxyCoordinator: ProxyCoordinator
     private var accountsWidgetSnapshotCancellable: AnyCancellable?
     private var accountsPageSnapshotCancellable: AnyCancellable?
+    private var sub2APIAccountsPageSnapshotCancellable: AnyCancellable?
     private var widgetUsageProgressDisplayMode: UsageProgressDisplayMode
 
     lazy var proxyModel: ProxyPageModel = ProxyPageModel(
@@ -112,9 +113,11 @@ final class AppContainer {
             let trayModel = TrayMenuModel(
                 accountsCoordinator: accountsCoordinator,
                 settingsCoordinator: settingsCoordinator,
+                sub2APIAccountService: sub2APIAccountService,
                 remoteAccountsMutationSyncService: remoteAccountsMutationSyncService,
                 backgroundRefreshPolicy: .forPlatform(PlatformCapabilities.currentPlatform),
-                initialAccounts: initialAccounts
+                initialAccounts: initialAccounts,
+                initialSub2APIAccounts: initialSettings.sub2APIProvider.cachedAccounts
             )
             accountsStoreChangeHandlerBox.handler = { [weak trayModel] in
                 guard let trayModel else { return }
@@ -226,6 +229,11 @@ final class AppContainer {
             .removeDuplicates()
             .sink { [weak accountsModel] accounts in
                 accountsModel?.acceptExternalAccountsSnapshot(accounts)
+            }
+        sub2APIAccountsPageSnapshotCancellable = trayModel.$sub2APIAccounts
+            .removeDuplicates()
+            .sink { [weak accountsModel] accounts in
+                accountsModel?.syncSub2APIFromBackgroundRefresh(accounts)
             }
         Task {
             await accountsWidgetSnapshotWriter.write(

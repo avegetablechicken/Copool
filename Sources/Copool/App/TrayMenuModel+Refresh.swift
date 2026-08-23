@@ -41,6 +41,7 @@ extension TrayMenuModel {
         )
 
         accounts = latestAccounts
+        try await refreshSub2APIAccounts(using: settings)
         scheduleWorkspaceMetadataRefresh(forceRemoteCheck: true)
         notice = nil
         return latestAccounts
@@ -99,6 +100,7 @@ extension TrayMenuModel {
             "tray.executeRefresh.afterLocalRefresh",
             "forceUsageRefresh=\(forceUsageRefresh) didAutoSwitch=\(localRefreshResult.didAutoSwitch) \(AccountSwitchDebugLog.describe(accounts: latestAccounts))"
         )
+        try await refreshSub2APIAccounts(using: settings)
         return latestAccounts
     }
 
@@ -174,6 +176,7 @@ extension TrayMenuModel {
                 onPartialUpdate: nil
             )
             accounts = localRefreshResult.accounts
+            try await refreshSub2APIAccounts(using: settings)
             notice = nil
         } catch {
             notice = error.localizedDescription
@@ -201,6 +204,26 @@ extension TrayMenuModel {
                 self.notice = nil
             } catch {}
         }
+    }
+
+    func refreshSub2APIAccounts(using settings: AppSettings) async throws {
+        guard let sub2APIAccountService else { return }
+        let configuration = settings.sub2APIProvider.normalized()
+        guard !configuration.importedAccountIDs.isEmpty,
+              sub2APIAccountService.isCurrentDefaultProviderConfirmed() else {
+            return
+        }
+
+        let refreshed = try await sub2APIAccountService.fetchAccounts(
+            accountIDs: configuration.importedAccountIDs
+        )
+        sub2APIAccounts = refreshed
+
+        var updatedConfiguration = configuration
+        updatedConfiguration.cachedAccounts = refreshed
+        _ = try await settingsCoordinator.updateSettings(
+            AppSettingsPatch(sub2APIProvider: updatedConfiguration)
+        )
     }
 
     func beginAccountsRefreshActivity() {

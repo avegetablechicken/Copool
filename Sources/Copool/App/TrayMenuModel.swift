@@ -38,6 +38,7 @@ final class TrayMenuModel: ObservableObject, AccountsManualRefreshServiceProtoco
 
     let accountsCoordinator: AccountsCoordinator
     let settingsCoordinator: SettingsCoordinator
+    let sub2APIAccountService: Sub2APIAccountServiceProtocol?
     let remoteAccountsMutationSyncService: RemoteAccountsMutationSyncServiceProtocol?
     let backgroundRefreshPolicy: BackgroundRefreshPolicy
     let dateProvider: DateProviding
@@ -51,6 +52,7 @@ final class TrayMenuModel: ObservableObject, AccountsManualRefreshServiceProtoco
     var remoteUsageRefreshActivityCountsByID: [String: Int] = [:]
 
     @Published var accounts: [AccountSummary] = []
+    @Published var sub2APIAccounts: [Sub2APIAccountSummary] = []
     @Published var notice: String?
     @Published var isRefreshingAccounts = false
     @Published var isFetchingRemoteUsage = false
@@ -59,21 +61,25 @@ final class TrayMenuModel: ObservableObject, AccountsManualRefreshServiceProtoco
     init(
         accountsCoordinator: AccountsCoordinator,
         settingsCoordinator: SettingsCoordinator,
+        sub2APIAccountService: Sub2APIAccountServiceProtocol? = nil,
         remoteAccountsMutationSyncService: RemoteAccountsMutationSyncServiceProtocol? = nil,
         backgroundRefreshPolicy: BackgroundRefreshPolicy,
         dateProvider: DateProviding = SystemDateProvider(),
         snapshotFreshnessPolicy: AccountsSnapshotFreshnessPolicy = AccountsSnapshotFreshnessPolicy(),
         usageRefreshPlanningPolicy: AccountsUsageRefreshPlanningPolicy = AccountsUsageRefreshPlanningPolicy(),
-        initialAccounts: [AccountSummary] = []
+        initialAccounts: [AccountSummary] = [],
+        initialSub2APIAccounts: [Sub2APIAccountSummary] = []
     ) {
         self.accountsCoordinator = accountsCoordinator
         self.settingsCoordinator = settingsCoordinator
+        self.sub2APIAccountService = sub2APIAccountService
         self.remoteAccountsMutationSyncService = remoteAccountsMutationSyncService
         self.backgroundRefreshPolicy = backgroundRefreshPolicy
         self.dateProvider = dateProvider
         self.snapshotFreshnessPolicy = snapshotFreshnessPolicy
         self.usageRefreshPlanningPolicy = usageRefreshPlanningPolicy
         self.accounts = initialAccounts
+        self.sub2APIAccounts = initialSub2APIAccounts
     }
 
     deinit {

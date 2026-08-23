@@ -23,7 +23,9 @@ extension AccountsPageModel {
             }
             let accounts = try await coordinator.listAccounts()
             applyAccounts(accounts)
-            try await refreshImportedSub2APIAccounts()
+            if manualRefreshService == nil {
+                try await refreshImportedSub2APIAccounts()
+            }
             await refreshPendingWorkspaceAuthorizations(from: accounts)
             if manualRefreshService == nil {
                 publishLocalAccounts(accounts)
