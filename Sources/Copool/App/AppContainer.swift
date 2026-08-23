@@ -47,12 +47,14 @@ final class AppContainer {
             let paths = try FileSystemPaths.live()
             let storeRepository = StoreFileRepository(paths: paths)
             let settingsRepository = SettingsFileRepository(paths: paths)
+            let sub2APISecretStore = Sub2APIKeychainSecretStore()
             let authRepository = AuthFileRepository(paths: paths)
             let initialAccounts = try initialAccountsSnapshot(using: storeRepository)
             let usageService = DefaultUsageService(configPath: paths.codexConfigPath)
             let sub2APIAccountService = DefaultSub2APIAccountService(
                 configPath: paths.codexConfigPath,
-                settingsRepository: settingsRepository
+                settingsRepository: settingsRepository,
+                secretStore: sub2APISecretStore
             )
             let codexModelProviderSwitchService = CodexModelProviderSwitchService(
                 configPath: paths.codexConfigPath
@@ -103,8 +105,12 @@ final class AppContainer {
                 initialSettings.sub2APIProvider,
                 configPath: paths.codexConfigPath
             )
-            if migratedSub2APISettings != initialSettings.sub2APIProvider {
-                initialSettings.sub2APIProvider = migratedSub2APISettings
+            let securedSub2APISettings = try migrateSub2APIPasswords(
+                migratedSub2APISettings,
+                secretStore: sub2APISecretStore
+            )
+            if securedSub2APISettings != initialSettings.sub2APIProvider {
+                initialSettings.sub2APIProvider = securedSub2APISettings
                 try settingsRepository.saveSettings(initialSettings)
             }
             let initialSub2APIAccounts = initialSub2APIAccountsSnapshot(
@@ -187,6 +193,7 @@ final class AppContainer {
             let settingsModel = SettingsPageModel(
                 settingsCoordinator: settingsCoordinator,
                 editorAppService: editorAppService,
+                sub2APISecretStore: sub2APISecretStore,
                 codexConfigPath: paths.codexConfigPath,
                 onSettingsUpdated: { settings in
                     applySettingsToContainer?(settings)
@@ -327,5 +334,19 @@ final class AppContainer {
             return configuration
         }
         return settings.normalized()
+    }
+
+    static func migrateSub2APIPasswords(
+        _ settings: Sub2APISettingsConfiguration,
+        secretStore: Sub2APISecretStoreProtocol
+    ) throws -> Sub2APISettingsConfiguration {
+        var settings = settings
+        for index in settings.providers.indices {
+            let password = settings.providers[index].password
+            guard !password.isEmpty else { continue }
+            try secretStore.setPassword(password, for: settings.providers[index].id)
+            settings.providers[index].password = ""
+        }
+        return settings
     }
 }

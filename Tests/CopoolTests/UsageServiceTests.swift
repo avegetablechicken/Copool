@@ -162,16 +162,17 @@ final class UsageServiceTests: XCTestCase {
         """)
         defer { try? FileManager.default.removeItem(at: configPath) }
 
+        let providerConfiguration = Sub2APIProviderConfiguration(
+            providerID: "my",
+            username: "you@example.com"
+        )
         var settings = AppSettings.defaultValue
         settings.sub2APIProvider = Sub2APISettingsConfiguration(
             confirmedProviderIDs: ["my"],
-            providers: [
-                Sub2APIProviderConfiguration(
-                    providerID: "my",
-                    username: "you@example.com",
-                    password: "secret"
-                )
-            ]
+            providers: [providerConfiguration]
+        )
+        let secretStore = UsageStubSub2APISecretStore(
+            passwords: [providerConfiguration.id: "secret"]
         )
         let recorder = UsageProviderRequestRecorder()
         await UsageMockURLProtocol.store.setHandler { request in
@@ -214,6 +215,7 @@ final class UsageServiceTests: XCTestCase {
         let service = DefaultSub2APIAccountService(
             configPath: configPath,
             settingsRepository: StaticUsageSettingsRepository(settings: settings),
+            secretStore: secretStore,
             session: session,
             insecureSession: session,
             dateProvider: UsageFixedDateProvider(now: 1_787_431_578)
@@ -478,6 +480,23 @@ private struct StaticUsageSettingsRepository: SettingsRepository {
 
     func saveSettings(_ settings: AppSettings) throws {
         _ = settings
+    }
+}
+
+private struct UsageStubSub2APISecretStore: Sub2APISecretStoreProtocol {
+    let passwords: [UUID: String]
+
+    func password(for configurationID: UUID) throws -> String? {
+        passwords[configurationID]
+    }
+
+    func setPassword(_ password: String, for configurationID: UUID) throws {
+        _ = password
+        _ = configurationID
+    }
+
+    func removePassword(for configurationID: UUID) throws {
+        _ = configurationID
     }
 }
 

@@ -261,18 +261,21 @@ final class DefaultUsageService: UsageService, @unchecked Sendable {
 final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchecked Sendable {
     private let configPath: URL
     private let settingsRepository: SettingsRepository
+    private let secretStore: Sub2APISecretStoreProtocol?
     private let sub2APIClient: Sub2APIUsageClient
     private let dateProvider: DateProviding
 
     init(
         configPath: URL,
         settingsRepository: SettingsRepository,
+        secretStore: Sub2APISecretStoreProtocol? = nil,
         session: URLSession = BackgroundNetworkSession.shared,
         insecureSession: URLSession = BackgroundNetworkSession.insecureSub2API,
         dateProvider: DateProviding = SystemDateProvider()
     ) {
         self.configPath = configPath
         self.settingsRepository = settingsRepository
+        self.secretStore = secretStore
         self.dateProvider = dateProvider
         self.sub2APIClient = Sub2APIUsageClient(
             session: session,
@@ -295,7 +298,8 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
 
     func isConnectionConfigured() -> Bool {
         guard let settings = try? settingsRepository.loadSettings().sub2APIProvider.normalized(),
-              let configuration = settings.provider(for: currentDefaultProviderID()) else {
+              let storedConfiguration = settings.provider(for: currentDefaultProviderID()),
+              let configuration = try? resolvedConfiguration(storedConfiguration) else {
             return false
         }
         return configuration.isEnabled
@@ -306,7 +310,11 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
             return false
         }
         let provider = CodexModelProviderResolver.resolve(configPath: configPath)
-        return settings.provider(for: provider.id)?.isEnabled == true
+        guard let storedConfiguration = settings.provider(for: provider.id),
+              let configuration = try? resolvedConfiguration(storedConfiguration) else {
+            return false
+        }
+        return configuration.isEnabled
             && !provider.isOfficialOpenAI
     }
 
@@ -321,7 +329,7 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
         providerID: String,
         accountIDs: [Int64]?
     ) async throws -> [Sub2APIAccountSummary] {
-        guard let route = providerRoute(providerID: providerID) else {
+        guard let route = try providerRoute(providerID: providerID) else {
             throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
         }
         let allAccounts = try await sub2APIClient.listOpenAIAccounts(
@@ -381,7 +389,7 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
         }
     }
 
-    private func providerRoute(providerID: String) -> (
+    private func providerRoute(providerID: String) throws -> (
         configuration: Sub2APIProviderConfiguration,
         provider: CodexModelProviderDefinition
     )? {
@@ -394,12 +402,23 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
         }) else {
             return nil
         }
-        guard let configuration = settings.provider(for: provider.id) else { return nil }
-        guard !provider.isOfficialOpenAI,
-              configuration.isEnabled else {
-            return nil
+        guard let storedConfiguration = settings.provider(for: provider.id) else { return nil }
+        let configuration = try resolvedConfiguration(storedConfiguration)
+        guard !provider.isOfficialOpenAI else { return nil }
+        guard configuration.isEnabled else {
+            throw AppError.invalidData(L10n.tr("error.sub2api.configuration_incomplete"))
         }
         return (configuration, provider)
+    }
+
+    private func resolvedConfiguration(
+        _ storedConfiguration: Sub2APIProviderConfiguration
+    ) throws -> Sub2APIProviderConfiguration {
+        var configuration = storedConfiguration
+        if configuration.password.isEmpty, let secretStore {
+            configuration.password = try secretStore.password(for: configuration.id) ?? ""
+        }
+        return configuration
     }
 }
 

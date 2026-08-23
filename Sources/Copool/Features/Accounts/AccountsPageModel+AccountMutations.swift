@@ -187,7 +187,9 @@ extension AccountsPageModel {
         }
         let sub2APISettings = settings.sub2APIProvider.normalized()
         guard !sub2APISettings.providers.isEmpty,
-              sub2APISettings.providers.allSatisfy({ $0.isEnabled }) else {
+              sub2APISettings.providers.allSatisfy({
+                  !$0.providerID.isEmpty && !$0.username.isEmpty
+              }) else {
             notice = NoticeMessage(style: .error, text: L10n.tr("error.sub2api.configuration_incomplete"))
             return
         }

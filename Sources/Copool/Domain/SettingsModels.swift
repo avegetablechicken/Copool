@@ -67,6 +67,17 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         legacyAdminBaseURL = try container.decodeIfPresent(String.self, forKey: .legacyAdminBaseURL) ?? ""
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(providerID, forKey: .providerID)
+        try container.encode(username, forKey: .username)
+        try container.encode(allowInsecureTLS, forKey: .allowInsecureTLS)
+        try container.encode(importedAccountIDs, forKey: .importedAccountIDs)
+        try container.encode(cachedAccounts, forKey: .cachedAccounts)
+        try container.encode(legacyAdminBaseURL, forKey: .legacyAdminBaseURL)
+    }
+
     func normalized() -> Sub2APIProviderConfiguration {
         var value = self
         value.providerID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)

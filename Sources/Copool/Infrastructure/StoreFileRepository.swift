@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 
 final class StoreFileRepository: AccountsStoreRepository, @unchecked Sendable {
     private let paths: FileSystemPaths
@@ -238,4 +241,83 @@ final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
         _ = chmod(url.path, S_IRUSR | S_IWUSR)
         #endif
     }
+}
+
+final class Sub2APIKeychainSecretStore: Sub2APISecretStoreProtocol, @unchecked Sendable {
+    private let service = "com.alick.copool.sub2api"
+
+    func password(for configurationID: UUID) throws -> String? {
+        #if canImport(Security)
+        var query = baseQuery(for: configurationID)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else {
+            throw keychainError(status)
+        }
+        guard let password = String(data: data, encoding: .utf8) else {
+            throw AppError.invalidData("Keychain returned invalid Sub2api password data.")
+        }
+        return password
+        #else
+        _ = configurationID
+        throw AppError.io("Keychain is unavailable on this platform.")
+        #endif
+    }
+
+    func setPassword(_ password: String, for configurationID: UUID) throws {
+        #if canImport(Security)
+        let data = Data(password.utf8)
+        let query = baseQuery(for: configurationID)
+        let updateStatus = SecItemUpdate(
+            query as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else {
+            throw keychainError(updateStatus)
+        }
+
+        var attributes = query
+        attributes[kSecValueData as String] = data
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addStatus = SecItemAdd(attributes as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw keychainError(addStatus)
+        }
+        #else
+        _ = password
+        _ = configurationID
+        throw AppError.io("Keychain is unavailable on this platform.")
+        #endif
+    }
+
+    func removePassword(for configurationID: UUID) throws {
+        #if canImport(Security)
+        let status = SecItemDelete(baseQuery(for: configurationID) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw keychainError(status)
+        }
+        #else
+        _ = configurationID
+        throw AppError.io("Keychain is unavailable on this platform.")
+        #endif
+    }
+
+    #if canImport(Security)
+    private func baseQuery(for configurationID: UUID) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: configurationID.uuidString,
+        ]
+    }
+
+    private func keychainError(_ status: OSStatus) -> AppError {
+        let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+        return AppError.io("Keychain operation failed: \(message)")
+    }
+    #endif
 }

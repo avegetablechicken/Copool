@@ -21,14 +21,16 @@ final class SettingsPageModelTests: XCTestCase {
         XCTAssertTrue(didQuit)
     }
 
-    func testSaveSub2APIProviderPersistsUsernameAndPassword() async throws {
+    func testSaveSub2APIProviderStoresPasswordOutsideSettings() async throws {
         let settingsRepository = TestSettingsRepository(settings: .defaultValue)
+        let secretStore = SettingsStubSub2APISecretStore()
         let model = SettingsPageModel(
             settingsCoordinator: SettingsCoordinator(
                 settingsRepository: settingsRepository,
                 launchAtStartupService: SettingsStubLaunchAtStartupService()
             ),
-            editorAppService: SettingsStubEditorAppService()
+            editorAppService: SettingsStubEditorAppService(),
+            sub2APISecretStore: secretStore
         )
         model.sub2APIProviderDraft = Sub2APISettingsConfiguration(
             confirmedProviderIDs: ["my"],
@@ -47,11 +49,26 @@ final class SettingsPageModelTests: XCTestCase {
             await Task.yield()
         }
 
-        XCTAssertEqual(
-            try settingsRepository.loadSettings().sub2APIProvider,
-            model.sub2APIProviderDraft
+        let configurationID = try XCTUnwrap(model.sub2APIProviderDraft.providers.first?.id)
+        let stored = try XCTUnwrap(
+            settingsRepository.loadSettings().sub2APIProvider.providers.first
         )
+        XCTAssertEqual(stored.username, "admin@example.com")
+        XCTAssertEqual(stored.password, "")
+        XCTAssertEqual(try secretStore.password(for: configurationID), "secret")
+        XCTAssertEqual(model.sub2APIProviderDraft.providers.first?.password, "secret")
         XCTAssertEqual(model.notice?.text, L10n.tr("settings.notice.sub2api_saved"))
+
+        let reloadedModel = SettingsPageModel(
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: settingsRepository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            editorAppService: SettingsStubEditorAppService(),
+            sub2APISecretStore: secretStore
+        )
+        await reloadedModel.load()
+        XCTAssertEqual(reloadedModel.sub2APIProviderDraft.providers.first?.password, "secret")
     }
 
     func testSettingsPageAddsAndSavesArbitrarySub2APIProviderConfigurations() async throws {
@@ -124,9 +141,17 @@ final class SettingsPageModelTests: XCTestCase {
             ]
         )
 
-        let migrated = AppContainer.migrateSub2APISettings(legacy, configPath: configPath)
+        let secretStore = SettingsStubSub2APISecretStore()
+        let matched = AppContainer.migrateSub2APISettings(legacy, configPath: configPath)
+        let migrated = try AppContainer.migrateSub2APIPasswords(
+            matched,
+            secretStore: secretStore
+        )
 
         XCTAssertEqual(migrated.providers.first?.providerID, "ShareCoder")
+        let configurationID = try XCTUnwrap(migrated.providers.first?.id)
+        XCTAssertEqual(migrated.providers.first?.password, "")
+        XCTAssertEqual(try secretStore.password(for: configurationID), "secret")
         XCTAssertEqual(migrated.providers.first?.legacyAdminBaseURL, "")
         XCTAssertEqual(migrated.providers.first?.cachedAccounts.first?.providerID, "ShareCoder")
         XCTAssertEqual(Set(migrated.confirmedProviderIDs), ["ShareCoder", "my"])
@@ -965,6 +990,25 @@ private struct SettingsStubSub2APIAccountService: Sub2APIAccountServiceProtocol 
         guard let accountIDs else { return providerAccounts }
         let ids = Set(accountIDs)
         return providerAccounts.filter { ids.contains($0.id) }
+    }
+}
+
+private final class SettingsStubSub2APISecretStore:
+    Sub2APISecretStoreProtocol,
+    @unchecked Sendable
+{
+    private var passwords: [UUID: String] = [:]
+
+    func password(for configurationID: UUID) throws -> String? {
+        passwords[configurationID]
+    }
+
+    func setPassword(_ password: String, for configurationID: UUID) throws {
+        passwords[configurationID] = password
+    }
+
+    func removePassword(for configurationID: UUID) throws {
+        passwords[configurationID] = nil
     }
 }
 

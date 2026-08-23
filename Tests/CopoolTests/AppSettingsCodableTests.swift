@@ -46,7 +46,7 @@ final class AppSettingsCodableTests: XCTestCase {
         XCTAssertEqual(settings.sub2APIProvider, .defaultValue)
     }
 
-    func testSub2APIProviderConfigurationRoundTrips() throws {
+    func testSub2APIProviderConfigurationRoundTripsWithoutPassword() throws {
         var settings = AppSettings.defaultValue
         settings.sub2APIProvider = Sub2APISettingsConfiguration(
             confirmedProviderIDs: ["my"],
@@ -61,10 +61,8 @@ final class AppSettingsCodableTests: XCTestCase {
             ]
         )
 
-        let decoded = try JSONDecoder().decode(
-            AppSettings.self,
-            from: JSONEncoder().encode(settings)
-        )
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: encoded)
 
         XCTAssertEqual(
             decoded.sub2APIProvider,
@@ -75,13 +73,19 @@ final class AppSettingsCodableTests: XCTestCase {
                         id: settings.sub2APIProvider.providers[0].id,
                         providerID: "my",
                         username: "admin@example.com",
-                        password: "secret",
                         allowInsecureTLS: true,
                         importedAccountIDs: [1, 2]
                     )
                 ]
             )
         )
+        let root = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let sub2API = try XCTUnwrap(root["sub2APIProvider"] as? [String: Any])
+        let providers = try XCTUnwrap(sub2API["providers"] as? [[String: Any]])
+        XCTAssertNil(providers.first?["password"])
+        XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("secret"))
     }
 
     func testLegacySingleConfigurationMigratesWithoutImplicitConfirmation() throws {

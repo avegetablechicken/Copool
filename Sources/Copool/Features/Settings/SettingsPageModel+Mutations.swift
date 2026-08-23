@@ -72,6 +72,8 @@ extension SettingsPageModel {
             do {
                 var configuration = configuration
                 let current = try await settingsCoordinator.currentSettings().sub2APIProvider
+                let removedConfigurationIDs = Set(current.providers.map(\.id))
+                    .subtracting(configuration.providers.map(\.id))
                 configuration.providers = configuration.providers.map { draft in
                     var draft = draft
                     if let saved = current.provider(for: draft.providerID) {
@@ -81,10 +83,26 @@ extension SettingsPageModel {
                     draft.legacyAdminBaseURL = ""
                     return draft
                 }
+                let editableConfiguration = configuration
+                if let sub2APISecretStore {
+                    for provider in configuration.providers {
+                        try sub2APISecretStore.setPassword(provider.password, for: provider.id)
+                    }
+                    configuration.providers = configuration.providers.map { provider in
+                        var provider = provider
+                        provider.password = ""
+                        return provider
+                    }
+                }
                 settings = try await settingsCoordinator.updateSettings(
                     AppSettingsPatch(sub2APIProvider: configuration)
                 )
-                sub2APIProviderDraft = settings.sub2APIProvider
+                if let sub2APISecretStore {
+                    for configurationID in removedConfigurationIDs {
+                        try sub2APISecretStore.removePassword(for: configurationID)
+                    }
+                }
+                sub2APIProviderDraft = editableConfiguration
                 onSettingsUpdated(settings)
                 notice = NoticeMessage(
                     style: .success,

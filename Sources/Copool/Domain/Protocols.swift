@@ -20,6 +20,12 @@ protocol SettingsRepository: Sendable {
     func saveSettings(_ settings: AppSettings) throws
 }
 
+protocol Sub2APISecretStoreProtocol: Sendable {
+    func password(for configurationID: UUID) throws -> String?
+    func setPassword(_ password: String, for configurationID: UUID) throws
+    func removePassword(for configurationID: UUID) throws
+}
+
 protocol AuthRepository: Sendable {
     func readCurrentAuth() throws -> JSONValue
     func readCurrentAuthOptional() throws -> JSONValue?
