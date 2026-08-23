@@ -338,6 +338,70 @@ final class SettingsPageModelTests: XCTestCase {
         XCTAssertEqual(model.notice?.text, L10n.tr("error.sub2api.configuration_incomplete"))
     }
 
+    func testManualSub2APIRefreshUsesCardProviderWithoutConfirmation() async throws {
+        let account = Sub2APIAccountSummary(
+            id: 42,
+            name: "my-account",
+            email: "old@example.com",
+            accountID: "my-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil,
+            providerID: "my"
+        )
+        var refreshed = account
+        refreshed.email = "refreshed@example.com"
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "my-admin@example.com",
+                    password: "secret",
+                    importedAccountIDs: [42],
+                    cachedAccounts: [account]
+                ),
+                Sub2APIProviderConfiguration(
+                    providerID: "ShareCoder",
+                    username: "share-admin@example.com",
+                    password: "secret"
+                ),
+            ]
+        )
+        let settingsRepository = TestSettingsRepository(settings: settings)
+        let model = AccountsPageModel(
+            coordinator: AccountsCoordinator(
+                storeRepository: SettingsTestAccountsStoreRepository(),
+                settingsRepository: settingsRepository,
+                authRepository: SettingsTestAuthRepository(),
+                usageService: SettingsTestUsageService(),
+                chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+                codexCLIService: SettingsStubCodexCLIService(),
+                editorAppService: SettingsStubEditorAppService(),
+                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                dateProvider: SettingsFixedDateProvider(now: 1)
+            ),
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: settingsRepository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            sub2APIAccountService: SettingsStubSub2APIAccountService(
+                accounts: [],
+                providerID: "ShareCoder",
+                accountsByProviderID: ["my": [refreshed]]
+            ),
+            initialAccounts: [],
+            initialSub2APIAccounts: [account]
+        )
+
+        await model.refreshSub2APIAccount(account)
+
+        XCTAssertEqual(model.sub2APIAccounts.first?.displayEmail, "refreshed@example.com")
+        XCTAssertNil(model.notice)
+    }
+
     func testAccountsPageRestoresCachedSub2APIAccountsWithoutNetwork() async throws {
         let account = Sub2APIAccountSummary(
             id: 42,

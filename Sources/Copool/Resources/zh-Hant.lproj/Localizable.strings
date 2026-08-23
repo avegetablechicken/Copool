@@ -97,7 +97,7 @@
 "accounts.sub2api.confirm_provider_title_format" = "%@ 是否來自 Sub2api？";
 "accounts.sub2api.confirm_provider_message_format" = "請確認 Codex 目前 Provider %@ 使用的是已設定的 Sub2api 管理員 API。";
 "accounts.sub2api.confirm_provider_action" = "確認並同步";
-"error.sub2api.provider_not_confirmed" = "尚未確認 Codex 目前 Provider 來自 Sub2api。";
+"error.sub2api.provider_not_confirmed" = "未在 Codex 設定或 Sub2api 設定中找到對應的 Provider。";
 "settings.sub2api.confirmed_providers" = "已確認的 Provider";
 "settings.sub2api.clear_confirmed_providers" = "清除已確認的 Provider 關聯";
 "settings.sub2api.add_provider" = "加入 Sub2api Provider";

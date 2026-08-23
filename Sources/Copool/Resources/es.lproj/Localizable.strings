@@ -97,7 +97,7 @@
 "accounts.sub2api.confirm_provider_title_format" = "¿%@ utiliza Sub2api?";
 "accounts.sub2api.confirm_provider_message_format" = "Confirma que el proveedor Codex actual %@ utiliza la API administrativa de Sub2api configurada.";
 "accounts.sub2api.confirm_provider_action" = "Confirmar y sincronizar";
-"error.sub2api.provider_not_confirmed" = "El proveedor Codex actual no se ha confirmado como proveedor Sub2api.";
+"error.sub2api.provider_not_confirmed" = "No se encontró el Provider correspondiente en la configuración de Codex o de Sub2api.";
 "settings.sub2api.confirmed_providers" = "Proveedores confirmados";
 "settings.sub2api.clear_confirmed_providers" = "Borrar asociaciones de proveedores confirmados";
 "settings.sub2api.add_provider" = "Añadir Provider Sub2api";

@@ -97,7 +97,7 @@
 "accounts.sub2api.confirm_provider_title_format" = "%@ использует Sub2api?";
 "accounts.sub2api.confirm_provider_message_format" = "Подтвердите, что текущий провайдер Codex %@ использует настроенный API администратора Sub2api.";
 "accounts.sub2api.confirm_provider_action" = "Подтвердить и синхронизировать";
-"error.sub2api.provider_not_confirmed" = "Текущий провайдер Codex ещё не подтверждён как провайдер Sub2api.";
+"error.sub2api.provider_not_confirmed" = "Соответствующий Provider не найден в конфигурации Codex или настройках Sub2api.";
 "settings.sub2api.confirmed_providers" = "Подтверждённые провайдеры";
 "settings.sub2api.clear_confirmed_providers" = "Очистить подтверждённые связи провайдеров";
 "settings.sub2api.add_provider" = "Добавить Provider Sub2api";

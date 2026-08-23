@@ -97,7 +97,7 @@
 "accounts.sub2api.confirm_provider_title_format" = "%@ は Sub2api を使用していますか？";
 "accounts.sub2api.confirm_provider_message_format" = "現在の Codex プロバイダー %@ が設定済みの Sub2api 管理 API を使用することを確認してください。";
 "accounts.sub2api.confirm_provider_action" = "確認して同期";
-"error.sub2api.provider_not_confirmed" = "現在の Codex プロバイダーは Sub2api として確認されていません。";
+"error.sub2api.provider_not_confirmed" = "Codex 設定または Sub2api 設定に対応する Provider がありません。";
 "settings.sub2api.confirmed_providers" = "確認済みプロバイダー";
 "settings.sub2api.clear_confirmed_providers" = "確認済みプロバイダーの関連付けを消去";
 "settings.sub2api.add_provider" = "Sub2api Provider を追加";

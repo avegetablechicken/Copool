@@ -97,7 +97,7 @@
 "accounts.sub2api.confirm_provider_title_format" = "%@ 제공자가 Sub2api를 사용합니까?";
 "accounts.sub2api.confirm_provider_message_format" = "현재 Codex 제공자 %@가 설정된 Sub2api 관리자 API를 사용하는지 확인하세요.";
 "accounts.sub2api.confirm_provider_action" = "확인 후 동기화";
-"error.sub2api.provider_not_confirmed" = "현재 Codex 제공자가 Sub2api 제공자로 확인되지 않았습니다.";
+"error.sub2api.provider_not_confirmed" = "Codex 설정 또는 Sub2api 설정에서 해당 Provider를 찾을 수 없습니다.";
 "settings.sub2api.confirmed_providers" = "확인된 제공자";
 "settings.sub2api.clear_confirmed_providers" = "확인된 제공자 연결 지우기";
 "settings.sub2api.add_provider" = "Sub2api Provider 추가";

@@ -299,17 +299,17 @@ extension AccountsPageModel {
         defer { refreshingSub2APIAccountIDs.remove(account.cardID) }
 
         do {
-            guard account.providerID?.caseInsensitiveCompare(
-                sub2APIAccountService.currentDefaultProviderID()
-            ) == .orderedSame else {
+            guard let providerID = account.providerID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !providerID.isEmpty else {
                 throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
             }
             guard let refreshed = try await sub2APIAccountService.fetchAccounts(
+                providerID: providerID,
                 accountIDs: [account.id]
             ).first else {
                 throw AppError.invalidData(L10n.tr("error.sub2api.account_not_found"))
             }
-            let associated = refreshed.settingProvider(sub2APIAccountService.currentDefaultProviderID())
+            let associated = refreshed.settingProvider(providerID)
             sub2APIAccounts = sub2APIAccounts.map { $0.cardID == account.cardID ? associated : $0 }
             publishSub2APIAccounts()
             try await persistSub2APIAccountCache()
