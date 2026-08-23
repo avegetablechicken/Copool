@@ -89,7 +89,7 @@
 "accounts.action.import_account" = "アカウントを取り込む";
 "accounts.action.import_current_auth" = "現在の認証を取り込む";
 "accounts.action.import_auth_file" = "JSON ファイルを取り込む";
-"accounts.action.import_sub2api" = "Sub2api から同期";
+"accounts.action.import_sub2api" = "非公式 Provider を同期";
 "accounts.notice.sub2api_imported_format" = "%@ 件の Sub2api アカウントを同期しました";
 "accounts.notice.sub2api_removed" = "Sub2api アカウントを Copool から削除しました";
 "accounts.sub2api.section_title" = "Sub2api アカウント";

@@ -89,7 +89,7 @@
 "accounts.action.import_account" = "Импортировать аккаунт";
 "accounts.action.import_current_auth" = "Импортировать текущую auth";
 "accounts.action.import_auth_file" = "Импортировать JSON-файл";
-"accounts.action.import_sub2api" = "Синхронизировать из Sub2api";
+"accounts.action.import_sub2api" = "Синхронизировать неофициальные провайдеры";
 "accounts.notice.sub2api_imported_format" = "Синхронизировано аккаунтов Sub2api: %@";
 "accounts.notice.sub2api_removed" = "Аккаунт Sub2api удалён из Copool";
 "accounts.sub2api.section_title" = "Аккаунты Sub2api";

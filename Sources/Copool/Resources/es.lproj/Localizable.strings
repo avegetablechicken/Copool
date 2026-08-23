@@ -89,7 +89,7 @@
 "accounts.action.import_account" = "Importar cuenta";
 "accounts.action.import_current_auth" = "Importar auth actual";
 "accounts.action.import_auth_file" = "Importar archivo JSON";
-"accounts.action.import_sub2api" = "Sincronizar desde Sub2api";
+"accounts.action.import_sub2api" = "Sincronizar proveedores no oficiales";
 "accounts.notice.sub2api_imported_format" = "Se sincronizaron %@ cuentas de Sub2api";
 "accounts.notice.sub2api_removed" = "Cuenta Sub2api eliminada de Copool";
 "accounts.sub2api.section_title" = "Cuentas Sub2api";

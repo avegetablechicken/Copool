@@ -89,7 +89,7 @@
 "accounts.action.import_account" = "导入账号";
 "accounts.action.import_current_auth" = "导入当前授权";
 "accounts.action.import_auth_file" = "导入 JSON 文件";
-"accounts.action.import_sub2api" = "从 Sub2api 同步";
+"accounts.action.import_sub2api" = "同步非官方 Provider";
 "accounts.notice.sub2api_imported_format" = "已同步 %@ 个 Sub2api 账号";
 "accounts.notice.sub2api_removed" = "已从 Copool 移除 Sub2api 账号";
 "accounts.sub2api.section_title" = "Sub2api 账号";
