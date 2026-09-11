@@ -54,6 +54,7 @@ struct AccountCardViewState: Equatable, Identifiable {
             && lhs.account.displayStatus == rhs.account.displayStatus
             && lhs.account.isCurrent == rhs.account.isCurrent
             && lhs.account.sourceTag == rhs.account.sourceTag
+            && lhs.account.proxyURL == rhs.account.proxyURL
     }
 }
 

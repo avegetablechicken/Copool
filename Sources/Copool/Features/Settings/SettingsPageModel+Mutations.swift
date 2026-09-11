@@ -79,6 +79,7 @@ extension SettingsPageModel {
                     if let saved = current.provider(for: draft.providerID) {
                         draft.importedAccountIDs = saved.importedAccountIDs
                         draft.cachedAccounts = saved.cachedAccounts
+                        draft.accountProxyURLs = saved.accountProxyURLs
                     }
                     draft.legacyAdminBaseURL = ""
                     return draft

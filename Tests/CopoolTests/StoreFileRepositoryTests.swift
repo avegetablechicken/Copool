@@ -2,6 +2,54 @@ import XCTest
 @testable import Copool
 
 final class StoreFileRepositoryTests: XCTestCase {
+    func testAccountProxyReloadsFromDiskIntoCardSnapshotAfterRepositoryRestart() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let paths = proxyPersistencePaths(directory)
+        let proxy = "socks5://127.0.0.1:1080"
+        let account = StoredAccount(
+            id: "a", label: "A", email: nil, accountID: "a", planType: "pro",
+            teamName: nil, teamAlias: nil, authJSON: .null, addedAt: 1, updatedAt: 1,
+            usage: nil, usageError: nil, proxyURL: proxy
+        )
+        try StoreFileRepository(paths: paths).saveStore(AccountsStore(accounts: [account]))
+        let restartedRepository = StoreFileRepository(paths: paths)
+        XCTAssertEqual(try restartedRepository.loadStore().accountSummaries().first?.proxyURL, proxy)
+        _ = try restartedRepository.mutateStore { store in
+            store.accounts[0].proxyURL = "http://127.0.0.1:8080"
+        }
+        XCTAssertEqual(
+            try StoreFileRepository(paths: paths).loadStore().accountSummaries().first?.proxyURL,
+            "http://127.0.0.1:8080"
+        )
+    }
+
+    func testSub2APIProxyReloadsEvenWhenCachedCardHasNoProxy() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let paths = proxyPersistencePaths(directory)
+        let proxy = "http://127.0.0.1:8080"
+        let cached = Sub2APIAccountSummary(
+            id: 42, name: "A", email: nil, accountID: nil, accountType: "oauth",
+            status: "active", planType: nil, usage: nil, usageError: nil
+        )
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(providers: [
+            Sub2APIProviderConfiguration(
+                providerID: "p", accountProxyURLs: ["42": proxy],
+                importedAccountIDs: [42], cachedAccounts: [cached]
+            )
+        ])
+        try SettingsFileRepository(paths: paths).saveSettings(settings)
+        let restarted = try SettingsFileRepository(paths: paths).loadSettings()
+        let provider = try XCTUnwrap(restarted.sub2APIProvider.normalized().providers.first)
+        XCTAssertEqual(provider.cachedAccounts.first?.accountSummary.proxyURL, proxy)
+        var cleared = provider
+        cleared.accountProxyURLs = [:]
+        XCTAssertEqual(cleared.normalized().cachedAccounts.first?.accountSummary.proxyURL, "")
+    }
+
+
     func testLoadStoreTreatsTrailingGarbageAsCorruption() throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -459,4 +507,18 @@ final class StoreFileRepositoryTests: XCTestCase {
             false
         )
     }
+}
+
+
+private func proxyPersistencePaths(_ directory: URL) -> FileSystemPaths {
+    FileSystemPaths(
+        applicationSupportDirectory: directory,
+        accountStorePath: directory.appendingPathComponent("accounts.json"),
+        settingsStorePath: directory.appendingPathComponent("settings.json"),
+        codexAuthPath: directory.appendingPathComponent("auth.json"),
+        codexConfigPath: directory.appendingPathComponent("config.toml"),
+        proxyDaemonDataDirectory: directory.appendingPathComponent("proxyd"),
+        proxyDaemonKeyPath: directory.appendingPathComponent("proxyd/key"),
+        cloudflaredLogDirectory: directory.appendingPathComponent("logs")
+    )
 }

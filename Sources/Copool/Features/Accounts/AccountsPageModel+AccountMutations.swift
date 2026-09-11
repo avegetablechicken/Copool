@@ -160,6 +160,36 @@ extension AccountsPageModel {
         }
     }
 
+    func saveAccountProxy(id: String, proxyURL: String) async throws {
+        let value = proxyURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try ProviderProxySession.proxyConfiguration(for: value)
+        if let account = sub2APIAccounts.first(where: { $0.cardID == id }) {
+            guard let settingsCoordinator,
+                  let providerID = account.providerID else {
+                throw AppError.invalidData(L10n.tr("error.sub2api.configuration_incomplete"))
+            }
+            var settings = try await settingsCoordinator.currentSettings()
+            guard var configuration = settings.sub2APIProvider.provider(for: providerID) else {
+                throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
+            }
+            configuration.accountProxyURLs[String(account.id)] = value.isEmpty ? nil : value
+            settings.sub2APIProvider.upsert(configuration)
+            let updated = try await settingsCoordinator.updateSettings(
+                AppSettingsPatch(sub2APIProvider: settings.sub2APIProvider)
+            )
+            for index in sub2APIAccounts.indices where sub2APIAccounts[index].cardID == id {
+                sub2APIAccounts[index].proxyURL = value
+            }
+            publishSub2APIAccounts()
+            onSettingsUpdated?(updated)
+        } else {
+            try await coordinator.updateAccountProxy(id: id, proxyURL: value)
+            let accounts = try await coordinator.listAccounts()
+            applyAccounts(accounts)
+            publishAndSyncLocalAccountsMutation(accounts)
+        }
+    }
+
     func saveTeamAlias(id: String, alias: String?) async {
         do {
             _ = try await coordinator.updateTeamAlias(id: id, alias: alias)
@@ -222,7 +252,9 @@ extension AccountsPageModel {
                     providerID: providerID,
                     accountIDs: nil
                 ).map {
-                    $0.settingProvider(providerID)
+                    var account = $0.settingProvider(providerID)
+                    account.proxyURL = configuration.accountProxyURLs[String(account.id)]
+                    return account
                 }
                 configuration.importedAccountIDs = accounts.map(\.id)
                 configuration.cachedAccounts = accounts
@@ -233,11 +265,10 @@ extension AccountsPageModel {
                 synchronizedAccounts.append(contentsOf: accounts)
                 synchronizedCount += accounts.count
             }
-            settings = try await settingsCoordinator.updateSettings(
-                AppSettingsPatch(sub2APIProvider: sub2APISettings)
-            )
+            settings = try await settingsCoordinator.updateSub2APIProviderPreservingAccountProxies(sub2APISettings)
             sub2APIAccounts = synchronizedAccounts
             publishSub2APIAccounts()
+            applySub2APIProxySettings(settings)
             onSettingsUpdated?(settings)
             notice = NoticeMessage(
                 style: .success,
@@ -256,7 +287,11 @@ extension AccountsPageModel {
         }
         var sub2APISettings = settings.sub2APIProvider.normalized()
         let cachedAccounts = sub2APISettings.providers.flatMap { configuration in
-            configuration.cachedAccounts.map { $0.settingProvider(configuration.providerID) }
+            configuration.cachedAccounts.map { account in
+                var account = account.settingProvider(configuration.providerID)
+                account.proxyURL = configuration.accountProxyURLs[String(account.id)]
+                return account
+            }
         }
         sub2APIAccounts = cachedAccounts
         publishSub2APIAccounts()
@@ -274,7 +309,9 @@ extension AccountsPageModel {
         }
         let providerID = configuration.providerID
         let associatedAccounts = accounts.map {
-            $0.settingProvider(providerID)
+            var account = $0.settingProvider(providerID)
+            account.proxyURL = configuration.accountProxyURLs[String(account.id)]
+            return account
         }
         sub2APIAccounts.removeAll {
             $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
@@ -284,10 +321,9 @@ extension AccountsPageModel {
         var updatedConfiguration = configuration
         updatedConfiguration.cachedAccounts = associatedAccounts
         sub2APISettings.upsert(updatedConfiguration)
-        if let updatedSettings = try? await settingsCoordinator.updateSettings(
-            AppSettingsPatch(sub2APIProvider: sub2APISettings)
-        ) {
+        if let updatedSettings = try? await settingsCoordinator.updateSub2APIProviderPreservingAccountProxies(sub2APISettings) {
             settings = updatedSettings
+            applySub2APIProxySettings(settings)
             onSettingsUpdated?(settings)
         }
     }
@@ -309,7 +345,8 @@ extension AccountsPageModel {
             ).first else {
                 throw AppError.invalidData(L10n.tr("error.sub2api.account_not_found"))
             }
-            let associated = refreshed.settingProvider(providerID)
+            var associated = refreshed.settingProvider(providerID)
+            associated.proxyURL = sub2APIAccounts.first(where: { $0.cardID == account.cardID })?.proxyURL
             sub2APIAccounts = sub2APIAccounts.map { $0.cardID == account.cardID ? associated : $0 }
             publishSub2APIAccounts()
             try await persistSub2APIAccountCache()
@@ -330,6 +367,7 @@ extension AccountsPageModel {
             }
             configuration.importedAccountIDs.removeAll { $0 == account.id }
             configuration.cachedAccounts.removeAll { $0.id == account.id }
+            configuration.accountProxyURLs[String(account.id)] = nil
             sub2APISettings.upsert(configuration)
             settings = try await settingsCoordinator.updateSettings(
                 AppSettingsPatch(sub2APIProvider: sub2APISettings)
@@ -337,6 +375,7 @@ extension AccountsPageModel {
             sub2APIAccounts.removeAll { $0.cardID == account.cardID }
             publishSub2APIAccounts()
             collapsedAccountIDs.remove(account.cardID)
+            applySub2APIProxySettings(settings)
             onSettingsUpdated?(settings)
             notice = NoticeMessage(style: .info, text: L10n.tr("accounts.notice.sub2api_removed"))
         } catch {
@@ -353,7 +392,9 @@ extension AccountsPageModel {
         let refreshed = try await sub2APIAccountService.fetchAccounts(
             accountIDs: configuration.importedAccountIDs
         ).map {
-            $0.settingProvider(providerID)
+            var account = $0.settingProvider(providerID)
+            account.proxyURL = configuration.accountProxyURLs[String(account.id)]
+            return account
         }
         sub2APIAccounts.removeAll {
             $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
@@ -375,10 +416,19 @@ extension AccountsPageModel {
                     && importedIDs.contains($0.id)
             }
         }
-        settings = try await settingsCoordinator.updateSettings(
-            AppSettingsPatch(sub2APIProvider: sub2APISettings)
-        )
+        settings = try await settingsCoordinator.updateSub2APIProviderPreservingAccountProxies(sub2APISettings)
+        applySub2APIProxySettings(settings)
         onSettingsUpdated?(settings)
+    }
+
+    private func applySub2APIProxySettings(_ settings: AppSettings) {
+        for index in sub2APIAccounts.indices {
+            let account = sub2APIAccounts[index]
+            sub2APIAccounts[index].proxyURL = account.providerID.flatMap {
+                settings.sub2APIProvider.provider(for: $0)?.accountProxyURLs[String(account.id)]
+            }
+        }
+        publishSub2APIAccounts()
     }
 
     func publishSub2APIAccounts() {

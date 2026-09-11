@@ -426,3 +426,11 @@
 "proxy.remote.help.stop" = "Stop the running remote systemd service.";
 "proxy.remote.help.logs" = "Load recent journal logs from the remote service.";
 "proxy.remote.help.uninstall_remote" = "Stop and remove the remote service plus deployed binary and accounts file, while keeping the server record locally.";
+
+"settings.sub2api.proxy_url" = "Dirección del proxy";
+"settings.sub2api.proxy_help" = "HTTP, HTTPS o SOCKS5. Deja el campo vacío para usar los ajustes del sistema.";
+"error.sub2api.proxy_invalid" = "Introduce una URL de proxy HTTP, HTTPS o SOCKS5 válida con puerto (sin usuario ni contraseña).";
+
+"accounts.proxy.title" = "Proxy de la cuenta";
+"accounts.proxy.provider_help" = "HTTP, HTTPS o SOCKS5. Deja vacío para heredar el proxy del Provider.";
+"accounts.proxy.unsupported" = "Este servicio de red no admite un proxy por cuenta.";

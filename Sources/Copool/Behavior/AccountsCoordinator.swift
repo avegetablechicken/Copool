@@ -118,6 +118,19 @@ actor AccountsCoordinator {
         try storeRepository.saveStore(store)
     }
 
+    func updateAccountProxy(id: String, proxyURL: String) throws {
+        let value = proxyURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try ProviderProxySession.proxyConfiguration(for: value)
+        let now = dateProvider.unixSecondsNow()
+        _ = try storeRepository.mutateStore { store in
+            guard let index = store.accounts.firstIndex(where: { $0.id == id }) else {
+                throw AppError.invalidData(L10n.tr("error.accounts.account_not_found_for_update"))
+            }
+            store.accounts[index].proxyURL = value
+            store.accounts[index].updatedAt = now
+        }
+    }
+
     func updateTeamAlias(id: String, alias: String?) throws -> AccountSummary {
         var store = try storeRepository.loadStore()
         guard let index = store.accounts.firstIndex(where: { $0.id == id }) else {

@@ -20,6 +20,8 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
     var username: String
     var password: String
     var allowInsecureTLS: Bool
+    var proxyURL: String
+    var accountProxyURLs: [String: String]
     var importedAccountIDs: [Int64]
     var cachedAccounts: [Sub2APIAccountSummary]
     var legacyAdminBaseURL: String
@@ -30,6 +32,8 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         case username
         case password
         case allowInsecureTLS
+        case proxyURL
+        case accountProxyURLs
         case importedAccountIDs
         case cachedAccounts
         case legacyAdminBaseURL
@@ -41,6 +45,8 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         username: String = "",
         password: String = "",
         allowInsecureTLS: Bool = false,
+        proxyURL: String = "",
+        accountProxyURLs: [String: String] = [:],
         importedAccountIDs: [Int64] = [],
         cachedAccounts: [Sub2APIAccountSummary] = [],
         legacyAdminBaseURL: String = ""
@@ -50,6 +56,8 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         self.username = username
         self.password = password
         self.allowInsecureTLS = allowInsecureTLS
+        self.proxyURL = proxyURL
+        self.accountProxyURLs = accountProxyURLs
         self.importedAccountIDs = importedAccountIDs
         self.cachedAccounts = cachedAccounts
         self.legacyAdminBaseURL = legacyAdminBaseURL
@@ -62,6 +70,8 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         username = try container.decodeIfPresent(String.self, forKey: .username) ?? ""
         password = try container.decodeIfPresent(String.self, forKey: .password) ?? ""
         allowInsecureTLS = try container.decodeIfPresent(Bool.self, forKey: .allowInsecureTLS) ?? false
+        proxyURL = try container.decodeIfPresent(String.self, forKey: .proxyURL) ?? ""
+        accountProxyURLs = try container.decodeIfPresent([String: String].self, forKey: .accountProxyURLs) ?? [:]
         importedAccountIDs = try container.decodeIfPresent([Int64].self, forKey: .importedAccountIDs) ?? []
         cachedAccounts = try container.decodeIfPresent([Sub2APIAccountSummary].self, forKey: .cachedAccounts) ?? []
         legacyAdminBaseURL = try container.decodeIfPresent(String.self, forKey: .legacyAdminBaseURL) ?? ""
@@ -73,6 +83,8 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         try container.encode(providerID, forKey: .providerID)
         try container.encode(username, forKey: .username)
         try container.encode(allowInsecureTLS, forKey: .allowInsecureTLS)
+        try container.encode(proxyURL, forKey: .proxyURL)
+        try container.encode(accountProxyURLs, forKey: .accountProxyURLs)
         try container.encode(importedAccountIDs, forKey: .importedAccountIDs)
         try container.encode(cachedAccounts, forKey: .cachedAccounts)
         try container.encode(legacyAdminBaseURL, forKey: .legacyAdminBaseURL)
@@ -81,6 +93,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
     func normalized() -> Sub2APIProviderConfiguration {
         var value = self
         value.providerID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        value.proxyURL = proxyURL.trimmingCharacters(in: .whitespacesAndNewlines)
         value.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         value.legacyAdminBaseURL = legacyAdminBaseURL
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -91,9 +104,16 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
             guard importedIDs.contains(account.id), !result.contains(where: { $0.id == account.id }) else {
                 return
             }
+            var account = account
+            account.proxyURL = value.accountProxyURLs[String(account.id)]
             result.append(account)
         }
         return value
+    }
+
+    func proxyURL(forAccountID accountID: Int64) -> String {
+        let override = accountProxyURLs[String(accountID)]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return override.isEmpty ? proxyURL : override
     }
 
     var isComplete: Bool {
@@ -110,6 +130,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
     var hasEditableContent: Bool {
         let value = normalized()
         return !value.providerID.isEmpty
+            || !value.proxyURL.isEmpty
             || !value.username.isEmpty
             || !value.password.isEmpty
             || !value.importedAccountIDs.isEmpty

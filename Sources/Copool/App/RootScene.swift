@@ -58,6 +58,7 @@ struct RootScene: View {
 
     var body: some View {
         platformTabShell
+        .accountProxyEditorPresentation()
         .environment(\.locale, runtimeLocale)
         .onAppear {
             L10n.setLocale(identifier: chromeStore.localeIdentifier)

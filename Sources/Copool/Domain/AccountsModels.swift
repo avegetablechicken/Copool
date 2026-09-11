@@ -239,6 +239,7 @@ struct StoredAccount: Codable, Equatable, Identifiable {
     var workspaceStatus: AccountWorkspaceStatus = .active
     var displayStatus: AccountDisplayStatus = .list
     var principalID: String? = nil
+    var proxyURL: String = ""
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -257,6 +258,7 @@ struct StoredAccount: Codable, Equatable, Identifiable {
         case workspaceStatus
         case displayStatus
         case principalID = "principalId"
+        case proxyURL
     }
 
     var accountKey: String {
@@ -279,7 +281,8 @@ struct StoredAccount: Codable, Equatable, Identifiable {
         usageStateUpdatedAt: Int64? = nil,
         workspaceStatus: AccountWorkspaceStatus = .active,
         displayStatus: AccountDisplayStatus = .list,
-        principalID: String? = nil
+        principalID: String? = nil,
+        proxyURL: String = ""
     ) {
         self.id = id
         self.label = label
@@ -299,6 +302,7 @@ struct StoredAccount: Codable, Equatable, Identifiable {
         self.workspaceStatus = workspaceStatus
         self.displayStatus = displayStatus
         self.principalID = principalID
+        self.proxyURL = proxyURL
     }
 
     init(from decoder: any Decoder) throws {
@@ -322,6 +326,7 @@ struct StoredAccount: Codable, Equatable, Identifiable {
         displayStatus = try container.decodeIfPresent(AccountDisplayStatus.self, forKey: .displayStatus)
             ?? (workspaceStatus == .deactivated ? .deactivated : .list)
         principalID = try container.decodeIfPresent(String.self, forKey: .principalID)
+        proxyURL = try container.decodeIfPresent(String.self, forKey: .proxyURL) ?? ""
     }
 }
 
@@ -341,6 +346,7 @@ struct AccountSummary: Equatable, Identifiable {
     var displayStatus: AccountDisplayStatus = .list
     var isCurrent: Bool
     var principalID: String? = nil
+    var proxyURL: String = ""
     var sourceTag: String? = nil
 
     var accountKey: String {
@@ -406,6 +412,7 @@ struct Sub2APIAccountSummary: Codable, Equatable, Identifiable, Sendable {
     var usage: UsageSnapshot?
     var usageError: String?
     var providerID: String? = nil
+    var proxyURL: String? = nil
 
     var cardID: String {
         let provider = providerID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
@@ -434,6 +441,7 @@ struct Sub2APIAccountSummary: Codable, Equatable, Identifiable, Sendable {
             usage: usage,
             usageError: usageError,
             isCurrent: false,
+            proxyURL: proxyURL ?? "",
             sourceTag: "SUB2API"
         )
     }
@@ -481,7 +489,8 @@ extension AccountsStore {
                 workspaceStatus: account.workspaceStatus,
                 displayStatus: account.displayStatus,
                 isCurrent: currentAccountID == account.id,
-                principalID: account.principalID
+                principalID: account.principalID,
+                proxyURL: account.proxyURL
             )
         }
     }

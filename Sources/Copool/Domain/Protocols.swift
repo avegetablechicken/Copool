@@ -36,10 +36,12 @@ protocol AuthRepository: Sendable {
     func exchangeAuth(email: String, refreshToken: String) async throws -> JSONValue
     func extractAuth(from auth: JSONValue) throws -> ExtractedAuth
     func refreshChatGPTAuth(_ auth: JSONValue) async throws -> JSONValue
+    func refreshChatGPTAuth(_ auth: JSONValue, proxyURL: String) async throws -> JSONValue
 }
 
 protocol UsageService: Sendable {
     func fetchUsage(accessToken: String, accountID: String) async throws -> UsageSnapshot
+    func fetchUsage(accessToken: String, accountID: String, proxyURL: String) async throws -> UsageSnapshot
 }
 
 protocol Sub2APIAccountServiceProtocol: Sendable {
@@ -70,6 +72,7 @@ protocol CodexModelProviderSwitchServiceProtocol: Sendable {
 
 protocol WorkspaceMetadataService: Sendable {
     func fetchWorkspaceMetadata(accessToken: String) async throws -> [WorkspaceMetadata]
+    func fetchWorkspaceMetadata(accessToken: String, proxyURL: String) async throws -> [WorkspaceMetadata]
 }
 
 protocol DateProviding: Sendable {
@@ -196,4 +199,27 @@ extension AccountsManualRefreshServiceProtocol {
 protocol AccountsLocalMutationSyncServiceProtocol: AnyObject {
     func acceptLocalAccountsSnapshot(_ accounts: [AccountSummary])
     func syncLocalAccountsMutationNow() async
+}
+
+
+// Compatibility for implementations that do not perform network requests.
+extension UsageService {
+    func fetchUsage(accessToken: String, accountID: String, proxyURL: String) async throws -> UsageSnapshot {
+        guard proxyURL.isEmpty else { throw AppError.invalidData(L10n.tr("accounts.proxy.unsupported")) }
+        return try await fetchUsage(accessToken: accessToken, accountID: accountID)
+    }
+}
+
+extension WorkspaceMetadataService {
+    func fetchWorkspaceMetadata(accessToken: String, proxyURL: String) async throws -> [WorkspaceMetadata] {
+        guard proxyURL.isEmpty else { throw AppError.invalidData(L10n.tr("accounts.proxy.unsupported")) }
+        return try await fetchWorkspaceMetadata(accessToken: accessToken)
+    }
+}
+
+extension AuthRepository {
+    func refreshChatGPTAuth(_ auth: JSONValue, proxyURL: String) async throws -> JSONValue {
+        guard proxyURL.isEmpty else { throw AppError.invalidData(L10n.tr("accounts.proxy.unsupported")) }
+        return try await refreshChatGPTAuth(auth)
+    }
 }

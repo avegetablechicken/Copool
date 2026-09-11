@@ -137,6 +137,7 @@ pub(crate) fn sync_current_auth_account_on_startup_in_path(path: &Path) -> Resul
         usage: None,
         usage_error: None,
         principal_id: None,
+        proxy_url: String::new(),
     };
     store.accounts.push(stored);
     save_store_to_path(path, &store)?;

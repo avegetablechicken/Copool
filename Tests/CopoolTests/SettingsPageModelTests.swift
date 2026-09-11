@@ -3,6 +3,22 @@ import XCTest
 
 @MainActor
 final class SettingsPageModelTests: XCTestCase {
+    func testCacheRefreshCannotOverwriteNewAccountProxy() async throws {
+        let provider = Sub2APIProviderConfiguration(
+            providerID: "p", importedAccountIDs: [42]
+        )
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(providers: [provider])
+        let stale = settings.sub2APIProvider
+        settings.sub2APIProvider.providers[0].accountProxyURLs["42"] = "socks5://127.0.0.1:1080"
+        let repository = TestSettingsRepository(settings: settings)
+        let coordinator = SettingsCoordinator(
+            settingsRepository: repository, launchAtStartupService: SettingsStubLaunchAtStartupService()
+        )
+        let updated = try await coordinator.updateSub2APIProviderPreservingAccountProxies(stale)
+        XCTAssertEqual(updated.sub2APIProvider.providers[0].proxyURL(forAccountID: 42), "socks5://127.0.0.1:1080")
+    }
+
     func testQuitAppInvokesInjectedAction() {
         var didQuit = false
         let model = SettingsPageModel(

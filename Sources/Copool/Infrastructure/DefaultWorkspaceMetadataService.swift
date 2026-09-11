@@ -26,6 +26,16 @@ final class DefaultWorkspaceMetadataService: WorkspaceMetadataService, @unchecke
         )
     }
 
+    func fetchWorkspaceMetadata(accessToken: String, proxyURL: String) async throws -> [WorkspaceMetadata] {
+        let requestSession = try ProviderProxySession.shared.session(proxyURL: proxyURL, fallback: session)
+        guard requestSession !== session else {
+            return try await fetchWorkspaceMetadata(accessToken: accessToken)
+        }
+        return try await DefaultWorkspaceMetadataService(
+            session: requestSession, configPath: configPath
+        ).fetchWorkspaceMetadata(accessToken: accessToken)
+    }
+
     func fetchWorkspaceMetadata(accessToken: String) async throws -> [WorkspaceMetadata] {
         let candidateURLs = resolveAccountURLs()
         let startedAt = Date()

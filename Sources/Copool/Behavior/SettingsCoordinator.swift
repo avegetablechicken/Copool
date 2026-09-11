@@ -44,6 +44,25 @@ actor SettingsCoordinator {
         return settings
     }
 
+    /// Cache refreshes may finish after an account proxy was edited.
+    func updateSub2APIProviderPreservingAccountProxies(_ value: Sub2APISettingsConfiguration) throws -> AppSettings {
+        let current = try settingsRepository.loadSettings().sub2APIProvider
+        var value = value
+        for index in value.providers.indices {
+            let providerID = value.providers[index].providerID
+            if let saved = current.provider(for: providerID) {
+                value.providers[index].accountProxyURLs = saved.accountProxyURLs
+            }
+            let overrides = value.providers[index].accountProxyURLs
+            value.providers[index].cachedAccounts = value.providers[index].cachedAccounts.map { account in
+                var account = account
+                account.proxyURL = overrides[String(account.id)]
+                return account
+            }
+        }
+        return try updateSettings(AppSettingsPatch(sub2APIProvider: value))
+    }
+
     func syncLaunchAtStartupFromStore() throws {
         let settings = try settingsRepository.loadSettings()
         try launchAtStartupService.syncWithStoreValue(settings.launchAtStartup)

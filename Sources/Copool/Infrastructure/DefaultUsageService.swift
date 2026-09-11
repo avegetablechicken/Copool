@@ -74,6 +74,16 @@ final class DefaultUsageService: UsageService, @unchecked Sendable {
         )
     }
 
+    func fetchUsage(accessToken: String, accountID: String, proxyURL: String) async throws -> UsageSnapshot {
+        let requestSession = try ProviderProxySession.shared.session(proxyURL: proxyURL, fallback: session)
+        guard requestSession !== session else {
+            return try await fetchUsage(accessToken: accessToken, accountID: accountID)
+        }
+        return try await DefaultUsageService(
+            session: requestSession, configPath: configPath, dateProvider: dateProvider
+        ).fetchUsage(accessToken: accessToken, accountID: accountID)
+    }
+
     func fetchUsage(accessToken: String, accountID: String) async throws -> UsageSnapshot {
         let candidateURLs = resolveUsageURLs()
         let startedAt = Date()
@@ -332,8 +342,12 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
         guard let route = try providerRoute(providerID: providerID) else {
             throw AppError.invalidData(L10n.tr("error.sub2api.provider_not_confirmed"))
         }
+        var listConfiguration = route.configuration
+        if let accountIDs, accountIDs.count == 1 {
+            listConfiguration.proxyURL = route.configuration.proxyURL(forAccountID: accountIDs[0])
+        }
         let allAccounts = try await sub2APIClient.listOpenAIAccounts(
-            configuration: route.configuration,
+            configuration: listConfiguration,
             provider: route.provider
         )
         let requestedIDs = accountIDs.map(Set.init)
@@ -353,9 +367,11 @@ final class DefaultSub2APIAccountService: Sub2APIAccountServiceProtocol, @unchec
         return await withTaskGroup(of: Sub2APIAccountSummary.self) { group in
             for account in accounts {
                 group.addTask { [sub2APIClient] in
+                    var configuration = route.configuration
+                    configuration.proxyURL = configuration.proxyURL(forAccountID: account.id)
                     do {
                         let result = try await sub2APIClient.fetchUsagePayload(
-                            configuration: route.configuration,
+                            configuration: configuration,
                             provider: route.provider,
                             accountID: account.id,
                             fetchedAt: fetchedAt
@@ -432,6 +448,7 @@ private actor Sub2APIUsageClient {
         var username: String
         var password: String
         var allowInsecureTLS: Bool
+        var proxyURL: String
     }
 
     private enum HTTPFailure: Error {
@@ -555,9 +572,13 @@ private actor Sub2APIUsageClient {
             baseURL: baseURL.absoluteString,
             username: configuration.username,
             password: configuration.password,
-            allowInsecureTLS: configuration.allowInsecureTLS
+            allowInsecureTLS: configuration.allowInsecureTLS,
+            proxyURL: configuration.proxyURL
         )
-        let requestSession = configuration.allowInsecureTLS ? insecureSession : session
+        let requestSession = try ProviderProxySession.shared.session(
+            proxyURL: configuration.proxyURL,
+            fallback: configuration.allowInsecureTLS ? insecureSession : session
+        )
         let token = try await adminToken(
             key: key,
             baseURL: baseURL,

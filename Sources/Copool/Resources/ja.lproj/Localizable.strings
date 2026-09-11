@@ -444,3 +444,11 @@
 "accounts.notice.workspace_authorized_format" = "ワークスペースを認証しました: %@";
 "error.accounts.sign_in_expired" = "ログインの有効期限が切れました。再度ログインしてください。";
 "error.accounts.workspace_deactivated" = "このワークスペースは現在無効です。";
+
+"settings.sub2api.proxy_url" = "プロキシアドレス";
+"settings.sub2api.proxy_help" = "HTTP、HTTPS、SOCKS5 に対応。空欄の場合はシステム設定を使用します。";
+"error.sub2api.proxy_invalid" = "ポートを含む有効な HTTP、HTTPS、SOCKS5 プロキシ URL を入力してください（ユーザー名・パスワードは指定できません）。";
+
+"accounts.proxy.title" = "アカウントのプロキシ";
+"accounts.proxy.provider_help" = "HTTP、HTTPS、SOCKS5 に対応。空欄の場合は Provider のプロキシ設定を使用します。";
+"accounts.proxy.unsupported" = "このネットワークサービスはアカウント別のプロキシに対応していません。";

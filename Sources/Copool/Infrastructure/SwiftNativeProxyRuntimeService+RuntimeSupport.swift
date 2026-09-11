@@ -72,7 +72,8 @@ extension SwiftNativeProxyRuntimeService {
                 addedAt: account.addedAt,
                 isPreferredCurrent: prefersLocalAccount && account.id == currentAccountID,
                 oneWeekUsed: account.usage?.oneWeek?.usedPercent,
-                fiveHourUsed: account.usage?.fiveHour?.usedPercent
+                fiveHourUsed: account.usage?.fiveHour?.usedPercent,
+                proxyURL: account.proxyURL
             )
         }
         let providerCandidates = (try? loadSub2APIProviderCandidates(
@@ -98,7 +99,7 @@ extension SwiftNativeProxyRuntimeService {
         let settings = try settingsRepository.loadSettings().sub2APIProvider.normalized()
         let definitions = CodexModelProviderResolver.definitions(configPath: paths.codexConfigPath)
 
-        return settings.providers.compactMap { rawConfiguration in
+        return settings.providers.flatMap { rawConfiguration -> [ProxyCandidate] in
             let configuration = rawConfiguration.normalized()
             guard !configuration.providerID.isEmpty,
                   !configuration.importedAccountIDs.isEmpty,
@@ -115,31 +116,38 @@ extension SwiftNativeProxyRuntimeService {
                   !rawEnvKey.isEmpty,
                   let apiKey = providerAPIKey(environmentKey: rawEnvKey),
                   !apiKey.isEmpty else {
-                return nil
+                return []
             }
 
-            let importedIDs = Set(configuration.importedAccountIDs)
-            let importedAccounts = configuration.cachedAccounts.filter { importedIDs.contains($0.id) }
-            let representative = importedAccounts.max {
-                Self.sub2APIAccountRemainingScore($0) < Self.sub2APIAccountRemainingScore($1)
+            let groups = Dictionary(grouping: configuration.importedAccountIDs) {
+                configuration.proxyURL(forAccountID: $0)
             }
-            let providerID = provider.id
-            let routeID = "sub2api-provider:\(providerID.lowercased())"
+            return groups.sorted { $0.key < $1.key }.map { proxyURL, accountIDs in
+                let importedIDs = Set(accountIDs)
+                let importedAccounts = configuration.cachedAccounts.filter { importedIDs.contains($0.id) }
+                let representative = importedAccounts.max {
+                    Self.sub2APIAccountRemainingScore($0) < Self.sub2APIAccountRemainingScore($1)
+                }
+                let providerID = provider.id
+                let routeID = "sub2api-provider:\(providerID.lowercased())"
+                    + (groups.count == 1 ? "" : ":\(accountIDs.min() ?? 0)")
 
-            return ProxyCandidate(
-                id: routeID,
-                label: providerID,
-                accountID: routeID,
-                accountKey: routeID,
-                accessToken: apiKey,
-                authJSON: .null,
-                addedAt: representative?.id ?? configuration.importedAccountIDs.min() ?? 0,
-                isPreferredCurrent: currentProviderID.caseInsensitiveCompare(providerID) == .orderedSame,
-                oneWeekUsed: representative?.usage?.oneWeek?.usedPercent,
-                fiveHourUsed: representative?.usage?.fiveHour?.usedPercent,
-                route: .modelProvider(providerID: providerID, baseURL: rawBaseURL),
-                allowInsecureTLS: configuration.allowInsecureTLS
-            )
+                return ProxyCandidate(
+                    id: routeID,
+                    label: providerID,
+                    accountID: routeID,
+                    accountKey: routeID,
+                    accessToken: apiKey,
+                    authJSON: .null,
+                    addedAt: representative?.id ?? accountIDs.min() ?? 0,
+                    isPreferredCurrent: currentProviderID.caseInsensitiveCompare(providerID) == .orderedSame,
+                    oneWeekUsed: representative?.usage?.oneWeek?.usedPercent,
+                    fiveHourUsed: representative?.usage?.fiveHour?.usedPercent,
+                    route: .modelProvider(providerID: providerID, baseURL: rawBaseURL),
+                    allowInsecureTLS: configuration.allowInsecureTLS,
+                    proxyURL: proxyURL
+                )
+            }
         }
     }
 
@@ -284,9 +292,10 @@ extension SwiftNativeProxyRuntimeService {
             candidate: candidate,
             downstreamHeaders: downstreamHeaders
         )
-        let session = candidate.allowInsecureTLS
-            ? BackgroundNetworkSession.insecureSub2API
-            : URLSession.shared
+        let session = try ProviderProxySession.shared.session(
+            proxyURL: candidate.proxyURL,
+            fallback: candidate.allowInsecureTLS ? BackgroundNetworkSession.insecureSub2API : URLSession.shared
+        )
         let (responseBytes, response) = try await session.bytes(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
         var responseBody = Data()
@@ -317,9 +326,10 @@ extension SwiftNativeProxyRuntimeService {
             candidate: candidate,
             downstreamHeaders: downstreamHeaders
         )
-        let session = candidate.allowInsecureTLS
-            ? BackgroundNetworkSession.insecureSub2API
-            : URLSession.shared
+        let session = try ProviderProxySession.shared.session(
+            proxyURL: candidate.proxyURL,
+            fallback: candidate.allowInsecureTLS ? BackgroundNetworkSession.insecureSub2API : URLSession.shared
+        )
         let (bytes, response) = try await session.bytes(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 500
         return UpstreamStreamingResponse(statusCode: statusCode, bytes: bytes, candidate: candidate)
@@ -466,6 +476,7 @@ struct ProxyCandidate {
     var fiveHourUsed: Double?
     var route: ProxyCandidateRoute = .chatGPTOAuth
     var allowInsecureTLS: Bool = false
+    var proxyURL: String = ""
 
     var remainingScore: Double {
         let weekUsed = oneWeekUsed ?? 100

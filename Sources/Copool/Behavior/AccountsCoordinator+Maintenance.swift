@@ -107,7 +107,8 @@ extension AccountsCoordinator {
         for (sourceAccount, extracted) in eligibleAccounts {
             try Task.checkCancellation()
             let metadata = try await workspaceMetadataService.fetchWorkspaceMetadata(
-                accessToken: extracted.accessToken
+                accessToken: extracted.accessToken,
+                proxyURL: sourceAccount.proxyURL
             )
             try Task.checkCancellation()
 
@@ -319,6 +320,8 @@ extension AccountsCoordinator {
         let now = dateProvider.unixSecondsNow()
         var authJSON = authJSON
         var extracted = try authRepository.extractAuth(from: authJSON)
+        let existingAccounts = try storeRepository.loadStore().accounts
+        let proxyURL = Self.matchingStoredAccount(for: extracted, in: existingAccounts)?.proxyURL ?? ""
         authFlowLogger.log("importAccount extracted account \(extracted.accountID, privacy: .public)")
         AuthFlowDebugLog.write("AccountsAuthFlow", "importAccount extracted account \(extracted.accountID)")
 
@@ -333,7 +336,8 @@ extension AccountsCoordinator {
                     authJSON: authJSON,
                     authRepository: authRepository,
                     usageService: usageService,
-                    now: now
+                    now: now,
+                    proxyURL: proxyURL
                 )
                 authJSON = refreshed.authJSON
                 extracted = refreshed.extractedAuth
@@ -359,7 +363,8 @@ extension AccountsCoordinator {
             AuthFlowDebugLog.write("AccountsAuthFlow", "importAccount fetching workspace metadata")
             do {
                 let directory = try await workspaceMetadataService.fetchWorkspaceMetadata(
-                    accessToken: extracted.accessToken
+                    accessToken: extracted.accessToken,
+                    proxyURL: proxyURL
                 )
                 if let remoteWorkspaceName = Self.remoteWorkspaceName(
                     for: extracted.accountID,
@@ -469,14 +474,16 @@ extension AccountsCoordinator {
             }
 
             let directory: [WorkspaceMetadata]
-            if let cached = cachedDirectories[extracted.accessToken] {
+            let directoryKey = extracted.accessToken + "|" + storedAccount.proxyURL
+            if let cached = cachedDirectories[directoryKey] {
                 directory = cached
             } else {
                 do {
                     let fetched = try await workspaceMetadataService.fetchWorkspaceMetadata(
-                        accessToken: extracted.accessToken
+                        accessToken: extracted.accessToken,
+                        proxyURL: storedAccount.proxyURL
                     )
-                    cachedDirectories[extracted.accessToken] = fetched
+                    cachedDirectories[directoryKey] = fetched
                     directory = fetched
                 } catch {
                     if let deactivatedError = AppError.workspaceDeactivatedIfMatched(error) {
@@ -541,7 +548,8 @@ extension AccountsCoordinator {
                 authJSON: account.authJSON,
                 authRepository: authRepository,
                 usageService: usageService,
-                now: now
+                now: now,
+                proxyURL: account.proxyURL
             )
             account.authJSON = refreshed.authJSON
             account.usage = refreshed.usage
@@ -650,31 +658,35 @@ extension AccountsCoordinator {
     private static func refreshAuthIfNeeded(
         _ authJSON: JSONValue,
         authRepository: AuthRepository,
-        now: Int64
+        now: Int64,
+        proxyURL: String
     ) async throws -> JSONValue {
         guard accessTokenIsExpired(in: authJSON, now: now) else {
             return authJSON
         }
-        return try await authRepository.refreshChatGPTAuth(authJSON)
+        return try await authRepository.refreshChatGPTAuth(authJSON, proxyURL: proxyURL)
     }
 
     private static func fetchUsageSnapshot(
         authJSON: JSONValue,
         authRepository: AuthRepository,
         usageService: UsageService,
-        now: Int64
+        now: Int64,
+        proxyURL: String = ""
     ) async throws -> (authJSON: JSONValue, extractedAuth: ExtractedAuth, usage: UsageSnapshot) {
         var authJSON = try await refreshAuthIfNeeded(
             authJSON,
             authRepository: authRepository,
-            now: now
+            now: now,
+            proxyURL: proxyURL
         )
         var extracted = try authRepository.extractAuth(from: authJSON)
 
         do {
             let usage = try await usageService.fetchUsage(
                 accessToken: extracted.accessToken,
-                accountID: extracted.accountID
+                accountID: extracted.accountID,
+                proxyURL: proxyURL
             )
             return (authJSON, extracted, usage)
         } catch {
@@ -682,11 +694,12 @@ extension AccountsCoordinator {
                 throw error
             }
 
-            authJSON = try await authRepository.refreshChatGPTAuth(authJSON)
+            authJSON = try await authRepository.refreshChatGPTAuth(authJSON, proxyURL: proxyURL)
             extracted = try authRepository.extractAuth(from: authJSON)
             let usage = try await usageService.fetchUsage(
                 accessToken: extracted.accessToken,
-                accountID: extracted.accountID
+                accountID: extracted.accountID,
+                proxyURL: proxyURL
             )
             return (authJSON, extracted, usage)
         }

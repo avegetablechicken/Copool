@@ -454,3 +454,11 @@
 "proxy.remote.help.stop" = "停止正在运行的远程 systemd 服务。";
 "proxy.remote.help.logs" = "加载远程服务最近的 journal 日志。";
 "proxy.remote.help.uninstall_remote" = "停止并删除远程服务、已部署二进制和 accounts 文件，同时保留本地服务器记录。";
+
+"settings.sub2api.proxy_url" = "代理地址";
+"settings.sub2api.proxy_help" = "支持 HTTP、HTTPS 或 SOCKS5；留空使用系统网络设置。";
+"error.sub2api.proxy_invalid" = "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址和端口（不含用户名或密码）。";
+
+"accounts.proxy.title" = "账号代理";
+"accounts.proxy.provider_help" = "支持 HTTP、HTTPS 或 SOCKS5；留空继承 Provider 的代理设置。";
+"accounts.proxy.unsupported" = "此网络服务不支持账号代理。";

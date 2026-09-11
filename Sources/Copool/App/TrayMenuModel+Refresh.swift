@@ -223,16 +223,17 @@ extension TrayMenuModel {
         let refreshed = try await sub2APIAccountService.fetchAccounts(
             accountIDs: configuration.importedAccountIDs
         ).map { $0.settingProvider(providerID) }
-        sub2APIAccounts.removeAll {
-            $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
-        }
-        sub2APIAccounts.append(contentsOf: refreshed)
 
         configuration.cachedAccounts = refreshed
         sub2APISettings.upsert(configuration)
-        _ = try await settingsCoordinator.updateSettings(
-            AppSettingsPatch(sub2APIProvider: sub2APISettings)
-        )
+        let updated = try await settingsCoordinator.updateSub2APIProviderPreservingAccountProxies(sub2APISettings)
+        let accounts = updated.sub2APIProvider.provider(for: providerID)?.cachedAccounts.map {
+            $0.settingProvider(providerID)
+        } ?? []
+        sub2APIAccounts.removeAll {
+            $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+        }
+        sub2APIAccounts.append(contentsOf: accounts)
     }
 
     func beginAccountsRefreshActivity() {

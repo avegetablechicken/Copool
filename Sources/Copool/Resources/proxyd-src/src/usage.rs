@@ -48,12 +48,16 @@ struct CreditDetails {
 pub(crate) async fn fetch_usage_snapshot(
     access_token: &str,
     account_id: &str,
+    proxy_url: &str,
 ) -> Result<UsageSnapshot, String> {
     let usage_urls = resolve_usage_urls();
 
-    let client = reqwest::Client::builder()
-        .user_agent("codex-tools/0.1")
-        .timeout(std::time::Duration::from_secs(18))
+    let client = crate::utils::with_account_proxy(
+        reqwest::Client::builder()
+            .user_agent("codex-tools/0.1")
+            .timeout(std::time::Duration::from_secs(18)),
+        proxy_url,
+    )?
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
 

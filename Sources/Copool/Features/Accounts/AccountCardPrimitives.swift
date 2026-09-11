@@ -77,6 +77,7 @@ struct AccountCardHeaderSection: View {
     let isCurrent: Bool
     let palette: AccountCardPalette
     let onDelete: () -> Void
+    var onEditProxy: (() -> Void)? = nil
 
     var body: some View {
         HStack {
@@ -108,6 +109,12 @@ struct AccountCardHeaderSection: View {
             }
 
             if !isCollapsed {
+                if let onEditProxy {
+                    Button(action: onEditProxy) { Image(systemName: "network") }
+                        .buttonStyle(.plain)
+                        .help(L10n.tr("accounts.proxy.title"))
+                        .accessibilityLabel(L10n.tr("accounts.proxy.title"))
+                }
                 AccountDeleteButton(action: onDelete)
             }
         }

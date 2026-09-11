@@ -127,6 +127,13 @@ final class AuthFileRepository: AuthRepository, @unchecked Sendable {
         return auth
     }
 
+    func refreshChatGPTAuth(_ auth: JSONValue, proxyURL: String) async throws -> JSONValue {
+        let requestSession = try ProviderProxySession.shared.session(proxyURL: proxyURL, fallback: session)
+        guard requestSession !== session else { return try await refreshChatGPTAuth(auth) }
+        return try await AuthFileRepository(paths: paths, fileManager: fileManager, session: requestSession)
+            .refreshChatGPTAuth(auth)
+    }
+
     func refreshChatGPTAuth(_ auth: JSONValue) async throws -> JSONValue {
         guard let tokens = authTokenObject(from: auth) else {
             throw AppError.unauthorized(L10n.tr("error.auth.no_chatgpt_token"))

@@ -2,6 +2,89 @@ import XCTest
 @testable import Copool
 
 final class AccountsCoordinatorTests: XCTestCase {
+    @MainActor
+    func testTrayRefreshPreservesAndPublishesProxySavedAfterItsSettingsSnapshot() async throws {
+        let cached = Sub2APIAccountSummary(
+            id: 42, name: "A", email: nil, accountID: nil, accountType: "oauth",
+            status: "active", planType: nil, usage: nil, usageError: nil
+        )
+        var oldSettings = AppSettings.defaultValue
+        oldSettings.sub2APIProvider = Sub2APISettingsConfiguration(providers: [
+            Sub2APIProviderConfiguration(providerID: "p", importedAccountIDs: [42], cachedAccounts: [cached])
+        ])
+        var savedSettings = oldSettings
+        savedSettings.sub2APIProvider.providers[0].accountProxyURLs["42"] = "http://127.0.0.1:8080"
+        let repository = TestSettingsRepository(settings: savedSettings)
+        let coordinator = SettingsCoordinator(
+            settingsRepository: repository, launchAtStartupService: StubLaunchAtStartupService()
+        )
+        let page = makeAccountsPageModelForViewStoreTests(initialAccounts: [])
+        let tray = TrayMenuModel(
+            accountsCoordinator: page.coordinator,
+            settingsCoordinator: coordinator,
+            sub2APIAccountService: ProxyRefreshSub2APIService(accounts: [cached]),
+            backgroundRefreshPolicy: .forPlatform(.macOS)
+        )
+        try await tray.refreshSub2APIAccounts(using: oldSettings)
+        page.syncSub2APIFromBackgroundRefresh(tray.sub2APIAccounts)
+        XCTAssertEqual(page.sub2APIAccounts.first?.accountSummary.proxyURL, "http://127.0.0.1:8080")
+        XCTAssertEqual(
+            try repository.loadSettings().sub2APIProvider.provider(for: "p")?.accountProxyURLs["42"],
+            "http://127.0.0.1:8080"
+        )
+    }
+
+    @MainActor
+    func testCardEqualityIncludesProxyOnlyChanges() throws {
+        let account = makeStoredAccount(id: "a", accountID: "a", now: 1)
+        let summary = AccountsStore(accounts: [account]).accountSummaries()[0]
+        let model = makeAccountsPageModelForViewStoreTests(initialAccounts: [summary])
+        let before = try XCTUnwrap(model.makeAccountCardViewState(forAccountID: "a"))
+        var edited = summary
+        edited.proxyURL = "http://127.0.0.1:8080"
+        model.acceptExternalAccountsSnapshot([edited])
+        let after = try XCTUnwrap(model.makeAccountCardViewState(forAccountID: "a"))
+        XCTAssertNotEqual(before, after)
+        XCTAssertEqual(after.account.proxyURL, edited.proxyURL)
+    }
+
+
+    func testAccountProxyIsPersistedUsedForRefreshAndCanBeCleared() async throws {
+        let now: Int64 = 1_763_216_000
+        let repository = InMemoryAccountsStoreRepository(store: AccountsStore(accounts: [
+            makeStoredAccount(id: "a", accountID: "account-1", now: now),
+            makeStoredAccount(id: "b", accountID: "account-2", now: now)
+        ]))
+        let usage = ProxyRecordingUsageService()
+        let coordinator = AccountsCoordinator(
+            storeRepository: repository, settingsRepository: TestSettingsRepository(),
+            authRepository: StubAuthRepository(), usageService: usage,
+            chatGPTOAuthLoginService: StubChatGPTOAuthLoginService(),
+            codexCLIService: StubCodexCLIService(), editorAppService: StubEditorAppService(),
+            opencodeAuthSyncService: StubOpencodeAuthSyncService(),
+            dateProvider: FixedDateProvider(now: now)
+        )
+        try await coordinator.updateAccountProxy(id: "a", proxyURL: " http://127.0.0.1:8080 ")
+        try await coordinator.updateAccountProxy(id: "b", proxyURL: "socks5://127.0.0.1:1080")
+        _ = try await coordinator.refreshUsage(force: true)
+        let requested = await usage.proxies
+        XCTAssertEqual(Set(requested), ["http://127.0.0.1:8080", "socks5://127.0.0.1:1080"])
+        let stored = try repository.loadStore()
+        XCTAssertEqual(stored.accounts[0].proxyURL, "http://127.0.0.1:8080")
+        XCTAssertEqual(stored.accountSummaries()[1].proxyURL, "socks5://127.0.0.1:1080")
+        let roundTrip = try JSONDecoder().decode(AccountsStore.self, from: JSONEncoder().encode(stored))
+        XCTAssertEqual(roundTrip.accounts.map(\.proxyURL), stored.accounts.map(\.proxyURL))
+        do {
+            try await coordinator.updateAccountProxy(id: "a", proxyURL: "invalid")
+            XCTFail("Invalid proxy must not be saved")
+        } catch {}
+        XCTAssertEqual(try repository.loadStore().accounts[0].proxyURL, "http://127.0.0.1:8080")
+        try await coordinator.updateAccountProxy(id: "a", proxyURL: " ")
+        XCTAssertEqual(try repository.loadStore().accounts[0].proxyURL, "")
+        XCTAssertEqual(try repository.loadStore().accounts[1].proxyURL, "socks5://127.0.0.1:1080")
+    }
+
+
     func testAccountsUsageRefreshPlanningTargetsCurrentAndNearResetAccounts() {
         let now: Int64 = 1_763_216_000
         let policy = AccountsUsageRefreshPlanningPolicy(nonCurrentResetLeadTimeSeconds: 60)
@@ -605,6 +688,71 @@ final class AccountsCoordinatorTests: XCTestCase {
         let savedStore = try storeRepository.loadStore()
         let requestedTokens = await usageService.readRequestedAccessTokens()
 
+        XCTAssertEqual(authRepository.readRefreshCallCount(), 1)
+        XCTAssertEqual(requestedTokens, [freshAccessToken])
+        XCTAssertNil(accounts.first?.usageError)
+        XCTAssertEqual(
+            savedStore.accounts.first?.authJSON["tokens"]?["access_token"]?.stringValue,
+            freshAccessToken
+        )
+    }
+
+    func testAccountProxyIsUsedForBothTokenRefreshAndUsage() async throws {
+        let now: Int64 = 1_763_216_000
+        let expiredAccessToken = makeUnsignedJWT(payload: ["exp": now - 60])
+        let freshAccessToken = makeUnsignedJWT(payload: ["exp": now + 3_600])
+        let expiredAuth = makeTestAuthJSON(accountID: "account-1", accessToken: expiredAccessToken)
+        let refreshedAuth = makeTestAuthJSON(accountID: "account-1", accessToken: freshAccessToken)
+        let storeRepository = InMemoryAccountsStoreRepository(
+            store: AccountsStore(
+                version: 1,
+                accounts: [
+                    StoredAccount(
+                        id: "acct-1",
+                        label: "Test",
+                        email: "test@example.com",
+                        accountID: "account-1",
+                        planType: "team",
+                        teamName: nil,
+                        teamAlias: nil,
+                        authJSON: expiredAuth,
+                        addedAt: now,
+                        updatedAt: now,
+                        usage: nil,
+                        usageError: nil,
+                        proxyURL: "http://127.0.0.1:8080"
+                    )
+                ],
+                currentSelection: nil
+            )
+        )
+        let usageService = ValidatingUsageService(
+            validAccessToken: freshAccessToken,
+            result: makeUsageSnapshot(fetchedAt: now, fiveHourResetAt: now + 300)
+        )
+        let authRepository = RefreshingAuthRepository(refreshedAuth: refreshedAuth)
+        var settings = AppSettings.defaultValue
+        settings.autoSmartSwitch = true
+        let settingsRepository = TestSettingsRepository(settings: settings)
+        let coordinator = AccountsCoordinator(
+            storeRepository: storeRepository,
+            settingsRepository: settingsRepository,
+            authRepository: authRepository,
+            usageService: usageService,
+            chatGPTOAuthLoginService: StubChatGPTOAuthLoginService(),
+            codexCLIService: StubCodexCLIService(),
+            editorAppService: StubEditorAppService(),
+            opencodeAuthSyncService: StubOpencodeAuthSyncService(),
+            dateProvider: FixedDateProvider(now: now)
+        )
+
+        let accounts = try await coordinator.refreshUsage(force: true)
+        let savedStore = try storeRepository.loadStore()
+        let requestedTokens = await usageService.readRequestedAccessTokens()
+
+        XCTAssertEqual(authRepository.requestedProxyURLs, ["http://127.0.0.1:8080"])
+        let proxies = await usageService.requestedProxyURLs
+        XCTAssertEqual(proxies, ["http://127.0.0.1:8080"])
         XCTAssertEqual(authRepository.readRefreshCallCount(), 1)
         XCTAssertEqual(requestedTokens, [freshAccessToken])
         XCTAssertNil(accounts.first?.usageError)
@@ -5394,6 +5542,7 @@ private actor ValidatingUsageService: UsageService {
     private let validAccessToken: String
     private let result: UsageSnapshot
     private var requestedAccessTokens: [String] = []
+    private(set) var requestedProxyURLs: [String] = []
 
     init(validAccessToken: String, result: UsageSnapshot) {
         self.validAccessToken = validAccessToken
@@ -5407,6 +5556,11 @@ private actor ValidatingUsageService: UsageService {
             throw AppError.unauthorized("Provided authentication token is expired. Please try signing in again.")
         }
         return result
+    }
+
+    func fetchUsage(accessToken: String, accountID: String, proxyURL: String) async throws -> UsageSnapshot {
+        requestedProxyURLs.append(proxyURL)
+        return try await fetchUsage(accessToken: accessToken, accountID: accountID)
     }
 
     func readRequestedAccessTokens() -> [String] {
@@ -6069,6 +6223,7 @@ private final class TokenMappedAuthRepository: AuthRepository, @unchecked Sendab
 private final class RefreshingAuthRepository: AuthRepository, @unchecked Sendable {
     private let refreshedAuth: JSONValue
     private var refreshCallCount = 0
+    private(set) var requestedProxyURLs: [String] = []
 
     init(refreshedAuth: JSONValue) {
         self.refreshedAuth = refreshedAuth
@@ -6108,6 +6263,11 @@ private final class RefreshingAuthRepository: AuthRepository, @unchecked Sendabl
         refreshCallCount += 1
         return refreshedAuth
     }
+    func refreshChatGPTAuth(_ auth: JSONValue, proxyURL: String) async throws -> JSONValue {
+        requestedProxyURLs.append(proxyURL)
+        return try await refreshChatGPTAuth(auth)
+    }
+
     func readRefreshCallCount() -> Int {
         refreshCallCount
     }
@@ -6324,4 +6484,27 @@ private final class StubLaunchAtStartupService: LaunchAtStartupServiceProtocol, 
     func syncWithStoreValue(_ enabled: Bool) throws {
         _ = enabled
     }
+}
+
+private actor ProxyRecordingUsageService: UsageService {
+    var proxies: [String] = []
+
+    func fetchUsage(accessToken: String, accountID: String) async throws -> UsageSnapshot {
+        XCTFail("Account refresh must pass its proxy explicitly")
+        return makeUsageSnapshot(fetchedAt: 1)
+    }
+
+    func fetchUsage(accessToken: String, accountID: String, proxyURL: String) async throws -> UsageSnapshot {
+        proxies.append(proxyURL)
+        return makeUsageSnapshot(fetchedAt: 1)
+    }
+}
+
+
+private struct ProxyRefreshSub2APIService: Sub2APIAccountServiceProtocol {
+    let accounts: [Sub2APIAccountSummary]
+    func currentDefaultProviderID() -> String { "p" }
+    func isConnectionConfigured() -> Bool { true }
+    func canQueryCurrentDefaultProvider() -> Bool { true }
+    func fetchAccounts(accountIDs: [Int64]?) async throws -> [Sub2APIAccountSummary] { accounts }
 }

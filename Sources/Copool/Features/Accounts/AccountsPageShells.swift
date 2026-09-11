@@ -190,6 +190,9 @@ private struct AccountsIOSContentHost: View {
                     onCancelAuthorizeWorkspace: onCancelAuthorizeWorkspace,
                     onDeletePendingWorkspace: onDeletePendingWorkspace,
                     onDeleteAccount: onDeleteAccount,
+                    onSaveAccountProxy: { id, value in
+                        try await model.saveAccountProxy(id: id, proxyURL: value)
+                    },
                     onSwitchSub2APIProvider: { account in
                         Task { await model.switchSub2APIProvider(account: account) }
                     },
@@ -240,6 +243,9 @@ private struct AccountsMacContentHost: View {
                     onCancelAuthorizeWorkspace: onCancelAuthorizeWorkspace,
                     onDeletePendingWorkspace: onDeletePendingWorkspace,
                     onDeleteAccount: onDeleteAccount,
+                    onSaveAccountProxy: { id, value in
+                        try await model.saveAccountProxy(id: id, proxyURL: value)
+                    },
                     onSwitchSub2APIProvider: { account in
                         Task { await model.switchSub2APIProvider(account: account) }
                     },

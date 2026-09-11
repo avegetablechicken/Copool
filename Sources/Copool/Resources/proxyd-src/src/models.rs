@@ -45,6 +45,8 @@ pub(crate) struct StoredAccount {
     pub(crate) usage_error: Option<String>,
     #[serde(default)]
     pub(crate) principal_id: Option<String>,
+    #[serde(default, rename = "proxyURL", alias = "proxyUrl")]
+    pub(crate) proxy_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

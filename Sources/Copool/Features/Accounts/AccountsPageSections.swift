@@ -13,6 +13,7 @@ struct AccountsPageContentSection: View {
     let onCancelAuthorizeWorkspace: () -> Void
     let onDeletePendingWorkspace: (String) -> Void
     let onDeleteAccount: (String) -> Void
+    var onSaveAccountProxy: (String, String) async throws -> Void = { _, _ in }
     let onSwitchSub2APIProvider: (Sub2APIAccountSummary) -> Void
     let onRefreshSub2APIAccount: (Sub2APIAccountSummary) -> Void
     let onRemoveSub2APIAccount: (Sub2APIAccountSummary) -> Void
@@ -51,6 +52,7 @@ struct AccountsPageContentSection: View {
                     onRefreshAccountUsage: onRefreshAccountUsage,
                     onReauthenticateAccount: onReauthenticateAccount,
                     onDeleteAccount: onDeleteAccount,
+                    onSaveAccountProxy: onSaveAccountProxy,
                     onSwitchSub2APIProvider: onSwitchSub2APIProvider,
                     onRefreshSub2APIAccount: onRefreshSub2APIAccount,
                     onRemoveSub2APIAccount: onRemoveSub2APIAccount
@@ -70,6 +72,7 @@ private struct AccountsGridSection: View {
     let onRefreshAccountUsage: (String) -> Void
     let onReauthenticateAccount: (String) -> Void
     let onDeleteAccount: (String) -> Void
+    var onSaveAccountProxy: (String, String) async throws -> Void = { _, _ in }
     let onSwitchSub2APIProvider: (Sub2APIAccountSummary) -> Void
     let onRefreshSub2APIAccount: (Sub2APIAccountSummary) -> Void
     let onRemoveSub2APIAccount: (Sub2APIAccountSummary) -> Void
@@ -143,7 +146,8 @@ private struct AccountsGridSection: View {
                         onSwitch: { onSwitchAccount(card.id) },
                         onRefresh: { onRefreshAccountUsage(card.id) },
                         onReauthenticate: { onReauthenticateAccount(card.id) },
-                        onDelete: { onDeleteAccount(card.id) }
+                        onDelete: { onDeleteAccount(card.id) },
+                        onSaveProxy: { try await onSaveAccountProxy(card.id, $0) }
                     )
                 case .sub2API(let state):
                     AccountCardGridItem(
@@ -154,7 +158,8 @@ private struct AccountsGridSection: View {
                         onSwitch: { onSwitchSub2APIProvider(state.source) },
                         onRefresh: { onRefreshSub2APIAccount(state.source) },
                         onReauthenticate: {},
-                        onDelete: { onRemoveSub2APIAccount(state.source) }
+                        onDelete: { onRemoveSub2APIAccount(state.source) },
+                        onSaveProxy: { try await onSaveAccountProxy(state.card.id, $0) }
                     )
                 }
             }
@@ -173,6 +178,7 @@ private struct AccountCardGridItem: View {
     let onRefresh: () -> Void
     let onReauthenticate: () -> Void
     let onDelete: () -> Void
+    let onSaveProxy: (String) async throws -> Void
 
     var body: some View {
         AccountCardView(
@@ -180,7 +186,8 @@ private struct AccountCardGridItem: View {
             onSwitch: onSwitch,
             onRefresh: onRefresh,
             onReauthenticate: onReauthenticate,
-            onDelete: onDelete
+            onDelete: onDelete,
+            onSaveProxy: onSaveProxy
         )
         .frame(width: frameWidth)
         .copoolCardEntrance(index: index, isPresented: areCardsPresented)

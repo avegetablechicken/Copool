@@ -2,6 +2,16 @@ import XCTest
 @testable import Copool
 
 final class SwiftNativeProxyRuntimeServiceTests: XCTestCase {
+    func testLocalCandidatesKeepIndependentAccountProxies() async throws {
+        var first = makeStoredAccount(id: "a", label: "A", accountID: "a", addedAt: 1)
+        var second = makeStoredAccount(id: "b", label: "B", accountID: "b", addedAt: 2)
+        first.proxyURL = "http://127.0.0.1:8080"
+        second.proxyURL = "socks5://127.0.0.1:1080"
+        let runtime = makeRuntime(store: AccountsStore(accounts: [first, second]))
+        let candidates = try await runtime.withIsolation { try $0.loadCandidates() }
+        XCTAssertEqual(candidates.map(\.proxyURL), [first.proxyURL, second.proxyURL])
+    }
+
     func testLoadCandidatesPrefersCurrentSelectionWhenUsageIsUnavailable() async throws {
         let runtime = makeRuntime(
             store: AccountsStore(
@@ -124,6 +134,7 @@ final class SwiftNativeProxyRuntimeServiceTests: XCTestCase {
                     providerID: "my",
                     username: "admin@example.com",
                     allowInsecureTLS: true,
+                    proxyURL: "socks5://127.0.0.1:1080",
                     importedAccountIDs: [42],
                     cachedAccounts: [importedAccount]
                 )
@@ -159,10 +170,84 @@ final class SwiftNativeProxyRuntimeServiceTests: XCTestCase {
         XCTAssertEqual(candidates[0].accessToken, "provider-api-key")
         XCTAssertTrue(candidates[0].isPreferredCurrent)
         XCTAssertTrue(candidates[0].allowInsecureTLS)
+        XCTAssertEqual(candidates[0].proxyURL, "socks5://127.0.0.1:1080")
         XCTAssertEqual(
             candidates[0].route,
             .modelProvider(providerID: "my", baseURL: "https://sub2.test/v1")
         )
+    }
+
+    func testImportedSub2APIAccountOverridesCreateIndependentProxyRoutes() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let configPath = tempDir.appendingPathComponent("config.toml")
+        try """
+        model_provider = "my"
+
+        [model_providers.my]
+        base_url = "https://sub2.test/v1"
+        wire_api = "responses"
+        env_key = "MY_SUB2API_API_KEY"
+        requires_openai_auth = false
+        """.write(to: configPath, atomically: true, encoding: .utf8)
+
+        let importedAccount = Sub2APIAccountSummary(
+            id: 42,
+            name: "remote-account",
+            email: "remote@example.com",
+            accountID: "remote-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil,
+            providerID: "my"
+        )
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "my",
+                    username: "admin@example.com",
+                    allowInsecureTLS: true,
+                    proxyURL: "socks5://127.0.0.1:1080",
+                    accountProxyURLs: ["43": "http://127.0.0.1:8080"],
+                    importedAccountIDs: [42, 43],
+                    cachedAccounts: [importedAccount]
+                )
+            ]
+        )
+        let paths = FileSystemPaths(
+            applicationSupportDirectory: tempDir,
+            accountStorePath: tempDir.appendingPathComponent("accounts.json"),
+            settingsStorePath: tempDir.appendingPathComponent("settings.json"),
+            codexAuthPath: tempDir.appendingPathComponent("auth.json"),
+            codexConfigPath: configPath,
+            proxyDaemonDataDirectory: tempDir.appendingPathComponent("proxyd", isDirectory: true),
+            proxyDaemonKeyPath: tempDir.appendingPathComponent("proxyd/api-proxy.key"),
+            cloudflaredLogDirectory: tempDir.appendingPathComponent("cloudflared-logs", isDirectory: true)
+        )
+        let runtime = SwiftNativeProxyRuntimeService(
+            paths: paths,
+            storeRepository: InMemoryAccountsStoreRepository(store: AccountsStore()),
+            settingsRepository: MockSettingsRepository(settings: settings),
+            authRepository: MockAuthRepository(),
+            environment: [:],
+            providerEnvironmentFallback: { environmentKey in
+                environmentKey == "MY_SUB2API_API_KEY" ? "provider-api-key" : nil
+            }
+        )
+
+        let candidates = try await runtime.withIsolation { runtime in
+            try runtime.loadCandidates()
+        }
+
+        XCTAssertEqual(candidates.count, 2)
+        XCTAssertEqual(Set(candidates.map(\.proxyURL)), ["socks5://127.0.0.1:1080", "http://127.0.0.1:8080"])
+        XCTAssertEqual(Set(candidates.map(\.id)).count, 2)
     }
 
     func testModelProviderCandidateUsesProviderResponsesEndpointWithoutChatGPTAccountHeader() async throws {

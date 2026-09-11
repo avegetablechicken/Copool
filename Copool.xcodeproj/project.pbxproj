@@ -187,11 +187,13 @@
 		F4A2F9DC97CF53F2649C2F64 /* PublicAccessSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0830DA51B1BE82286FA407AB /* PublicAccessSection.swift */; };
 		F567996745001A735BA62B03 /* ProxyCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3D1B2CF91A4BFFC55FB8AA5 /* ProxyCoordinatorTests.swift */; };
 		F7183D0C1F0BB2AF8E956378 /* EndpointRequestCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EAF06F7C7AF8EC727D71D52 /* EndpointRequestCoordinatorTests.swift */; };
+		CF57245AC53642718A314BC4 /* ProviderProxySessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF57245AC53642718A314BC3 /* ProviderProxySessionTests.swift */; };
 		FA0F2E55B42E1B1768C9E1FF /* AppSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8CB27B4B72C66025D076C89 /* AppSmokeTests.swift */; };
 		FA624CCECA28D7F68B1C0FF8 /* DefaultUsageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DD2673A9712C55D302564FA /* DefaultUsageService.swift */; };
 		FA836AB28B6E7F72C253A49F /* AppVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38BD5BE0A332BCE32A46A463 /* AppVersion.swift */; };
 		FA8F4B3E19ED4AA8B7740F31 /* DefaultWorkspaceMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95E85D9244A64A8BB6AB5F11 /* DefaultWorkspaceMetadataService.swift */; };
 		FA8F4B3E19ED4AA8B7740F32 /* EndpointRequestCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26C8D1A13F4D46AAB7E2A110 /* EndpointRequestCoordinator.swift */; };
+		CF57245AC53642718A314BC2 /* ProviderProxySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF57245AC53642718A314BC1 /* ProviderProxySession.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -253,6 +255,7 @@
 		24B1B848F41AC50078FAF4C2 /* ProxyModels.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProxyModels.swift; sourceTree = "<group>"; };
 		251BC10FF4D8538941CDC174 /* LocalizationConsistencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationConsistencyTests.swift; sourceTree = "<group>"; };
 		26C8D1A13F4D46AAB7E2A110 /* EndpointRequestCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointRequestCoordinator.swift; sourceTree = "<group>"; };
+		CF57245AC53642718A314BC1 /* ProviderProxySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderProxySession.swift; sourceTree = "<group>"; };
 		2843DB9CB43284AFB2E5A459 /* ProxyCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyCoordinator.swift; sourceTree = "<group>"; };
 		289314A55623ACB1B9B054E4 /* SwiftNativeProxyRuntimeService+RetryFailures.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "SwiftNativeProxyRuntimeService+RetryFailures.swift"; sourceTree = "<group>"; };
 		28E2CF5AE0B544874B721FCC /* AppLocale.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocale.swift; sourceTree = "<group>"; };
@@ -266,6 +269,7 @@
 		38BD5BE0A332BCE32A46A463 /* AppVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppVersion.swift; sourceTree = "<group>"; };
 		3E013D6F6786AE2EA7E9AF59 /* proxy_daemon.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = proxy_daemon.rs; sourceTree = "<group>"; };
 		3EAF06F7C7AF8EC727D71D52 /* EndpointRequestCoordinatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = EndpointRequestCoordinatorTests.swift; sourceTree = "<group>"; };
+		CF57245AC53642718A314BC3 /* ProviderProxySessionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProviderProxySessionTests.swift; sourceTree = "<group>"; };
 		3EB01EB2A0408FB4CA84CDEE /* CodexCLIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexCLIService.swift; sourceTree = "<group>"; };
 		42479015F84989E486D80B6E /* Protocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protocols.swift; sourceTree = "<group>"; };
 		46A8A937EF06D12B06395D29 /* LiquidProgress.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiquidProgress.swift; sourceTree = "<group>"; };
@@ -457,6 +461,7 @@
 				2DD2673A9712C55D302564FA /* DefaultUsageService.swift */,
 				95E85D9244A64A8BB6AB5F11 /* DefaultWorkspaceMetadataService.swift */,
 				26C8D1A13F4D46AAB7E2A110 /* EndpointRequestCoordinator.swift */,
+				CF57245AC53642718A314BC1 /* ProviderProxySession.swift */,
 				C5358263820EB410620C79AB /* EditorAppService.swift */,
 				1D518BC8C9103B4FD9C16B27 /* FileSystemPaths.swift */,
 				BCFDDF034C6446339DDFAF9B /* LaunchAtStartupService.swift */,
@@ -780,6 +785,7 @@
 				19C06689F088C56B8BE363B4 /* AccountsWidgetSnapshotStoreTests.swift */,
 				E8CB27B4B72C66025D076C89 /* AppSmokeTests.swift */,
 				3EAF06F7C7AF8EC727D71D52 /* EndpointRequestCoordinatorTests.swift */,
+				CF57245AC53642718A314BC3 /* ProviderProxySessionTests.swift */,
 				CBD3F01FE0E3270445E3F92C /* LayoutRulesTests.swift */,
 				A3D1B2CF91A4BFFC55FB8AA5 /* ProxyCoordinatorTests.swift */,
 				48CF6078EFCC779D84F7D6A3 /* RepositoryLocatorTests.swift */,
@@ -1020,6 +1026,7 @@
 				B3E47BF90443604C1C7BAB3D /* AccountsWidgetSnapshotStoreTests.swift in Sources */,
 				FA0F2E55B42E1B1768C9E1FF /* AppSmokeTests.swift in Sources */,
 				F7183D0C1F0BB2AF8E956378 /* EndpointRequestCoordinatorTests.swift in Sources */,
+				CF57245AC53642718A314BC4 /* ProviderProxySessionTests.swift in Sources */,
 				C26AD9CDD389F06EBA8F3301 /* LayoutRulesTests.swift in Sources */,
 				F567996745001A735BA62B03 /* ProxyCoordinatorTests.swift in Sources */,
 				DF8368291C8E0CEAA590256E /* RepositoryLocatorTests.swift in Sources */,
@@ -1081,6 +1088,7 @@
 				FA624CCECA28D7F68B1C0FF8 /* DefaultUsageService.swift in Sources */,
 				FA8F4B3E19ED4AA8B7740F31 /* DefaultWorkspaceMetadataService.swift in Sources */,
 				FA8F4B3E19ED4AA8B7740F32 /* EndpointRequestCoordinator.swift in Sources */,
+				CF57245AC53642718A314BC2 /* ProviderProxySession.swift in Sources */,
 				CA37BD95DACA443113BF6EC6 /* EditorAppService.swift in Sources */,
 				C0040E924E495A9B4DCF7EBE /* EmptyStateView.swift in Sources */,
 				D0D721335F066D21AAAD652D /* FileSystemPaths.swift in Sources */,

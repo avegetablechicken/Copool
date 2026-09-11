@@ -141,6 +141,7 @@ struct ProxyCandidate {
     account_id: String,
     access_token: String,
     auth_json: Value,
+    proxy_url: String,
     plan_type: Option<String>,
     added_at: i64,
     usage: Option<UsageSnapshot>,
@@ -1548,8 +1549,17 @@ async fn forward_codex_request_with_candidate(
     let serialized =
         serde_json::to_vec(payload).map_err(|error| format!("序列化上游请求失败: {error}"))?;
 
-    context
-        .client
+    let client = if candidate.proxy_url.trim().is_empty() {
+        context.client.clone()
+    } else {
+        crate::utils::with_account_proxy(
+            reqwest::Client::builder()
+                .user_agent("codex-tools-proxy/0.1")
+                .timeout(std::time::Duration::from_secs(180)),
+            &candidate.proxy_url,
+        )?.build().map_err(|_| "Failed to create account proxy client".to_string())?
+    };
+    client
         .post(&upstream_url)
         .header(
             "Authorization",
@@ -1635,6 +1645,7 @@ fn account_to_proxy_candidate(account: StoredAccount) -> Option<ProxyCandidate> 
         account_id: extracted.account_id,
         access_token: extracted.access_token,
         auth_json: account.auth_json,
+        proxy_url: account.proxy_url,
         plan_type: account
             .usage
             .as_ref()
@@ -1800,7 +1811,7 @@ async fn refresh_proxy_candidate_usage(
     candidates: Vec<ProxyCandidate>,
 ) {
     for candidate in candidates {
-        let result = fetch_usage_snapshot(&candidate.access_token, &candidate.account_id).await;
+        let result = fetch_usage_snapshot(&candidate.access_token, &candidate.account_id, &candidate.proxy_url).await;
         persist_candidate_usage_result(storage, &candidate.account_id, result).await;
     }
 }
@@ -1882,7 +1893,7 @@ async fn refresh_proxy_candidate_auth(
     storage: &ProxyStorageContext,
     candidate: &ProxyCandidate,
 ) -> Result<ProxyCandidate, String> {
-    let refreshed_auth_json = refresh_chatgpt_auth_tokens(&candidate.auth_json).await?;
+    let refreshed_auth_json = refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?;
     persist_refreshed_candidate_auth(storage, &candidate.account_id, &refreshed_auth_json).await?;
 
     let extracted = extract_auth(&refreshed_auth_json)
@@ -1894,6 +1905,7 @@ async fn refresh_proxy_candidate_auth(
         account_id: extracted.account_id,
         access_token: extracted.access_token,
         auth_json: refreshed_auth_json,
+        proxy_url: candidate.proxy_url.clone(),
         plan_type: candidate.plan_type.clone().or(extracted.plan_type),
         added_at: candidate.added_at,
         usage: candidate.usage.clone(),
@@ -3891,6 +3903,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             account_id: account_id.to_string(),
             access_token: "token".to_string(),
             auth_json: json!({}),
+            proxy_url: String::new(),
             plan_type: None,
             added_at,
             usage: Some(UsageSnapshot {

@@ -296,7 +296,7 @@ pub(crate) fn extract_codex_oauth_tokens(auth_json: &Value) -> Result<CodexOAuth
 /// 使用 auth.json 内的 refresh_token 刷新 ChatGPT OAuth 令牌。
 ///
 /// 返回更新后的 auth.json（仅内存对象，不会自动写盘）。
-pub(crate) async fn refresh_chatgpt_auth_tokens(auth_json: &Value) -> Result<Value, String> {
+pub(crate) async fn refresh_chatgpt_auth_tokens(auth_json: &Value, proxy_url: &str) -> Result<Value, String> {
     let tokens = auth_token_object(auth_json).ok_or_else(|| "auth.json 缺少 tokens".to_string())?;
 
     let refresh_token = tokens
@@ -325,8 +325,9 @@ pub(crate) async fn refresh_chatgpt_auth_tokens(auth_json: &Value) -> Result<Val
         form_pairs.push(("client_id", client_id));
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent("codex-tools/0.1")
+    let client = crate::utils::with_account_proxy(
+        reqwest::Client::builder().user_agent("codex-tools/0.1"), proxy_url,
+    )?
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
 
