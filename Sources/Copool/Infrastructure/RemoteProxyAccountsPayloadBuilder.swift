@@ -38,7 +38,14 @@ struct RemoteProxyAccountsPayloadBuilder {
     private func decodeAccountsStore(from path: URL) throws -> AccountsStore {
         let data = try Data(contentsOf: path)
         do {
-            return try JSONDecoder().decode(AccountsStore.self, from: data)
+            var store = try JSONDecoder().decode(AccountsStore.self, from: data)
+            let proxies = try AccountProxySettings.read(from: path.deletingLastPathComponent().appendingPathComponent("settings.json"))
+            for index in store.accounts.indices {
+                if let proxy = proxies[store.accounts[index].id] {
+                    store.accounts[index].proxyURL = proxy
+                }
+            }
+            return store
         } catch {
             throw AppError.invalidData("Invalid accounts.json format")
         }

@@ -42,6 +42,9 @@ final class RemoteProxyAccountsPayloadBuilderTests: XCTestCase {
         let data = try JSONEncoder().encode(store)
         try data.write(to: storePath, options: Data.WritingOptions.atomic)
 
+        var settings = AppSettings.defaultValue
+        settings.accountProxyURLs[store.accounts[0].id] = "http://127.0.0.1:8080"
+        try JSONEncoder().encode(settings).write(to: tempDirectory.appendingPathComponent("settings.json"))
         let payload = try RemoteProxyAccountsPayloadBuilder(
             sourceAccountStorePath: storePath,
             fileManager: fileManager
@@ -52,6 +55,7 @@ final class RemoteProxyAccountsPayloadBuilderTests: XCTestCase {
         XCTAssertEqual(builtStore.accounts.count, 1)
         XCTAssertEqual(builtStore.accounts[0].accountID, "acc-1")
         XCTAssertEqual(builtStore.accounts[0].email, "test@example.com")
+        XCTAssertEqual(builtStore.accounts[0].proxyURL, "http://127.0.0.1:8080")
     }
 
     func testBuildClearsLocalCurrentSelectionForRemoteAutonomy() throws {

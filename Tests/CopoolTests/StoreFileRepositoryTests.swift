@@ -2,6 +2,26 @@ import XCTest
 @testable import Copool
 
 final class StoreFileRepositoryTests: XCTestCase {
+    func testLegacyAccountProxyMigratesToSettingsAndCanBeCleared() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let paths = proxyPersistencePaths(directory)
+        let account = StoredAccount(
+            id: "legacy", label: "Legacy", email: nil, accountID: "legacy", planType: nil,
+            teamName: nil, teamAlias: nil, authJSON: .null, addedAt: 1, updatedAt: 1,
+            usage: nil, usageError: nil, proxyURL: "http://127.0.0.1:8080"
+        )
+        try JSONEncoder().encode(AccountsStore(accounts: [account])).write(to: paths.accountStorePath)
+        let repository = StoreFileRepository(paths: paths)
+        XCTAssertEqual(try repository.loadStore().accounts.first?.proxyURL, account.proxyURL)
+        XCTAssertEqual(try SettingsFileRepository(paths: paths).loadSettings().accountProxyURLs[account.id], account.proxyURL)
+        XCTAssertFalse(try String(contentsOf: paths.accountStorePath, encoding: .utf8).contains("proxyURL"))
+        _ = try repository.mutateStore { $0.accounts[0].proxyURL = "" }
+        XCTAssertEqual(try repository.loadStore().accounts.first?.proxyURL, "")
+        XCTAssertEqual(try SettingsFileRepository(paths: paths).loadSettings().accountProxyURLs[account.id], "")
+    }
+
     func testSub2APICacheMigratesAndSurvivesStaleAccountStoreSave() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -48,11 +68,17 @@ final class StoreFileRepositoryTests: XCTestCase {
             usage: nil, usageError: nil, proxyURL: proxy
         )
         try StoreFileRepository(paths: paths).saveStore(AccountsStore(accounts: [account]))
+        let raw = try String(contentsOf: paths.accountStorePath, encoding: .utf8)
+        XCTAssertFalse(raw.contains("proxyURL"))
+        let settingsRepository = SettingsFileRepository(paths: paths)
+        let staleSettings = try settingsRepository.loadSettings()
+        XCTAssertEqual(staleSettings.accountProxyURLs["a"], proxy)
         let restartedRepository = StoreFileRepository(paths: paths)
         XCTAssertEqual(try restartedRepository.loadStore().accountSummaries().first?.proxyURL, proxy)
         _ = try restartedRepository.mutateStore { store in
             store.accounts[0].proxyURL = "http://127.0.0.1:8080"
         }
+        try settingsRepository.saveSettings(staleSettings)
         XCTAssertEqual(
             try StoreFileRepository(paths: paths).loadStore().accountSummaries().first?.proxyURL,
             "http://127.0.0.1:8080"
@@ -79,6 +105,7 @@ final class StoreFileRepositoryTests: XCTestCase {
         let restarted = try SettingsFileRepository(paths: paths).loadSettings()
         let provider = try XCTUnwrap(restarted.sub2APIProvider.normalized().providers.first)
         XCTAssertEqual(provider.cachedAccounts.first?.accountSummary.proxyURL, proxy)
+        XCTAssertFalse(try String(contentsOf: paths.accountStorePath, encoding: .utf8).contains("proxyURL"))
         var cleared = provider
         cleared.accountProxyURLs = [:]
         XCTAssertEqual(cleared.normalized().cachedAccounts.first?.accountSummary.proxyURL, "")
@@ -382,7 +409,7 @@ final class StoreFileRepositoryTests: XCTestCase {
 
         let storePath = tempDir.appendingPathComponent("accounts.json")
         let settingsPath = tempDir.appendingPathComponent("settings.json")
-        let legacySettings = AppSettings(
+        var legacySettings = AppSettings(
             launchAtStartup: true,
             launchCodexAfterSwitch: false,
             autoSmartSwitch: true,
@@ -437,6 +464,7 @@ final class StoreFileRepositoryTests: XCTestCase {
         let migratedAccounts = try JSONDecoder().decode(AccountsStore.self, from: Data(contentsOf: storePath))
         let storedSettings = try JSONDecoder().decode(AppSettings.self, from: Data(contentsOf: settingsPath))
 
+        legacySettings.accountProxyURLs = ["acct-1": ""]
         XCTAssertEqual(migrated, legacySettings)
         XCTAssertEqual(storedSettings, legacySettings)
         XCTAssertEqual(migratedAccounts.accounts, [account])

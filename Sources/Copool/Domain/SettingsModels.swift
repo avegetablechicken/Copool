@@ -272,6 +272,7 @@ struct AppSettings: Codable, Equatable {
     var usageProgressDisplayMode: UsageProgressDisplayMode
     var sub2APIProvider: Sub2APISettingsConfiguration
     var locale: String
+    var accountProxyURLs: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
         case launchAtStartup
@@ -287,6 +288,7 @@ struct AppSettings: Codable, Equatable {
         case usageProgressDisplayMode
         case sub2APIProvider
         case locale
+        case accountProxyURLs
     }
 
     init(
@@ -339,6 +341,7 @@ struct AppSettings: Codable, Equatable {
             Sub2APISettingsConfiguration.self,
             forKey: .sub2APIProvider
         )?.normalized() ?? .defaultValue
+        accountProxyURLs = try container.decodeIfPresent([String: String].self, forKey: .accountProxyURLs) ?? [:]
         locale = AppLocale.resolve(try container.decode(String.self, forKey: .locale)).identifier
     }
 
@@ -357,6 +360,7 @@ struct AppSettings: Codable, Equatable {
         try container.encode(usageProgressDisplayMode, forKey: .usageProgressDisplayMode)
         try container.encode(sub2APIProvider.normalized(), forKey: .sub2APIProvider)
         try container.encode(locale, forKey: .locale)
+        try container.encode(accountProxyURLs, forKey: .accountProxyURLs)
     }
 
     static var defaultValue: AppSettings {

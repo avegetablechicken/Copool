@@ -3,7 +3,7 @@ import Foundation
 import Security
 #endif
 
-// Both repositories update accounts.json; serialize read/modify/write across instances.
+// Both repositories update the account and settings files; serialize across instances.
 private let accountFilesLock = NSRecursiveLock()
 
 final class StoreFileRepository: AccountsStoreRepository, @unchecked Sendable {
@@ -56,14 +56,32 @@ final class StoreFileRepository: AccountsStoreRepository, @unchecked Sendable {
             throw AppError.io(L10n.tr("error.store.read_failed_format", error.localizedDescription))
         }
 
+        var store: AccountsStore
         do {
-            return try decodeStore(from: data)
+            store = try decodeStore(from: data)
         } catch {
             try backupCorruptedStore(raw: data)
             let emptyStore = AccountsStore()
             try saveStoreUnlocked(emptyStore)
             return emptyStore
         }
+        // Settings are authoritative, including an explicitly cleared proxy.
+        // Keep migration IO outside the corruption handler so settings failures
+        // can never cause a valid account store to be reset.
+        let proxies = try AccountProxySettings.read(paths: paths)
+        for index in store.accounts.indices {
+            if let proxy = proxies[store.accounts[index].id] {
+                store.accounts[index].proxyURL = proxy
+            }
+        }
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let accounts = root?["accounts"] as? [[String: Any]] ?? []
+        let cached = root?["cachedAccounts"] as? [String: [[String: Any]]] ?? [:]
+        if accounts.contains(where: { $0["proxyURL"] != nil })
+            || cached.values.joined().contains(where: { $0["proxyURL"] != nil }) {
+            try saveStoreUnlocked(store)
+        }
+        return store
     }
 
     private func saveStoreUnlocked(_ store: AccountsStore) throws {
@@ -74,11 +92,23 @@ final class StoreFileRepository: AccountsStoreRepository, @unchecked Sendable {
 
         let data: Data
         do {
-            data = try encoder.encode(store)
+            var root = try JSONSerialization.jsonObject(with: encoder.encode(store)) as! [String: Any]
+            func removingProxy(_ account: [String: Any]) -> [String: Any] {
+                var account = account
+                account.removeValue(forKey: "proxyURL")
+                return account
+            }
+            root["accounts"] = (root["accounts"] as? [[String: Any]] ?? []).map(removingProxy)
+            let cached = root["cachedAccounts"] as? [String: [[String: Any]]] ?? [:]
+            root["cachedAccounts"] = cached.mapValues { $0.map(removingProxy) }
+            data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         } catch {
             throw AppError.invalidData(L10n.tr("error.store.serialize_failed_format", error.localizedDescription))
         }
 
+        // Persist settings before dropping the legacy proxy fields from accounts.
+        let proxies = store.accounts.reduce(into: [String: String]()) { $0[$1.id] = $1.proxyURL }
+        try AccountProxySettings.write(proxies, paths: paths, fileManager: fileManager)
         try writeAtomically(data: data, to: paths.accountStorePath)
     }
 
@@ -131,6 +161,48 @@ final class StoreFileRepository: AccountsStoreRepository, @unchecked Sendable {
     }
 }
 
+enum AccountProxySettings {
+    static func read(paths: FileSystemPaths) throws -> [String: String] {
+        try read(from: paths.settingsStorePath)
+    }
+
+    static func read(from settingsPath: URL) throws -> [String: String] {
+        guard FileManager.default.fileExists(atPath: settingsPath.path) else { return [:] }
+        let data = try Data(contentsOf: settingsPath)
+        let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let value = root?["accountProxyURLs"] else { return [:] }
+        guard let proxies = value as? [String: String] else {
+            throw AppError.invalidData("Invalid accountProxyURLs in settings.json")
+        }
+        return proxies
+    }
+
+    static func write(_ proxies: [String: String], paths: FileSystemPaths, fileManager: FileManager) throws {
+        var root: [String: Any]
+        if fileManager.fileExists(atPath: paths.settingsStorePath.path) {
+            let data = try Data(contentsOf: paths.settingsStorePath)
+            guard let existing = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw AppError.invalidData("Invalid settings.json")
+            }
+            root = existing
+        } else {
+            // Preserve settings from the oldest combined accounts/settings format.
+            let legacy = try? Data(contentsOf: paths.accountStorePath)
+            let legacyRoot = legacy.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if let settings = legacyRoot?["settings"] as? [String: Any] {
+                root = settings
+            } else {
+                root = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AppSettings.defaultValue)) as! [String: Any]
+            }
+        }
+        if root["accountProxyURLs"] as? [String: String] == proxies { return }
+        root["accountProxyURLs"] = proxies
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try SettingsFileRepository(paths: paths, fileManager: fileManager)
+            .writeAtomically(data: data, to: paths.settingsStorePath)
+    }
+}
+
 final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
     private struct LegacyAccountsStore: Codable {
         var version: Int = 1
@@ -168,13 +240,16 @@ final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
                 // Save the accounts first; only then remove the legacy cache from settings.
                 try saveSettings(settings)
             }
+            settings.accountProxyURLs = try AccountProxySettings.read(paths: paths)
+            settings.sub2APIProvider = settings.sub2APIProvider.normalized()
             return settings
         }
 
         if fileManager.fileExists(atPath: paths.accountStorePath.path),
            let legacyStore = try decodeLegacyStore(from: paths.accountStorePath) {
-            let migratedSettings = legacyStore.settings
+            var migratedSettings = legacyStore.settings
             try saveSettings(migratedSettings)
+            migratedSettings.accountProxyURLs = try AccountProxySettings.read(paths: paths)
             return migratedSettings
         }
 
@@ -190,19 +265,15 @@ final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.userInfo[.omitSub2APIAccountCache] = true
 
-        let data: Data
-        do {
-            data = try encoder.encode(settings)
-        } catch {
-            throw AppError.invalidData(L10n.tr("error.store.serialize_failed_format", error.localizedDescription))
-        }
-
         let repository = StoreFileRepository(paths: paths, fileManager: fileManager)
         _ = try repository.mutateStore { store in
             store.cachedAccounts = settings.sub2APIProvider.normalized().providers.reduce(into: [:]) { cache, provider in
                 cache[provider.id.uuidString] = provider.cachedAccounts
             }
         }
+        var persistedSettings = settings
+        persistedSettings.accountProxyURLs = try AccountProxySettings.read(paths: paths)
+        let data = try encoder.encode(persistedSettings)
         try writeAtomically(data: data, to: paths.settingsStorePath)
     }
 
@@ -226,7 +297,7 @@ final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
         return try? JSONDecoder().decode(LegacyAccountsStore.self, from: data)
     }
 
-    private func writeAtomically(data: Data, to destination: URL) throws {
+    fileprivate func writeAtomically(data: Data, to destination: URL) throws {
         let tempURL = destination.deletingLastPathComponent()
             .appendingPathComponent(".\(destination.lastPathComponent).tmp-\(UUID().uuidString)", isDirectory: false)
 
