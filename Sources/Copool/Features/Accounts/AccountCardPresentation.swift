@@ -28,6 +28,7 @@ struct AccountCardPresentation: Equatable {
     let statusLabel: String?
     let displayAccountName: String
     let remainingResetCountText: String
+    let showsCredits: Bool
     let creditsText: String
     let fiveHourWindow: AccountWindowPresentation
     let oneWeekWindow: AccountWindowPresentation
@@ -46,6 +47,7 @@ struct AccountCardPresentation: Equatable {
             ?? (account.shouldDisplayWorkspaceTag ? account.displayTeamName : nil)
         statusLabel = account.isWorkspaceDeactivated ? L10n.tr("accounts.card.status.deactivated") : nil
         displayAccountName = Self.displayName(for: account, isCollapsed: isCollapsed)
+        showsCredits = account.sourceTag != "SUB2API"
         creditsText = Self.creditsText(for: account)
         remainingResetCountText = account.usage?.remainingResetCount.flatMap { $0 >= 0 ? String($0) : nil } ?? "--"
         fiveHourWindow = Self.windowPresentation(
