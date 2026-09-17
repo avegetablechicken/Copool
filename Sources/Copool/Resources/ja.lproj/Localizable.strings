@@ -118,6 +118,8 @@
 "accounts.card.current" = "現在";
 "accounts.card.team.set_name" = "Team 名を設定";
 "accounts.card.credits_format" = "Credits: %@";
+"accounts.card.remaining_resets_format" = "リセット：%@";
+"accounts.card.resets_unavailable_format" = "リセット：%@";
 "accounts.card.unlimited" = "無制限";
 "accounts.card.switching" = "切替中...";
 "accounts.card.switch_to_this" = "このアカウントへ切替";

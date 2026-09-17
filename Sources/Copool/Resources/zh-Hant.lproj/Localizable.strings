@@ -118,6 +118,8 @@
 "accounts.card.current" = "目前";
 "accounts.card.team.set_name" = "設定團隊名稱";
 "accounts.card.credits_format" = "額度：%@";
+"accounts.card.remaining_resets_format" = "重設：%@ 次";
+"accounts.card.resets_unavailable_format" = "重設：%@";
 "accounts.card.unlimited" = "無限制";
 "accounts.card.switching" = "切換中...";
 "accounts.card.switch_to_this" = "切換到此帳號";

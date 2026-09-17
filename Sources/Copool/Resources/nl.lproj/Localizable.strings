@@ -118,6 +118,8 @@
 "accounts.card.current" = "HUIDIG";
 "accounts.card.team.set_name" = "Teamnaam instellen";
 "accounts.card.credits_format" = "Credits: %@";
+"accounts.card.remaining_resets_format" = "Resets: %@";
+"accounts.card.resets_unavailable_format" = "Resets: %@";
 "accounts.card.unlimited" = "Onbeperkt";
 "accounts.card.switching" = "Wisselen...";
 "accounts.card.switch_to_this" = "Naar dit account schakelen";

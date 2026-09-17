@@ -502,6 +502,7 @@ struct UsageSnapshot: Codable, Equatable, Sendable {
     var fiveHour: UsageWindow?
     var oneWeek: UsageWindow?
     var credits: CreditSnapshot?
+    var remainingResetCount: Int? = nil
 }
 
 struct UsageWindow: Codable, Equatable, Sendable {

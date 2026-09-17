@@ -118,6 +118,8 @@
 "accounts.card.current" = "ТЕКУЩИЙ";
 "accounts.card.team.set_name" = "Указать имя команды";
 "accounts.card.credits_format" = "Кредиты: %@";
+"accounts.card.remaining_resets_format" = "Сбросы: %@";
+"accounts.card.resets_unavailable_format" = "Сбросы: %@";
 "accounts.card.unlimited" = "Без ограничений";
 "accounts.card.switching" = "Переключение...";
 "accounts.card.switch_to_this" = "Переключиться на этот аккаунт";

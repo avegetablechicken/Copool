@@ -1,7 +1,7 @@
 import SwiftUI
 
 private enum AccountCardOverlayLayout {
-    static let actionReservationWidth: CGFloat = 144
+    static let actionReservationWidth: CGFloat = 96
     static let compactActionControlHeight = LayoutRules.compactActionControlHeight
 }
 
@@ -149,8 +149,12 @@ struct AccountCardExpandedUsageSection: View {
             AccountWindowSection(presentation: presentation.oneWeekWindow, tint: .teal)
 
             HStack(spacing: 8) {
-                Text(L10n.tr("accounts.card.credits_format", presentation.creditsText))
+                Text(L10n.tr("accounts.card.credits_format", presentation.creditsText)
+                    + " · " + L10n.tr(presentation.remainingResetCountText == "--"
+                        ? "accounts.card.resets_unavailable_format"
+                        : "accounts.card.remaining_resets_format", presentation.remainingResetCountText))
                     .font(.caption)
+                    .lineLimit(1)
                     .foregroundStyle(.secondary)
                     .padding(.trailing, AccountCardOverlayLayout.actionReservationWidth)
                 Spacer(minLength: 0)

@@ -118,6 +118,8 @@
 "accounts.card.current" = "当前";
 "accounts.card.team.set_name" = "设置团队名称";
 "accounts.card.credits_format" = "额度：%@";
+"accounts.card.remaining_resets_format" = "重置：%@ 次";
+"accounts.card.resets_unavailable_format" = "重置：%@";
 "accounts.card.unlimited" = "无限制";
 "accounts.card.switching" = "切换中...";
 "accounts.card.switch_to_this" = "切换到此账号";

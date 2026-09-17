@@ -126,10 +126,15 @@ final class DefaultUsageService: UsageService, @unchecked Sendable {
             // Self.logger.debug(
             //     "Usage request succeeded via \(resolved.endpoint, privacy: .public) in \(elapsedMilliseconds) ms for account \(accountID, privacy: .public)"
             // )
-            let snapshot = Self.mapPayload(
+            var snapshot = Self.mapPayload(
                 resolved.payload,
                 fetchedAt: dateProvider.unixSecondsNow()
             )
+            if let count = await fetchRemainingResetCount(
+                usageEndpoint: resolved.endpoint, accessToken: accessToken, accountID: accountID
+            ) {
+                snapshot.remainingResetCount = count
+            }
             let elapsedMilliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
             UsageDebugLog.write(
                 "request.success",
@@ -153,6 +158,38 @@ final class DefaultUsageService: UsageService, @unchecked Sendable {
                 throw AppError.network(L10n.tr("error.usage.request_failed_with_more_format", preview, String(errors.count - 2)))
             }
             throw AppError.network(L10n.tr("error.usage.request_failed_format", preview))
+        }
+    }
+
+    private func fetchRemainingResetCount(
+        usageEndpoint: String, accessToken: String, accountID: String
+    ) async -> Int? {
+        // Follow the successful usage endpoint so custom origins and account proxies still apply.
+        let endpoint: String
+        if usageEndpoint.hasSuffix("/wham/usage") {
+            endpoint = String(usageEndpoint.dropLast("usage".count)) + "rate-limit-reset-credits"
+        } else if usageEndpoint.hasSuffix("/api/codex/usage") {
+            endpoint = String(usageEndpoint.dropLast("/api/codex/usage".count))
+                + "/backend-api/wham/rate-limit-reset-credits"
+        } else {
+            return nil
+        }
+        guard let url = URL(string: endpoint) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = RequestPolicy.timeout
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
+        request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else { return nil }
+            return try JSONDecoder().decode(ResetCreditDetails.self, from: data).availableCount
+        } catch {
+            // This optional metadata must not turn a successful usage refresh into a failure.
+            return nil
         }
     }
 
@@ -246,7 +283,8 @@ final class DefaultUsageService: UsageService, @unchecked Sendable {
             oneWeek: oneWeekRaw.map(Self.toUsageWindow),
             credits: payload.credits.map {
                 CreditSnapshot(hasCredits: $0.hasCredits, unlimited: $0.unlimited, balance: $0.balance)
-            }
+            },
+            remainingResetCount: payload.rateLimitResetCredits?.availableCount
         )
     }
 
@@ -906,6 +944,7 @@ fileprivate struct UsageAPIResponse: Decodable {
     var rateLimit: RateLimitDetails?
     var additionalRateLimits: [AdditionalRateLimitDetails]?
     var credits: CreditDetails?
+    var rateLimitResetCredits: ResetCreditDetails?
 
     enum CodingKeys: String, CodingKey {
         case accountID = "account_id"
@@ -914,6 +953,21 @@ fileprivate struct UsageAPIResponse: Decodable {
         case rateLimit = "rate_limit"
         case additionalRateLimits = "additional_rate_limits"
         case credits
+        case rateLimitResetCredits = "rate_limit_reset_credits"
+    }
+}
+
+fileprivate struct ResetCreditDetails: Decodable {
+    let availableCount: Int?
+
+    init(from decoder: Decoder) throws {
+        let value = try JSONValue(from: decoder)["available_count"]
+        let number = value?.doubleValue ?? value?.stringValue.flatMap(Double.init)
+        if let number, number.isFinite, number >= 0, number < Double(Int.max) {
+            availableCount = Int(number.rounded(.down))
+        } else {
+            availableCount = nil
+        }
     }
 }
 

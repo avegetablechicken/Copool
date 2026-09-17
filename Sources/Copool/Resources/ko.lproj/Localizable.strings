@@ -118,6 +118,8 @@
 "accounts.card.current" = "현재";
 "accounts.card.team.set_name" = "Team 이름 설정";
 "accounts.card.credits_format" = "Credits: %@";
+"accounts.card.remaining_resets_format" = "초기화: %@";
+"accounts.card.resets_unavailable_format" = "초기화: %@";
 "accounts.card.unlimited" = "무제한";
 "accounts.card.switching" = "전환 중...";
 "accounts.card.switch_to_this" = "이 계정으로 전환";

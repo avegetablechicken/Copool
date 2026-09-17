@@ -142,8 +142,8 @@ final class AccountCardPresentationTests: XCTestCase {
         )
 
         XCTAssertEqual(presentation.fiveHourWindow.progressPercent, 28)
-        XCTAssertEqual(presentation.fiveHourWindow.primaryText, "Remaining 28%")
-        XCTAssertEqual(presentation.fiveHourWindow.secondaryText, "Used 72%")
+        XCTAssertEqual(presentation.fiveHourWindow.primaryText, L10n.tr("accounts.window.remaining_format", "28%"))
+        XCTAssertEqual(presentation.fiveHourWindow.secondaryText, L10n.tr("accounts.window.used_format", "72%"))
         XCTAssertEqual(
             presentation.fiveHourWindow.resetText,
             L10n.tr("accounts.window.reset_at_format", "11/15/25, 22:13:20")

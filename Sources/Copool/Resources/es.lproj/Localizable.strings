@@ -118,6 +118,8 @@
 "accounts.card.current" = "ACTUAL";
 "accounts.card.team.set_name" = "Definir nombre del equipo";
 "accounts.card.credits_format" = "Créditos: %@";
+"accounts.card.remaining_resets_format" = "Restablecimientos: %@";
+"accounts.card.resets_unavailable_format" = "Restablecimientos: %@";
 "accounts.card.unlimited" = "Ilimitado";
 "accounts.card.switching" = "Cambiando...";
 "accounts.card.switch_to_this" = "Cambiar a esta cuenta";
