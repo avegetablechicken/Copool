@@ -12,7 +12,7 @@
 
 ## Local macOS App Bundle Build
 
-- When the user says `构建`, `构建 app bundle`, or similar wording, use the following verified workflow from the repository root. Build the Swift/Xcode `Copool` project; do not use the unrelated Electron scripts in `package.json`.
+- For requests to build the application locally, use the following verified workflow from the repository root. Build the Swift/Xcode `Copool` project; do not use the unrelated Electron scripts in `package.json`.
 - Default to a Release bundle with local ad-hoc signing. The current machine lacks the Mac App Development provisioning profiles for `com.alick.copool` and `com.alick.copool.widgets`, so disable Xcode signing during the build. Do not repeat provisioning discovery or enable provisioning updates for an ordinary local build.
 - Xcode may require execution outside the sandbox to access system build services and caches; use the execution tool's approval mechanism when needed.
 
