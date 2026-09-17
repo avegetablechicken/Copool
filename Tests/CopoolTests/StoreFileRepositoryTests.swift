@@ -2,6 +2,41 @@ import XCTest
 @testable import Copool
 
 final class StoreFileRepositoryTests: XCTestCase {
+    func testSub2APICacheMigratesAndSurvivesStaleAccountStoreSave() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let paths = proxyPersistencePaths(directory)
+        let accountRepository = StoreFileRepository(paths: paths)
+        let staleStore = try accountRepository.loadStore()
+        let cached = Sub2APIAccountSummary(
+            id: 42, name: "Cached", email: nil, accountID: nil, accountType: "oauth",
+            status: "active", planType: nil, usage: nil, usageError: nil
+        )
+        let first = Sub2APIProviderConfiguration(providerID: "first", importedAccountIDs: [42], cachedAccounts: [cached])
+        let second = Sub2APIProviderConfiguration(providerID: "second", importedAccountIDs: [42], cachedAccounts: [cached])
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(providers: [first, second])
+        try JSONEncoder().encode(settings).write(to: paths.settingsStorePath)
+
+        let repository = SettingsFileRepository(paths: paths)
+        XCTAssertEqual(try repository.loadSettings(), settings)
+        let rawSettings = try String(contentsOf: paths.settingsStorePath, encoding: .utf8)
+        XCTAssertFalse(rawSettings.contains("cachedAccounts"))
+        XCTAssertEqual(try accountRepository.loadStore().cachedAccounts[first.id.uuidString], [cached])
+        XCTAssertEqual(try accountRepository.loadStore().cachedAccounts[second.id.uuidString], [cached])
+
+        try accountRepository.saveStore(staleStore)
+        XCTAssertEqual(try SettingsFileRepository(paths: paths).loadSettings(), settings)
+        settings.sub2APIProvider.providers[0].cachedAccounts = []
+        try repository.saveSettings(settings)
+        XCTAssertEqual(try repository.loadSettings(), settings)
+        settings.sub2APIProvider.providers.removeFirst()
+        try repository.saveSettings(settings)
+        XCTAssertNil(try accountRepository.loadStore().cachedAccounts[first.id.uuidString])
+        XCTAssertEqual(try accountRepository.loadStore().cachedAccounts[second.id.uuidString], [cached])
+    }
+
     func testAccountProxyReloadsFromDiskIntoCardSnapshotAfterRepositoryRestart() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

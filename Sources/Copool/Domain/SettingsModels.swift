@@ -86,7 +86,9 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         try container.encode(proxyURL, forKey: .proxyURL)
         try container.encode(accountProxyURLs, forKey: .accountProxyURLs)
         try container.encode(importedAccountIDs, forKey: .importedAccountIDs)
-        try container.encode(cachedAccounts, forKey: .cachedAccounts)
+        if encoder.userInfo[.omitSub2APIAccountCache] as? Bool != true {
+            try container.encode(cachedAccounts, forKey: .cachedAccounts)
+        }
         try container.encode(legacyAdminBaseURL, forKey: .legacyAdminBaseURL)
     }
 
@@ -390,4 +392,8 @@ struct AppSettingsPatch {
     var usageProgressDisplayMode: UsageProgressDisplayMode? = nil
     var sub2APIProvider: Sub2APISettingsConfiguration? = nil
     var locale: String? = nil
+}
+
+extension CodingUserInfoKey {
+    static let omitSub2APIAccountCache = CodingUserInfoKey(rawValue: "omitSub2APIAccountCache")!
 }

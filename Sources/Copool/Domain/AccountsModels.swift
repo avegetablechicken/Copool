@@ -152,6 +152,7 @@ struct WorkspaceDirectoryEntry: Codable, Equatable, Identifiable {
 struct AccountsStore: Codable, Equatable {
     var version: Int = 1
     var accounts: [StoredAccount] = []
+    var cachedAccounts: [String: [Sub2APIAccountSummary]] = [:]
     var workspaceDirectory: [WorkspaceDirectoryEntry] = []
     var currentAccountID: String?
     var currentSelection: CurrentAccountSelection?
@@ -159,6 +160,7 @@ struct AccountsStore: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case version
         case accounts
+        case cachedAccounts
         case workspaceDirectory
         case currentAccountID = "currentAccountId"
         case currentSelection
@@ -182,6 +184,7 @@ struct AccountsStore: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
         accounts = try container.decodeIfPresent([StoredAccount].self, forKey: .accounts) ?? []
+        cachedAccounts = try container.decodeIfPresent([String: [Sub2APIAccountSummary]].self, forKey: .cachedAccounts) ?? [:]
         workspaceDirectory = try container.decodeIfPresent([WorkspaceDirectoryEntry].self, forKey: .workspaceDirectory) ?? []
         currentSelection = try container.decodeIfPresent(CurrentAccountSelection.self, forKey: .currentSelection)
         currentAccountID = try container.decodeIfPresent(String.self, forKey: .currentAccountID)

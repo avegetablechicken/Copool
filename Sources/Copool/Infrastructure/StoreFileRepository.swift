@@ -3,11 +3,14 @@ import Foundation
 import Security
 #endif
 
+// Both repositories update accounts.json; serialize read/modify/write across instances.
+private let accountFilesLock = NSRecursiveLock()
+
 final class StoreFileRepository: AccountsStoreRepository, @unchecked Sendable {
     private let paths: FileSystemPaths
     private let fileManager: FileManager
     private let dateProvider: DateProviding
-    private let lock = NSLock()
+    private let lock = accountFilesLock
 
     init(paths: FileSystemPaths, fileManager: FileManager = .default, dateProvider: DateProviding = SystemDateProvider()) {
         self.paths = paths
@@ -24,7 +27,11 @@ final class StoreFileRepository: AccountsStoreRepository, @unchecked Sendable {
     func saveStore(_ store: AccountsStore) throws {
         lock.lock()
         defer { lock.unlock() }
-        try saveStoreUnlocked(store)
+        var updated = store
+        if fileManager.fileExists(atPath: paths.accountStorePath.path) {
+            updated.cachedAccounts = try loadStoreUnlocked().cachedAccounts
+        }
+        try saveStoreUnlocked(updated)
     }
 
     func mutateStore(_ transform: (inout AccountsStore) throws -> Void) throws -> AccountsStore {
@@ -141,21 +148,33 @@ final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
     }
 
     func loadSettings() throws -> AppSettings {
+        accountFilesLock.lock()
+        defer { accountFilesLock.unlock() }
         if fileManager.fileExists(atPath: paths.settingsStorePath.path) {
-            return try decodeSettings(from: paths.settingsStorePath)
+            var settings = try decodeSettings(from: paths.settingsStorePath)
+            let repository = StoreFileRepository(paths: paths, fileManager: fileManager)
+            let cache = try repository.loadStore().cachedAccounts
+            for index in settings.sub2APIProvider.providers.indices {
+                let id = settings.sub2APIProvider.providers[index].id.uuidString
+                if let accounts = cache[id] {
+                    settings.sub2APIProvider.providers[index].cachedAccounts = accounts
+                }
+            }
+            let raw = try Data(contentsOf: paths.settingsStorePath)
+            let root = try JSONSerialization.jsonObject(with: raw) as? [String: Any]
+            let provider = root?["sub2APIProvider"] as? [String: Any]
+            let configurations = provider?["providers"] as? [[String: Any]] ?? []
+            if provider?["cachedAccounts"] != nil || configurations.contains(where: { $0["cachedAccounts"] != nil }) {
+                // Save the accounts first; only then remove the legacy cache from settings.
+                try saveSettings(settings)
+            }
+            return settings
         }
 
         if fileManager.fileExists(atPath: paths.accountStorePath.path),
            let legacyStore = try decodeLegacyStore(from: paths.accountStorePath) {
             let migratedSettings = legacyStore.settings
             try saveSettings(migratedSettings)
-            try saveAccountsStore(
-                AccountsStore(
-                    version: legacyStore.version,
-                    accounts: legacyStore.accounts,
-                    currentSelection: legacyStore.currentSelection
-                )
-            )
             return migratedSettings
         }
 
@@ -163,10 +182,13 @@ final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
     }
 
     func saveSettings(_ settings: AppSettings) throws {
+        accountFilesLock.lock()
+        defer { accountFilesLock.unlock() }
         try fileManager.createDirectory(at: paths.applicationSupportDirectory, withIntermediateDirectories: true)
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.userInfo[.omitSub2APIAccountCache] = true
 
         let data: Data
         do {
@@ -175,6 +197,12 @@ final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
             throw AppError.invalidData(L10n.tr("error.store.serialize_failed_format", error.localizedDescription))
         }
 
+        let repository = StoreFileRepository(paths: paths, fileManager: fileManager)
+        _ = try repository.mutateStore { store in
+            store.cachedAccounts = settings.sub2APIProvider.normalized().providers.reduce(into: [:]) { cache, provider in
+                cache[provider.id.uuidString] = provider.cachedAccounts
+            }
+        }
         try writeAtomically(data: data, to: paths.settingsStorePath)
     }
 
@@ -196,20 +224,6 @@ final class SettingsFileRepository: SettingsRepository, @unchecked Sendable {
     private func decodeLegacyStore(from path: URL) throws -> LegacyAccountsStore? {
         let data = try Data(contentsOf: path)
         return try? JSONDecoder().decode(LegacyAccountsStore.self, from: data)
-    }
-
-    private func saveAccountsStore(_ store: AccountsStore) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-
-        let data: Data
-        do {
-            data = try encoder.encode(store)
-        } catch {
-            throw AppError.invalidData(L10n.tr("error.store.serialize_failed_format", error.localizedDescription))
-        }
-
-        try writeAtomically(data: data, to: paths.accountStorePath)
     }
 
     private func writeAtomically(data: Data, to destination: URL) throws {
