@@ -524,6 +524,83 @@ final class SettingsPageModelTests: XCTestCase {
         )
     }
 
+    func testManualRefreshUpdatesAllSub2APIProvidersWithOfficialDefault() async throws {
+        let account = Sub2APIAccountSummary(
+            id: 42,
+            name: "openai-2026",
+            email: "codex@example.com",
+            accountID: "chatgpt-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil
+        )
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = makeSub2APISettings(
+            providerID: "ShareCoder",
+            importedAccountIDs: [42]
+        )
+        settings.sub2APIProvider.upsert(Sub2APIProviderConfiguration(
+            providerID: "second", username: "admin", password: "secret",
+            importedAccountIDs: [42], cachedAccounts: [account.settingProvider("second")]
+        ))
+        let service = SettingsStubSub2APIAccountService(
+            accounts: [], providerID: "openai",
+            accountsByProviderID: ["ShareCoder": [account], "second": [account]],
+            isConnected: false
+        )
+        let settingsRepository = TestSettingsRepository(settings: settings)
+        let settingsCoordinator = SettingsCoordinator(
+            settingsRepository: settingsRepository,
+            launchAtStartupService: SettingsStubLaunchAtStartupService()
+        )
+        let coordinator = AccountsCoordinator(
+            storeRepository: SettingsTestAccountsStoreRepository(),
+            settingsRepository: settingsRepository,
+            authRepository: SettingsTestAuthRepository(),
+            usageService: SettingsTestUsageService(),
+            chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+            codexCLIService: SettingsStubCodexCLIService(),
+            editorAppService: SettingsStubEditorAppService(),
+            opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+            dateProvider: SettingsFixedDateProvider(now: 1)
+        )
+        let trayModel = TrayMenuModel(
+            accountsCoordinator: coordinator,
+            settingsCoordinator: settingsCoordinator,
+            sub2APIAccountService: service,
+            backgroundRefreshPolicy: .init(
+                initialRefreshDelay: .seconds(1),
+                usageRefreshInterval: .seconds(10),
+                refreshUsageOnRecurringTick: true
+            )
+        )
+
+        _ = try await trayModel.performManualRefresh(onPartialUpdate: { _ in })
+        trayModel.stopBackgroundRefresh()
+
+        let expected = [account.settingProvider("ShareCoder"), account.settingProvider("second")]
+        XCTAssertEqual(Set(trayModel.sub2APIAccounts.map(\.cardID)), Set(expected.map(\.cardID)))
+        for account in expected {
+            XCTAssertEqual(
+                try settingsRepository.loadSettings().sub2APIProvider.provider(for: account.providerID!)?.cachedAccounts,
+                [account]
+            )
+        }
+
+        // The accounts page also supports refreshing without the tray service.
+        let pageModel = AccountsPageModel(
+            coordinator: coordinator,
+            settingsCoordinator: settingsCoordinator,
+            sub2APIAccountService: service,
+            initialAccounts: []
+        )
+        await pageModel.refreshUsage()
+        XCTAssertEqual(Set(pageModel.sub2APIAccounts.map(\.cardID)), Set(expected.map(\.cardID)))
+        XCTAssertEqual(pageModel.notice?.style, .info)
+    }
+
     func testAccountsPageSyncsConfiguredProviderWithoutConfirmation() async throws {
         var initialSettings = AppSettings.defaultValue
         initialSettings.sub2APIProvider = makeSub2APISettings(

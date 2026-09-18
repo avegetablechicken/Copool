@@ -41,7 +41,7 @@ extension TrayMenuModel {
         )
 
         accounts = latestAccounts
-        try await refreshSub2APIAccounts(using: settings)
+        try await refreshSub2APIAccounts(using: settings, refreshAllProviders: true)
         scheduleWorkspaceMetadataRefresh(forceRemoteCheck: true)
         notice = nil
         return latestAccounts
@@ -206,34 +206,45 @@ extension TrayMenuModel {
         }
     }
 
-    func refreshSub2APIAccounts(using settings: AppSettings) async throws {
+    func refreshSub2APIAccounts(
+        using settings: AppSettings,
+        refreshAllProviders: Bool = false
+    ) async throws {
         guard let sub2APIAccountService else { return }
-        var sub2APISettings = settings.sub2APIProvider.normalized()
-        guard var configuration = sub2APISettings.provider(
-            for: sub2APIAccountService.currentDefaultProviderID()
-        ) else {
-            return
+        let configurations = settings.sub2APIProvider.normalized().providers.filter {
+            !$0.importedAccountIDs.isEmpty && (refreshAllProviders || (
+                $0.providerID.caseInsensitiveCompare(sub2APIAccountService.currentDefaultProviderID()) == .orderedSame
+                    && sub2APIAccountService.canQueryCurrentDefaultProvider()
+            ))
         }
-        guard !configuration.importedAccountIDs.isEmpty,
-              sub2APIAccountService.canQueryCurrentDefaultProvider() else {
-            return
-        }
+        var firstError: Error?
+        for configuration in configurations {
+            do {
+                let providerID = configuration.providerID
+                let refreshed = try await sub2APIAccountService.fetchAccounts(
+                    providerID: providerID,
+                    accountIDs: configuration.importedAccountIDs
+                ).map { $0.settingProvider(providerID) }
 
-        let providerID = configuration.providerID
-        let refreshed = try await sub2APIAccountService.fetchAccounts(
-            accountIDs: configuration.importedAccountIDs
-        ).map { $0.settingProvider(providerID) }
-
-        configuration.cachedAccounts = refreshed
-        sub2APISettings.upsert(configuration)
-        let updated = try await settingsCoordinator.updateSub2APIProviderPreservingAccountProxies(sub2APISettings)
-        let accounts = updated.sub2APIProvider.provider(for: providerID)?.cachedAccounts.map {
-            $0.settingProvider(providerID)
-        } ?? []
-        sub2APIAccounts.removeAll {
-            $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+                var sub2APISettings = try await settingsCoordinator.currentSettings().sub2APIProvider.normalized()
+                guard var latestConfiguration = sub2APISettings.provider(for: providerID) else { continue }
+                latestConfiguration.cachedAccounts = refreshed.filter {
+                    latestConfiguration.importedAccountIDs.contains($0.id)
+                }
+                sub2APISettings.upsert(latestConfiguration)
+                let updated = try await settingsCoordinator.updateSub2APIProviderPreservingAccountProxies(sub2APISettings)
+                let accounts = updated.sub2APIProvider.provider(for: providerID)?.cachedAccounts.map {
+                    $0.settingProvider(providerID)
+                } ?? []
+                sub2APIAccounts.removeAll {
+                    $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+                }
+                sub2APIAccounts.append(contentsOf: accounts)
+            } catch {
+                if firstError == nil { firstError = error }
+            }
         }
-        sub2APIAccounts.append(contentsOf: accounts)
+        if let firstError { throw firstError }
     }
 
     func beginAccountsRefreshActivity() {

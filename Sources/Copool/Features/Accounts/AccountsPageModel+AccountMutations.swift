@@ -386,22 +386,29 @@ extension AccountsPageModel {
     func refreshImportedSub2APIAccounts() async throws {
         guard let sub2APIAccountService, let settingsCoordinator else { return }
         let settings = try await settingsCoordinator.currentSettings()
-        let providerID = sub2APIAccountService.currentDefaultProviderID()
-        guard let configuration = settings.sub2APIProvider.provider(for: providerID),
-              !configuration.importedAccountIDs.isEmpty else { return }
-        let refreshed = try await sub2APIAccountService.fetchAccounts(
-            accountIDs: configuration.importedAccountIDs
-        ).map {
-            var account = $0.settingProvider(providerID)
-            account.proxyURL = configuration.accountProxyURLs[String(account.id)]
-            return account
+        var firstError: Error?
+        for configuration in settings.sub2APIProvider.normalized().providers where !configuration.importedAccountIDs.isEmpty {
+            do {
+                let providerID = configuration.providerID
+                let refreshed = try await sub2APIAccountService.fetchAccounts(
+                    providerID: providerID,
+                    accountIDs: configuration.importedAccountIDs
+                ).map {
+                    var account = $0.settingProvider(providerID)
+                    account.proxyURL = configuration.accountProxyURLs[String(account.id)]
+                    return account
+                }
+                sub2APIAccounts.removeAll {
+                    $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+                }
+                sub2APIAccounts.append(contentsOf: refreshed)
+                publishSub2APIAccounts()
+                try await persistSub2APIAccountCache()
+            } catch {
+                if firstError == nil { firstError = error }
+            }
         }
-        sub2APIAccounts.removeAll {
-            $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
-        }
-        sub2APIAccounts.append(contentsOf: refreshed)
-        publishSub2APIAccounts()
-        try await persistSub2APIAccountCache()
+        if let firstError { throw firstError }
     }
 
     func persistSub2APIAccountCache() async throws {
