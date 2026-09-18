@@ -97,6 +97,69 @@ final class UsageServiceTests: XCTestCase {
         XCTAssertEqual(provider.requiresOpenAIAuth, false)
     }
 
+    func testCodexModelProviderDefinitionsIncludeSiblingProfileConfigs() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let configPath = directory.appendingPathComponent("config.toml")
+        try "model_provider = \"openai\"\n".write(
+            to: configPath,
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        model_provider = "profile-sub2api"
+
+        [model_providers.profile-sub2api]
+        base_url = "https://profile-sub2.test/v1/"
+        wire_api = "responses"
+        env_key = "PROFILE_SUB2API_KEY"
+        requires_openai_auth = false
+        """.write(
+            to: directory.appendingPathComponent("work.config.toml"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let definitions = CodexModelProviderResolver.definitions(configPath: configPath)
+        let provider = try XCTUnwrap(definitions.first {
+            $0.id.caseInsensitiveCompare("profile-sub2api") == .orderedSame
+        })
+
+        XCTAssertEqual(provider.baseURL, "https://profile-sub2.test/v1")
+        XCTAssertEqual(provider.wireAPI, "responses")
+        XCTAssertEqual(provider.envKey, "PROFILE_SUB2API_KEY")
+        XCTAssertEqual(provider.requiresOpenAIAuth, false)
+        XCTAssertEqual(CodexModelProviderResolver.resolve(configPath: configPath).id, "openai")
+    }
+
+    func testCodexModelProviderDefinitionsIncludeProfileRootProviderWithoutDefinition() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let configPath = directory.appendingPathComponent("config.toml")
+        try "model_provider = \"openai\"\n".write(
+            to: configPath,
+            atomically: true,
+            encoding: .utf8
+        )
+        try "model_provider = \"profile-sub2api\"\n".write(
+            to: directory.appendingPathComponent("work.config.toml"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let definitions = CodexModelProviderResolver.definitions(configPath: configPath)
+
+        XCTAssertTrue(definitions.contains {
+            $0.id.caseInsensitiveCompare("profile-sub2api") == .orderedSame
+        })
+    }
+
     func testCodexProviderResolverMatchesLegacyAdminURLForMigration() throws {
         let configPath = try makeCodexConfig("""
         model_provider = "my"

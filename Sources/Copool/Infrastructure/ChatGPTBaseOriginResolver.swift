@@ -91,24 +91,43 @@ enum CodexModelProviderResolver {
     }
 
     static func definitions(configPath: URL) -> [CodexModelProviderDefinition] {
-        guard let raw = try? String(contentsOf: configPath, encoding: .utf8), !raw.isEmpty else {
-            return []
+        var result: [CodexModelProviderDefinition] = []
+        for path in configurationPaths(configPath: configPath) {
+            guard let raw = try? String(contentsOf: path, encoding: .utf8), !raw.isEmpty else {
+                continue
+            }
+            let document = CodexConfigDocument(raw: raw)
+            for providerID in document.modelProviderIDs {
+                let candidate = definition(for: providerID, document: document)
+                if let index = result.firstIndex(where: {
+                    $0.id.caseInsensitiveCompare(providerID) == .orderedSame
+                }) {
+                    result[index] = merging(primary: result[index], fallback: candidate)
+                } else {
+                    result.append(candidate)
+                }
+            }
         }
-        let document = CodexConfigDocument(raw: raw)
-        let providerIDs = (
-            Array(document.modelProviderBaseURLs.keys)
-                + Array(document.modelProviderWireAPIs.keys)
-                + Array(document.modelProviderEnvKeys.keys)
-                + Array(document.modelProviderRequiresOpenAIAuth.keys)
-        ).reduce(into: [String]()) { result, providerID in
-            guard !result.contains(where: {
-                $0.caseInsensitiveCompare(providerID) == .orderedSame
-            }) else { return }
-            result.append(providerID)
-        }
-        return providerIDs.map { providerID in
-            definition(for: providerID, document: document)
-        }
+        return result
+    }
+
+    static func configurationPaths(configPath: URL) -> [URL] {
+        guard configPath.lastPathComponent == "config.toml" else { return [configPath] }
+
+        let directory = configPath.deletingLastPathComponent()
+        let profileConfigPaths = (try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ))?
+            .filter { path in
+                let filename = path.lastPathComponent
+                return filename.hasSuffix(".config.toml")
+                    && filename.count > ".config.toml".count
+            }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            ?? []
+        return [configPath] + profileConfigPaths
     }
 
     private static func definition(
@@ -124,6 +143,19 @@ enum CodexModelProviderResolver {
                 for: providerID,
                 in: document.modelProviderRequiresOpenAIAuth
             )
+        )
+    }
+
+    private static func merging(
+        primary: CodexModelProviderDefinition,
+        fallback: CodexModelProviderDefinition
+    ) -> CodexModelProviderDefinition {
+        CodexModelProviderDefinition(
+            id: primary.id,
+            baseURL: primary.baseURL ?? fallback.baseURL,
+            wireAPI: primary.wireAPI ?? fallback.wireAPI,
+            envKey: primary.envKey ?? fallback.envKey,
+            requiresOpenAIAuth: primary.requiresOpenAIAuth ?? fallback.requiresOpenAIAuth
         )
     }
 
@@ -227,6 +259,25 @@ private struct CodexConfigDocument {
     var modelProviderWireAPIs: [String: String] = [:]
     var modelProviderEnvKeys: [String: String] = [:]
     var modelProviderRequiresOpenAIAuth: [String: Bool] = [:]
+
+    var modelProviderIDs: [String] {
+        let definedProviderIDs = (
+            Array(modelProviderBaseURLs.keys)
+                + Array(modelProviderWireAPIs.keys)
+                + Array(modelProviderEnvKeys.keys)
+                + Array(modelProviderRequiresOpenAIAuth.keys)
+        ).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        let referencedProviderIDs = [defaultModelProvider]
+            + profileModelProviders.keys.sorted().map { profileModelProviders[$0] }
+
+        return (definedProviderIDs + referencedProviderIDs.compactMap { $0 })
+            .reduce(into: [String]()) { result, providerID in
+                guard !result.contains(where: {
+                    $0.caseInsensitiveCompare(providerID) == .orderedSame
+                }) else { return }
+                result.append(providerID)
+            }
+    }
 
     init(raw: String) {
         var section: [String] = []

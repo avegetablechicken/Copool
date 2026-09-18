@@ -250,6 +250,91 @@ final class SwiftNativeProxyRuntimeServiceTests: XCTestCase {
         XCTAssertEqual(Set(candidates.map(\.id)).count, 2)
     }
 
+    func testLoadCandidatesIncludesSub2APIProviderFromProfileConfig() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let configPath = tempDir.appendingPathComponent("config.toml")
+        try "model_provider = \"openai\"\n".write(
+            to: configPath,
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        model_provider = "profile-provider"
+
+        [model_providers.profile-provider]
+        base_url = "https://profile-sub2.test/v1"
+        wire_api = "responses"
+        env_key = "PROFILE_SUB2API_KEY"
+        requires_openai_auth = false
+        """.write(
+            to: tempDir.appendingPathComponent("work.config.toml"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let importedAccount = Sub2APIAccountSummary(
+            id: 42,
+            name: "remote-account",
+            email: "remote@example.com",
+            accountID: "remote-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil,
+            providerID: "profile-provider"
+        )
+        var settings = AppSettings.defaultValue
+        settings.sub2APIProvider = Sub2APISettingsConfiguration(
+            providers: [
+                Sub2APIProviderConfiguration(
+                    providerID: "profile-provider",
+                    username: "admin@example.com",
+                    importedAccountIDs: [42],
+                    cachedAccounts: [importedAccount]
+                )
+            ]
+        )
+        let paths = FileSystemPaths(
+            applicationSupportDirectory: tempDir,
+            accountStorePath: tempDir.appendingPathComponent("accounts.json"),
+            settingsStorePath: tempDir.appendingPathComponent("settings.json"),
+            codexAuthPath: tempDir.appendingPathComponent("auth.json"),
+            codexConfigPath: configPath,
+            proxyDaemonDataDirectory: tempDir.appendingPathComponent("proxyd", isDirectory: true),
+            proxyDaemonKeyPath: tempDir.appendingPathComponent("proxyd/api-proxy.key"),
+            cloudflaredLogDirectory: tempDir.appendingPathComponent("cloudflared-logs", isDirectory: true)
+        )
+        let runtime = SwiftNativeProxyRuntimeService(
+            paths: paths,
+            storeRepository: InMemoryAccountsStoreRepository(store: AccountsStore()),
+            settingsRepository: MockSettingsRepository(settings: settings),
+            authRepository: MockAuthRepository(),
+            environment: ["PROFILE_SUB2API_KEY": "provider-api-key"],
+            providerEnvironmentFallback: { _ in nil }
+        )
+
+        let candidates = try await runtime.withIsolation { runtime in
+            try runtime.loadCandidates()
+        }
+
+        XCTAssertEqual(candidates.count, 1)
+        XCTAssertEqual(candidates[0].label, "profile-provider")
+        XCTAssertEqual(candidates[0].accessToken, "provider-api-key")
+        XCTAssertFalse(candidates[0].isPreferredCurrent)
+        XCTAssertEqual(
+            candidates[0].route,
+            .modelProvider(
+                providerID: "profile-provider",
+                baseURL: "https://profile-sub2.test/v1"
+            )
+        )
+    }
+
     func testModelProviderCandidateUsesProviderResponsesEndpointWithoutChatGPTAccountHeader() async throws {
         let runtime = makeRuntime(store: AccountsStore())
         let candidate = ProxyCandidate(

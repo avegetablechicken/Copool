@@ -203,7 +203,14 @@ extension SwiftNativeProxyRuntimeService {
         ProxyCandidateSourceDates(
             accounts: modificationDate(for: paths.accountStorePath),
             settings: modificationDate(for: paths.settingsStorePath),
-            codexConfig: modificationDate(for: paths.codexConfigPath)
+            codexConfigs: CodexModelProviderResolver.configurationPaths(
+                configPath: paths.codexConfigPath
+            ).map {
+                CodexConfigFileState(
+                    path: $0.path,
+                    modificationDate: modificationDate(for: $0)
+                )
+            }
         )
     }
 
@@ -495,5 +502,10 @@ enum ProxyCandidateRoute: Equatable {
 struct ProxyCandidateSourceDates: Equatable {
     var accounts: Date?
     var settings: Date?
-    var codexConfig: Date?
+    var codexConfigs: [CodexConfigFileState]
+}
+
+struct CodexConfigFileState: Equatable {
+    var path: String
+    var modificationDate: Date?
 }
