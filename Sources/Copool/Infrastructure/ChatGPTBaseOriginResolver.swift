@@ -348,8 +348,10 @@ private struct CodexConfigDocument {
             let content = strippingComment(from: rawLine)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if content.hasPrefix("["), content.hasSuffix("]") {
-                if targetSection.isEmpty, insertionIndex == lines.count {
-                    insertionIndex = index
+                if targetSection.isEmpty {
+                    // Root assignments must precede every table, even when the
+                    // file ends in a newline (and the fallback index is count - 1).
+                    insertionIndex = min(insertionIndex, index)
                 }
                 section = parsePath(String(content.dropFirst().dropLast()))
                 continue

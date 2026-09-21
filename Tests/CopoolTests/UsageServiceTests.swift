@@ -234,6 +234,37 @@ final class UsageServiceTests: XCTestCase {
         XCTAssertEqual(CodexModelProviderResolver.resolve(raw: raw).id, "ShareCoder")
     }
 
+    func testCodexModelProviderSwitchServiceKeepsRepeatedSwitchesAtRootWithTrailingNewlines() throws {
+        for trailingNewlines in ["\n", "\n\n"] {
+            let original = """
+            # Keep provider definitions intact.
+            [model_providers.ShareCoder]
+            base_url = "https://sub2.test/v1"
+
+            [profiles.work]
+            model_provider = "work-provider"
+
+            [features]
+            shell_tool = true
+            """ + trailingNewlines
+            let configPath = try makeCodexConfig(original)
+            defer { try? FileManager.default.removeItem(at: configPath) }
+            let service = CodexModelProviderSwitchService(configPath: configPath)
+
+            for providerID in ["ShareCoder", "openai", "openai", "ShareCoder"] {
+                try service.switchProvider(to: providerID)
+
+                let raw = try String(contentsOf: configPath, encoding: .utf8)
+                let expected = original.replacingOccurrences(
+                    of: "# Keep provider definitions intact.\n",
+                    with: "# Keep provider definitions intact.\nmodel_provider = \"\(providerID)\"\n"
+                )
+                XCTAssertEqual(raw, expected)
+                XCTAssertEqual(CodexModelProviderResolver.resolve(raw: raw).id, providerID)
+            }
+        }
+    }
+
     func testCustomDefaultProviderListsAccountsAndMapsSub2APIQuota() async throws {
         let configPath = try makeCodexConfig("""
         model_provider = "my"
