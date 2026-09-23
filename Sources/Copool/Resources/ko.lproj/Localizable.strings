@@ -454,3 +454,5 @@
 "accounts.proxy.title" = "계정 프록시";
 "accounts.proxy.provider_help" = "HTTP, HTTPS 또는 SOCKS5를 지원합니다. 비워 두면 Provider 프록시 설정을 사용합니다.";
 "accounts.proxy.unsupported" = "이 네트워크 서비스는 계정 프록시를 지원하지 않습니다.";
+
+"accounts.notice.sub2api_sync_required_format" = "%@의 업스트림 계정 목록이 변경되었습니다. 유효한 계정은 유지되었습니다. “%@”을 사용하여 비공식 계정을 동기화하세요.";

@@ -464,3 +464,5 @@
 "accounts.proxy.title" = "Account proxy";
 "accounts.proxy.provider_help" = "HTTP, HTTPS or SOCKS5. Leave blank to inherit the Provider proxy.";
 "accounts.proxy.unsupported" = "This network service does not support an account proxy.";
+
+"accounts.notice.sub2api_sync_required_format" = "The upstream account list for %@ has changed. Valid accounts have been retained. Use “%@” to sync unofficial accounts.";

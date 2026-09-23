@@ -436,3 +436,5 @@
 "accounts.proxy.title" = "Accountproxy";
 "accounts.proxy.provider_help" = "HTTP, HTTPS of SOCKS5. Laat leeg om de proxy van de Provider te gebruiken.";
 "accounts.proxy.unsupported" = "Deze netwerkdienst ondersteunt geen accountproxy.";
+
+"accounts.notice.sub2api_sync_required_format" = "De upstream-accountlijst voor %@ is gewijzigd. Geldige accounts zijn behouden. Gebruik ‘%@’ om niet-officiële accounts te synchroniseren.";

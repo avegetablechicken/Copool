@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 @testable import Copool
 
 @MainActor
@@ -599,6 +600,136 @@ final class SettingsPageModelTests: XCTestCase {
         await pageModel.refreshUsage()
         XCTAssertEqual(Set(pageModel.sub2APIAccounts.map(\.cardID)), Set(expected.map(\.cardID)))
         XCTAssertEqual(pageModel.notice?.style, .info)
+    }
+
+    func testRefreshPreservesValidSub2APICardsAndWarnsWhenUpstreamMembershipChanges() async throws {
+        let account = Sub2APIAccountSummary(
+            id: 42,
+            name: "openai-2026",
+            email: "codex@example.com",
+            accountID: "chatgpt-account",
+            accountType: "oauth",
+            status: "active",
+            planType: "pro",
+            usage: nil,
+            usageError: nil
+        )
+        for upstreamIDs: [Int64] in [[42], [42, 43, 44], [42, 44], []] {
+            let upstream = upstreamIDs.map { id in
+                var value = account
+                value.id = id
+                return value
+            }
+            var removedAccount = account
+            removedAccount.id = 43
+            var settings = AppSettings.defaultValue
+            settings.sub2APIProvider = makeSub2APISettings(
+                providerID: "ShareCoder",
+                importedAccountIDs: [42, 43]
+            )
+            settings.sub2APIProvider.upsert(Sub2APIProviderConfiguration(
+                providerID: "second", username: "admin", password: "secret",
+                importedAccountIDs: [42], cachedAccounts: [account.settingProvider("second")]
+            ))
+            let service = SettingsStubSub2APIAccountService(
+                accounts: [], providerID: "openai",
+                accountsByProviderID: ["ShareCoder": upstream, "second": [account]],
+                isConnected: false
+            )
+            let settingsRepository = TestSettingsRepository(settings: settings)
+            let settingsCoordinator = SettingsCoordinator(
+                settingsRepository: settingsRepository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            )
+            let coordinator = AccountsCoordinator(
+                storeRepository: SettingsTestAccountsStoreRepository(),
+                settingsRepository: settingsRepository,
+                authRepository: SettingsTestAuthRepository(),
+                usageService: SettingsTestUsageService(),
+                chatGPTOAuthLoginService: SettingsStubChatGPTOAuthLoginService(),
+                codexCLIService: SettingsStubCodexCLIService(),
+                editorAppService: SettingsStubEditorAppService(),
+                opencodeAuthSyncService: SettingsStubOpencodeAuthSyncService(),
+                dateProvider: SettingsFixedDateProvider(now: 1)
+            )
+            let trayModel = TrayMenuModel(
+                accountsCoordinator: coordinator,
+                settingsCoordinator: settingsCoordinator,
+                sub2APIAccountService: service,
+                backgroundRefreshPolicy: .init(
+                    initialRefreshDelay: .seconds(1),
+                    usageRefreshInterval: .seconds(10),
+                    refreshUsageOnRecurringTick: true
+                )
+            )
+
+            let initial = [account.settingProvider("ShareCoder"), removedAccount.settingProvider("ShareCoder"), account.settingProvider("second")]
+            trayModel.acceptSub2APIAccountsSnapshot(initial)
+            var snapshots: [[Sub2APIAccountSummary]] = []
+            let subscription = trayModel.$sub2APIAccounts.sink { snapshots.append($0) }
+            do {
+                _ = try await trayModel.performManualRefresh(onPartialUpdate: { _ in })
+                XCTFail("Membership changes must surface the sync reminder")
+            } catch {
+                XCTAssertEqual(error.localizedDescription, L10n.tr(
+                    "accounts.notice.sub2api_sync_required_format", "ShareCoder",
+                    L10n.tr("accounts.action.import_sub2api")
+                ))
+            }
+            subscription.cancel()
+            if !upstream.isEmpty {
+                XCTAssertTrue(snapshots.allSatisfy { $0.contains { $0.cardID == account.settingProvider("ShareCoder").cardID } })
+            }
+            trayModel.stopBackgroundRefresh()
+
+            let expected = upstream.filter { [42, 43].contains($0.id) }.map { $0.settingProvider("ShareCoder") } + [account.settingProvider("second")]
+            XCTAssertEqual(Set(trayModel.sub2APIAccounts.map(\.cardID)), Set(expected.map(\.cardID)))
+            XCTAssertEqual(
+                try settingsRepository.loadSettings().sub2APIProvider.provider(for: "ShareCoder")?.cachedAccounts,
+                expected.filter { $0.providerID == "ShareCoder" }
+            )
+            XCTAssertEqual(try settingsRepository.loadSettings().sub2APIProvider.provider(for: "ShareCoder")?.importedAccountIDs, [42, 43])
+
+            // The accounts page also supports refreshing without the tray service.
+            let pageModel = AccountsPageModel(
+                coordinator: coordinator,
+                settingsCoordinator: settingsCoordinator,
+                sub2APIAccountService: service,
+                initialAccounts: [],
+                initialSub2APIAccounts: initial
+            )
+            await pageModel.refreshUsage()
+            XCTAssertEqual(Set(pageModel.sub2APIAccounts.map(\.cardID)), Set(expected.map(\.cardID)))
+            XCTAssertEqual(pageModel.notice?.style, .error)
+            XCTAssertEqual(pageModel.notice?.text, L10n.tr(
+                "accounts.notice.sub2api_sync_required_format", "ShareCoder",
+                L10n.tr("accounts.action.import_sub2api")
+            ))
+
+            let backgroundModel = TrayMenuModel(
+                accountsCoordinator: coordinator,
+                settingsCoordinator: settingsCoordinator,
+                sub2APIAccountService: SettingsStubSub2APIAccountService(
+                    accounts: upstream, providerID: "ShareCoder"
+                ),
+                backgroundRefreshPolicy: .init(
+                    initialRefreshDelay: .seconds(1),
+                    usageRefreshInterval: .seconds(10),
+                    refreshUsageOnRecurringTick: true
+                ),
+                initialSub2APIAccounts: initial
+            )
+            await backgroundModel.refreshRecurringUsage(tick: 0)
+            XCTAssertEqual(Set(backgroundModel.sub2APIAccounts.map(\.cardID)), Set(expected.map(\.cardID)))
+            XCTAssertEqual(backgroundModel.notice, pageModel.notice?.text)
+            backgroundModel.stopBackgroundRefresh()
+
+            await pageModel.importSub2APIAccounts()
+            XCTAssertEqual(pageModel.notice?.style, .success)
+            XCTAssertEqual(try settingsRepository.loadSettings().sub2APIProvider.provider(for: "ShareCoder")?.importedAccountIDs, upstreamIDs)
+            await pageModel.refreshUsage()
+            XCTAssertEqual(pageModel.notice?.style, .info)
+        }
     }
 
     func testAccountsPageSyncsConfiguredProviderWithoutConfirmation() async throws {

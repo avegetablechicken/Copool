@@ -464,3 +464,5 @@
 "accounts.proxy.title" = "账号代理";
 "accounts.proxy.provider_help" = "支持 HTTP、HTTPS 或 SOCKS5；留空继承 Provider 的代理设置。";
 "accounts.proxy.unsupported" = "此网络服务不支持账号代理。";
+
+"accounts.notice.sub2api_sync_required_format" = "%@ 的上游账号列表已变化，已保留仍有效的账号。请点击“%@”同步非官方账号。";

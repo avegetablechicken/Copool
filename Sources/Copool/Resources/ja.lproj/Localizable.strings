@@ -454,3 +454,5 @@
 "accounts.proxy.title" = "アカウントのプロキシ";
 "accounts.proxy.provider_help" = "HTTP、HTTPS、SOCKS5 に対応。空欄の場合は Provider のプロキシ設定を使用します。";
 "accounts.proxy.unsupported" = "このネットワークサービスはアカウント別のプロキシに対応していません。";
+
+"accounts.notice.sub2api_sync_required_format" = "%@ の上流アカウント一覧が変更されました。有効なアカウントは保持されています。「%@」で非公式アカウントを同期してください。";

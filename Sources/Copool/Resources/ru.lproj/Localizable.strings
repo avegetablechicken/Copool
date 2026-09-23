@@ -436,3 +436,5 @@
 "accounts.proxy.title" = "Прокси аккаунта";
 "accounts.proxy.provider_help" = "HTTP, HTTPS или SOCKS5. Оставьте пустым для использования прокси Provider.";
 "accounts.proxy.unsupported" = "Эта сетевая служба не поддерживает прокси аккаунта.";
+
+"accounts.notice.sub2api_sync_required_format" = "Список вышестоящих аккаунтов %@ изменился. Действующие аккаунты сохранены. Используйте «%@» для синхронизации неофициальных аккаунтов.";

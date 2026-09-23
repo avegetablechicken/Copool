@@ -303,21 +303,27 @@ extension AccountsPageModel {
               ),
               !configuration.importedAccountIDs.isEmpty,
               let accounts = try? await sub2APIAccountService.fetchAccounts(
-                  accountIDs: configuration.importedAccountIDs
+                  accountIDs: nil
               ) else {
             return
         }
         let providerID = configuration.providerID
-        let associatedAccounts = accounts.map {
+        let importedIDs = Set(configuration.importedAccountIDs)
+        let associatedAccounts = accounts.filter { importedIDs.contains($0.id) }.map {
             var account = $0.settingProvider(providerID)
             account.proxyURL = configuration.accountProxyURLs[String(account.id)]
             return account
         }
-        sub2APIAccounts.removeAll {
-            $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
-        }
-        sub2APIAccounts.append(contentsOf: associatedAccounts)
+        sub2APIAccounts = sub2APIAccounts.filter {
+            $0.providerID?.caseInsensitiveCompare(providerID) != .orderedSame
+        } + associatedAccounts
         publishSub2APIAccounts()
+        if Set(accounts.map(\.id)) != importedIDs {
+            notice = NoticeMessage(style: .error, text: L10n.tr(
+                "accounts.notice.sub2api_sync_required_format", providerID,
+                L10n.tr("accounts.action.import_sub2api")
+            ))
+        }
         var updatedConfiguration = configuration
         updatedConfiguration.cachedAccounts = associatedAccounts
         sub2APISettings.upsert(updatedConfiguration)
@@ -343,7 +349,10 @@ extension AccountsPageModel {
                 providerID: providerID,
                 accountIDs: [account.id]
             ).first else {
-                throw AppError.invalidData(L10n.tr("error.sub2api.account_not_found"))
+                throw AppError.invalidData(L10n.tr(
+                    "accounts.notice.sub2api_sync_required_format", providerID,
+                    L10n.tr("accounts.action.import_sub2api")
+                ))
             }
             var associated = refreshed.settingProvider(providerID)
             associated.proxyURL = sub2APIAccounts.first(where: { $0.cardID == account.cardID })?.proxyURL
@@ -392,18 +401,24 @@ extension AccountsPageModel {
                 let providerID = configuration.providerID
                 let refreshed = try await sub2APIAccountService.fetchAccounts(
                     providerID: providerID,
-                    accountIDs: configuration.importedAccountIDs
+                    accountIDs: nil
                 ).map {
                     var account = $0.settingProvider(providerID)
                     account.proxyURL = configuration.accountProxyURLs[String(account.id)]
                     return account
                 }
-                sub2APIAccounts.removeAll {
-                    $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
-                }
-                sub2APIAccounts.append(contentsOf: refreshed)
+                let importedIDs = Set(configuration.importedAccountIDs)
+                sub2APIAccounts = sub2APIAccounts.filter {
+                    $0.providerID?.caseInsensitiveCompare(providerID) != .orderedSame
+                } + refreshed.filter { importedIDs.contains($0.id) }
                 publishSub2APIAccounts()
                 try await persistSub2APIAccountCache()
+                if Set(refreshed.map(\.id)) != importedIDs, firstError == nil {
+                    firstError = AppError.invalidData(L10n.tr(
+                        "accounts.notice.sub2api_sync_required_format", providerID,
+                        L10n.tr("accounts.action.import_sub2api")
+                    ))
+                }
             } catch {
                 if firstError == nil { firstError = error }
             }

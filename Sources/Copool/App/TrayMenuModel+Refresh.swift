@@ -223,7 +223,7 @@ extension TrayMenuModel {
                 let providerID = configuration.providerID
                 let refreshed = try await sub2APIAccountService.fetchAccounts(
                     providerID: providerID,
-                    accountIDs: configuration.importedAccountIDs
+                    accountIDs: nil
                 ).map { $0.settingProvider(providerID) }
 
                 var sub2APISettings = try await settingsCoordinator.currentSettings().sub2APIProvider.normalized()
@@ -236,10 +236,16 @@ extension TrayMenuModel {
                 let accounts = updated.sub2APIProvider.provider(for: providerID)?.cachedAccounts.map {
                     $0.settingProvider(providerID)
                 } ?? []
-                sub2APIAccounts.removeAll {
-                    $0.providerID?.caseInsensitiveCompare(providerID) == .orderedSame
+                // Publish one complete snapshot so observers never see an empty provider.
+                sub2APIAccounts = sub2APIAccounts.filter {
+                    $0.providerID?.caseInsensitiveCompare(providerID) != .orderedSame
+                } + accounts
+                if Set(refreshed.map(\.id)) != Set(configuration.importedAccountIDs), firstError == nil {
+                    firstError = AppError.invalidData(L10n.tr(
+                        "accounts.notice.sub2api_sync_required_format", providerID,
+                        L10n.tr("accounts.action.import_sub2api")
+                    ))
                 }
-                sub2APIAccounts.append(contentsOf: accounts)
             } catch {
                 if firstError == nil { firstError = error }
             }

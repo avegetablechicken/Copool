@@ -436,3 +436,5 @@
 "accounts.proxy.title" = "Konto-Proxy";
 "accounts.proxy.provider_help" = "HTTP, HTTPS oder SOCKS5. Leer lassen, um den Provider-Proxy zu verwenden.";
 "accounts.proxy.unsupported" = "Dieser Netzwerkdienst unterstützt keinen Konto-Proxy.";
+
+"accounts.notice.sub2api_sync_required_format" = "Die Liste der vorgelagerten Konten für %@ hat sich geändert. Gültige Konten wurden beibehalten. Verwende „%@“, um inoffizielle Konten zu synchronisieren.";

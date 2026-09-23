@@ -436,3 +436,5 @@
 "accounts.proxy.title" = "帳號代理";
 "accounts.proxy.provider_help" = "支援 HTTP、HTTPS 或 SOCKS5；留空繼承 Provider 的代理設定。";
 "accounts.proxy.unsupported" = "此網路服務不支援帳號代理。";
+
+"accounts.notice.sub2api_sync_required_format" = "%@ 的上游帳號列表已變更，已保留仍有效的帳號。請點擊「%@」同步非官方帳號。";
