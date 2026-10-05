@@ -438,3 +438,5 @@
 "accounts.proxy.unsupported" = "Deze netwerkdienst ondersteunt geen accountproxy.";
 
 "accounts.notice.sub2api_sync_required_format" = "De upstream-accountlijst voor %@ is gewijzigd. Geldige accounts zijn behouden. Gebruik ‘%@’ om niet-officiële accounts te synchroniseren.";
+
+"settings.sub2api.admin_base_url_help" = "Optioneel voor Sub2api-aanmelding, accounts en quota. Leeg laten om af te leiden uit Codex. Modelverzoeken blijven de Codex-URL gebruiken. Voorbeeld: https://host:6060/api/v1.";

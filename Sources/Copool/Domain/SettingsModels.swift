@@ -24,6 +24,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
     var accountProxyURLs: [String: String]
     var importedAccountIDs: [Int64]
     var cachedAccounts: [Sub2APIAccountSummary]
+    var adminBaseURL: String
     var legacyAdminBaseURL: String
 
     enum CodingKeys: String, CodingKey {
@@ -36,6 +37,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         case accountProxyURLs
         case importedAccountIDs
         case cachedAccounts
+        case adminBaseURL
         case legacyAdminBaseURL
     }
 
@@ -49,6 +51,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         accountProxyURLs: [String: String] = [:],
         importedAccountIDs: [Int64] = [],
         cachedAccounts: [Sub2APIAccountSummary] = [],
+        adminBaseURL: String = "",
         legacyAdminBaseURL: String = ""
     ) {
         self.id = id
@@ -60,6 +63,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         self.accountProxyURLs = accountProxyURLs
         self.importedAccountIDs = importedAccountIDs
         self.cachedAccounts = cachedAccounts
+        self.adminBaseURL = adminBaseURL
         self.legacyAdminBaseURL = legacyAdminBaseURL
     }
 
@@ -74,6 +78,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         accountProxyURLs = try container.decodeIfPresent([String: String].self, forKey: .accountProxyURLs) ?? [:]
         importedAccountIDs = try container.decodeIfPresent([Int64].self, forKey: .importedAccountIDs) ?? []
         cachedAccounts = try container.decodeIfPresent([Sub2APIAccountSummary].self, forKey: .cachedAccounts) ?? []
+        adminBaseURL = try container.decodeIfPresent(String.self, forKey: .adminBaseURL) ?? ""
         legacyAdminBaseURL = try container.decodeIfPresent(String.self, forKey: .legacyAdminBaseURL) ?? ""
     }
 
@@ -89,6 +94,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         if encoder.userInfo[.omitSub2APIAccountCache] as? Bool != true {
             try container.encode(cachedAccounts, forKey: .cachedAccounts)
         }
+        try container.encode(adminBaseURL, forKey: .adminBaseURL)
         try container.encode(legacyAdminBaseURL, forKey: .legacyAdminBaseURL)
     }
 
@@ -97,6 +103,8 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
         value.providerID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         value.proxyURL = proxyURL.trimmingCharacters(in: .whitespacesAndNewlines)
         value.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        value.adminBaseURL = adminBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         value.legacyAdminBaseURL = legacyAdminBaseURL
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -137,6 +145,7 @@ struct Sub2APIProviderConfiguration: Codable, Equatable, Identifiable, Sendable 
             || !value.password.isEmpty
             || !value.importedAccountIDs.isEmpty
             || !value.cachedAccounts.isEmpty
+            || !value.adminBaseURL.isEmpty
             || !value.legacyAdminBaseURL.isEmpty
     }
 }

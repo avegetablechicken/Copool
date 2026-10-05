@@ -266,6 +266,22 @@ final class UsageServiceTests: XCTestCase {
     }
 
     func testCustomDefaultProviderListsAccountsAndMapsSub2APIQuota() async throws {
+        try await checkSub2APIRequests(adminBaseURL: "", expectedHost: "sub2.test")
+    }
+
+    func testExplicitAdminURLRoutesLoginAccountsAndQuotaIndependently() async throws {
+        for baseURL in ["https://admin.test", "https://admin.test/api/v1/"] {
+            try await checkSub2APIRequests(adminBaseURL: baseURL, expectedHost: "admin.test")
+        }
+        try await checkSub2APIRequests(
+            adminBaseURL: "https://admin.test/management/api/v1",
+            expectedHost: "admin.test", pathPrefix: "/management"
+        )
+    }
+
+    private func checkSub2APIRequests(
+        adminBaseURL: String, expectedHost: String, pathPrefix: String = ""
+    ) async throws {
         let configPath = try makeCodexConfig("""
         model_provider = "my"
 
@@ -276,7 +292,8 @@ final class UsageServiceTests: XCTestCase {
 
         let providerConfiguration = Sub2APIProviderConfiguration(
             providerID: "my",
-            username: "you@example.com"
+            username: "you@example.com",
+            adminBaseURL: adminBaseURL
         )
         var settings = AppSettings.defaultValue
         settings.sub2APIProvider = Sub2APISettingsConfiguration(
@@ -290,7 +307,7 @@ final class UsageServiceTests: XCTestCase {
         await UsageMockURLProtocol.store.setHandler { request in
             recorder.record(request)
             let url = try XCTUnwrap(request.url)
-            switch url.path {
+            switch String(url.path.dropFirst(pathPrefix.count)) {
             case "/api/v1/auth/login":
                 return (
                     HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!,
@@ -353,7 +370,9 @@ final class UsageServiceTests: XCTestCase {
         XCTAssertEqual(usage.oneWeek?.resetAt, 1_787_810_131)
 
         let requests = recorder.snapshot()
-        XCTAssertEqual(requests.map { $0.url.path }, [
+        XCTAssertTrue(requests.allSatisfy { $0.url.host == expectedHost })
+        XCTAssertEqual(CodexModelProviderResolver.resolve(configPath: configPath).baseURL, "https://sub2.test:6060/v1")
+        XCTAssertEqual(requests.map { String($0.url.path.dropFirst(pathPrefix.count)) }, [
             "/api/v1/auth/login",
             "/api/v1/admin/accounts",
             "/api/v1/admin/accounts",

@@ -56,7 +56,8 @@ final class SettingsPageModelTests: XCTestCase {
                     providerID: "my",
                     username: "admin@example.com",
                     password: "secret",
-                    allowInsecureTLS: true
+                    allowInsecureTLS: true,
+                    adminBaseURL: " https://admin.test/api/v1/ "
                 )
             ]
         )
@@ -70,6 +71,8 @@ final class SettingsPageModelTests: XCTestCase {
         let stored = try XCTUnwrap(
             settingsRepository.loadSettings().sub2APIProvider.providers.first
         )
+        XCTAssertEqual(stored.adminBaseURL, "https://admin.test/api/v1")
+        XCTAssertEqual(try JSONDecoder().decode(Sub2APIProviderConfiguration.self, from: JSONEncoder().encode(stored)).adminBaseURL, stored.adminBaseURL)
         XCTAssertEqual(stored.username, "admin@example.com")
         XCTAssertEqual(stored.password, "")
         XCTAssertEqual(try secretStore.password(for: configurationID), "secret")
@@ -86,6 +89,7 @@ final class SettingsPageModelTests: XCTestCase {
         )
         await reloadedModel.load()
         XCTAssertEqual(reloadedModel.sub2APIProviderDraft.providers.first?.password, "secret")
+        XCTAssertEqual(reloadedModel.sub2APIProviderDraft.providers.first?.adminBaseURL, "https://admin.test/api/v1")
     }
 
     func testSettingsPageAddsAndSavesArbitrarySub2APIProviderConfigurations() async throws {

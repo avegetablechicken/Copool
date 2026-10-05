@@ -438,3 +438,5 @@
 "accounts.proxy.unsupported" = "此網路服務不支援帳號代理。";
 
 "accounts.notice.sub2api_sync_required_format" = "%@ 的上游帳號列表已變更，已保留仍有效的帳號。請點擊「%@」同步非官方帳號。";
+
+"settings.sub2api.admin_base_url_help" = "選填，用於 Sub2api 登入、帳號和額度查詢；留空則從 Codex Provider 位址推導。模型請求仍使用 Codex 中的位址。請填寫基礎位址，例如 https://主機:6060/api/v1。";

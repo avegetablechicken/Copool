@@ -438,3 +438,5 @@
 "accounts.proxy.unsupported" = "Ce service réseau ne prend pas en charge le proxy par compte.";
 
 "accounts.notice.sub2api_sync_required_format" = "La liste des comptes en amont de %@ a changé. Les comptes valides ont été conservés. Utilisez « %@ » pour synchroniser les comptes non officiels.";
+
+"settings.sub2api.admin_base_url_help" = "Facultatif pour la connexion Sub2api et les comptes et quotas. Vide : déduit de Codex. Les requêtes au modèle utilisent toujours l’URL Codex. Exemple : https://host:6060/api/v1.";

@@ -57,6 +57,18 @@ extension SettingsPageModel {
             )
             return
         }
+        guard configuration.providers.allSatisfy({ provider in
+            guard !provider.adminBaseURL.isEmpty else { return true }
+            guard let url = URLComponents(string: provider.adminBaseURL),
+                  let host = url.host, !host.isEmpty,
+                  let scheme = url.scheme?.lowercased() else { return false }
+            return ["http", "https"].contains(scheme)
+                && url.user == nil && url.password == nil
+                && url.query == nil && url.fragment == nil
+        }) else {
+            notice = NoticeMessage(style: .error, text: L10n.tr("error.sub2api.invalid_base_url"))
+            return
+        }
         let normalizedProviderIDs = configuration.providers.map { $0.providerID.lowercased() }
         guard Set(normalizedProviderIDs).count == normalizedProviderIDs.count else {
             notice = NoticeMessage(

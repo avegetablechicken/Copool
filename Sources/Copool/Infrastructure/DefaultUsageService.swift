@@ -603,7 +603,7 @@ private actor Sub2APIUsageClient {
             throw AppError.invalidData(L10n.tr("error.sub2api.configuration_incomplete"))
         }
         let baseURL = try Self.resolveAdminBaseURL(
-            configuredValue: "",
+            configuredValue: configuration.adminBaseURL,
             providerBaseURL: provider.baseURL
         )
         let key = CredentialKey(

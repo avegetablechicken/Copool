@@ -438,3 +438,5 @@
 "accounts.proxy.unsupported" = "Dieser Netzwerkdienst unterstützt keinen Konto-Proxy.";
 
 "accounts.notice.sub2api_sync_required_format" = "Die Liste der vorgelagerten Konten für %@ hat sich geändert. Gültige Konten wurden beibehalten. Verwende „%@“, um inoffizielle Konten zu synchronisieren.";
+
+"settings.sub2api.admin_base_url_help" = "Optional für Sub2api-Anmeldung, Konten und Kontingente. Leer lassen, um die URL aus Codex abzuleiten. Modellanfragen verwenden weiterhin die Codex-URL. Beispiel: https://host:6060/api/v1.";

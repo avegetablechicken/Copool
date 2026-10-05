@@ -101,6 +101,16 @@ private struct SettingsSub2APISection: View {
                         .textFieldStyle(.roundedBorder)
 
                         TextField(
+                            "settings.sub2api.admin_base_url",
+                            text: $configuration.adminBaseURL,
+                            prompt: Text("settings.sub2api.admin_base_url_placeholder")
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        Text("settings.sub2api.admin_base_url_help")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        TextField(
                             "settings.sub2api.username",
                             text: $configuration.username,
                             prompt: Text("settings.sub2api.username_placeholder")
