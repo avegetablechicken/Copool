@@ -99,7 +99,9 @@ struct AccountCardPresentation: Equatable {
     private static func creditsText(for account: AccountSummary) -> String {
         guard let credits = account.usage?.credits else { return "--" }
         if credits.unlimited { return L10n.tr("accounts.card.unlimited") }
-        return credits.balance ?? "--"
+        guard let balance = credits.balance else { return "--" }
+        guard let value = Double(balance), value.isFinite else { return balance }
+        return String(format: "%.0f", value.rounded())
     }
 
     private static func windowPresentation(
