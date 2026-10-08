@@ -142,6 +142,12 @@ struct AccountDeleteButton: View {
 
 struct AccountCardExpandedUsageSection: View {
     let presentation: AccountCardPresentation
+    @State private var usageTextWidth: CGFloat = 0
+    @State private var availableUsageWidth: CGFloat = 0
+
+    private var isUsageTextTruncated: Bool {
+        availableUsageWidth > 0 && usageTextWidth > availableUsageWidth
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -149,20 +155,56 @@ struct AccountCardExpandedUsageSection: View {
             AccountWindowSection(presentation: presentation.oneWeekWindow, tint: .teal)
 
             HStack(spacing: 8) {
-                Text((presentation.showsCredits
-                    ? L10n.tr("accounts.card.credits_format", presentation.creditsText) + " · "
-                    : "") + L10n.tr(presentation.remainingResetCountText == "--"
-                        ? "accounts.card.resets_unavailable_format"
-                        : "accounts.card.remaining_resets_format", presentation.remainingResetCountText))
+                Text(presentation.creditsAndResetsText)
                     .font(.caption)
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.size.width
+                    } action: { width in
+                        availableUsageWidth = width
+                    }
+                    .background {
+                        Text(presentation.creditsAndResetsText)
+                            .font(.caption)
+                            .fixedSize()
+                            .hidden()
+                            .onGeometryChange(for: CGFloat.self) { geometry in
+                                geometry.size.width
+                            } action: { width in
+                                usageTextWidth = width
+                            }
+                    }
+                    .overlay {
+                        #if os(macOS)
+                        AccountUsageToolTip(text: isUsageTextTruncated ? presentation.creditsAndResetsText : nil)
+                            .accessibilityHidden(true)
+                        #endif
+                    }
                     .padding(.trailing, AccountCardOverlayLayout.actionReservationWidth)
                 Spacer(minLength: 0)
             }
         }
     }
 }
+
+#if os(macOS)
+/// Register the tooltip directly with AppKit rather than SwiftUI's help bridge.
+private struct AccountUsageToolTip: NSViewRepresentable {
+    let text: String?
+
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        if view.toolTip != text {
+            view.toolTip = text
+        }
+    }
+}
+#endif
 
 struct AccountCardCompactUsageSection: View {
     let presentation: AccountCardPresentation

@@ -118,6 +118,7 @@ struct AccountCardView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(palette.selectionBorderColor ?? .clear, lineWidth: 1)
+                .allowsHitTesting(false)
         )
         .overlay(alignment: .bottomTrailing) {
             AccountCardBottomOverlay(

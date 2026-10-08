@@ -74,6 +74,14 @@ struct AccountCardPresentation: Equatable {
         )
     }
 
+    var creditsAndResetsText: String {
+        (showsCredits
+            ? L10n.tr("accounts.card.credits_format", creditsText) + " · "
+            : "") + L10n.tr(remainingResetCountText == "--"
+                ? "accounts.card.resets_unavailable_format"
+                : "accounts.card.remaining_resets_format", remainingResetCountText)
+    }
+
     private static func accent(for planLabel: String) -> AccountCardAccent {
         switch planLabel {
         case "PRO":
