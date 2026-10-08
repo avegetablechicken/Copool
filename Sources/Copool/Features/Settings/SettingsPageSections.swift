@@ -74,6 +74,7 @@ private struct SettingsSub2APISection: View {
                                 Image(systemName: "server.rack")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                    .frame(width: 14)
                                 Text(configurationTitle(configuration.providerID))
                                 Spacer(minLength: 0)
                             }
@@ -94,56 +95,60 @@ private struct SettingsSub2APISection: View {
                     .padding(.leading, 12)
 
                     if expandedConfigurationIDs.contains(configuration.id) {
-                        TextField(
-                            "settings.sub2api.provider_id",
-                            text: $configuration.providerID,
-                            prompt: Text("settings.sub2api.provider_id_placeholder")
-                        )
-                        .textFieldStyle(.roundedBorder)
+                        Group {
+                            TextField(
+                                "settings.sub2api.provider_id",
+                                text: $configuration.providerID,
+                                prompt: Text("settings.sub2api.provider_id_placeholder")
+                            )
+                            .textFieldStyle(.roundedBorder)
 
-                        TextField(
-                            "settings.sub2api.admin_base_url",
-                            text: $configuration.adminBaseURL,
-                            prompt: Text("settings.sub2api.admin_base_url_placeholder")
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        Text("settings.sub2api.admin_base_url_help")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            TextField(
+                                "settings.sub2api.admin_base_url",
+                                text: $configuration.adminBaseURL,
+                                prompt: Text("settings.sub2api.admin_base_url_placeholder")
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            Text("settings.sub2api.admin_base_url_help")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
 
-                        TextField(
-                            "settings.sub2api.username",
-                            text: $configuration.username,
-                            prompt: Text("settings.sub2api.username_placeholder")
-                        )
-                        .textContentType(.username)
-                        .textFieldStyle(.roundedBorder)
+                            TextField(
+                                "settings.sub2api.username",
+                                text: $configuration.username,
+                                prompt: Text("settings.sub2api.username_placeholder")
+                            )
+                            .textContentType(.username)
+                            .textFieldStyle(.roundedBorder)
 
-                        SecureField(
-                            "settings.sub2api.password",
-                            text: $configuration.password,
-                            prompt: Text(model.settings.sub2APIProvider.providers.contains { $0.id == configuration.id }
-                                ? "settings.sub2api.password_keep" : "settings.sub2api.password_placeholder")
-                        )
-                        .textContentType(.password)
-                        .textFieldStyle(.roundedBorder)
+                            SecureField(
+                                "settings.sub2api.password",
+                                text: $configuration.password,
+                                prompt: Text(model.settings.sub2APIProvider.providers.contains { $0.id == configuration.id }
+                                    ? "settings.sub2api.password_keep" : "settings.sub2api.password_placeholder")
+                            )
+                            .textContentType(.password)
+                            .textFieldStyle(.roundedBorder)
 
-                        Toggle(
-                            "settings.sub2api.allow_insecure_tls",
-                            isOn: $configuration.allowInsecureTLS
-                        )
-                        .toggleStyle(.switch)
+                            Toggle(
+                                "settings.sub2api.allow_insecure_tls",
+                                isOn: $configuration.allowInsecureTLS
+                            )
+                            .toggleStyle(.switch)
 
-                        HStack {
-                            Spacer(minLength: 0)
-                            Button {
-                                model.saveSub2APIProvider(id: configuration.id)
-                            } label: {
-                                Label("common.save", systemImage: "square.and.arrow.down")
+                            HStack {
+                                Spacer(minLength: 0)
+                                Button {
+                                    model.saveSub2APIProvider(id: configuration.id)
+                                } label: {
+                                    Label("common.save", systemImage: "square.and.arrow.down")
+                                }
+                                .copoolActionButtonStyle(prominent: true)
+                                .disabled(model.isSavingSub2APIProvider)
                             }
-                            .copoolActionButtonStyle(prominent: true)
-                            .disabled(model.isSavingSub2APIProvider)
                         }
+                        // Align every expanded row with the provider title after its icons.
+                        .padding(.leading, 12 + 12 + 8 + 3 + 8 + 14 + 8)
                     }
                 }
                 .padding(.vertical, -4)
