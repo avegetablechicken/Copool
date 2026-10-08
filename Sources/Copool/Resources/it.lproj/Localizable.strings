@@ -440,3 +440,5 @@
 "accounts.notice.sub2api_sync_required_format" = "L’elenco degli account a monte di %@ è cambiato. Gli account validi sono stati mantenuti. Usa «%@» per sincronizzare gli account non ufficiali.";
 
 "settings.sub2api.admin_base_url_help" = "Facoltativo per accesso Sub2api, account e quote. Se vuoto, viene ricavato da Codex. Le richieste al modello usano ancora l’URL Codex. Esempio: https://host:6060/api/v1.";
+
+"settings.sub2api.password_keep" = "Lascia vuoto per mantenere la password salvata";

@@ -458,3 +458,5 @@
 "accounts.notice.sub2api_sync_required_format" = "%@ の上流アカウント一覧が変更されました。有効なアカウントは保持されています。「%@」で非公式アカウントを同期してください。";
 
 "settings.sub2api.admin_base_url_help" = "任意。Sub2api のログイン、アカウント、使用量の照会に使用します。空欄の場合は Codex の URL から導出します。モデルへのリクエストは引き続き Codex の URL を使用します。例：https://host:6060/api/v1。";
+
+"settings.sub2api.password_keep" = "空欄の場合は保存済みのパスワードを使用";

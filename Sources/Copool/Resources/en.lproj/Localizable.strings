@@ -468,3 +468,5 @@
 "accounts.notice.sub2api_sync_required_format" = "The upstream account list for %@ has changed. Valid accounts have been retained. Use “%@” to sync unofficial accounts.";
 
 "settings.sub2api.admin_base_url_help" = "Optional. Used for Sub2api login, account and quota queries. Leave blank to derive from the Codex Provider URL. Model requests still use the Codex URL. Enter a base URL, such as https://host:6060/api/v1.";
+
+"settings.sub2api.password_keep" = "Leave blank to keep the saved password";

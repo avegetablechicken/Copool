@@ -458,3 +458,5 @@
 "accounts.notice.sub2api_sync_required_format" = "%@의 업스트림 계정 목록이 변경되었습니다. 유효한 계정은 유지되었습니다. “%@”을 사용하여 비공식 계정을 동기화하세요.";
 
 "settings.sub2api.admin_base_url_help" = "선택 사항. Sub2api 로그인, 계정 및 할당량 조회에 사용합니다. 비워 두면 Codex URL에서 추론합니다. 모델 요청은 계속 Codex URL을 사용합니다. 예: https://host:6060/api/v1.";
+
+"settings.sub2api.password_keep" = "비워 두면 저장된 비밀번호 유지";

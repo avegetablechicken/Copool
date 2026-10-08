@@ -468,3 +468,5 @@
 "accounts.notice.sub2api_sync_required_format" = "%@ 的上游账号列表已变化，已保留仍有效的账号。请点击“%@”同步非官方账号。";
 
 "settings.sub2api.admin_base_url_help" = "可选，用于 Sub2api 登录、账号和额度查询；留空则从 Codex Provider 地址推导。模型请求仍使用 Codex 中的地址。请填写基础地址，例如 https://主机:6060/api/v1。";
+
+"settings.sub2api.password_keep" = "留空保留原密码";

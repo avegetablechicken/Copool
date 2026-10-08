@@ -89,6 +89,7 @@ private struct SettingsSub2APISection: View {
                         }
                         .buttonStyle(.plain)
                         .help(L10n.tr("settings.sub2api.remove_provider"))
+                        .disabled(model.isSavingSub2APIProvider)
                     }
                     .padding(.leading, 12)
 
@@ -120,7 +121,9 @@ private struct SettingsSub2APISection: View {
 
                         SecureField(
                             "settings.sub2api.password",
-                            text: $configuration.password
+                            text: $configuration.password,
+                            prompt: Text(model.settings.sub2APIProvider.providers.contains { $0.id == configuration.id }
+                                ? "settings.sub2api.password_keep" : "settings.sub2api.password_placeholder")
                         )
                         .textContentType(.password)
                         .textFieldStyle(.roundedBorder)
@@ -130,6 +133,17 @@ private struct SettingsSub2APISection: View {
                             isOn: $configuration.allowInsecureTLS
                         )
                         .toggleStyle(.switch)
+
+                        HStack {
+                            Spacer(minLength: 0)
+                            Button {
+                                model.saveSub2APIProvider(id: configuration.id)
+                            } label: {
+                                Label("common.save", systemImage: "square.and.arrow.down")
+                            }
+                            .copoolActionButtonStyle(prominent: true)
+                            .disabled(model.isSavingSub2APIProvider)
+                        }
                     }
                 }
                 .padding(.vertical, -4)
@@ -144,11 +158,6 @@ private struct SettingsSub2APISection: View {
                     .help(L10n.tr("settings.sub2api.add_provider"))
 
                     Spacer(minLength: 0)
-                    Button(action: model.saveSub2APIProvider) {
-                        Label("common.save", systemImage: "square.and.arrow.down")
-                    }
-                    .copoolActionButtonStyle(prominent: true)
-                    .disabled(model.isSavingSub2APIProvider)
                 }
             }
         }

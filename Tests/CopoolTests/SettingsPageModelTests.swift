@@ -76,7 +76,7 @@ final class SettingsPageModelTests: XCTestCase {
         XCTAssertEqual(stored.username, "admin@example.com")
         XCTAssertEqual(stored.password, "")
         XCTAssertEqual(try secretStore.password(for: configurationID), "secret")
-        XCTAssertEqual(model.sub2APIProviderDraft.providers.first?.password, "secret")
+        XCTAssertEqual(model.sub2APIProviderDraft.providers.first?.password, "")
         XCTAssertEqual(model.notice?.text, L10n.tr("settings.notice.sub2api_saved"))
 
         let reloadedModel = SettingsPageModel(
@@ -88,8 +88,110 @@ final class SettingsPageModelTests: XCTestCase {
             sub2APISecretStore: secretStore
         )
         await reloadedModel.load()
-        XCTAssertEqual(reloadedModel.sub2APIProviderDraft.providers.first?.password, "secret")
+        XCTAssertEqual(reloadedModel.sub2APIProviderDraft.providers.first?.password, "")
         XCTAssertEqual(reloadedModel.sub2APIProviderDraft.providers.first?.adminBaseURL, "https://admin.test/api/v1")
+    }
+
+    func testEditingProviderPreservesOtherCredentialsWithoutKeychainAccess() async throws {
+        let first = Sub2APIProviderConfiguration(providerID: "first", username: "first@example.com")
+        let second = Sub2APIProviderConfiguration(providerID: "second", username: "second@example.com")
+        var initial = AppSettings.defaultValue
+        initial.sub2APIProvider = Sub2APISettingsConfiguration(providers: [first, second])
+        let repository = TestSettingsRepository(settings: initial)
+        let secrets = SettingsStubSub2APISecretStore()
+        try secrets.setPassword("first-secret", for: first.id)
+        try secrets.setPassword("second-secret", for: second.id)
+        secrets.writtenIDs = []
+        let model = SettingsPageModel(
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: repository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            editorAppService: SettingsStubEditorAppService(),
+            sub2APISecretStore: secrets
+        )
+        await model.load()
+        model.sub2APIProviderDraft.providers[0].adminBaseURL = "https://admin.example.com"
+        model.saveSub2APIProvider()
+        while model.isSavingSub2APIProvider { await Task.yield() }
+        XCTAssertEqual(model.notice?.text, L10n.tr("settings.notice.sub2api_saved"))
+        XCTAssertTrue(secrets.readIDs.isEmpty)
+        XCTAssertTrue(secrets.writtenIDs.isEmpty)
+        XCTAssertEqual(try repository.loadSettings().sub2APIProvider.providers[0].adminBaseURL, "https://admin.example.com")
+        XCTAssertEqual(try repository.loadSettings().sub2APIProvider.providers[1], second)
+
+        model.sub2APIProviderDraft.providers[0].password = "replacement"
+        model.saveSub2APIProvider()
+        while model.isSavingSub2APIProvider { await Task.yield() }
+        XCTAssertEqual(secrets.writtenIDs, [first.id])
+        XCTAssertTrue(secrets.readIDs.isEmpty)
+        XCTAssertEqual(try secrets.password(for: first.id), "replacement")
+        XCTAssertEqual(try secrets.password(for: second.id), "second-secret")
+        XCTAssertTrue(try repository.loadSettings().sub2APIProvider.providers.allSatisfy { $0.password.isEmpty })
+
+        // Saving again must not rewrite the password just submitted.
+        model.saveSub2APIProvider()
+        while model.isSavingSub2APIProvider { await Task.yield() }
+        XCTAssertEqual(secrets.writtenIDs, [first.id])
+
+        model.addSub2APIProviderConfiguration()
+        model.sub2APIProviderDraft.providers[2].providerID = "new"
+        model.sub2APIProviderDraft.providers[2].username = "new@example.com"
+        model.saveSub2APIProvider()
+        while model.isSavingSub2APIProvider { await Task.yield() }
+        XCTAssertEqual(model.notice?.text, L10n.tr("error.sub2api.configuration_incomplete"))
+        XCTAssertEqual(try repository.loadSettings().sub2APIProvider.providers.count, 2)
+        XCTAssertEqual(secrets.writtenIDs, [first.id])
+    }
+
+    func testProviderSaveIsScopedAndDeletionPersistsIndependently() async throws {
+        let first = Sub2APIProviderConfiguration(providerID: "first", username: "first@example.com")
+        let second = Sub2APIProviderConfiguration(providerID: "second", username: "second@example.com")
+        var initial = AppSettings.defaultValue
+        initial.sub2APIProvider = Sub2APISettingsConfiguration(providers: [first, second])
+        let repository = TestSettingsRepository(settings: initial)
+        let secrets = SettingsStubSub2APISecretStore()
+        try secrets.setPassword("second-secret", for: second.id)
+        secrets.writtenIDs = []
+        let model = SettingsPageModel(
+            settingsCoordinator: SettingsCoordinator(
+                settingsRepository: repository,
+                launchAtStartupService: SettingsStubLaunchAtStartupService()
+            ),
+            editorAppService: SettingsStubEditorAppService(),
+            sub2APISecretStore: secrets
+        )
+        await model.load()
+        model.sub2APIProviderDraft.providers[0].adminBaseURL = "https://admin.example.com"
+        model.sub2APIProviderDraft.providers[1].username = ""
+        model.sub2APIProviderDraft.providers[1].password = "unsaved-password"
+        model.addSub2APIProviderConfiguration()
+        model.saveSub2APIProvider(id: first.id)
+        while model.isSavingSub2APIProvider { await Task.yield() }
+        XCTAssertEqual(model.notice?.text, L10n.tr("settings.notice.sub2api_saved"))
+        let saved = try repository.loadSettings().sub2APIProvider
+        XCTAssertEqual(saved.providers.count, 2)
+        XCTAssertEqual(saved.providers[0].adminBaseURL, "https://admin.example.com")
+        XCTAssertEqual(saved.providers[1], second)
+        XCTAssertEqual(model.sub2APIProviderDraft.providers[1].password, "unsaved-password")
+        XCTAssertEqual(model.sub2APIProviderDraft.providers.count, 3)
+        XCTAssertTrue(secrets.writtenIDs.isEmpty)
+        XCTAssertTrue(secrets.readIDs.isEmpty)
+
+        // The saved name of another provider remains reserved even if its draft changes.
+        model.sub2APIProviderDraft.providers[0].providerID = "SECOND"
+        model.sub2APIProviderDraft.providers[1].providerID = "editing-second"
+        model.saveSub2APIProvider(id: first.id)
+        while model.isSavingSub2APIProvider { await Task.yield() }
+        XCTAssertEqual(model.notice?.text, L10n.tr("error.sub2api.duplicate_provider"))
+        XCTAssertEqual(try repository.loadSettings().sub2APIProvider, saved)
+
+        model.removeSub2APIProviderConfiguration(id: second.id)
+        while model.isSavingSub2APIProvider { await Task.yield() }
+        XCTAssertEqual(try repository.loadSettings().sub2APIProvider.providers.map(\.id), [first.id])
+        XCTAssertNil(try secrets.password(for: second.id))
+        XCTAssertEqual(model.sub2APIProviderDraft.providers[0].providerID, "SECOND")
+        XCTAssertEqual(model.sub2APIProviderDraft.providers.count, 2)
     }
 
     func testSettingsPageAddsAndSavesArbitrarySub2APIProviderConfigurations() async throws {
@@ -1312,12 +1414,16 @@ private final class SettingsStubSub2APISecretStore:
     @unchecked Sendable
 {
     private var passwords: [UUID: String] = [:]
+    var writtenIDs: [UUID] = []
+    var readIDs: [UUID] = []
 
     func password(for configurationID: UUID) throws -> String? {
-        passwords[configurationID]
+        readIDs.append(configurationID)
+        return passwords[configurationID]
     }
 
     func setPassword(_ password: String, for configurationID: UUID) throws {
+        writtenIDs.append(configurationID)
         passwords[configurationID] = password
     }
 

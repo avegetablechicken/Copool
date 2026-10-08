@@ -46,17 +46,13 @@ extension SettingsPageModel {
         onQuitRequested()
     }
 
-    func saveSub2APIProvider() {
-        let configuration = sub2APIProviderDraft.normalized()
-        guard configuration.providers.allSatisfy({
-            !$0.providerID.isEmpty && $0.isComplete
-        }) else {
-            notice = NoticeMessage(
-                style: .error,
-                text: L10n.tr("error.sub2api.configuration_incomplete")
-            )
-            return
-        }
+    func saveSub2APIProvider(id: UUID? = nil) {
+        guard !isSavingSub2APIProvider else { return }
+        var configuration = sub2APIProviderDraft
+        configuration.providers = configuration.providers
+            .filter { id == nil || $0.id == id }
+            .map { $0.normalized() }
+        if id != nil && configuration.providers.isEmpty { return }
         guard configuration.providers.allSatisfy({ provider in
             guard !provider.adminBaseURL.isEmpty else { return true }
             guard let url = URLComponents(string: provider.adminBaseURL),
@@ -84,8 +80,27 @@ extension SettingsPageModel {
             do {
                 var configuration = configuration
                 let current = try await settingsCoordinator.currentSettings().sub2APIProvider
-                let removedConfigurationIDs = Set(current.providers.map(\.id))
-                    .subtracting(configuration.providers.map(\.id))
+                if let id, let provider = configuration.providers.first,
+                   current.providers.contains(where: {
+                       $0.id != id && $0.providerID.caseInsensitiveCompare(provider.providerID) == .orderedSame
+                   }) {
+                    notice = NoticeMessage(style: .error, text: L10n.tr("error.sub2api.duplicate_provider"))
+                    return
+                }
+                // A blank password keeps the credential of an existing configuration.
+                // Match by stable ID so renamed providers retain their own credential.
+                guard configuration.providers.allSatisfy({ provider in
+                    let saved = current.providers.first { $0.id == provider.id }
+                    let retainsPassword = saved != nil && (sub2APISecretStore != nil || !(saved?.password.isEmpty ?? true))
+                    return !provider.providerID.isEmpty && !provider.username.isEmpty
+                        && (!provider.password.isEmpty || retainsPassword)
+                }) else {
+                    notice = NoticeMessage(style: .error, text: L10n.tr("error.sub2api.configuration_incomplete"))
+                    return
+                }
+                let removedConfigurationIDs = id == nil
+                    ? Set(current.providers.map(\.id)).subtracting(configuration.providers.map(\.id))
+                    : Set<UUID>()
                 configuration.providers = configuration.providers.map { draft in
                     var draft = draft
                     if let saved = current.provider(for: draft.providerID) {
@@ -93,12 +108,15 @@ extension SettingsPageModel {
                         draft.cachedAccounts = saved.cachedAccounts
                         draft.accountProxyURLs = saved.accountProxyURLs
                     }
+                    if draft.password.isEmpty,
+                       let saved = current.providers.first(where: { $0.id == draft.id }) {
+                        draft.password = saved.password
+                    }
                     draft.legacyAdminBaseURL = ""
                     return draft
                 }
-                let editableConfiguration = configuration
                 if let sub2APISecretStore {
-                    for provider in configuration.providers {
+                    for provider in configuration.providers where !provider.password.isEmpty {
                         try sub2APISecretStore.setPassword(provider.password, for: provider.id)
                     }
                     configuration.providers = configuration.providers.map { provider in
@@ -107,15 +125,28 @@ extension SettingsPageModel {
                         return provider
                     }
                 }
+                var persistedConfiguration = configuration
+                if id != nil {
+                    persistedConfiguration = current
+                    for provider in configuration.providers {
+                        persistedConfiguration.upsert(provider)
+                    }
+                }
                 settings = try await settingsCoordinator.updateSettings(
-                    AppSettingsPatch(sub2APIProvider: configuration)
+                    AppSettingsPatch(sub2APIProvider: persistedConfiguration)
                 )
                 if let sub2APISecretStore {
                     for configurationID in removedConfigurationIDs {
                         try sub2APISecretStore.removePassword(for: configurationID)
                     }
                 }
-                sub2APIProviderDraft = editableConfiguration
+                if let id,
+                   let index = sub2APIProviderDraft.providers.firstIndex(where: { $0.id == id }),
+                   let saved = configuration.providers.first {
+                    sub2APIProviderDraft.providers[index] = saved
+                } else if id == nil {
+                    sub2APIProviderDraft = configuration
+                }
                 onSettingsUpdated(settings)
                 notice = NoticeMessage(
                     style: .success,
@@ -134,7 +165,26 @@ extension SettingsPageModel {
     }
 
     func removeSub2APIProviderConfiguration(id: UUID) {
-        sub2APIProviderDraft.providers.removeAll { $0.id == id }
+        guard !isSavingSub2APIProvider else { return }
+        guard settings.sub2APIProvider.providers.contains(where: { $0.id == id }) else {
+            sub2APIProviderDraft.providers.removeAll { $0.id == id }
+            return
+        }
+        isSavingSub2APIProvider = true
+        Task {
+            defer { isSavingSub2APIProvider = false }
+            do {
+                var current = try await settingsCoordinator.currentSettings().sub2APIProvider
+                current.providers.removeAll { $0.id == id }
+                settings = try await settingsCoordinator.updateSettings(AppSettingsPatch(sub2APIProvider: current))
+                sub2APIProviderDraft.providers.removeAll { $0.id == id }
+                onSettingsUpdated(settings)
+                try sub2APISecretStore?.removePassword(for: id)
+                notice = NoticeMessage(style: .success, text: L10n.tr("settings.notice.sub2api_saved"))
+            } catch {
+                notice = NoticeMessage(style: .error, text: error.localizedDescription)
+            }
+        }
     }
 
     func updateToggle(_ intent: SettingsToggleIntent, to value: Bool) {

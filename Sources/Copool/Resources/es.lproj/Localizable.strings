@@ -440,3 +440,5 @@
 "accounts.notice.sub2api_sync_required_format" = "La lista de cuentas de origen de %@ ha cambiado. Se han conservado las cuentas válidas. Usa «%@» para sincronizar las cuentas no oficiales.";
 
 "settings.sub2api.admin_base_url_help" = "Opcional para iniciar sesión en Sub2api y consultar cuentas y cuotas. En blanco se deduce de Codex. Las solicitudes al modelo siguen usando la URL de Codex. Ejemplo: https://host:6060/api/v1.";
+
+"settings.sub2api.password_keep" = "Dejar en blanco para conservar la contraseña guardada";

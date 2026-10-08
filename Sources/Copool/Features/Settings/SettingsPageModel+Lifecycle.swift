@@ -35,7 +35,7 @@ extension SettingsPageModel {
         do {
             settings = try await settingsCoordinator.currentSettings()
             installedEditorApps = editorAppService.listInstalledApps()
-            sub2APIProviderDraft = try sub2APISettingsWithPasswords(settings.sub2APIProvider)
+            sub2APIProviderDraft = settings.sub2APIProvider
             if let codexConfigPath {
                 let provider = CodexModelProviderResolver.resolve(configPath: codexConfigPath)
                 defaultCodexProviderID = provider.id
@@ -47,16 +47,4 @@ extension SettingsPageModel {
         }
     }
 
-    private func sub2APISettingsWithPasswords(
-        _ settings: Sub2APISettingsConfiguration
-    ) throws -> Sub2APISettingsConfiguration {
-        guard let sub2APISecretStore else { return settings }
-        var settings = settings
-        for index in settings.providers.indices where settings.providers[index].password.isEmpty {
-            settings.providers[index].password = try sub2APISecretStore.password(
-                for: settings.providers[index].id
-            ) ?? ""
-        }
-        return settings
-    }
 }
