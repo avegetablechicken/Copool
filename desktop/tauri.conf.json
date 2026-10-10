@@ -16,15 +16,18 @@
       {
         "label": "main",
         "title": "Copool",
-        "width": 542,
-        "height": 620,
-        "minWidth": 542,
-        "maxWidth": 542,
-        "minHeight": 520,
+        "width": 360,
+        "height": 560,
         "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
         "decorations": false,
         "transparent": true,
-        "shadow": true
+        "visible": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "shadow": true,
+        "focus": true
       }
     ],
     "security": {

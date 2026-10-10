@@ -3212,7 +3212,8 @@ fn stopped_status(api_key: Option<String>, last_error: Option<String>) -> ApiPro
 }
 
 fn resolve_upstream_base_url(configured: &str, family: UpstreamRouteFamily) -> String {
-    let base = configured.trim().trim_end_matches('/');
+    let base = crate::utils::loopback_plain_http(configured);
+    let base = base.trim_end_matches('/');
     let base = base.strip_suffix("/responses").unwrap_or(base);
     let base = base.strip_suffix("/codex").unwrap_or(base);
     let base = if base.ends_with("/backend-api") {

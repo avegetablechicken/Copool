@@ -6,393 +6,441 @@
     <meta name="color-scheme" content="light dark" />
     <title>Copool</title>
     <link rel="stylesheet" href="style.css" />
-    <link rel="stylesheet" href="theme.css" />
-    <link rel="stylesheet" href="typography.css" />
   </head>
   <body>
     <div class="panel">
-      <header class="tab-header" data-tauri-drag-region>
-        <nav class="tab-switcher" aria-label="Sections" role="tablist">
+      <header class="top" data-tauri-drag-region>
+        <div id="top-main" class="top-row" data-tauri-drag-region>
+          <span class="app-name">Copool</span>
+          <nav class="links" aria-label="Sections">
+            <button
+              class="text-link"
+              data-page="proxy"
+              aria-selected="false"
+              data-l10n="tab.proxy"
+            ></button
+            ><button
+              class="text-link"
+              data-page="settings"
+              aria-selected="false"
+              data-l10n="tab.settings"
+            ></button
+            ><button
+              id="quit"
+              class="text-link"
+              data-l10n="common.quit"
+            ></button>
+          </nav>
+        </div>
+        <div id="top-sub" class="top-row" data-tauri-drag-region hidden>
           <button
+            class="text-link back"
             data-page="accounts"
-            role="tab"
             aria-selected="true"
-            data-title="tab.accounts"
+            aria-keyshortcuts="Meta+["
           >
-            <span data-icon="accounts"></span>
+            <span data-icon="chevron-left"></span
+            ><span data-l10n="tab.accounts"></span>
           </button>
-          <button
-            data-page="proxy"
-            role="tab"
-            aria-selected="false"
-            data-title="tab.proxy"
-          >
-            <span data-icon="network"></span>
-          </button>
-          <button
-            data-page="settings"
-            role="tab"
-            aria-selected="false"
-            data-title="tab.settings"
-          >
-            <span data-icon="settings"></span>
-          </button>
-        </nav>
+          <span id="page-title" class="page-title"></span>
+        </div>
       </header>
       <div id="notice" role="status" aria-live="polite" hidden>
-        <span id="notice-text"></span
-        ><button id="notice-close" class="plain icon-only" aria-label="Dismiss">
+        <span class="message-dot"></span><span id="notice-text"></span
+        ><button id="notice-close" class="icon-btn" aria-label="Dismiss">
           <span data-icon="close"></span>
         </button>
       </div>
       <main>
-        <section id="accounts-page" role="tabpanel">
-          <div class="account-toolbar">
-            <div class="action-strip">
+        <section id="accounts-page" class="content">
+          <div class="page">
+            <div class="toolbar">
               <div class="menu-anchor">
                 <button
                   id="import-open"
-                  class="capsule prominent"
+                  class="btn quiet"
                   aria-haspopup="menu"
                   aria-expanded="false"
-                >
-                  <span data-icon="import"></span
-                  ><span data-l10n="accounts.action.import_account"></span>
-                </button>
+                  data-l10n="accounts.action.import_account"
+                ></button>
                 <div id="import-menu" class="popover-menu" role="menu" hidden>
                   <button id="import-current" role="menuitem">
-                    <span data-icon="import"></span
-                    ><span
+                    <span
                       data-l10n="accounts.action.import_current_auth"
                     ></span></button
                   ><button id="import-file-open" role="menuitem">
-                    <span data-icon="document"></span
-                    ><span data-l10n="accounts.action.import_auth_file"></span>
+                    <span data-l10n="accounts.action.import_auth_file"></span>
                   </button>
                 </div>
               </div>
-              <button id="add-account" class="capsule prominent">
-                <span data-icon="plus"></span
-                ><span data-l10n="accounts.action.add_account"></span>
-              </button>
-              <button id="smart-switch" class="capsule prominent">
-                <span data-icon="wand"></span
-                ><span data-l10n="accounts.action.smart_switch"></span>
-              </button>
               <button
-                id="refresh-all"
-                class="capsule mint icon-only"
-                data-title="common.refresh_usage"
-              >
-                <span data-icon="refresh"></span>
-              </button>
-            </div>
-            <button
-              id="collapse-all"
-              class="capsule icon-only"
-              aria-expanded="true"
-              data-title="accounts.action.collapse_all"
-            >
-              <span data-icon="chevron-up"></span>
-            </button>
-          </div>
-          <div class="account-scroll">
-            <div id="pending-workspaces"></div>
-            <div id="accounts" class="account-grid"></div>
-          </div>
-        </section>
-        <section id="proxy-page" role="tabpanel" class="scroll-page" hidden>
-          <div class="section-card" id="api-section">
-            <div class="section-header">
-              <h2 data-l10n="proxy.section.api_proxy"></h2>
+                id="add-account"
+                class="btn quiet"
+                data-l10n="accounts.action.add_account"
+              ></button>
               <button
-                class="capsule icon-only disclosure"
-                data-target="api-details"
-                aria-expanded="false"
-              >
-                <span data-icon="chevron-down"></span>
-              </button>
-            </div>
-            <div class="status-pills">
-              <span id="proxy-status" class="metric"
-                ><i class="status-dot"></i><span id="proxy-state"></span></span
-              ><span id="proxy-port-status" class="metric"></span
-              ><span id="proxy-count" class="metric"></span>
-            </div>
-            <div id="api-details" class="section-details" hidden>
-              <div class="proxy-actions">
-                <input
-                  id="proxy-port"
-                  class="capsule-input"
-                  inputmode="numeric"
-                  type="number"
-                  min="1"
-                  max="65535"
-                  placeholder="8787"
-                  aria-label="Port"
-                /><button
-                  id="proxy-start"
-                  class="capsule prominent"
-                  data-l10n="common.start"
-                ></button
-                ><button
-                  id="proxy-stop"
-                  class="capsule"
-                  data-l10n="common.stop"
-                ></button
-                ><button
-                  id="proxy-refresh"
-                  class="capsule icon-only"
-                  data-title="common.refresh"
+                id="smart-switch"
+                class="btn quiet"
+                data-l10n="accounts.action.smart_switch"
+              ></button>
+              <span class="toolbar-aside">
+                <button
+                  id="refresh-all"
+                  class="icon-btn"
+                  data-title="common.refresh_usage"
                 >
                   <span data-icon="refresh"></span>
                 </button>
+                <button
+                  id="collapse-all"
+                  class="icon-btn"
+                  aria-expanded="true"
+                  data-title="accounts.action.collapse_all"
+                >
+                  <span data-icon="chevron-up"></span>
+                </button>
+              </span>
+            </div>
+            <div id="pending-workspaces"></div>
+            <div id="accounts" class="account-list"></div>
+          </div>
+        </section>
+        <section id="proxy-page" class="content" hidden>
+          <div class="page">
+            <section class="block" id="api-section">
+              <div class="block-head">
+                <span
+                  class="block-title"
+                  data-l10n="proxy.section.api_proxy"
+                ></span>
+                <span class="block-aside">
+                  <span id="proxy-status" class="state"
+                    ><span class="dot"></span><span id="proxy-state"></span
+                  ></span>
+                  <button
+                    id="proxy-refresh"
+                    class="icon-btn"
+                    data-title="common.refresh"
+                  >
+                    <span data-icon="refresh"></span></button
+                  ><button
+                    class="icon-btn disclosure"
+                    data-target="api-details"
+                    aria-expanded="false"
+                  >
+                    <span data-icon="chevron-down"></span>
+                  </button>
+                </span>
               </div>
-              <label class="toggle-row"
-                ><span data-l10n="proxy.start_on_launch"></span
-                ><input
-                  id="proxy-auto-start"
-                  type="checkbox"
-                  class="switch"
-                  data-preference="autoStartProxy"
-              /></label>
-              <div class="value-card">
-                <h3 data-l10n="proxy.detail.base_url"></h3>
+              <div class="strip">
+                <span id="proxy-port-status" class="stat-value"></span
+                ><span id="proxy-count" class="stat-value"></span>
+              </div>
+              <div id="api-details" class="section-details" hidden>
+                <div class="row">
+                  <span class="row-label">Port</span>
+                  <span class="number-field"
+                    ><input
+                      id="proxy-port"
+                      class="field"
+                      inputmode="numeric"
+                      type="number"
+                      min="1"
+                      max="65535"
+                      placeholder="8787"
+                      aria-label="Port"
+                  /></span>
+                  <button
+                    id="proxy-start"
+                    class="btn quiet prominent"
+                    data-l10n="common.start"
+                  ></button
+                  ><button
+                    id="proxy-stop"
+                    class="btn quiet destructive"
+                    data-l10n="common.stop"
+                  ></button>
+                </div>
+                <label class="row"
+                  ><span
+                    class="row-label"
+                    data-l10n="proxy.start_on_launch"
+                  ></span
+                  ><input
+                    id="proxy-auto-start"
+                    type="checkbox"
+                    class="switch"
+                    data-preference="autoStartProxy"
+                /></label>
+                <div class="subhead" data-l10n="proxy.detail.base_url"></div>
                 <div class="copy-row">
-                  <input id="proxy-url" readonly /><button
-                    class="capsule icon-only copy"
+                  <input id="proxy-url" class="field" readonly /><button
+                    class="icon-btn copy"
                     data-copy="proxy-url"
                     data-title="common.copy"
                   >
                     <span data-icon="copy"></span>
                   </button>
                 </div>
-              </div>
-              <div class="value-card">
-                <div class="section-header">
-                  <h3 data-l10n="proxy.detail.api_key"></h3>
-                </div>
+                <div class="subhead" data-l10n="proxy.detail.api_key"></div>
                 <div class="copy-row">
                   <input
                     id="proxy-key"
+                    class="field"
                     readonly
                     type="password"
                     autocomplete="off"
                   /><button
                     id="toggle-key"
-                    class="capsule icon-only"
+                    class="icon-btn"
                     aria-label="Show API key"
                   >
                     <span data-icon="eye"></span></button
                   ><button
-                    class="capsule icon-only copy"
+                    class="icon-btn copy"
                     data-copy="proxy-key"
                     data-title="common.copy"
                   >
                     <span data-icon="copy"></span>
                   </button>
                 </div>
+                <dl class="kv">
+                  <dt data-l10n="proxy.detail.active_routed_account"></dt>
+                  <dd>
+                    <div id="proxy-active"></div>
+                    <small id="proxy-active-id" class="secondary"></small>
+                  </dd>
+                  <dt data-l10n="proxy.detail.last_error"></dt>
+                  <dd id="proxy-error"></dd>
+                </dl>
               </div>
-              <div class="value-card">
-                <h3 data-l10n="proxy.detail.active_routed_account"></h3>
-                <div id="proxy-active"></div>
-                <small id="proxy-active-id" class="secondary"></small>
+            </section>
+            <section class="block">
+              <div class="block-head">
+                <span
+                  class="block-title"
+                  data-l10n="proxy.section.remote_servers"
+                ></span>
+                <span class="block-aside">
+                  <button
+                    id="remote-add"
+                    class="btn quiet"
+                    data-l10n="proxy.action.add_server"
+                  ></button>
+                </span>
               </div>
-              <div class="value-card">
-                <h3 data-l10n="proxy.detail.last_error"></h3>
-                <div id="proxy-error"></div>
+              <p
+                class="setting-description"
+                data-l10n="proxy.remote.description"
+              ></p>
+              <div id="remote-list"></div>
+              <div id="remote-empty" class="placeholder">
+                <span class="row-name" data-l10n="proxy.remote.empty.title"></span>
+                <span
+                  class="setting-description"
+                  data-l10n="proxy.remote.empty.message"
+                ></span>
               </div>
-            </div>
-          </div>
-          <div class="section-card">
-            <div class="section-header">
-              <h2 data-l10n="proxy.section.remote_servers"></h2>
-              <button
-                id="remote-add"
-                class="capsule prominent"
-                data-l10n="proxy.action.add_server"
-              ></button>
-            </div>
-            <p
-              class="secondary caption"
-              data-l10n="proxy.remote.description"
-            ></p>
-            <div id="remote-list"></div>
-            <div id="remote-empty" class="empty-state small">
-              <span data-icon="server"></span>
-              <h3 data-l10n="proxy.remote.empty.title"></h3>
-              <p data-l10n="proxy.remote.empty.message"></p>
-            </div>
-          </div>
-          <div class="section-card">
-            <div class="section-header">
-              <h2 data-l10n="proxy.section.public_access"></h2>
-              <button
-                class="capsule icon-only disclosure"
-                data-target="public-details"
-                aria-expanded="false"
-              >
-                <span data-icon="chevron-down"></span>
-              </button>
-            </div>
-            <label class="toggle-row"
-              ><span data-l10n="proxy.toggle.enable_public_access"></span
-              ><span class="toggle-pill"
+            </section>
+            <section class="block">
+              <div class="block-head">
+                <span
+                  class="block-title"
+                  data-l10n="proxy.section.public_access"
+                ></span>
+                <span class="block-aside">
+                  <button
+                    class="icon-btn disclosure"
+                    data-target="public-details"
+                    aria-expanded="false"
+                  >
+                    <span data-icon="chevron-down"></span>
+                  </button>
+                </span>
+              </div>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="proxy.toggle.enable_public_access"
+                ></span
                 ><input
                   id="public-enabled"
                   type="checkbox"
                   class="switch"
-                  data-tunnel="enabled" /><span
-                  data-l10n="proxy.switch.off"
-                ></span></span
-            ></label>
-            <div id="public-details" class="section-details" hidden>
-              <div id="tunnel-controls"></div>
-              <div class="value-card">
-                <h3
-                  data-l10n="proxy.public.callout.start_local_first_title"
-                ></h3>
-                <p
-                  class="secondary"
-                  data-l10n="proxy.public.callout.start_local_first_message"
-                ></p>
+                  data-tunnel="enabled"
+              /></label>
+              <div id="public-details" class="section-details" hidden>
+                <div id="tunnel-controls"></div>
+                <div class="value-card message warn">
+                  <span class="message-dot"></span>
+                  <div class="message-body">
+                    <div
+                      class="row-name"
+                      data-l10n="proxy.public.callout.start_local_first_title"
+                    ></div>
+                    <div
+                      class="secondary"
+                      data-l10n="proxy.public.callout.start_local_first_message"
+                    ></div>
+                  </div>
+                </div>
+                <div class="value-card message">
+                  <span class="message-dot"></span>
+                  <div class="message-body">
+                    <div
+                      class="row-name"
+                      data-l10n="proxy.public.install_title"
+                    ></div>
+                    <div
+                      class="secondary"
+                      data-l10n="proxy.public.install_message"
+                    ></div>
+                    <div class="message-actions">
+                      <button
+                        class="btn quiet"
+                        id="tunnel-install"
+                        data-l10n="proxy.public.install_action"
+                      ></button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div class="value-card">
-                <small
-                  class="secondary"
-                  data-l10n="proxy.public.not_installed_label"
-                ></small>
-                <h3 data-l10n="proxy.public.install_title"></h3>
-                <p
-                  class="secondary"
-                  data-l10n="proxy.public.install_message"
-                ></p>
-                <button
-                  class="capsule prominent"
-                  id="tunnel-install"
-                  data-l10n="proxy.public.install_action"
-                ></button>
-              </div>
-            </div>
+            </section>
           </div>
         </section>
-        <section id="settings-page" role="tabpanel" hidden>
-          <div class="settings-scroll">
-            <div class="settings-section">
-              <h2 data-l10n="settings.section.general"></h2>
-              <div class="settings-group">
-                <label class="settings-row"
-                  ><span data-l10n="settings.launch_at_startup"></span
-                  ><input
-                    type="checkbox"
-                    class="switch"
-                    data-preference="launchAtStartup"
-                /></label>
-                <label class="settings-row"
-                  ><span data-l10n="settings.launch_codex_after_switch"></span
-                  ><input
-                    type="checkbox"
-                    class="switch"
-                    data-preference="launchCodexAfterSwitch"
-                /></label>
-                <label class="settings-row"
-                  ><span data-l10n="settings.auto_start_api_proxy"></span
-                  ><input
-                    type="checkbox"
-                    class="switch"
-                    data-preference="autoStartProxy"
-                /></label>
-                <label class="settings-row"
-                  ><span data-l10n="settings.local_proxy_host_api_only"></span
-                  ><input
-                    type="checkbox"
-                    class="switch"
-                    data-preference="hostApiOnly"
-                /></label>
-                <label class="settings-row"
-                  ><span data-l10n="settings.usage_progress_display"></span
-                  ><select id="usage-display">
-                    <option
-                      value="used"
-                      data-l10n="settings.usage_progress_display.used"
-                    ></option>
-                    <option
-                      value="remaining"
-                      data-l10n="settings.usage_progress_display.remaining"
-                    ></option></select
-                ></label>
+        <section id="settings-page" class="content settings-page" hidden>
+          <div class="page">
+            <section class="block">
+              <div class="block-head">
+                <span
+                  class="block-title"
+                  data-l10n="settings.section.general"
+                ></span>
               </div>
-            </div>
-            <div class="settings-section">
-              <h2 data-l10n="settings.section.language"></h2>
-              <div class="settings-group">
-                <label class="settings-row"
-                  ><span data-l10n="settings.language"></span
-                  ><select id="language"></select
-                ></label>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.launch_at_startup"
+                ></span
+                ><input
+                  type="checkbox"
+                  class="switch"
+                  data-preference="launchAtStartup"
+              /></label>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.launch_codex_after_switch"
+                ></span
+                ><input
+                  type="checkbox"
+                  class="switch"
+                  data-preference="launchCodexAfterSwitch"
+              /></label>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.auto_start_api_proxy"
+                ></span
+                ><input
+                  type="checkbox"
+                  class="switch"
+                  data-preference="autoStartProxy"
+              /></label>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.local_proxy_host_api_only"
+                ></span
+                ><input
+                  type="checkbox"
+                  class="switch"
+                  data-preference="hostApiOnly"
+              /></label>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.usage_progress_display"
+                ></span
+                ><select id="usage-display" class="select">
+                  <option
+                    value="used"
+                    data-l10n="settings.usage_progress_display.used"
+                  ></option>
+                  <option
+                    value="remaining"
+                    data-l10n="settings.usage_progress_display.remaining"
+                  ></option></select
+              ></label>
+              <label class="row"
+                ><span class="row-label" data-l10n="settings.language"></span
+                ><select id="language" class="select"></select
+              ></label>
+            </section>
+            <section class="block">
+              <div class="block-head">
+                <span
+                  class="block-title"
+                  data-l10n="settings.section.switch_behavior"
+                ></span>
               </div>
-            </div>
-            <div class="settings-section">
-              <h2 data-l10n="settings.section.switch_behavior"></h2>
-              <div class="settings-group">
-                <label class="settings-row"
-                  ><span data-l10n="settings.auto_smart_switch"></span
-                  ><input
-                    type="checkbox"
-                    class="switch"
-                    data-preference="autoSwitch"
-                /></label>
-                <label class="settings-row"
-                  ><span data-l10n="settings.sync_opencode_openai_auth"></span
-                  ><input
-                    type="checkbox"
-                    class="switch"
-                    data-preference="syncOpencodeOpenaiAuth"
-                /></label>
-                <label class="settings-row"
-                  ><span data-l10n="settings.restart_editors_on_switch"></span
-                  ><input
-                    type="checkbox"
-                    class="switch"
-                    data-preference="restartEditorsOnSwitch"
-                /></label>
-                <label class="settings-row"
-                  ><span data-l10n="settings.editor_restart_target"></span
-                  ><select id="restart-target" disabled>
-                    <option data-l10n="common.none"></option></select
-                ></label>
-              </div>
-            </div>
-            <div class="settings-section">
-              <h2 data-l10n="settings.section.sub2api"></h2>
-              <div class="settings-group">
-                <div class="settings-row">
-                  <span class="inline-label"
-                    ><span data-icon="server"></span><b>Sub2api</b></span
-                  ><span id="provider-count" class="secondary">0</span>
-                </div>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.auto_smart_switch"
+                ></span
+                ><input
+                  type="checkbox"
+                  class="switch"
+                  data-preference="autoSwitch"
+              /></label>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.sync_opencode_openai_auth"
+                ></span
+                ><input
+                  type="checkbox"
+                  class="switch"
+                  data-preference="syncOpencodeOpenaiAuth"
+              /></label>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.restart_editors_on_switch"
+                ></span
+                ><input
+                  type="checkbox"
+                  class="switch"
+                  data-preference="restartEditorsOnSwitch"
+              /></label>
+              <label class="row"
+                ><span
+                  class="row-label"
+                  data-l10n="settings.editor_restart_target"
+                ></span
+                ><select id="restart-target" class="select" disabled>
+                  <option data-l10n="common.none"></option></select
+              ></label>
+            </section>
+            <section class="block">
+              <div class="block-head">
+                <span
+                  class="block-title"
+                  data-l10n="settings.section.sub2api"
+                ></span>
+                <span class="block-aside">
+                  <span id="provider-count">0</span>
+                  <button
+                    class="btn quiet"
+                    id="provider-add"
+                    data-l10n="settings.sub2api.add_provider"
+                  ></button>
+                </span>
               </div>
               <div id="provider-forms"></div>
-              <div class="settings-group">
-                <div class="settings-row">
-                  <button
-                    class="plain icon-only"
-                    id="provider-add"
-                    data-title="settings.sub2api.add_provider"
-                  >
-                    <span data-icon="plus"></span>
-                  </button>
-                </div>
-              </div>
-            </div>
+            </section>
           </div>
-          <footer class="settings-footer">
-            <button
-              id="quit"
-              class="capsule destructive"
-              data-l10n="common.quit"
-            ></button>
-          </footer>
         </section>
       </main>
     </div>
@@ -405,7 +453,7 @@
     <dialog id="import-dialog">
       <form id="import-form">
         <h2 data-l10n="accounts.action.add_account"></h2>
-        <div class="dialog-tabs">
+        <div class="segmented">
           <button type="button" id="auth-json-tab" aria-pressed="true">
             auth.json</button
           ><button type="button" id="refresh-token-tab" aria-pressed="false">
@@ -414,6 +462,7 @@
         </div>
         <textarea
           id="import-content"
+          class="field"
           rows="8"
           spellcheck="false"
           placeholder='{"tokens": {…}}'
@@ -421,6 +470,7 @@
         ></textarea
         ><input
           id="refresh-token"
+          class="field"
           type="password"
           autocomplete="off"
           placeholder="Refresh Token"
@@ -431,12 +481,12 @@
           <button
             type="button"
             id="import-cancel"
-            class="capsule"
+            class="btn"
             data-l10n="common.cancel"
           ></button
           ><button
             type="submit"
-            class="capsule prominent"
+            class="btn primary"
             data-l10n="accounts.action.import_account"
           ></button>
         </div>
@@ -444,13 +494,12 @@
     </dialog>
     <dialog id="login-dialog">
       <h2 data-l10n="accounts.action.add_account"></h2>
-      <p data-l10n="accounts.action.waiting_for_login"></p>
+      <p
+        class="secondary"
+        data-l10n="accounts.action.waiting_for_login"
+      ></p>
       <div class="dialog-actions">
-        <button
-          id="login-cancel"
-          class="capsule"
-          data-l10n="common.cancel"
-        ></button>
+        <button id="login-cancel" class="btn" data-l10n="common.cancel"></button>
       </div>
     </dialog>
     <dialog id="edit-dialog">
@@ -459,12 +508,13 @@
         <p id="edit-name" class="secondary"></p>
         <input
           id="edit-proxy"
+          class="field"
           placeholder="http://127.0.0.1:7890"
           aria-label="Proxy URL"
         />
         <p
           id="edit-proxy-help"
-          class="secondary caption"
+          class="setting-description"
           data-l10n="settings.sub2api.proxy_help"
         ></p>
         <p id="edit-error" class="error" hidden></p>
@@ -472,12 +522,12 @@
           <button
             type="button"
             id="edit-cancel"
-            class="capsule"
+            class="btn"
             data-l10n="common.cancel"
           ></button
           ><button
             type="submit"
-            class="capsule prominent"
+            class="btn primary"
             data-l10n="common.save"
           ></button>
         </div>
@@ -486,25 +536,16 @@
     <dialog id="confirm-dialog">
       <form method="dialog">
         <h2 id="confirm-title"></h2>
-        <p id="confirm-description"></p>
+        <p id="confirm-description" class="secondary"></p>
         <div class="dialog-actions">
-          <button
-            value="cancel"
-            class="capsule"
-            data-l10n="common.cancel"
-          ></button
-          ><button
-            value="confirm"
-            class="capsule prominent"
-            data-l10n="common.save"
-          ></button>
+          <button value="cancel" class="btn" data-l10n="common.cancel"></button
+          ><button id="confirm-accept" value="confirm" class="btn primary"></button>
         </div>
       </form>
     </dialog>
     <div id="account-menu" class="popover-menu account-menu" role="menu" hidden>
       <button id="account-proxy-edit" role="menuitem">
-        <span data-icon="network"></span
-        ><span data-l10n="accounts.proxy.title"></span>
+        <span data-l10n="accounts.proxy.title"></span>
       </button>
     </div>
     <script src="locales.js" defer></script>

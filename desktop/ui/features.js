@@ -27,7 +27,7 @@ const proxyController = new window.CopoolControllers.Proxy(invoke, () => {
   }
 });
 function providerField(form, provider, key, label, type = "text") {
-  const row = el("label", "settings-row provider-field");
+  const row = el("label", "row provider-field");
   row.append(el("span", "", tr(label)));
   const input = el("input");
   input.type = type;
@@ -46,9 +46,9 @@ function renderProviders() {
   root.replaceChildren();
   $("provider-count").textContent = String(providerDrafts.size);
   for (const [id, provider] of providerDrafts) {
-    const form = el("form", "settings-group provider-form");
-    const header = el("div", "settings-row provider-header");
-    const toggle = button("", null, "plain provider-toggle", () => {
+    const form = el("form", "provider-form");
+    const header = el("div", "row provider-header");
+    const toggle = button("", null, "provider-toggle", () => {
       if (expandedProviders.has(id)) expandedProviders.delete(id);
       else expandedProviders.add(id);
       renderProviders();
@@ -60,11 +60,10 @@ function renderProviders() {
     if (!expandedProviders.has(id)) chevron.classList.add("collapsed");
     toggle.append(
       chevron,
-      el("span", "provider-accent"),
       icon("server"),
       el("span", "", provider.providerID || "Sub2api"),
     );
-    const remove = button("", "trash", "plain icon-only", () =>
+    const remove = button("", "trash", "icon-btn", () =>
       action(async () => {
         await providerController.remove(id);
         expandedProviders.delete(id);
@@ -89,21 +88,23 @@ function renderProviders() {
           body.append(
             el(
               "p",
-              "caption secondary",
+              "setting-description",
               tr("settings.sub2api.admin_base_url_help"),
             ),
           );
       }
-      const row = el("label", "settings-row");
-      row.append(el("span", "", tr("settings.sub2api.allow_insecure_tls")));
+      const row = el("label", "row");
+      row.append(
+        el("span", "row-label", tr("settings.sub2api.allow_insecure_tls")),
+      );
       const check = el("input", "switch");
       check.type = "checkbox";
       check.checked = !!provider.allowInsecureTLS;
       check.onchange = () => (provider.allowInsecureTLS = check.checked);
       row.append(check);
       body.append(row);
-      const actions = el("div", "settings-row provider-save");
-      const save = button(tr("common.save"), "import", "capsule prominent");
+      const actions = el("div", "provider-save");
+      const save = button(tr("common.save"), null, "btn primary");
       save.type = "submit";
       actions.append(save);
       body.append(actions);
@@ -217,7 +218,7 @@ $("import-file-open").onclick = () => {
 };
 const remoteDrafts = new Map();
 function remoteField(form, server, key, label, type = "text") {
-  const row = el("label", "settings-row provider-field");
+  const row = el("label", "row provider-field");
   row.append(el("span", "", tr(label)));
   const input = el("input");
   input.type = type;
@@ -250,9 +251,9 @@ function renderRemotes() {
   $("remote-list").replaceChildren();
   $("remote-empty").hidden = remoteDrafts.size > 0;
   for (const [id, server] of remoteDrafts) {
-    const form = el("form", "section-card remote-form");
+    const form = el("form", "remote-form");
     form.dataset.serverId = id;
-    const header = button("", null, "plain remote-card-header", () => {
+    const header = button("", null, "remote-card-header", () => {
       if (expandedRemotes.has(id)) expandedRemotes.delete(id);
       else expandedRemotes.add(id);
       renderRemotes();
@@ -262,11 +263,7 @@ function renderRemotes() {
     text.append(el("h3", "", server.label || "new-server"));
     if (!expandedRemotes.has(id))
       text.append(
-        el(
-          "span",
-          "caption secondary",
-          `${server.sshUser}@${server.host}:${server.sshPort}`,
-        ),
+        el("span", "", `${server.sshUser}@${server.host}:${server.sshPort}`),
       );
     header.append(
       icon("server"),
@@ -286,11 +283,9 @@ function renderRemotes() {
       ])
         remoteField(grid, server, key, `proxy.remote.field.${label}`, type);
       form.append(grid);
-      const auth = el("label", "settings-row remote-auth");
-      auth.append(
-        el("span", "caption secondary", tr("proxy.remote.auth.title")),
-      );
-      const select = el("select");
+      const auth = el("label", "row remote-auth");
+      auth.append(el("span", "row-label", tr("proxy.remote.auth.title")));
+      const select = el("select", "select");
       for (const [value, label] of [
         ["keyPath", "path"],
         ["keyContent", "private_key"],
@@ -323,7 +318,7 @@ function renderRemotes() {
           server.authMode === "password" ? "password" : "text",
         );
         if (server.authMode !== "password") {
-          const choose = button("", "folder", "capsule icon-only", async () => {
+          const choose = button("", "folder", "icon-btn", async () => {
             try {
               const path = await proxyController.chooseIdentityFile();
               if (path) {
@@ -348,15 +343,11 @@ function renderRemotes() {
       );
       const guide = el("details", "remote-action-guide");
       guide.append(
-        el("summary", "caption secondary", tr("proxy.remote.help.title")),
+        el("summary", "", tr("proxy.remote.help.title")),
       );
       for (const help of P.remoteHelp(proxyController.remoteButtons(id)))
         guide.append(
-          el(
-            "p",
-            "caption",
-            `${tr(remoteTitles[help.action])}: ${tr(help.key)}`,
-          ),
+          el("p", "", `${tr(remoteTitles[help.action])}: ${tr(help.key)}`),
         );
       form.append(guide);
     }
@@ -392,7 +383,9 @@ function renderRemoteStates() {
         const control = button(
           tr(remoteTitles[descriptor.intent]),
           descriptor.showsProgress ? "refresh" : null,
-          `capsule ${descriptor.role === "destructive" ? "destructive" : descriptor.surfaceStyle === "prominent" ? "prominent" : ""}`,
+          descriptor.intent === "save"
+            ? "btn primary"
+            : `btn quiet ${descriptor.role === "destructive" ? "destructive" : descriptor.surfaceStyle === "prominent" ? "prominent" : ""}`,
           async () => {
             if (descriptor.intent === "save") {
               await saveRemoteDraft(id);
@@ -426,11 +419,12 @@ function renderRemoteStates() {
     feedback.replaceChildren();
     const f = proxyController.feedbacks[id];
     if (f) {
-      feedback.className = `remote-feedback value-card ${f.state === "failure" ? "error" : ""}`;
+      feedback.className = `remote-feedback message ${f.state === "failure" ? "bad" : "good"}`;
       feedback.append(
-        el("span", "caption", f.message || tr(f.key, ...(f.args || []))),
+        el("span", "message-dot"),
+        el("span", "message-body", f.message || tr(f.key, ...(f.args || []))),
       );
-      const close = button("", "close", "plain icon-only", () =>
+      const close = button("", "close", "icon-btn", () =>
         proxyController.dismissFeedback(id),
       );
       close.type = "button";
@@ -450,11 +444,11 @@ function renderRemoteStates() {
     if (status) {
       const metrics = el("div", "remote-metrics");
       for (const metric of P.remoteMetrics(status)) {
-        const card = el("div", "value-card");
+        const card = el("div", "remote-metric");
         card.append(
           el(
             "span",
-            "caption secondary",
+            "",
             {
               installed: "Installed",
               serviceInstalled: "Systemd",
@@ -474,12 +468,12 @@ function renderRemoteStates() {
       ]) {
         if (!value) continue;
         const row = el("div", "copy-row");
-        const field = el("input");
+        const field = el("input", "field");
         field.readOnly = true;
         field.type = secret ? "password" : "text";
         field.value = value;
         field.setAttribute("aria-label", tr(label));
-        const copy = button("", "copy", "plain icon-only", () =>
+        const copy = button("", "copy", "icon-btn", () =>
           navigator.clipboard.writeText(value),
         );
         copy.type = "button";
@@ -488,21 +482,21 @@ function renderRemoteStates() {
         output.append(row);
       }
       if (status.lastError)
-        output.append(el("p", "caption error", status.lastError));
+        output.append(el("p", "error", status.lastError));
     }
     for (const found of proxyController.remoteDiscoveries[id] || []) {
-      const card = el("div", "value-card");
+      const card = el("div", "remote-discovery");
       card.append(
         el(
-          "p",
-          "caption",
+          "span",
+          "",
           `${found.label || found.service_name} · ${found.remote_dir}:${found.listen_port}`,
         ),
       );
       const adopt = button(
         tr("proxy.remote.discovery.use_instance"),
         null,
-        "capsule",
+        "btn quiet prominent",
         () =>
           action(async () => {
             const next = {
@@ -548,9 +542,9 @@ const tunnelConfiguration = proxyController.tunnelConfiguration;
 function renderTunnelControls() {
   const root = $("tunnel-controls");
   root.replaceChildren();
-  const row = el("label", "settings-row");
-  row.append(el("span", "", tr("proxy.section.public_access")));
-  const mode = el("select");
+  const row = el("label", "row");
+  row.append(el("span", "row-label", tr("proxy.section.public_access")));
+  const mode = el("select", "select");
   for (const value of ["quick", "named"]) {
     const option = el("option", "", tr(`proxy.public.mode.${value}_kicker`));
     option.value = value;
@@ -564,8 +558,8 @@ function renderTunnelControls() {
   };
   row.append(mode);
   root.append(row);
-  const http = el("label", "settings-row");
-  http.append(el("span", "", "HTTP/2"));
+  const http = el("label", "row");
+  http.append(el("span", "row-label", "HTTP/2"));
   const toggle = el("input", "switch");
   toggle.type = "checkbox";
   toggle.checked = tunnelConfiguration.useHTTP2;
@@ -591,21 +585,21 @@ function renderTunnelControls() {
       );
   else
     root.append(
-      el("p", "caption secondary", tr("proxy.public.quick_note_message")),
+      el("p", "setting-description", tr("proxy.public.quick_note_message")),
     );
-  const actions = el("div", "settings-row provider-actions");
+  const actions = el("div", "provider-actions");
   for (const [op, label] of [
     ["start", "start_action"],
     ["stop", "stop_action"],
     ["status", "refresh_status"],
   ]) {
-    const control = button(tr(`proxy.public.${label}`), null, "capsule", () =>
+    const control = button(tr(`proxy.public.${label}`), null, "btn quiet", () =>
       runTunnel(op),
     );
     control.dataset.tunnelAction = op;
     actions.append(control);
   }
-  root.append(actions, el("p", "caption", ""));
+  root.append(actions, el("p", "", ""));
   root.lastChild.id = "tunnel-status";
   renderTunnelState();
 }
@@ -658,37 +652,45 @@ function renderPendingWorkspaces() {
   const presentation = accountsController.presentation(collapsed);
   const visible = presentation.pending;
   if (!presentation.showPending) return;
+  const block = el("section", "block pending");
+  const head = el("div", "block-head");
+  head.append(el("span", "block-title", tr("accounts.pending.title")));
+  block.append(head);
   if (presentation.pendingError)
-    root.append(el("p", "caption error", presentation.pendingError));
-  root.append(el("p", "caption error", accountsController.pendingError));
-  root.append(
-    el("h3", "", tr("accounts.pending.title")),
-    el("p", "caption secondary", tr("accounts.pending.subtitle")),
+    block.append(el("p", "error", presentation.pendingError));
+  if (accountsController.pendingError)
+    block.append(el("p", "error", accountsController.pendingError));
+  block.append(
+    el("p", "setting-description", tr("accounts.pending.subtitle")),
   );
   for (const workspace of visible) {
-    const card = el("div", "value-card pending-workspace");
-    card.append(el("h3", "", workspace.workspaceName || workspace.workspaceId));
-    const actions = el("div", "provider-actions");
-    actions.append(
+    const row = el("div", "row pending-workspace");
+    row.append(
+      el(
+        "span",
+        "row-label row-name",
+        workspace.workspaceName || workspace.workspaceId,
+      ),
       button(
         tr("accounts.action.add_account"),
-        "plus",
-        "capsule prominent",
+        null,
+        "btn quiet prominent",
         () => signIn(workspace.workspaceId),
       ),
     );
-    actions.append(
-      button(tr("common.remove"), "trash", "capsule destructive", () =>
-        action(
-          () => accountsController.dismissPending(workspace.id),
-          null,
-          false,
-        ),
+    const remove = button("", "trash", "icon-btn destructive", () =>
+      action(
+        () => accountsController.dismissPending(workspace.id),
+        null,
+        false,
       ),
     );
-    card.append(actions);
-    root.append(card);
+    remove.title = tr("common.remove");
+    remove.setAttribute("aria-label", remove.title);
+    row.append(remove);
+    block.append(row);
   }
+  root.append(block);
 }
 async function saveTunnelConfiguration() {
   await action(() => proxyController.updateTunnel(tunnelConfiguration));

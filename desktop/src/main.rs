@@ -8,6 +8,8 @@ use tauri::{
 };
 mod appearance;
 mod native_icons;
+mod panel;
+mod placement;
 mod widget_support;
 type App = Arc<Application>;
 
@@ -268,7 +270,7 @@ async fn finish_login(
         *current = None;
     }
     if result.is_ok() {
-        show(&handle);
+        panel::show(&handle, None);
     }
     result
 }
@@ -283,10 +285,13 @@ async fn cancel_login(state: State<'_, LoginState>) -> Result<(), String> {
 async fn pick_identity_file(handle: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
+    panel::set_modal(&handle, true);
     handle.dialog().file().pick_file(move |file| {
         let _ = tx.send(file);
     });
-    rx.await
+    let picked = rx.await;
+    panel::set_modal(&handle, false);
+    picked
         .map_err(|e| e.to_string())?
         .map(|file| {
             file.into_path()
@@ -302,6 +307,7 @@ async fn import_account_file(
 ) -> Result<usize, String> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
+    panel::set_modal(&handle, true);
     handle
         .dialog()
         .file()
@@ -309,7 +315,9 @@ async fn import_account_file(
         .pick_file(move |file| {
             let _ = sender.send(file);
         });
-    let Some(file) = receiver.await.map_err(|e| e.to_string())? else {
+    let picked = receiver.await;
+    panel::set_modal(&handle, false);
+    let Some(file) = picked.map_err(|e| e.to_string())? else {
         return Ok(0);
     };
     let path = file.into_path().map_err(|e| e.to_string())?;
@@ -449,20 +457,18 @@ async fn quit_app(app: tauri::AppHandle, tunnel: State<'_, TunnelState>) -> Resu
     app.exit(0);
     Ok(())
 }
-fn show(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+#[tauri::command]
+fn fit_panel(app: tauri::AppHandle, height: f64) {
+    panel::fit(&app, height);
+}
+#[tauri::command]
+fn hide_panel(app: tauri::AppHandle) {
+    panel::hide(&app);
 }
 fn main() {
     let app = tauri::Builder::default()
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-            }
-        })
+        .on_window_event(panel::on_window_event)
+        .manage(panel::PanelState::default())
         .manage(NativeMenuState::default())
         .manage(LoginState::default())
         .manage(TunnelState::default())
@@ -479,7 +485,9 @@ fn main() {
                 let _ = app.emit("account-proxy-menu", id);
             }
         })
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            panel::show(app, None)
+        }))
         .setup(|app| {
             appearance::configure(app)?;
             app.manage(native_icons::load().map_err(std::io::Error::other)?);
@@ -512,7 +520,8 @@ fn main() {
             let tray_image = native_icons::tray().map_err(std::io::Error::other)?;
             #[cfg(not(target_os = "macos"))]
             let tray_image = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-            TrayIconBuilder::new()
+            // Left click toggles the panel under the icon, like a menu.
+            let tray = TrayIconBuilder::new()
                 .icon(tray_image)
                 .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("Copool")
@@ -523,39 +532,15 @@ fn main() {
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
                         rect,
+                        position,
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false)
-                                && window.is_focused().unwrap_or(false)
-                            {
-                                let _ = window.hide();
-                                return;
-                            }
-                            if let Ok(Some(monitor)) = window.current_monitor() {
-                                let scale = monitor.scale_factor();
-                                let anchor = rect.position.to_logical::<f64>(scale);
-                                let size = rect.size.to_logical::<f64>(scale);
-                                let origin = monitor.position().to_logical::<f64>(scale);
-                                let screen = monitor.size().to_logical::<f64>(scale);
-                                let x = (anchor.x + size.width / 2.0 - 271.0).clamp(
-                                    origin.x,
-                                    (origin.x + screen.width - 542.0).max(origin.x),
-                                );
-                                let y = (anchor.y + size.height + 4.0).clamp(
-                                    origin.y,
-                                    (origin.y + screen.height - 620.0).max(origin.y),
-                                );
-                                let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-                            }
-                            show(app);
-                        }
+                        panel::toggle(tray.app_handle(), Some(panel::anchor(rect, position)));
                     }
                 })
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => show(app),
+                    "open" => panel::show(app, None),
                     "quit" => {
                         let handle = app.clone();
                         tauri::async_runtime::spawn(async move {
@@ -566,6 +551,7 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+            panel::set_tray(app.handle(), tray);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -612,7 +598,9 @@ fn main() {
             cancel_workspace_refresh,
             workspace_directory,
             refresh_workspace_names,
-            dismiss_workspace
+            dismiss_workspace,
+            fit_panel,
+            hide_panel
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build Copool");
@@ -624,7 +612,7 @@ fn main() {
             ..
         } = &event
         {
-            show(handle);
+            panel::show(handle, None);
         }
         if let tauri::RunEvent::ExitRequested {
             api, code: None, ..

@@ -181,7 +181,14 @@
       }
     }
     async refresh(id = null) {
-      if (this.refreshing) return false;
+      // Refreshing all waits for every refresh; one account only for itself.
+      const busy =
+        id === null
+          ? this.refreshing
+          : this.manualRefreshing ||
+            this.refreshingIds.has(id) ||
+            this.remoteRefreshingIds.has(id);
+      if (busy) return false;
       if (id === null) this.manualRefreshing = true;
       else this.refreshingIds.add(id);
       this.onUpdate();

@@ -39,13 +39,18 @@ cargo build -p copool-desktop --release --locked
 cargo check --manifest-path Sources/Copool/Resources/proxyd-src/proxyd/Cargo.toml --locked
 ```
 
-安装 Tauri CLI 后，可在 `desktop` 目录生成本地 macOS 调试应用包：
+构建脚本（在仓库根目录运行）：
 
 ```sh
-cargo tauri build --debug --bundles app --no-sign --ci --config '{"bundle":{"active":true}}' -- --locked
+python3 scripts/build_rust_desktop.py            # macOS：release 版 Copool.app
+python3 scripts/build_rust_desktop.py --debug    # 调试版应用包
+python3 scripts/build_rust_desktop.py --target universal-apple-darwin
+python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（非 macOS 默认如此）
 ```
 
-产物为 `target/debug/bundle/macos/Copool.app`（路径相对仓库根目录）。此包使用正常数据目录，不含烟测账号或测试环境覆盖；最低 macOS 版本为 14.0。当前本机包为 arm64 调试构建，已做本地 ad-hoc 签名和签名校验。
+脚本先运行前端 `node --check` 与 `desktop/tests`（`--skip-checks` 跳过），再用 Tauri CLI 打包；未安装 `cargo tauri` 时通过 `npx @tauri-apps/cli@^2` 调用。打包会经 `beforeBundleCommand` 构建 WidgetKit 扩展，之后先签小组件、再签主应用（ad-hoc，分别使用 `desktop/native` 下的 entitlements），并校验签名、架构和版本。
+
+产物为 `target/<release|debug>/bundle/macos/Copool.app`（指定 `--target` 时位于 `target/<triple>/…`，路径相对仓库根目录）。此包使用正常数据目录，不含烟测账号或测试环境覆盖；最低 macOS 版本为 14.0。2026-10-10 本机以该脚本生成 arm64 release 包并通过 `codesign --verify --deep --strict`；未经公证，不是分发版本。
 
 尚未启用发布签名、公证、自动更新或发布。macOS 原 Swift 正式发布继续遵循 `release-macos.md`。
 
@@ -58,9 +63,9 @@ cargo tauri build --debug --bundles app --no-sign --ci --config '{"bundle":{"act
 - 智能切换排除过期（超过 15 分钟）、刷新失败、额度耗尽及隐藏/停用账号。
 - 本地 OpenAI 兼容代理：`/v1/models`、`/v1/responses`、`/v1/chat/completions`、SSE、模型映射、失败重试与代理请求中的 OAuth 刷新。
 - 代理密钥生成/轮换、回环监听、启动/停止、打开应用时自动启动代理的设置。
-- 保留 SwiftUI 的三页结构、542 点宽面板、顶部胶囊导航、两列展开/三列折叠卡片、右键代理编辑与分组设置。
-- macOS 使用原生 Popover 材质、透明 WebView 和系统语义色；Windows/Linux 使用对应的静态主题后备。
-- macOS 字体保留 WebKit 系统文本样式的自动光学字号，不把 CoreText 的 `opsz` 数值直接强制写入 CSS。2026-10-10 在重建包的 2× WebView 中核对：`account1@example.test` 的 headline/body/caption 宽度分别为 154.797119、143.907715、114.389648 点，与 AppKit 实测一致；`添加账号 智能切换` 的对应宽度误差小于 0.00001 点。此前关闭光学字号的规则会改变字形，已移除。此检查验证样本文字指标及目视效果，不代表整个 GUI 已达到逐像素一致。
+- 界面采用 Coport（`../coding-agent-proxy/gui/ui`）风格：360 点宽的状态栏菜单式面板（启动时隐藏；点击状态栏图标在图标下方弹出，再次点击、失去焦点或 Esc 收起；高度随内容，最多屏幕高度的 85%；定位逻辑与 Coport 共用 `desktop/src/placement.rs`），顶部为应用名与文字链接（代理 · 设置 · 退出），子页面以“‹ 账号”返回（macOS ⌘[）；内容为带标题的浅色块、11 点系统字体、小号按钮/开关/下拉框和单色细进度条。展开时每个账号一个块，折叠时为对齐的单行列表；保留右键代理编辑。此分支不再追求与 SwiftUI 布局逐项一致。
+- macOS 使用原生 Popover 材质（圆角 12 点）、透明 WebView 和系统语义色；Windows/Linux 使用对应的静态主题后备。
+- macOS 字体保留 WebKit 系统字体的自动光学字号，不强制写入 `opsz` 数值。
 - macOS 图标由本机 AppKit 按准确逻辑尺寸生成 SF Symbols 的 1×/2×/3×资源；菜单栏使用原版 figure.pool.swim 模板符号。其他平台保留矢量图标与原应用图标资源。
 - 原版 11 种语言文案由 scripts/sync_rust_locales.py 同步，不另建翻译副本。
 - 系统托盘入口、单实例、独立数据目录。

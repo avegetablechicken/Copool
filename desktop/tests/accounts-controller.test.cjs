@@ -247,6 +247,23 @@ legacy(
     assert.equal(db.calls.length, 0);
   },
 );
+test("Single-account refresh waits only for that account", async () => {
+  const gate = deferred();
+  const { model, db } = fixture([account("a"), account("b")], [], {
+    refresh_usage: () => gate.promise,
+  });
+  model.syncActivity(["a"]);
+  assert.equal(await model.refresh("a"), false);
+  const refreshB = model.refresh("b");
+  assert.equal(await model.refresh("b"), false);
+  assert.equal(await model.refresh(), false);
+  gate.resolve();
+  assert.equal(await refreshB, true);
+  assert.deepEqual(
+    db.calls.filter((c) => c[0] === "refresh_usage").map((c) => c[1]),
+    [{ id: "b" }],
+  );
+});
 legacy(
   "AccountsCoordinatorTests",
   "testAccountsPageModelLocalMutationTriggersImmediateRemoteSync",

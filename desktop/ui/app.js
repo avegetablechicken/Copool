@@ -38,6 +38,7 @@ const ICONS = {
   copy: '<rect x="7" y="6" width="12" height="14" rx="2"/><path d="M14 6V3H3v13h4"/>',
   eye: '<path d="M1 11s4-7 10-7 10 7 10 7-4 7-10 7S1 11 1 11Z"/><circle cx="11" cy="11" r="3"/>',
   close: '<path d="m5 5 12 12M5 17 17 5"/>',
+  "chevron-left": '<path d="m14 5-6 6 6 6"/>',
   document: '<path d="M13 1H4v20h14V6ZM13 1v5h5M7 12h8M7 16h8"/>',
   server:
     '<rect x="2" y="3" width="18" height="6" rx="2"/><rect x="2" y="13" width="18" height="6" rx="2"/><path d="M5 6h1M5 16h1M10 6h7M10 16h7"/>',
@@ -134,6 +135,7 @@ function translate() {
     }),
   );
   $("language").value = locale;
+  $("page-title").textContent = tr(`tab.${selectedPage}`);
   $("collapse-all").title = tr(
     collapsed ? "accounts.action.expand_all" : "accounts.action.collapse_all",
   );
@@ -208,9 +210,11 @@ function button(label, glyph, className, handler) {
   if (handler) node.addEventListener("click", handler);
   return node;
 }
-function confirmAction(title, description) {
+function confirmAction(title, description, accept, destructive = false) {
   $("confirm-title").textContent = title;
   $("confirm-description").textContent = description;
+  $("confirm-accept").textContent = accept;
+  $("confirm-accept").classList.toggle("danger", destructive);
   const dialog = $("confirm-dialog");
   dialog.returnValue = "";
   dialog.showModal();
@@ -228,53 +232,42 @@ function plan(account) {
 function percentage(window) {
   return P.displayPercent(window, preferences?.usageDisplay || "used");
 }
-function ring(window, label, tone) {
-  const container = el("div", `ring ${tone}`);
-  const value = percentage(window);
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 54 54");
-  svg.setAttribute("aria-hidden", "true");
-  for (const [name, radius] of [
-    ["ring-track", 23],
-    ["ring-fill", 23],
-  ]) {
-    const circle = document.createElementNS(svg.namespaceURI, "circle");
-    circle.setAttribute("cx", "27");
-    circle.setAttribute("cy", "27");
-    circle.setAttribute("r", String(radius));
-    circle.setAttribute("class", name);
-    if (name === "ring-fill") {
-      circle.setAttribute("pathLength", "100");
-      circle.setAttribute("stroke-dasharray", `${value ?? 0} 100`);
-      if (!value) circle.setAttribute("visibility", "hidden");
-    }
-    svg.append(circle);
-  }
-  const center = el("div", "ring-center");
-  center.append(
-    el("span", "ring-value", value === null ? "--" : `${Math.round(value)}%`),
-    el("span", "ring-subtitle", label),
+function usedPercent(window) {
+  return window ? Math.round(Math.max(0, Math.min(100, window.usedPercent))) : 100;
+}
+function meter(window, title) {
+  const used = usedPercent(window);
+  const track = el(
+    "div",
+    `meter${window && used >= 95 ? " full" : window && used >= 80 ? " high" : ""}`,
   );
-  container.append(svg, center);
-  container.setAttribute(
-    "aria-label",
-    `${label}: ${value === null ? "--" : Math.round(value) + "%"}`,
+  track.setAttribute("role", "progressbar");
+  track.setAttribute("aria-label", title);
+  track.setAttribute("aria-valuenow", String(percentage(window) ?? 0));
+  track.setAttribute("aria-valuemin", "0");
+  track.setAttribute("aria-valuemax", "100");
+  const fill = el("div", "meter-fill");
+  const displayed = P.displayPercent(
+    window,
+    preferences?.usageDisplay || "used",
+    preferences?.usageDisplay === "remaining" ? 0 : 100,
   );
-  return container;
+  fill.style.width = `${displayed}%`;
+  track.append(fill);
+  return track;
 }
 function usageWindow(window, title, tone) {
-  const section = el("div", `usage-window ${tone}`);
-  const used = window
-    ? Math.round(Math.max(0, Math.min(100, window.usedPercent)))
-    : 100;
+  const used = usedPercent(window);
   const remaining = 100 - used;
   const remainder = preferences?.usageDisplay === "remaining";
-  const heading = el("div", "usage-heading");
-  heading.append(
-    el("span", "window-label", title),
+  const row = el("div", `usage ${tone}`);
+  const reset = P.formatReset(window?.resetAt, locale);
+  row.append(
+    el("span", "usage-label", title),
+    meter(window, title),
     el(
       "span",
-      "usage-primary",
+      "usage-value",
       tr(
         remainder
           ? "accounts.window.remaining_format"
@@ -284,37 +277,29 @@ function usageWindow(window, title, tone) {
     ),
     el(
       "span",
-      "usage-secondary",
-      tr(
+      "usage-reset",
+      `${tr(
         remainder
           ? "accounts.window.used_format"
           : "accounts.window.remaining_format",
         `${remainder ? used : remaining}%`,
-      ),
+      )} · ${tr("accounts.window.reset_at_format", reset)}`,
     ),
   );
-  const track = el("div", "liquid-progress");
-  track.setAttribute("role", "progressbar");
-  track.setAttribute("aria-label", title);
-  track.setAttribute("aria-valuenow", String(percentage(window) ?? 0));
-  track.setAttribute("aria-valuemin", "0");
-  track.setAttribute("aria-valuemax", "100");
-  const fill = el("div", "liquid-fill");
-  const displayed = P.displayPercent(
-    window,
-    preferences?.usageDisplay || "used",
-    preferences?.usageDisplay === "remaining" ? 0 : 100,
+  return row;
+}
+function compactUsage(window, label) {
+  const value = percentage(window);
+  const node = el("span", "usage-value");
+  node.append(
+    `${label} `,
+    el("b", "", value === null ? "--" : `${Math.round(value)}%`),
   );
-  fill.style.width = `${displayed}%`;
-  fill.style.minWidth = displayed > 0 ? "8px" : "0";
-  track.append(fill);
-  const reset = P.formatReset(window?.resetAt, locale);
-  section.append(
-    heading,
-    track,
-    el("div", "reset-label", tr("accounts.window.reset_at_format", reset)),
+  node.setAttribute(
+    "aria-label",
+    `${label}: ${value === null ? "--" : Math.round(value) + "%"}`,
   );
-  return section;
+  return node;
 }
 function accountMenu(event, account) {
   event.preventDefault();
@@ -332,172 +317,194 @@ window.__TAURI__.event
   })
   .catch((error) => notice(error, true));
 let renderedAccountsState;
+/// Proxy and removal, in the card's top row as in the SwiftUI card.
+function accountManagement(account) {
+  const actions = el("span", "block-aside");
+  const proxyButton = button("", "network", "icon-btn", () =>
+    openAccountProxy(account),
+  );
+  proxyButton.title = tr("accounts.proxy.title");
+  proxyButton.setAttribute(
+    "aria-label",
+    `${tr("accounts.proxy.title")} ${account.email || account.label}`,
+  );
+  const remove = button("", "trash", "icon-btn destructive", async () => {
+    if (
+      await confirmAction(
+        tr("common.remove"),
+        extra(
+          `Remove ${account.label} from the account pool?`,
+          `从账号池移除 ${account.label}？`,
+        ),
+        tr("common.remove"),
+        true,
+      )
+    )
+      await action(() => accountsController.removeAccount(account.id));
+  });
+  remove.title = tr("common.remove");
+  remove.setAttribute("aria-label", `${tr("common.remove")} ${account.label}`);
+  actions.append(proxyButton, remove);
+  return actions;
+}
+/// Usage warning, refresh and switch, at the card's bottom right as in the
+/// SwiftUI card, clear of long account names.
+function accountControls(account, full) {
+  const actions = el("span", "block-aside");
+  const reauthenticate = P.needsReauthentication(
+    account,
+    tr("error.accounts.sign_in_expired"),
+  );
+  if (!collapsed && account.usageError) {
+    const warning = button("", "warning", "icon-btn error-indicator", () =>
+      notice(account.usageError, true),
+    );
+    warning.title = account.usageError;
+    warning.setAttribute("aria-label", account.usageError);
+    actions.append(warning);
+  }
+  // Every account refreshes on its own; an expired sign-in offers sign-in.
+  const refresh = button(
+    "",
+    reauthenticate ? "plus" : "refresh",
+    "icon-btn card-refresh",
+    reauthenticate
+      ? () => signIn(account.accountId)
+      : () => action(() => accountsController.refresh(account.id)),
+  );
+  refresh.title = tr(
+    reauthenticate ? "accounts.card.sign_in_again" : "common.refresh_usage",
+  );
+  refresh.setAttribute("aria-label", `${refresh.title} ${full}`);
+  refresh.classList.toggle(
+    "spinning",
+    accountsController.refreshingIds.has(account.id),
+  );
+  actions.append(refresh);
+  if (!account.isCurrent) {
+    const control = button("", "switch", "icon-btn card-switch", () =>
+      action(
+        () => invoke("switch_account", { id: account.id }),
+        extra(`Switched to ${full}`, `已切换到 ${full}`),
+      ),
+    );
+    control.dataset.available = String(account.available);
+    control.title = tr("accounts.card.switch_to_this");
+    control.setAttribute("aria-label", `${control.title} ${full}`);
+    actions.append(control);
+  }
+  return actions;
+}
+function accountTags(account) {
+  const tags = el("span", "account-tags");
+  tags.append(el("span", "tag plan", plan(account)));
+  if (P.workspaceTag(account))
+    tags.append(el("span", "tag muted", P.workspaceTag(account)));
+  if (account.isCurrent)
+    tags.append(el("span", "tag good", tr("accounts.card.current")));
+  if (!account.available)
+    tags.append(el("span", "tag bad", tr("accounts.card.status.deactivated")));
+  return tags;
+}
 function renderAccounts(accounts) {
-  const renderState = [accounts, collapsed, locale, preferences?.usageDisplay];
+  const renderState = [
+    accounts,
+    collapsed,
+    locale,
+    preferences?.usageDisplay,
+    [...accountsController.refreshingIds],
+  ];
   if (P.cardsEqual(renderState, renderedAccountsState)) return;
   renderedAccountsState = structuredClone(renderState);
   accounts = P.visibleAccounts(accounts);
-  const grid = $("accounts");
-  grid.classList.toggle("compact", collapsed);
-  grid.style.gridTemplateColumns = `repeat(${P.grid({ collapsed }).count}, minmax(0, 1fr))`;
-  grid.replaceChildren();
+  const list = $("accounts");
+  list.className = collapsed ? "account-list compact block flush" : "account-list";
+  list.replaceChildren();
   if (!accounts.length) {
-    const empty = el("div", "empty-state");
+    list.className = "account-list block";
+    const empty = el("div", "empty");
     empty.append(
-      icon("accounts"),
-      el("h3", "", tr("accounts.empty.title")),
-      el("p", "", tr("accounts.empty.message.no_accounts")),
+      el("span", "row-name", tr("accounts.empty.title")),
+      el("span", "setting-description", tr("accounts.empty.message.no_accounts")),
     );
-    grid.append(empty);
+    list.append(empty);
     return;
   }
   for (const account of accounts) {
+    const full = account.email || account.accountId;
+    if (collapsed) {
+      const row = el(
+        "div",
+        `account-row${account.isCurrent ? " current running" : ""}`,
+      );
+      row.dataset.plan = plan(account);
+      row.addEventListener("contextmenu", (event) =>
+        accountMenu(event, account),
+      );
+      const name = el("span", "account-row-name", full.split("@")[0]);
+      name.title = full;
+      row.append(
+        el("span", "dot"),
+        name,
+        el("span", "tag plan", plan(account)),
+        compactUsage(account.usage?.fiveHour, "5h"),
+        compactUsage(account.usage?.oneWeek, "1w"),
+        accountControls(account, full),
+      );
+      list.append(row);
+      continue;
+    }
     const card = el(
-      "article",
-      `account-card${account.isCurrent ? " current" : ""}`,
+      "section",
+      `block account${account.isCurrent ? " current" : ""}`,
     );
     card.dataset.plan = plan(account);
     card.addEventListener("contextmenu", (event) =>
       accountMenu(event, account),
     );
-    const heading = el("div", "card-header");
-    const tags = el("div", "account-tags");
-    tags.append(el("span", "tag", plan(account)));
-    if (P.workspaceTag(account))
-      tags.append(el("span", "tag", P.workspaceTag(account)));
-    if (account.isCurrent)
-      tags.append(el("span", "tag", tr("accounts.card.current")));
-    if (!account.available)
-      tags.append(el("span", "tag", tr("accounts.card.status.deactivated")));
-    heading.append(tags);
-    if (!collapsed) {
-      const remove = button(
-        "",
-        "trash",
-        "capsule destructive icon-only",
-        async () => {
-          if (
-            await confirmAction(
-              tr("common.remove"),
-              extra(
-                `Remove ${account.label} from the account pool?`,
-                `从账号池移除 ${account.label}？`,
-              ),
-            )
-          )
-            await action(() => accountsController.removeAccount(account.id));
-        },
-      );
-      remove.title = tr("common.remove");
-      remove.setAttribute(
-        "aria-label",
-        `${tr("common.remove")} ${account.label}`,
-      );
-      const proxyButton = button(
-        "",
-        "network",
-        "plain icon-only account-proxy-button",
-        () => openAccountProxy(account),
-      );
-      proxyButton.title = tr("accounts.proxy.title");
-      proxyButton.setAttribute(
-        "aria-label",
-        `${tr("accounts.proxy.title")} ${account.email || account.label}`,
-      );
-      const headerActions = el("div", "card-header-actions");
-      headerActions.append(proxyButton, remove);
-      heading.append(headerActions);
+    const head = el("div", "block-head");
+    head.append(accountTags(account), accountManagement(account));
+    const name = el("div", "account-name");
+    if (account.isCurrent) {
+      const state = el("span", "state running");
+      state.append(el("span", "dot"));
+      name.append(state);
     }
-    const full = account.email || account.accountId;
-    const name = collapsed ? full.split("@")[0] : full;
-    const title = el("h3", "card-name", name);
+    const title = el("span", "block-title", full);
     title.title = full;
-    card.append(heading, title);
-    const switchAccount = () =>
-      action(
-        () => invoke("switch_account", { id: account.id }),
-        extra(`Switched to ${full}`, `已切换到 ${full}`),
-      );
-    if (collapsed) {
-      const rings = el("div", "rings");
-      rings.append(
-        ring(account.usage?.fiveHour, "5h", "five-hour"),
-        ring(account.usage?.oneWeek, "1w", "one-week"),
-      );
-      card.append(rings);
-      if (!account.isCurrent) {
-        card.tabIndex = 0;
-        const overlay = el("div", "compact-switch-overlay");
-        const control = button(
-          tr("accounts.card.switch_to_this"),
-          "switch",
-          "capsule mint",
-          switchAccount,
-        );
-        control.disabled = !account.available;
-        overlay.append(control);
-        card.append(overlay);
-      }
-    } else {
-      card.append(
-        usageWindow(
-          account.usage?.fiveHour,
-          tr("accounts.window.five_hour"),
-          "five-hour",
-        ),
-        usageWindow(
-          account.usage?.oneWeek,
-          tr("accounts.window.one_week"),
-          "one-week",
-        ),
-      );
-      const credits = account.usage?.credits;
-      let balance = "--";
-      if (credits?.unlimited) balance = tr("accounts.card.unlimited");
-      else if (credits?.balance !== null && credits?.balance !== undefined)
-        balance = Number.isFinite(Number(credits.balance))
-          ? String(Math.round(Number(credits.balance)))
-          : credits.balance;
-      const footer = el(
-        "div",
-        "card-footer",
+    name.append(title);
+    const credits = account.usage?.credits;
+    let balance = "--";
+    if (credits?.unlimited) balance = tr("accounts.card.unlimited");
+    else if (credits?.balance !== null && credits?.balance !== undefined)
+      balance = Number.isFinite(Number(credits.balance))
+        ? String(Math.round(Number(credits.balance)))
+        : credits.balance;
+    const footer = el("div", "account-footer");
+    footer.append(
+      el(
+        "span",
+        "account-footer-text",
         `${tr("accounts.card.credits_format", balance)} · ${tr(account.usage?.remainingResetCount != null ? "accounts.card.remaining_resets_format" : "accounts.card.resets_unavailable_format", account.usage?.remainingResetCount ?? "--")}`,
-      );
-      footer.title = footer.textContent;
-      card.append(footer);
-      const control = button(
-        "",
-        account.isCurrent ? "refresh" : "switch",
-        `capsule mint card-switch`,
-        P.needsReauthentication(account, tr("error.accounts.sign_in_expired"))
-          ? () => signIn(account.accountId)
-          : account.isCurrent
-            ? () => action(() => accountsController.refresh(account.id))
-            : switchAccount,
-      );
-      if (
-        P.needsReauthentication(account, tr("error.accounts.sign_in_expired"))
-      ) {
-        control.replaceChildren(icon("plus"));
-        control.dataset.available = "true";
-      } else control.dataset.available = String(account.available);
-      control.title = tr(
-        account.isCurrent
-          ? "common.refresh_usage"
-          : "accounts.card.switch_to_this",
-      );
-      control.setAttribute("aria-label", `${control.title} ${full}`);
-      card.append(control);
-      if (account.usageError) {
-        const warning = button("", "warning", "plain error-indicator", () =>
-          notice(account.usageError, true),
-        );
-        warning.title = account.usageError;
-        warning.setAttribute("aria-label", account.usageError);
-        card.append(warning);
-      }
-    }
-    grid.append(card);
+      ),
+      accountControls(account, full),
+    );
+    card.append(
+      head,
+      name,
+      usageWindow(
+        account.usage?.fiveHour,
+        tr("accounts.window.five_hour"),
+        "five-hour",
+      ),
+      usageWindow(
+        account.usage?.oneWeek,
+        tr("accounts.window.one_week"),
+        "one-week",
+      ),
+      footer,
+    );
+    list.append(card);
   }
 }
 function renderProxy() {
@@ -585,25 +592,34 @@ translate();
 $("notice-close").onclick = () => {
   $("notice").hidden = true;
 };
-document.querySelectorAll("[data-page]").forEach((button) =>
-  button.addEventListener("click", () => {
-    selectedPage = button.dataset.page;
-    if (selectedPage === "proxy")
-      proxyController.refresh().catch((error) => notice(error, true));
-    requestAnimationFrame(applyNativeIcons);
-    closeMenus();
-    document
-      .querySelectorAll("main>section")
-      .forEach(
-        (section) => (section.hidden = section.id !== `${selectedPage}-page`),
-      );
-    document
-      .querySelectorAll("[data-page]")
-      .forEach((tab) =>
-        tab.setAttribute("aria-selected", String(tab === button)),
-      );
-  }),
-);
+function showPage(page) {
+  selectedPage = page;
+  if (selectedPage === "proxy")
+    proxyController.refresh().catch((error) => notice(error, true));
+  closeMenus();
+  document
+    .querySelectorAll("main>section")
+    .forEach(
+      (section) => (section.hidden = section.id !== `${selectedPage}-page`),
+    );
+  document
+    .querySelectorAll("[data-page]")
+    .forEach((link) =>
+      link.setAttribute(
+        "aria-selected",
+        String(link.dataset.page === selectedPage),
+      ),
+    );
+  $("top-main").hidden = selectedPage !== "accounts";
+  $("top-sub").hidden = selectedPage === "accounts";
+  $("page-title").textContent = tr(`tab.${selectedPage}`);
+  requestAnimationFrame(applyNativeIcons);
+}
+document
+  .querySelectorAll("[data-page]")
+  .forEach((link) =>
+    link.addEventListener("click", () => showPage(link.dataset.page)),
+  );
 document.querySelectorAll(".disclosure").forEach((button) =>
   button.addEventListener("click", () => {
     const opened = button.getAttribute("aria-expanded") !== "true";
@@ -654,7 +670,18 @@ document.addEventListener("click", (event) => {
     closeMenus();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeMenus();
+  if (event.key === "Escape") {
+    const menuOpen = !$("import-menu").hidden || !$("account-menu").hidden;
+    closeMenus();
+    // Like a menu, Escape dismisses the panel once nothing inside is open.
+    if (!menuOpen && !document.querySelector("dialog[open]"))
+      invoke("hide_panel").catch(() => {});
+  }
+  const back = navigator.userAgent.includes("Mac")
+    ? event.metaKey && event.key === "["
+    : event.altKey && event.key === "ArrowLeft";
+  if (back && selectedPage !== "accounts" && !document.querySelector("dialog[open]"))
+    showPage("accounts");
 });
 $("import-current").onclick = () => {
   closeMenus();
@@ -815,6 +842,57 @@ setInterval(() => {
   if (!busy && !document.hidden && !document.querySelector("dialog[open]"))
     refreshView().catch((error) => notice(error, true));
 }, 15000);
+
+// The panel follows its content height, like a menu; the native side clamps
+// it to the screen and keeps it under the status bar icon.
+let fitFrame = 0;
+let fittedHeight = 0;
+function queueFit() {
+  if (fitFrame) return;
+  fitFrame = requestAnimationFrame(() => {
+    fitFrame = 0;
+    const section = document.querySelector("main>section:not([hidden])");
+    const page = section?.firstElementChild;
+    if (!page) return;
+    const style = getComputedStyle(section);
+    let height =
+      document.querySelector(".top").offsetHeight +
+      page.offsetHeight +
+      parseFloat(style.paddingTop) +
+      parseFloat(style.paddingBottom);
+    const dialog = document.querySelector("dialog[open]");
+    if (dialog) height = Math.max(height, dialog.offsetHeight + 40);
+    height = Math.ceil(height);
+    if (Math.abs(height - fittedHeight) > 1) {
+      fittedHeight = height;
+      invoke("fit_panel", { height }).catch(() => {});
+    }
+  });
+}
+const fitObserver = new ResizeObserver(queueFit);
+document
+  .querySelectorAll(".top, main>section>.page, dialog")
+  .forEach((node) => fitObserver.observe(node));
+
+// A panel reopened after a while starts on the accounts page, as in Coport.
+const PANEL_PAGE_TIMEOUT_MS = 60 * 1000;
+let panelHiddenAt = null;
+window.__TAURI__.event
+  .listen("panel-hidden", () => {
+    panelHiddenAt = Date.now();
+    closeMenus();
+  })
+  .catch((error) => notice(error, true));
+window.__TAURI__.event
+  .listen("panel-shown", () => {
+    if (panelHiddenAt && Date.now() - panelHiddenAt > PANEL_PAGE_TIMEOUT_MS)
+      showPage("accounts");
+    panelHiddenAt = null;
+    queueFit();
+    if (!busy && !document.querySelector("dialog[open]"))
+      refreshView().catch((error) => notice(error, true));
+  })
+  .catch((error) => notice(error, true));
 
 let changeRefreshTimer;
 window.__TAURI__.event

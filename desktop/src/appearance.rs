@@ -12,7 +12,7 @@ pub fn configure(app: &mut App) -> tauri::Result<()> {
                 EffectsBuilder::new()
                     .effect(Effect::Popover)
                     .state(EffectState::Active)
-                    .radius(16.0)
+                    .radius(12.0)
                     .build(),
             )?;
         }

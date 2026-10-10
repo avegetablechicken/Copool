@@ -154,6 +154,16 @@ fn testResolvesUpstreamBaseURLForBothRouteFamilies() {
     );
 }
 #[test]
+fn testLoopbackUpstreamUsesPlainHTTPOnTheSamePort() {
+    assert_eq!(
+        resolve_upstream_base_url(
+            "https://127.0.0.1:8787/backend-api",
+            UpstreamRouteFamily::Codex
+        ),
+        "http://127.0.0.1:8787/backend-api/codex"
+    );
+}
+#[test]
 fn testResponsesNormalizesStringInputToMessageArray() {
     let (p, stream) = normalize_openai_responses_request(
         json!({"model":"gpt-5.4","input":"reply with exactly OK","stream":false}),
