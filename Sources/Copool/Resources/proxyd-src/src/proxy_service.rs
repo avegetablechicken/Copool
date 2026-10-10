@@ -4108,6 +4108,22 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
 #[path = "legacy_proxy_tests.rs"]
 mod swift_contracts;
 
+#[cfg(test)]
+mod loopback_upstream_tests {
+    use super::{resolve_upstream_base_url, UpstreamRouteFamily};
+
+    #[test]
+    fn loopback_upstream_uses_plain_http_on_the_same_port() {
+        assert_eq!(
+            resolve_upstream_base_url(
+                "https://127.0.0.1:8787/backend-api",
+                UpstreamRouteFamily::Codex
+            ),
+            "http://127.0.0.1:8787/backend-api/codex"
+        );
+    }
+}
+
 fn is_payload_oversized(buffer: &[u8], limit: usize) -> bool {
     if buffer.len() > limit {
         return true;
