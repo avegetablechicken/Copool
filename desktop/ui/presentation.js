@@ -107,7 +107,7 @@
       reset: window?.resetAt != null ? formatDate(window.resetAt) : "--",
     };
   }
-  function card(account, collapsed = false, mode = "used") {
+  function card(account, collapsed = false, mode = "used", formatDate) {
     const plan = normalizedPlan(account),
       name = (account.email ?? account.accountId ?? "").trim(),
       credits = account.usage?.credits;
@@ -137,97 +137,13 @@
           : Number.isFinite(Number(credits.balance))
             ? String(Math.round(Number(credits.balance)))
             : credits.balance,
-      fiveHour: windowPresentation(account.usage?.fiveHour, mode),
-      oneWeek: windowPresentation(account.usage?.oneWeek, mode),
+      fiveHour: windowPresentation(account.usage?.fiveHour, mode, formatDate),
+      oneWeek: windowPresentation(account.usage?.oneWeek, mode, formatDate),
       compact: [
         displayPercent(account.usage?.fiveHour, mode),
         displayPercent(account.usage?.oneWeek, mode),
       ],
       selectionAccent: account.isCurrent ? plan : null,
-    };
-  }
-  function collapsedInteraction({ collapsed, current, switching, hovered }) {
-    return {
-      canHover: collapsed && !current,
-      canReveal: collapsed && !current && !switching,
-      visible: collapsed && !current && (hovered || switching),
-    };
-  }
-  const layout = {
-    panelWidth: 542,
-    pagePadding: 16,
-    gap: 10,
-    cardWidth: 250,
-    compactHeight: 30,
-  };
-  function grid({
-    platform = "desktop",
-    collapsed = false,
-    width = 542,
-    height = 620,
-  } = {}) {
-    if (["desktop", "macOS", "windows", "linux"].includes(platform))
-      return {
-        count: collapsed ? 3 : 2,
-        width: collapsed ? (542 - 32 - 20) / 3 : 250,
-      };
-    const landscape = width > height,
-      mini = platform === "iPadMini",
-      phone = platform === "iPhone";
-    const desired = phone
-      ? collapsed
-        ? 2
-        : 1
-      : mini
-        ? collapsed
-          ? landscape
-            ? 5
-            : 3
-          : landscape
-            ? 3
-            : 2
-        : collapsed
-          ? landscape
-            ? 7
-            : 5
-          : landscape
-            ? 4
-            : 3;
-    const minimum = phone ? (collapsed ? 160 : 280) : collapsed ? 132 : 240;
-    return {
-      count: Math.min(
-        desired,
-        Math.max(1, Math.floor((width - 32 + 10) / (minimum + 10))),
-      ),
-      width: null,
-    };
-  }
-  function progressMetrics(progress, width, height = 12) {
-    const clamped = Math.max(0, Math.min(1, progress)),
-      grooveHeight = Math.max(0, height - 4),
-      grooveWidth = Math.max(0, width - 4),
-      raw = grooveWidth * clamped;
-    return {
-      fillScale: clamped,
-      showsFill: clamped > 0,
-      grooveHeight,
-      rawFillWidth: raw,
-      visibleFillWidth: raw > 0 ? Math.max(raw, grooveHeight) : 0,
-    };
-  }
-  function ringMetrics(lineWidth = 7, size = 54) {
-    const trackWidth = lineWidth * 1.22,
-      inset = Math.max(0.05, lineWidth * 0.01) + trackWidth / 2,
-      fillWidth = Math.max(6.2, trackWidth * 0.82);
-    return {
-      trackWidth,
-      fillWidth,
-      highlightWidth: Math.max(1.8, fillWidth * 0.38),
-      dotThreshold: Math.min(
-        1,
-        Math.max(5.8, fillWidth * 1.04) /
-          (2 * Math.PI * Math.max(0, size / 2 - inset)),
-      ),
     };
   }
   function actions({
@@ -288,34 +204,6 @@
       },
     };
   }
-  function trailingActions({
-    canRefresh = true,
-    spinning = false,
-    collapsed = false,
-  } = {}) {
-    return [
-      { intent: "refreshUsage", enabled: canRefresh, spinning },
-      {
-        intent: "toggleCollapse",
-        symbol: collapsed ? "chevron.down" : "chevron.up",
-        label: collapsed
-          ? "accounts.action.expand_all"
-          : "accounts.action.collapse_all",
-      },
-    ];
-  }
-  function leadingActions(options = {}) {
-    const all = actions(options);
-    return [
-      {
-        intent: "toggleUsageProgressDisplay",
-        symbol: "switch.2",
-        label: "accounts.action.toggle_usage_progress_display",
-      },
-      { ...all[0], label: "accounts.action.import_account" },
-      all[1],
-    ];
-  }
   function publicCallout(running) {
     return running
       ? null
@@ -323,43 +211,6 @@
           title: "proxy.public.callout.start_local_first_title",
           message: "proxy.public.callout.start_local_first_message",
         };
-  }
-  function publicModes(selectedMode, enabled) {
-    return ["quick", "named"].map((mode) => ({
-      mode,
-      selected: mode === selectedMode,
-      isEnabled: enabled,
-    }));
-  }
-  function publicStatus(status = {}) {
-    return [
-      {
-        id: "status",
-        headline: status.running
-          ? "proxy.status.running"
-          : "proxy.status.stopped",
-        copyValue: null,
-        truncation: "tail",
-      },
-      {
-        id: "url",
-        headline: status.publicURL ?? "proxy.value.generated_after_start",
-        copyValue: status.publicURL ?? null,
-        truncation: "middle",
-      },
-      {
-        id: "install-path",
-        headline: status.binaryPath ?? "proxy.public.not_detected",
-        copyValue: null,
-        truncation: "middle",
-      },
-      {
-        id: "last-error",
-        headline: status.lastError ?? "common.none",
-        copyValue: null,
-        truncation: "tail",
-      },
-    ];
   }
   function remoteHeader({
     label = "",
@@ -385,22 +236,6 @@
           key === "pid" ? String(status?.pid ?? "--") : boolean(status?.[key]),
       }),
     );
-  }
-  function remoteDetails(status) {
-    return [
-      { value: status?.baseURL ?? "--", canCopy: status != null },
-      {
-        value: status?.apiKey ?? "Generated after first start",
-        canCopy: status?.apiKey != null,
-      },
-      { value: status?.serviceName ?? "Unknown", canCopy: status != null },
-    ];
-  }
-  function remoteLogs(logs) {
-    return {
-      content: logs || "Logs have not been loaded yet",
-      canCopy: Boolean(logs),
-    };
   }
   function proxyButtons(running, loading = false) {
     return [
@@ -522,12 +357,6 @@
   function cardsEqual(a, b) {
     return JSON.stringify(a) === JSON.stringify(b);
   }
-  const darkGroovePalette = {
-    glassTintOpacity: 0.14,
-    topEdgeOpacity: 0.24,
-    centerGlowOpacity: 0.11,
-    ringOuterHighlightOpacity: 0.22,
-  };
   return {
     formatLocalized,
     proxyButtons,
@@ -540,17 +369,9 @@
     needsReauthentication,
     cardsEqual,
     settingsControls,
-    trailingActions,
-    leadingActions,
     publicCallout,
-    publicModes,
-    publicStatus,
     remoteHeader,
     remoteMetrics,
-    remoteDetails,
-    remoteLogs,
-    darkGroovePalette,
-    locales,
     clean,
     resolveLocale,
     preferredLocale,
@@ -560,11 +381,6 @@
     windowPresentation,
     formatReset,
     card,
-    collapsedInteraction,
-    layout,
-    grid,
-    progressMetrics,
-    ringMetrics,
     actions,
   };
 });

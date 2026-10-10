@@ -1,17 +1,20 @@
 {
   "total": 350,
-  "ported": 350,
+  "ported": 327,
+  "retired": 23,
   "pending": 0,
   "cases": {
     "AccountCardInteractionPresentationTests.testMacOSHoverControlsCollapsedOverlayVisibility": {
       "source": "Tests/CopoolTests/AccountCardInteractionPresentationTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: the collapsed overlay became a hover row"
     },
     "AccountCardInteractionPresentationTests.testSwitchingKeepsOverlayVisibleButPreventsReveal": {
       "source": "Tests/CopoolTests/AccountCardInteractionPresentationTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: the collapsed overlay became a hover row"
     },
     "AccountCardPresentationTests.testCurrentAccountPaletteUsesOwnAccentForSelectionHighlight": {
       "source": "Tests/CopoolTests/AccountCardPresentationTests.swift",
@@ -125,13 +128,15 @@
     },
     "AccountsActionPresentationTests.testTrailingToolbarButtonsReflectCollapseStateAndSpinner": {
       "source": "Tests/CopoolTests/AccountsActionPresentationTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/controls.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: SwiftUI toolbar symbols"
     },
     "AccountsActionPresentationTests.testLeadingToolbarButtonsIncludeUsageToggleIcon": {
       "source": "Tests/CopoolTests/AccountsActionPresentationTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/controls.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: no usage display toggle in the toolbar"
     },
     "AccountsCoordinatorTests.testTrayRefreshPreservesAndPublishesProxySavedAfterItsSettingsSnapshot": {
       "source": "Tests/CopoolTests/AccountsCoordinatorTests.swift",
@@ -810,83 +815,99 @@
     },
     "LayoutRulesTests.testCompactActionControlHeightMatchesAccountCardBottomActionLayout": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testMacOSUsesFixedGridColumnCounts": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testMacOSUsesFixedCardWidthsForCollapseAnimation": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testIOSKeepsAdaptiveCardWidths": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testIOSGridColumnsStayFlexible": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testIPadMiniPortraitColumnCounts": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testIPadMiniLandscapeColumnCounts": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testRegularIPadPortraitColumnCounts": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testRegularIPadLandscapeColumnCounts": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LayoutRulesTests.testNarrowViewportCapsRequestedColumnCount": {
       "source": "Tests/CopoolTests/LayoutRulesTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: fixed 542 pt grid and iOS column counts"
     },
     "LiquidProgressMetricsTests.testRenderModelClampsProgressIntoUnitRange": {
       "source": "Tests/CopoolTests/LiquidProgressMetricsTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: liquid progress bars and rings became flat meters"
     },
     "LiquidProgressMetricsTests.testRenderModelOnlyShowsFillForPositiveProgress": {
       "source": "Tests/CopoolTests/LiquidProgressMetricsTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: liquid progress bars and rings became flat meters"
     },
     "LiquidProgressMetricsTests.testLowProgressUsesFullLeadingCapWidth": {
       "source": "Tests/CopoolTests/LiquidProgressMetricsTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: liquid progress bars and rings became flat meters"
     },
     "LiquidProgressMetricsTests.testHigherProgressKeepsMeasuredFillWidth": {
       "source": "Tests/CopoolTests/LiquidProgressMetricsTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: liquid progress bars and rings became flat meters"
     },
     "LiquidProgressMetricsTests.testCompactRingUsesDotThresholdAboveOnePercent": {
       "source": "Tests/CopoolTests/LiquidProgressMetricsTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/presentation.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: liquid progress bars and rings became flat meters"
     },
     "LiquidProgressMetricsTests.testDarkGroovePaletteKeepsRingTrackVisibleOnBlackBackground": {
       "source": "Tests/CopoolTests/LiquidProgressMetricsTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/controls.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: liquid progress bars and rings became flat meters"
     },
     "LocalizationConsistencyTests.testLocaleKeySetsMatchEnglish": {
       "source": "Tests/CopoolTests/LocalizationConsistencyTests.swift",
@@ -1035,8 +1056,9 @@
     },
     "PublicAccessSectionPresentationTests.testModeCardsReflectSelectedModeAndEditability": {
       "source": "Tests/CopoolTests/PublicAccessSectionPresentationTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/controls.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: tunnel mode is a pop-up button"
     },
     "PublicAccessSectionPresentationTests.testStartLocalProxyCalloutOnlyAppearsWhenProxyIsStopped": {
       "source": "Tests/CopoolTests/PublicAccessSectionPresentationTests.swift",
@@ -1045,8 +1067,9 @@
     },
     "PublicAccessSectionPresentationTests.testStatusCardsExposePublicURLCopyBehavior": {
       "source": "Tests/CopoolTests/PublicAccessSectionPresentationTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/controls.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: one status line replaces the status cards"
     },
     "RemoteProxyAccountsPayloadBuilderTests.testBuildPreservesUsableAccountsFromStore": {
       "source": "Tests/CopoolTests/RemoteProxyAccountsPayloadBuilderTests.swift",
@@ -1100,8 +1123,9 @@
     },
     "RemoteServerCardPresentationTests.testLogsPresentationUsesPlaceholderWhenLogsMissing": {
       "source": "Tests/CopoolTests/RemoteServerCardPresentationTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/controls.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: logs appear only once loaded"
     },
     "RemoteServerConfigurationTests.testMakeDraftUsesSharedDefaults": {
       "source": "Tests/CopoolTests/RemoteServerConfigurationTests.swift",
