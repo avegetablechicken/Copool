@@ -104,3 +104,6 @@ mod SettingsPageModelTests;
 mod SimpleHTTPServerTests;
 mod SwiftNativeProxyRuntimeServiceTests;
 mod network_fixture;
+
+#[path = "../usage_regression_tests.rs"]
+mod usage_regressions;

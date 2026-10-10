@@ -82,16 +82,30 @@ pub(crate) async fn fetch_usage_from_urls(
                     .bearer_auth(&access)
                     .header("ChatGPT-Account-Id", &account)
                     .header("Accept", "application/json")
+                    .header("User-Agent", "codex-tools-swift/0.1")
             },
             |value| serde_json::from_value::<UsageApiResponse>(value).map_err(|e| e.to_string()),
         )
         .await?;
     let mut snapshot = map_usage_payload(result.value);
-    if let Some((base, _)) = result.endpoint.rsplit_once('/') {
+    // The /api/codex/usage fallback has no sibling reset endpoint; as in the
+    // Swift usage service, reset credits always come from backend-api/wham.
+    let reset_url = if let Some(origin) = result.endpoint.strip_suffix(CODEX_USAGE_PATH) {
+        Some(format!(
+            "{origin}{BACKEND_API_PREFIX}/wham/rate-limit-reset-credits"
+        ))
+    } else {
+        result
+            .endpoint
+            .rsplit_once('/')
+            .map(|(base, _)| format!("{base}/rate-limit-reset-credits"))
+    };
+    if let Some(reset_url) = reset_url {
         if let Ok(response) = client
-            .get(format!("{base}/rate-limit-reset-credits"))
+            .get(reset_url)
             .bearer_auth(access_token)
             .header("ChatGPT-Account-Id", account_id)
+            .header("Accept", "application/json")
             .header("OpenAI-Beta", "codex-1")
             .header("originator", "Codex Desktop")
             .send()
@@ -109,7 +123,11 @@ pub(crate) async fn fetch_usage_from_urls(
 }
 
 fn resolve_usage_urls() -> Vec<String> {
-    let normalized = resolve_chatgpt_base_origin();
+    usage_urls(&resolve_chatgpt_base_origin())
+}
+
+/// Usage endpoints under the configured ChatGPT origin, then the official ones.
+pub(crate) fn usage_urls(normalized: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
     if let Some(origin) = normalized.strip_suffix(BACKEND_API_PREFIX) {
@@ -136,8 +154,12 @@ fn resolve_usage_urls() -> Vec<String> {
 }
 
 pub(crate) fn resolve_chatgpt_base_origin() -> String {
-    let base_url =
-        read_chatgpt_base_url_from_config().unwrap_or_else(|| DEFAULT_CHATGPT_BASE_URL.to_string());
+    chatgpt_base_origin(read_chatgpt_base_url_from_config().as_deref())
+}
+
+/// The configured `chatgpt_base_url`, or the official origin without one.
+pub(crate) fn chatgpt_base_origin(configured: Option<&str>) -> String {
+    let base_url = configured.unwrap_or(DEFAULT_CHATGPT_BASE_URL);
     crate::utils::loopback_plain_http(base_url.trim_end_matches('/'))
 }
 
