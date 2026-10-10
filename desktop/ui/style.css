@@ -160,10 +160,6 @@ p {
   color: var(--secondary);
 }
 
-.faint {
-  color: var(--tertiary);
-}
-
 .error {
   color: var(--text-red);
   font-size: 10px;
@@ -387,10 +383,6 @@ main > section {
   background: var(--green);
 }
 
-.dot.failed {
-  background: var(--red);
-}
-
 .dot.warn {
   background: var(--orange);
 }
@@ -443,23 +435,6 @@ main > section {
 
 .row-name {
   color: var(--label);
-}
-
-.row-sub {
-  font-size: 10px;
-  color: var(--secondary);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.row-value {
-  max-width: 62%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 
 .setting-description {
@@ -705,7 +680,6 @@ select:disabled {
 }
 
 input.field,
-textarea.field,
 .row > input:not(.switch),
 .copy-row input {
   width: 100%;
@@ -723,17 +697,7 @@ textarea.field,
   user-select: text;
 }
 
-textarea.field {
-  height: auto;
-  padding: 6px 7px;
-  resize: vertical;
-  font-family: var(--mono);
-  font-size: 10px;
-  line-height: 1.5;
-}
-
 input.field:focus,
-textarea.field:focus,
 .row > input:not(.switch):focus {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
 }
@@ -772,26 +736,6 @@ textarea::placeholder {
   margin: 0;
 }
 
-.segmented {
-  display: flex;
-  padding: 2px;
-  border-radius: 6px;
-  background: var(--track);
-}
-
-.segmented button {
-  flex: 1;
-  height: 18px;
-  border-radius: 4px;
-  color: var(--label);
-  font-size: 11px;
-}
-
-.segmented button[aria-pressed="true"] {
-  background: var(--control);
-  box-shadow: 0 0 0 0.5px var(--control-border), 0 0.5px 1px rgba(0, 0, 0, 0.12);
-}
-
 .kv {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -815,45 +759,6 @@ textarea::placeholder {
 .kv small {
   display: block;
   font-size: 10px;
-}
-
-/* ------------------------------------------------------------------- menus */
-
-.menu-anchor {
-  position: relative;
-}
-
-.popover-menu {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 150px;
-  padding: 4px;
-  border-radius: 6px;
-  background: var(--window);
-  box-shadow: 0 0 0 1px var(--control-border), 0 4px 16px rgba(0, 0, 0, 0.25);
-}
-
-.account-menu {
-  position: fixed;
-  top: 0;
-  left: 0;
-}
-
-.popover-menu button {
-  display: block;
-  width: 100%;
-  padding: 4px 20px 4px 8px;
-  border-radius: 3px;
-  text-align: left;
-}
-
-.popover-menu button:hover,
-.popover-menu button:focus {
-  background: var(--accent);
-  color: #fff;
-  outline: none;
 }
 
 /* ---------------------------------------------------------------- accounts */

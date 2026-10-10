@@ -270,13 +270,6 @@
       this.discovery = this.refreshPending();
       return count;
     }
-    async importRefreshToken(token) {
-      const count = await this.invoke("import_refresh_token", { token });
-      await this.load();
-      this.onMutation();
-      this.discovery = this.refreshPending();
-      return count;
-    }
     async removeAccount(id) {
       await this.invoke("delete_account", { id });
       await this.load();

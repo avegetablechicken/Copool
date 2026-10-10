@@ -55,24 +55,12 @@
         <section id="accounts-page" class="content">
           <div class="page">
             <div class="toolbar">
-              <div class="menu-anchor">
-                <button
-                  id="import-open"
-                  class="btn quiet"
-                  aria-haspopup="menu"
-                  aria-expanded="false"
-                  data-l10n="accounts.action.import_account"
-                ></button>
-                <div id="import-menu" class="popover-menu" role="menu" hidden>
-                  <button id="import-current" role="menuitem">
-                    <span
-                      data-l10n="accounts.action.import_current_auth"
-                    ></span></button
-                  ><button id="import-file-open" role="menuitem">
-                    <span data-l10n="accounts.action.import_auth_file"></span>
-                  </button>
-                </div>
-              </div>
+              <button
+                id="import-open"
+                class="btn quiet"
+                aria-haspopup="menu"
+                data-l10n="accounts.action.import_account"
+              ></button>
               <button
                 id="add-account"
                 class="btn quiet"
@@ -444,54 +432,6 @@
         </section>
       </main>
     </div>
-    <input
-      id="import-file"
-      type="file"
-      accept=".json,application/json"
-      hidden
-    />
-    <dialog id="import-dialog">
-      <form id="import-form">
-        <h2 data-l10n="accounts.action.add_account"></h2>
-        <div class="segmented">
-          <button type="button" id="auth-json-tab" aria-pressed="true">
-            auth.json</button
-          ><button type="button" id="refresh-token-tab" aria-pressed="false">
-            Refresh Token
-          </button>
-        </div>
-        <textarea
-          id="import-content"
-          class="field"
-          rows="8"
-          spellcheck="false"
-          placeholder='{"tokens": {…}}'
-          aria-label="auth.json"
-        ></textarea
-        ><input
-          id="refresh-token"
-          class="field"
-          type="password"
-          autocomplete="off"
-          placeholder="Refresh Token"
-          hidden
-        />
-        <p id="import-error" class="error" hidden></p>
-        <div class="dialog-actions">
-          <button
-            type="button"
-            id="import-cancel"
-            class="btn"
-            data-l10n="common.cancel"
-          ></button
-          ><button
-            type="submit"
-            class="btn primary"
-            data-l10n="accounts.action.import_account"
-          ></button>
-        </div>
-      </form>
-    </dialog>
     <dialog id="login-dialog">
       <h2 data-l10n="accounts.action.add_account"></h2>
       <p
@@ -543,11 +483,6 @@
         </div>
       </form>
     </dialog>
-    <div id="account-menu" class="popover-menu account-menu" role="menu" hidden>
-      <button id="account-proxy-edit" role="menuitem">
-        <span data-l10n="accounts.proxy.title"></span>
-      </button>
-    </div>
     <script src="locales.js" defer></script>
     <script src="presentation.js" defer></script>
     <script src="controllers.js" defer></script>

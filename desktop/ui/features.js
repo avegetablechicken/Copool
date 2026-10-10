@@ -209,13 +209,12 @@ $("login-cancel").onclick = () => accountsController.cancelLogin();
 $("login-dialog").addEventListener("cancel", () =>
   accountsController.cancelLogin(),
 );
-$("import-file-open").onclick = () => {
-  closeMenus();
+function importAccountFile() {
   action(
     () => accountsController.importFile(),
     (count) => extra(`Imported ${count} accounts`, `已导入 ${count} 个账号`),
   );
-};
+}
 const remoteDrafts = new Map();
 function remoteField(form, server, key, label, type = "text") {
   const row = el("label", "row provider-field");
@@ -259,12 +258,13 @@ function renderRemotes() {
       renderRemotes();
     });
     header.type = "button";
+    const heading = P.remoteHeader({
+      ...server,
+      expanded: expandedRemotes.has(id),
+    });
     const text = el("div", "remote-heading");
-    text.append(el("h3", "", server.label || "new-server"));
-    if (!expandedRemotes.has(id))
-      text.append(
-        el("span", "", `${server.sshUser}@${server.host}:${server.sshPort}`),
-      );
+    text.append(el("h3", "", heading.title));
+    if (heading.subtitle) text.append(el("span", "", heading.subtitle));
     header.append(
       icon("server"),
       text,

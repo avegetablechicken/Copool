@@ -63,7 +63,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 - 智能切换排除过期（超过 15 分钟）、刷新失败、额度耗尽及隐藏/停用账号。
 - 本地 OpenAI 兼容代理：`/v1/models`、`/v1/responses`、`/v1/chat/completions`、SSE、模型映射、失败重试与代理请求中的 OAuth 刷新。
 - 代理密钥生成/轮换、回环监听、启动/停止、打开应用时自动启动代理的设置。
-- 界面采用 Coport（`../coding-agent-proxy/gui/ui`）风格：360 点宽的状态栏菜单式面板（启动时隐藏；点击状态栏图标在图标下方弹出，再次点击、失去焦点或 Esc 收起；高度随内容，最多屏幕高度的 85%；定位逻辑与 Coport 共用 `desktop/src/placement.rs`），顶部为应用名与文字链接（代理 · 设置 · 退出），子页面以“‹ 账号”返回（macOS ⌘[）；内容为带标题的浅色块、11 点系统字体、小号按钮/开关/下拉框和单色细进度条。展开时每个账号一个块，折叠时为对齐的单行列表；保留右键代理编辑。此分支不再追求与 SwiftUI 布局逐项一致。
+- 界面采用 Coport（`../coding-agent-proxy/gui/ui`）风格：360 点宽的状态栏菜单式面板（启动时隐藏；点击状态栏图标在图标下方弹出，再次点击、失去焦点或 Esc 收起；高度随内容，最多屏幕高度的 85%；定位逻辑与 Coport 共用 `desktop/src/placement.rs`），顶部为应用名与文字链接（代理 · 设置 · 退出），子页面以“‹ 账号”返回（macOS ⌘[）；内容为带标题的浅色块、11 点系统字体、小号按钮/开关/下拉框和单色细进度条。展开时每个账号一个块，折叠时为对齐的单行列表；保留右键代理编辑。导入菜单与账号右键菜单只用原生菜单；此前已无入口的粘贴 auth.json / Refresh Token 导入对话框已移除。此分支不再追求与 SwiftUI 布局逐项一致。
 - macOS 使用原生 Popover 材质（圆角 12 点）、透明 WebView 和系统语义色；Windows/Linux 使用对应的静态主题后备。
 - macOS 字体保留 WebKit 系统字体的自动光学字号，不强制写入 `opsz` 数值。
 - macOS 图标由本机 AppKit 按准确逻辑尺寸生成 SF Symbols 的 1×/2×/3×资源；菜单栏使用原版 figure.pool.swim 模板符号。其他平台保留矢量图标与原应用图标资源。
@@ -84,7 +84,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 
 ## 尚未迁移的功能
 
-- 内置浏览器 OAuth 登录、工作区发现与切换邀请流程；当前可通过 Codex CLI 登录后导入，或导入 JSON/Refresh Token。
+- 内置浏览器 OAuth 登录、工作区发现与切换邀请流程；当前可通过 Codex CLI 登录后导入，或导入 auth.json 文件。
 - SSH 远程节点部署、启停和日志页面；已有独立 Rust daemon 保留。
 - Cloudflared 快速/命名隧道、Cloudflare DNS 管理。
 - Sub2api provider、远程账号同步和缓存。

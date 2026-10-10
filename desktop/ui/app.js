@@ -13,22 +13,14 @@ let accountsCache = [];
 let proxyCache = null;
 let preferences = null;
 let locale = "en";
-let importingToken = false;
 let noticeTimer;
 let nativeIcons = {};
 let iconFrame = 0;
 const ICONS = {
   folder: '<path d="M2 5h7l2 3h9v12H2Z"/>',
-  accounts:
-    '<path d="M15 11c2.3 0 4 1.3 4.6 3.3.1.5-.2.7-.6.7h-8c-.4 0-.7-.2-.6-.7.6-2 2.3-3.3 4.6-3.3Z"/><circle cx="15" cy="5.8" r="2.8"/><path d="M6.5 11.5c-2.2.2-4.2 1.4-4.7 3.4-.1.5.1.8.6.8h5.1M7.4 3.3a2.6 2.6 0 1 0 0 5.1"/>',
   network:
     '<circle cx="11" cy="11" r="8.7"/><ellipse cx="11" cy="11" rx="4" ry="8.7" transform="rotate(-23 11 11)"/><path d="M3.4 6.8c3.5 3.7 8.8 6.5 16.1 7.2M4 16c4.9-.4 10-3 13.9-8.3"/>',
-  settings:
-    '<path d="m9 2-.7 2.4-1.6.9-2.4-.6-2 3.5 1.7 1.9v1.8l-1.7 1.9 2 3.5 2.4-.6 1.6.9L9 20h4l.7-2.4 1.6-.9 2.4.6 2-3.5-1.7-1.9v-1.8l1.7-1.9-2-3.5-2.4.6-1.6-.9L13 2Z"/><circle cx="11" cy="11" r="3.4"/>',
-  import:
-    '<path d="M11 1v12m-3-3 3 3 3-3M6 6H4a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 4 20h14a1.5 1.5 0 0 0 1.5-1.5v-11A1.5 1.5 0 0 0 18 6h-2"/>',
   plus: '<path d="M11 3v16M3 11h16"/>',
-  wand: '<path d="m8 8 11 11-2 2L6 10ZM5 2v4M3 4h4M16 2v3M14.5 3.5h3M3 13v4M1 15h4M9 5l2-2M18 9l2-2"/>',
   refresh: '<path d="M18 8a8 8 0 1 0 .4 6M18 3v5h-5"/>',
   "chevron-up": '<path d="m5 14 6-6 6 6"/>',
   "chevron-down": '<path d="m5 8 6 6 6-6"/>',
@@ -39,7 +31,6 @@ const ICONS = {
   eye: '<path d="M1 11s4-7 10-7 10 7 10 7-4 7-10 7S1 11 1 11Z"/><circle cx="11" cy="11" r="3"/>',
   close: '<path d="m5 5 12 12M5 17 17 5"/>',
   "chevron-left": '<path d="m14 5-6 6 6 6"/>',
-  document: '<path d="M13 1H4v20h14V6ZM13 1v5h5M7 12h8M7 16h8"/>',
   server:
     '<rect x="2" y="3" width="18" height="6" rx="2"/><rect x="2" y="13" width="18" height="6" rx="2"/><path d="M5 6h1M5 16h1M10 6h7M10 16h7"/>',
   warning: '<path d="m11 2 10 18H1Z"/><path d="M11 8v5M11 16v1"/>',
@@ -93,8 +84,11 @@ function el(tag, className, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
-function resolveLocale(value) {
-  return P.resolveLocale(value);
+/// The saved language, else the first supported system language.
+function appLocale() {
+  return preferences?.locale
+    ? P.resolveLocale(preferences.locale)
+    : P.preferredLocale(navigator.languages?.length ? navigator.languages : [navigator.language]);
 }
 function tr(key, ...args) {
   let value =
@@ -226,79 +220,45 @@ function confirmAction(title, description, accept, destructive = false) {
     ),
   );
 }
-function plan(account) {
-  return P.normalizedPlan(account);
+function usageMode() {
+  return preferences?.usageDisplay || "used";
 }
-function percentage(window) {
-  return P.displayPercent(window, preferences?.usageDisplay || "used");
-}
-function usedPercent(window) {
-  return window ? Math.round(Math.max(0, Math.min(100, window.usedPercent))) : 100;
-}
-function meter(window, title) {
-  const used = usedPercent(window);
+function usageWindow(window, view, title, tone) {
+  const remaining = usageMode() === "remaining";
+  const used = remaining ? view.secondaryPercent : view.primaryPercent;
   const track = el(
     "div",
     `meter${window && used >= 95 ? " full" : window && used >= 80 ? " high" : ""}`,
   );
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", title);
-  track.setAttribute("aria-valuenow", String(percentage(window) ?? 0));
+  track.setAttribute("aria-valuenow", String(view.progressPercent));
   track.setAttribute("aria-valuemin", "0");
   track.setAttribute("aria-valuemax", "100");
   const fill = el("div", "meter-fill");
-  const displayed = P.displayPercent(
-    window,
-    preferences?.usageDisplay || "used",
-    preferences?.usageDisplay === "remaining" ? 0 : 100,
-  );
-  fill.style.width = `${displayed}%`;
+  fill.style.width = `${view.progressPercent}%`;
   track.append(fill);
-  return track;
-}
-function usageWindow(window, title, tone) {
-  const used = usedPercent(window);
-  const remaining = 100 - used;
-  const remainder = preferences?.usageDisplay === "remaining";
+  const [primary, secondary] = remaining
+    ? ["accounts.window.remaining_format", "accounts.window.used_format"]
+    : ["accounts.window.used_format", "accounts.window.remaining_format"];
   const row = el("div", `usage ${tone}`);
-  const reset = P.formatReset(window?.resetAt, locale);
   row.append(
     el("span", "usage-label", title),
-    meter(window, title),
-    el(
-      "span",
-      "usage-value",
-      tr(
-        remainder
-          ? "accounts.window.remaining_format"
-          : "accounts.window.used_format",
-        `${remainder ? remaining : used}%`,
-      ),
-    ),
+    track,
+    el("span", "usage-value", tr(primary, `${view.primaryPercent}%`)),
     el(
       "span",
       "usage-reset",
-      `${tr(
-        remainder
-          ? "accounts.window.used_format"
-          : "accounts.window.remaining_format",
-        `${remainder ? used : remaining}%`,
-      )} · ${tr("accounts.window.reset_at_format", reset)}`,
+      `${tr(secondary, `${view.secondaryPercent}%`)} · ${tr("accounts.window.reset_at_format", view.reset)}`,
     ),
   );
   return row;
 }
-function compactUsage(window, label) {
-  const value = percentage(window);
+function compactUsage(value, label) {
+  const text = value === null ? "--" : `${Math.round(value)}%`;
   const node = el("span", "usage-value");
-  node.append(
-    `${label} `,
-    el("b", "", value === null ? "--" : `${Math.round(value)}%`),
-  );
-  node.setAttribute(
-    "aria-label",
-    `${label}: ${value === null ? "--" : Math.round(value) + "%"}`,
-  );
+  node.append(`${label} `, el("b", "", text));
+  node.setAttribute("aria-label", `${label}: ${text}`);
   return node;
 }
 function accountMenu(event, account) {
@@ -395,14 +355,14 @@ function accountControls(account, full) {
   }
   return actions;
 }
-function accountTags(account) {
+function accountTags(account, view) {
   const tags = el("span", "account-tags");
-  tags.append(el("span", "tag plan", plan(account)));
-  if (P.workspaceTag(account))
-    tags.append(el("span", "tag muted", P.workspaceTag(account)));
+  tags.append(el("span", "tag plan", view.plan));
+  if (view.workspaceTag)
+    tags.append(el("span", "tag muted", view.workspaceTag));
   if (account.isCurrent)
     tags.append(el("span", "tag good", tr("accounts.card.current")));
-  if (!account.available)
+  if (view.status === "deactivated")
     tags.append(el("span", "tag bad", tr("accounts.card.status.deactivated")));
   return tags;
 }
@@ -432,23 +392,26 @@ function renderAccounts(accounts) {
   }
   for (const account of accounts) {
     const full = account.email || account.accountId;
+    const view = P.card(account, collapsed, usageMode(), (epoch) =>
+      P.formatReset(epoch, locale),
+    );
     if (collapsed) {
       const row = el(
         "div",
         `account-row${account.isCurrent ? " current running" : ""}`,
       );
-      row.dataset.plan = plan(account);
+      row.dataset.plan = view.plan;
       row.addEventListener("contextmenu", (event) =>
         accountMenu(event, account),
       );
-      const name = el("span", "account-row-name", full.split("@")[0]);
+      const name = el("span", "account-row-name", view.name);
       name.title = full;
       row.append(
         el("span", "dot"),
         name,
-        el("span", "tag plan", plan(account)),
-        compactUsage(account.usage?.fiveHour, "5h"),
-        compactUsage(account.usage?.oneWeek, "1w"),
+        el("span", "tag plan", view.plan),
+        compactUsage(view.compact[0], "5h"),
+        compactUsage(view.compact[1], "1w"),
         accountControls(account, full),
       );
       list.append(row);
@@ -458,12 +421,12 @@ function renderAccounts(accounts) {
       "section",
       `block account${account.isCurrent ? " current" : ""}`,
     );
-    card.dataset.plan = plan(account);
+    card.dataset.plan = view.plan;
     card.addEventListener("contextmenu", (event) =>
       accountMenu(event, account),
     );
     const head = el("div", "block-head");
-    head.append(accountTags(account), accountManagement(account));
+    head.append(accountTags(account, view), accountManagement(account));
     const name = el("div", "account-name");
     if (account.isCurrent) {
       const state = el("span", "state running");
@@ -473,19 +436,15 @@ function renderAccounts(accounts) {
     const title = el("span", "block-title", full);
     title.title = full;
     name.append(title);
-    const credits = account.usage?.credits;
-    let balance = "--";
-    if (credits?.unlimited) balance = tr("accounts.card.unlimited");
-    else if (credits?.balance !== null && credits?.balance !== undefined)
-      balance = Number.isFinite(Number(credits.balance))
-        ? String(Math.round(Number(credits.balance)))
-        : credits.balance;
+    const credits =
+      view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
+    const resets = account.usage?.remainingResetCount;
     const footer = el("div", "account-footer");
     footer.append(
       el(
         "span",
         "account-footer-text",
-        `${tr("accounts.card.credits_format", balance)} · ${tr(account.usage?.remainingResetCount != null ? "accounts.card.remaining_resets_format" : "accounts.card.resets_unavailable_format", account.usage?.remainingResetCount ?? "--")}`,
+        `${tr("accounts.card.credits_format", credits)} · ${tr(resets != null ? "accounts.card.remaining_resets_format" : "accounts.card.resets_unavailable_format", resets ?? "--")}`,
       ),
       accountControls(account, full),
     );
@@ -494,11 +453,13 @@ function renderAccounts(accounts) {
       name,
       usageWindow(
         account.usage?.fiveHour,
+        view.fiveHour,
         tr("accounts.window.five_hour"),
         "five-hour",
       ),
       usageWindow(
         account.usage?.oneWeek,
+        view.oneWeek,
         tr("accounts.window.one_week"),
         "one-week",
       ),
@@ -572,7 +533,7 @@ async function savePreference(patch) {
     patch.restartEditorTargets = [installedEditors[0].id];
   const result = await action(async () => {
     preferences = await providerController.savePreferences(preferences, patch);
-    locale = resolveLocale(preferences.locale || navigator.language);
+    locale = appLocale();
     translate();
     renderPreferences();
     renderProviders();
@@ -581,13 +542,8 @@ async function savePreference(patch) {
   });
   if (!result) renderPreferences();
 }
-function closeMenus() {
-  $("import-menu").hidden = true;
-  $("import-open").setAttribute("aria-expanded", "false");
-  $("account-menu").hidden = true;
-}
 mountIcons();
-locale = resolveLocale(navigator.language);
+locale = appLocale();
 translate();
 $("notice-close").onclick = () => {
   $("notice").hidden = true;
@@ -596,7 +552,6 @@ function showPage(page) {
   selectedPage = page;
   if (selectedPage === "proxy")
     proxyController.refresh().catch((error) => notice(error, true));
-  closeMenus();
   document
     .querySelectorAll("main>section")
     .forEach(
@@ -641,7 +596,6 @@ $("collapse-all").onclick = () => {
 };
 $("import-open").onclick = async () => {
   const bounds = $("import-open").getBoundingClientRect();
-  closeMenus();
   try {
     await invoke("import_menu", {
       labels: [
@@ -656,97 +610,25 @@ $("import-open").onclick = async () => {
     notice(error, true);
   }
 };
+const importActions = {
+  "import-current": () => action(() => accountsController.importCurrent()),
+  "import-file-open": () => importAccountFile(),
+  "import-providers": () => openProviderImport(),
+};
 window.__TAURI__.event
-  .listen("import-action", ({ payload }) => {
-    if (payload === "import-providers") openProviderImport();
-    else $(payload)?.click();
-  })
+  .listen("import-action", ({ payload }) => importActions[payload]?.())
   .catch((error) => notice(error, true));
-document.addEventListener("click", (event) => {
-  if (
-    !event.target.closest(".menu-anchor") &&
-    !event.target.closest(".account-menu")
-  )
-    closeMenus();
-});
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    const menuOpen = !$("import-menu").hidden || !$("account-menu").hidden;
-    closeMenus();
-    // Like a menu, Escape dismisses the panel once nothing inside is open.
-    if (!menuOpen && !document.querySelector("dialog[open]"))
-      invoke("hide_panel").catch(() => {});
-  }
+  const dialogOpen = Boolean(document.querySelector("dialog[open]"));
+  // Like a menu, Escape dismisses the panel once no dialog is open.
+  if (event.key === "Escape" && !dialogOpen)
+    invoke("hide_panel").catch(() => {});
   const back = navigator.userAgent.includes("Mac")
     ? event.metaKey && event.key === "["
     : event.altKey && event.key === "ArrowLeft";
-  if (back && selectedPage !== "accounts" && !document.querySelector("dialog[open]"))
-    showPage("accounts");
+  if (back && selectedPage !== "accounts" && !dialogOpen) showPage("accounts");
 });
-$("import-current").onclick = () => {
-  closeMenus();
-  action(() => accountsController.importCurrent());
-};
-$("import-file-open").onclick = () => {
-  closeMenus();
-  $("import-file").click();
-};
-$("import-file").onchange = async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
-  await action(
-    async () => {
-      if (file.size > 16 * 1024 * 1024)
-        throw new Error(extra("File exceeds 16 MiB", "文件不能超过 16 MiB"));
-      return accountsController.importDocument(await file.text());
-    },
-    (count) => extra(`Imported ${count} accounts`, `已导入 ${count} 个账号`),
-  );
-  event.target.value = "";
-};
-$("add-account").onclick = () => {
-  $("import-error").hidden = true;
-  $("import-dialog").showModal();
-};
-$("import-cancel").onclick = () => $("import-dialog").close();
-$("import-dialog").addEventListener("close", () => {
-  $("import-content").value = "";
-  $("refresh-token").value = "";
-});
-for (const [id, token] of [
-  ["auth-json-tab", false],
-  ["refresh-token-tab", true],
-])
-  $(id).onclick = () => {
-    importingToken = token;
-    $("auth-json-tab").setAttribute("aria-pressed", String(!token));
-    $("refresh-token-tab").setAttribute("aria-pressed", String(token));
-    $("refresh-token").hidden = !token;
-    $("import-content").hidden = token;
-  };
-$("import-form").onsubmit = (event) => {
-  event.preventDefault();
-  action(
-    async () => {
-      try {
-        const count = importingToken
-          ? await accountsController.importRefreshToken(
-              $("refresh-token").value.trim(),
-            )
-          : await accountsController.importDocument($("import-content").value);
-        $("import-dialog").close();
-        return count;
-      } catch (error) {
-        $("import-error").textContent = String(error);
-        $("import-error").hidden = false;
-        throw error;
-      }
-    },
-    (count) => extra(`Imported ${count} accounts`, `已导入 ${count} 个账号`),
-  );
-};
 function openAccountProxy(account) {
-  closeMenus();
   editingAccount = account;
   $("edit-name").textContent = account.email || account.accountId;
   $("edit-proxy").value = account.proxyUrl || "";
@@ -759,9 +641,6 @@ function openAccountProxy(account) {
   $("edit-dialog").showModal();
   $("edit-proxy").focus();
 }
-$("account-proxy-edit").onclick = () => {
-  if (editingAccount) openAccountProxy(editingAccount);
-};
 $("edit-cancel").onclick = () => $("edit-dialog").close();
 $("edit-form").onsubmit = (event) => {
   event.preventDefault();
@@ -827,7 +706,7 @@ document.addEventListener(
         invoke("native_symbols"),
       ]);
       applyNativeIcons();
-      locale = resolveLocale(preferences.locale || navigator.language);
+      locale = appLocale();
       translate();
       await initializeFeatures();
       renderPreferences();
@@ -880,7 +759,6 @@ let panelHiddenAt = null;
 window.__TAURI__.event
   .listen("panel-hidden", () => {
     panelHiddenAt = Date.now();
-    closeMenus();
   })
   .catch((error) => notice(error, true));
 window.__TAURI__.event
