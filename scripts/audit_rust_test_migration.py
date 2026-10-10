@@ -16,13 +16,8 @@ PANEL = 'The Coport-style panel replaced this SwiftUI layout'
 # Whole suites, or single Suite.testName cases.
 RETIRED = {
     'LayoutRulesTests': f'{PANEL}: fixed 542 pt grid and iOS column counts',
-    'LiquidProgressMetricsTests': f'{PANEL}: liquid progress bars and rings became flat meters',
-    'AccountCardInteractionPresentationTests': f'{PANEL}: the collapsed overlay became a hover row',
-    'AccountsActionPresentationTests.testTrailingToolbarButtonsReflectCollapseStateAndSpinner': f'{PANEL}: SwiftUI toolbar symbols',
-    'AccountsActionPresentationTests.testLeadingToolbarButtonsIncludeUsageToggleIcon': f'{PANEL}: no usage display toggle in the toolbar',
-    'PublicAccessSectionPresentationTests.testModeCardsReflectSelectedModeAndEditability': f'{PANEL}: tunnel mode is a pop-up button',
-    'PublicAccessSectionPresentationTests.testStatusCardsExposePublicURLCopyBehavior': f'{PANEL}: one status line replaces the status cards',
-    'RemoteServerCardPresentationTests.testLogsPresentationUsesPlaceholderWhenLogsMissing': f'{PANEL}: logs appear only once loaded',
+    'LiquidProgressMetricsTests.testCompactRingUsesDotThresholdAboveOnePercent': f'{PANEL}: no usage rings',
+    'LiquidProgressMetricsTests.testDarkGroovePaletteKeepsRingTrackVisibleOnBlackBackground': f'{PANEL}: no glass groove palette',
 }
 
 def inventory():

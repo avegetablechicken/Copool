@@ -146,6 +146,26 @@
       selectionAccent: account.isCurrent ? plan : null,
     };
   }
+  function collapsedInteraction({ collapsed, current, switching, hovered }) {
+    return {
+      canHover: collapsed && !current,
+      canReveal: collapsed && !current && !switching,
+      visible: collapsed && !current && (hovered || switching),
+    };
+  }
+  function progressMetrics(progress, width, height = 12, inset = 2) {
+    const clamped = Math.max(0, Math.min(1, progress)),
+      grooveHeight = Math.max(0, height - 2 * inset),
+      grooveWidth = Math.max(0, width - 2 * inset),
+      raw = grooveWidth * clamped;
+    return {
+      fillScale: clamped,
+      showsFill: clamped > 0,
+      grooveHeight,
+      rawFillWidth: raw,
+      visibleFillWidth: raw > 0 ? Math.max(raw, grooveHeight) : 0,
+    };
+  }
   function actions({
     importing = false,
     adding = false,
@@ -204,6 +224,34 @@
       },
     };
   }
+  function trailingActions({
+    canRefresh = true,
+    spinning = false,
+    collapsed = false,
+  } = {}) {
+    return [
+      { intent: "refreshUsage", enabled: canRefresh, spinning },
+      {
+        intent: "toggleCollapse",
+        symbol: collapsed ? "chevron.down" : "chevron.up",
+        label: collapsed
+          ? "accounts.action.expand_all"
+          : "accounts.action.collapse_all",
+      },
+    ];
+  }
+  function leadingActions(options = {}) {
+    const all = actions(options);
+    return [
+      {
+        intent: "toggleUsageProgressDisplay",
+        symbol: "switch.2",
+        label: "accounts.action.toggle_usage_progress_display",
+      },
+      { ...all[0], label: "accounts.action.import_account" },
+      all[1],
+    ];
+  }
   function publicCallout(running) {
     return running
       ? null
@@ -226,6 +274,43 @@
       isRunning: status?.running === true,
     };
   }
+  function publicModes(selectedMode, enabled) {
+    return ["quick", "named"].map((mode) => ({
+      mode,
+      selected: mode === selectedMode,
+      isEnabled: enabled,
+    }));
+  }
+  function publicStatus(status = {}) {
+    return [
+      {
+        id: "status",
+        headline: status.running
+          ? "proxy.status.running"
+          : "proxy.status.stopped",
+        copyValue: null,
+        truncation: "tail",
+      },
+      {
+        id: "url",
+        headline: status.publicURL ?? "proxy.value.generated_after_start",
+        copyValue: status.publicURL ?? null,
+        truncation: "middle",
+      },
+      {
+        id: "install-path",
+        headline: status.binaryPath ?? "proxy.public.not_detected",
+        copyValue: null,
+        truncation: "middle",
+      },
+      {
+        id: "last-error",
+        headline: status.lastError ?? "common.none",
+        copyValue: null,
+        truncation: "tail",
+      },
+    ];
+  }
   function remoteMetrics(status) {
     const boolean = (value) =>
       value == null ? "Unknown" : value ? "Yes" : "No";
@@ -236,6 +321,22 @@
           key === "pid" ? String(status?.pid ?? "--") : boolean(status?.[key]),
       }),
     );
+  }
+  function remoteDetails(status) {
+    return [
+      { value: status?.baseURL ?? "--", canCopy: status != null },
+      {
+        value: status?.apiKey ?? "Generated after first start",
+        canCopy: status?.apiKey != null,
+      },
+      { value: status?.serviceName ?? "Unknown", canCopy: status != null },
+    ];
+  }
+  function remoteLogs(logs) {
+    return {
+      content: logs || "Logs have not been loaded yet",
+      canCopy: Boolean(logs),
+    };
   }
   function proxyButtons(running, loading = false) {
     return [
@@ -382,5 +483,13 @@
     formatReset,
     card,
     actions,
+    collapsedInteraction,
+    progressMetrics,
+    trailingActions,
+    leadingActions,
+    publicModes,
+    publicStatus,
+    remoteDetails,
+    remoteLogs,
   };
 });

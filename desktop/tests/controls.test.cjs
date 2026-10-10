@@ -50,11 +50,75 @@ legacy(
   },
 );
 legacy(
+  "AccountsActionPresentationTests",
+  "testTrailingToolbarButtonsReflectCollapseStateAndSpinner",
+  () => {
+    const p = P.trailingActions({
+      canRefresh: true,
+      spinning: true,
+      collapsed: true,
+    });
+    assert.deepEqual(
+      p.map((a) => a.intent),
+      ["refreshUsage", "toggleCollapse"],
+    );
+    assert.equal(p[0].spinning, true);
+    assert.equal(p[1].symbol, "chevron.down");
+    assert.equal(p[1].label, "accounts.action.expand_all");
+  },
+);
+legacy(
+  "AccountsActionPresentationTests",
+  "testLeadingToolbarButtonsIncludeUsageToggleIcon",
+  () => {
+    const p = P.leadingActions();
+    assert.deepEqual(
+      p.map((a) => a.intent),
+      ["toggleUsageProgressDisplay", "importCurrentAuth", "addAccount"],
+    );
+    assert.equal(p[0].symbol, "switch.2");
+    assert.equal(p[0].label, "accounts.action.toggle_usage_progress_display");
+    assert.equal(p[1].label, "accounts.action.import_account");
+    assert.deepEqual(p[1].menu, ["importCurrentAuth", "importAuthFile"]);
+  },
+);
+legacy(
+  "PublicAccessSectionPresentationTests",
+  "testModeCardsReflectSelectedModeAndEditability",
+  () => {
+    const p = P.publicModes("named", false);
+    assert.deepEqual(
+      p.map((a) => a.mode),
+      ["quick", "named"],
+    );
+    assert.equal(p[0].selected, false);
+    assert.equal(p[1].selected, true);
+    assert.equal(p[0].isEnabled, false);
+  },
+);
+legacy(
   "PublicAccessSectionPresentationTests",
   "testStartLocalProxyCalloutOnlyAppearsWhenProxyIsStopped",
   () => {
     assert.notEqual(P.publicCallout(false), null);
     assert.equal(P.publicCallout(true), null);
+  },
+);
+legacy(
+  "PublicAccessSectionPresentationTests",
+  "testStatusCardsExposePublicURLCopyBehavior",
+  () => {
+    const p = P.publicStatus({
+      running: true,
+      publicURL: "https://example.trycloudflare.com",
+      binaryPath: "/usr/local/bin/cloudflared",
+    });
+    assert.deepEqual(
+      p.map((c) => c.id),
+      ["status", "url", "install-path", "last-error"],
+    );
+    assert.equal(p[1].copyValue, "https://example.trycloudflare.com");
+    assert.equal(p[1].truncation, "middle");
   },
 );
 legacy(
@@ -77,10 +141,21 @@ legacy(
 legacy(
   "RemoteServerCardPresentationTests",
   "testMetricsAndDetailsExposeFallbackValues",
-  // The Coport panel has no remote detail cards; the metrics still apply.
   () => {
-    const m = P.remoteMetrics(null);
+    const m = P.remoteMetrics(null),
+      d = P.remoteDetails(null);
     assert.equal(m.at(-1).value, "--");
-    assert.equal(m[0].value, "Unknown");
+    assert.equal(d[0].value, "--");
+    assert.equal(d[1].canCopy, false);
+    assert.equal(d[1].value, "Generated after first start");
+  },
+);
+legacy(
+  "RemoteServerCardPresentationTests",
+  "testLogsPresentationUsesPlaceholderWhenLogsMissing",
+  () => {
+    const p = P.remoteLogs(null);
+    assert.equal(p.content, "Logs have not been loaded yet");
+    assert.equal(p.canCopy, false);
   },
 );

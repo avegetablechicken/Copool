@@ -129,6 +129,34 @@ legacy(
     );
   },
 );
+legacy(
+  "AccountCardInteractionPresentationTests",
+  "testMacOSHoverControlsCollapsedOverlayVisibility",
+  () =>
+    assert.deepEqual(
+      P.collapsedInteraction({
+        collapsed: true,
+        current: false,
+        switching: false,
+        hovered: true,
+      }),
+      { canHover: true, canReveal: true, visible: true },
+    ),
+);
+legacy(
+  "AccountCardInteractionPresentationTests",
+  "testSwitchingKeepsOverlayVisibleButPreventsReveal",
+  () => {
+    const p = P.collapsedInteraction({
+      collapsed: true,
+      current: false,
+      switching: true,
+      hovered: false,
+    });
+    assert.equal(p.canReveal, false);
+    assert.equal(p.visible, true);
+  },
+);
 legacy("AppLocaleTests", "testResolveNormalizesLegacyIdentifiers", () => {
   for (const [raw, want] of [
     ["en-US", "en"],
@@ -187,5 +215,39 @@ legacy(
     assert.equal(p[1].title, "common.cancel");
     assert.equal(p[1].symbol, "xmark");
     assert.equal(p[1].enabled, true);
+  },
+);
+legacy(
+  "LiquidProgressMetricsTests",
+  "testRenderModelClampsProgressIntoUnitRange",
+  () => {
+    assert.equal(P.progressMetrics(-0.4, 250).fillScale, 0);
+    assert.equal(P.progressMetrics(0.45, 250).fillScale, 0.45);
+    assert.equal(P.progressMetrics(1.8, 250).fillScale, 1);
+  },
+);
+legacy(
+  "LiquidProgressMetricsTests",
+  "testRenderModelOnlyShowsFillForPositiveProgress",
+  () => {
+    assert.equal(P.progressMetrics(0, 250).showsFill, false);
+    assert.equal(P.progressMetrics(0.01, 250).showsFill, true);
+  },
+);
+legacy(
+  "LiquidProgressMetricsTests",
+  "testLowProgressUsesFullLeadingCapWidth",
+  () => {
+    const m = P.progressMetrics(0.01, 250);
+    assert(m.rawFillWidth > 0 && m.rawFillWidth < m.grooveHeight);
+    assert.equal(m.visibleFillWidth, m.grooveHeight);
+  },
+);
+legacy(
+  "LiquidProgressMetricsTests",
+  "testHigherProgressKeepsMeasuredFillWidth",
+  () => {
+    const m = P.progressMetrics(0.3, 250);
+    assert.equal(m.visibleFillWidth, m.rawFillWidth);
   },
 );
