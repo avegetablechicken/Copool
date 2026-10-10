@@ -60,8 +60,7 @@ async fn import_current(app: State<'_, App>) -> Result<usize, String> {
 }
 #[tauri::command]
 async fn delete_account(app: State<'_, App>, id: String) -> Result<(), String> {
-    let result = app.delete_account(&id).await?;
-    Ok(result)
+    app.delete_account(&id).await
 }
 #[tauri::command]
 async fn switch_account(app: State<'_, App>, id: String) -> Result<(), String> {
