@@ -9,6 +9,7 @@ let busy = false;
 let collapsed = false;
 let selectedPage = "accounts";
 let editingAccount = null;
+let switchingId = null;
 let accountsCache = [];
 let proxyCache = null;
 let preferences = null;
@@ -31,6 +32,8 @@ const ICONS = {
   eye: '<path d="M1 11s4-7 10-7 10 7 10 7-4 7-10 7S1 11 1 11Z"/><circle cx="11" cy="11" r="3"/>',
   close: '<path d="m5 5 12 12M5 17 17 5"/>',
   "chevron-left": '<path d="m14 5-6 6 6 6"/>',
+  "switch-2":
+    '<rect x="2" y="3" width="18" height="7" rx="3.5"/><circle cx="6.5" cy="6.5" r="1.6"/><rect x="2" y="12" width="18" height="7" rx="3.5"/><circle cx="15.5" cy="15.5" r="1.6"/>',
   server:
     '<rect x="2" y="3" width="18" height="6" rx="2"/><rect x="2" y="13" width="18" height="6" rx="2"/><path d="M5 6h1M5 16h1M10 6h7M10 16h7"/>',
   warning: '<path d="m11 2 10 18H1Z"/><path d="M11 8v5M11 16v1"/>',
@@ -77,6 +80,16 @@ function mountIcons(root = document) {
   root
     .querySelectorAll("[data-icon]")
     .forEach((node) => node.replaceWith(icon(node.dataset.icon)));
+}
+// SF Symbol names used by the presentation models, as panel icons.
+const SYMBOL_ICONS = {
+  "chevron.down": "chevron-down",
+  "chevron.up": "chevron-up",
+  "switch.2": "switch-2",
+};
+function setIcon(button, glyph) {
+  if (button.querySelector(`[data-glyph="${glyph}"]`)) return;
+  button.replaceChildren(icon(glyph));
 }
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -130,10 +143,38 @@ function translate() {
   );
   $("language").value = locale;
   $("page-title").textContent = tr(`tab.${selectedPage}`);
-  $("collapse-all").title = tr(
-    collapsed ? "accounts.action.expand_all" : "accounts.action.collapse_all",
-  );
-  $("collapse-all").setAttribute("aria-label", $("collapse-all").title);
+  // features.js defines the controllers after this script's first translate().
+  if (typeof accountsController !== "undefined") renderToolbar();
+}
+/// The account toolbar, as the SwiftUI leading and trailing action groups.
+function renderToolbar() {
+  const options = {
+    importing: busy,
+    switching: busy,
+    canRefresh: !busy && accountsCache.length > 0,
+    spinning: accountsController.spinner,
+    collapsed,
+  };
+  const [usageToggle, importAccount, addAccount] = P.leadingActions(options);
+  const smartSwitch = P.actions(options)[2];
+  const [refresh, collapse] = P.trailingActions(options);
+  const label = (button, key) => {
+    button.title = tr(key);
+    button.setAttribute("aria-label", button.title);
+  };
+  setIcon($("usage-toggle"), SYMBOL_ICONS[usageToggle.symbol]);
+  label($("usage-toggle"), usageToggle.label);
+  $("import-open").textContent = $("import-open").title = tr(importAccount.label);
+  $("import-open").disabled = !importAccount.enabled;
+  $("add-account").textContent = $("add-account").title = tr(addAccount.title);
+  $("add-account").disabled = !addAccount.enabled;
+  $("smart-switch").title = $("smart-switch").textContent;
+  $("smart-switch").disabled = !smartSwitch.enabled || !accountsCache.length;
+  $("refresh-all").disabled = !refresh.enabled;
+  $("refresh-all").classList.toggle("spinning", Boolean(refresh.spinning));
+  setIcon($("collapse-all"), SYMBOL_ICONS[collapse.symbol]);
+  label($("collapse-all"), collapse.label);
+  $("collapse-all").setAttribute("aria-expanded", String(!collapsed));
 }
 function notice(message, error = false) {
   clearTimeout(noticeTimer);
@@ -148,27 +189,15 @@ function notice(message, error = false) {
     }, 4500);
 }
 function syncButtons() {
-  const toolbar = P.actions({
-    importing: busy,
-    switching: busy,
-    canRefresh: !busy && accountsCache.length > 0,
-  });
   document.querySelectorAll("button").forEach((button) => {
     button.disabled =
       busy && !["login-cancel", "notice-close"].includes(button.id);
   });
-  ["import-open", "add-account", "smart-switch", "refresh-all"].forEach(
-    (id, index) => {
-      $(id).disabled = !toolbar[index].enabled;
-    },
-  );
+  renderToolbar();
   $("proxy-start").disabled = busy || Boolean(proxyCache?.running);
   $("proxy-stop").disabled = busy || !proxyCache?.running;
   $("proxy-start").hidden = !!proxyCache?.running;
   $("proxy-stop").hidden = !proxyCache?.running;
-  $("refresh-all").disabled = !accountsCache.length;
-  $("refresh-all").classList.toggle("spinning", accountsController.spinner);
-  $("smart-switch").disabled = busy || !accountsCache.length;
   document.querySelectorAll(".card-switch").forEach((button) => {
     button.disabled = busy || button.dataset.available === "false";
   });
@@ -220,6 +249,7 @@ function confirmAction(title, description, accept, destructive = false) {
     ),
   );
 }
+const METER_HEIGHT = 4; // .meter in style.css
 function usageMode() {
   return preferences?.usageDisplay || "used";
 }
@@ -236,7 +266,10 @@ function usageWindow(window, view, title, tone) {
   track.setAttribute("aria-valuemin", "0");
   track.setAttribute("aria-valuemax", "100");
   const fill = el("div", "meter-fill");
-  fill.style.width = `${view.progressPercent}%`;
+  const metrics = P.progressMetrics(view.progressPercent / 100, 0, METER_HEIGHT, 0);
+  fill.hidden = !metrics.showsFill;
+  fill.style.width = `${metrics.fillScale * 100}%`;
+  fill.style.minWidth = `${metrics.grooveHeight}px`;
   track.append(fill);
   const [primary, secondary] = remaining
     ? ["accounts.window.remaining_format", "accounts.window.used_format"]
@@ -342,12 +375,16 @@ function accountControls(account, full) {
   );
   actions.append(refresh);
   if (!account.isCurrent) {
-    const control = button("", "switch", "icon-btn card-switch", () =>
-      action(
+    const control = button("", "switch", "icon-btn card-switch", async () => {
+      switchingId = account.id;
+      renderAccounts(accountsCache);
+      await action(
         () => invoke("switch_account", { id: account.id }),
         extra(`Switched to ${full}`, `已切换到 ${full}`),
-      ),
-    );
+      );
+      switchingId = null;
+      renderAccounts(accountsCache);
+    });
     control.dataset.available = String(account.available);
     control.title = tr("accounts.card.switch_to_this");
     control.setAttribute("aria-label", `${control.title} ${full}`);
@@ -373,6 +410,7 @@ function renderAccounts(accounts) {
     locale,
     preferences?.usageDisplay,
     [...accountsController.refreshingIds],
+    switchingId,
   ];
   if (P.cardsEqual(renderState, renderedAccountsState)) return;
   renderedAccountsState = structuredClone(renderState);
@@ -396,10 +434,18 @@ function renderAccounts(accounts) {
       P.formatReset(epoch, locale),
     );
     if (collapsed) {
+      const interaction = P.collapsedInteraction({
+        collapsed,
+        current: account.isCurrent,
+        switching: switchingId === account.id,
+        hovered: false,
+      });
       const row = el(
         "div",
         `account-row${account.isCurrent ? " current running" : ""}`,
       );
+      row.classList.toggle("can-reveal", interaction.canReveal);
+      row.classList.toggle("revealed", interaction.visible);
       row.dataset.plan = view.plan;
       row.addEventListener("contextmenu", (event) =>
         accountMenu(event, account),
@@ -586,14 +632,13 @@ document.querySelectorAll(".disclosure").forEach((button) =>
 );
 $("collapse-all").onclick = () => {
   collapsed = !collapsed;
-  $("collapse-all").setAttribute("aria-expanded", String(!collapsed));
-  $("collapse-all").replaceChildren(
-    icon(collapsed ? "chevron-down" : "chevron-up"),
-  );
-  translate();
   renderAccounts(accountsCache);
   syncButtons();
 };
+$("usage-toggle").onclick = () =>
+  savePreference({
+    usageDisplay: usageMode() === "remaining" ? "used" : "remaining",
+  });
 $("import-open").onclick = async () => {
   const bounds = $("import-open").getBoundingClientRect();
   try {

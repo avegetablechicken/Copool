@@ -766,9 +766,20 @@ textarea::placeholder {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   min-height: 20px;
+}
+
+/* Long translations shrink the buttons before the icons. */
+.toolbar .btn {
+  display: block;
+  flex-shrink: 1;
+  min-width: 0;
+  padding: 0 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 20px;
 }
 
 .toolbar-aside {
@@ -986,13 +997,17 @@ textarea::placeholder {
   gap: 2px;
 }
 
+/* Row controls appear on hover; a switch in progress stays revealed. */
 .account-row .card-refresh:not(.spinning),
 .account-row .card-switch {
   visibility: hidden;
 }
 
-.account-row:hover .icon-btn,
-.account-row:focus-within .icon-btn {
+.account-row:hover .card-refresh,
+.account-row:focus-within .card-refresh,
+.account-row.can-reveal:hover .card-switch,
+.account-row.can-reveal:focus-within .card-switch,
+.account-row.revealed .card-switch {
   visibility: visible;
 }
 
@@ -1215,6 +1230,54 @@ pre.remote-log {
   overflow-wrap: anywhere;
   -webkit-user-select: text;
   user-select: text;
+}
+
+.remote-details {
+  margin: 2px 0 0;
+}
+
+.remote-details dd.copy-row input.field {
+  height: 20px;
+}
+
+#tunnel-status dd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+#tunnel-status dd span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Middle truncation keeps both ends of URLs and paths visible. */
+#tunnel-status dd.truncate-middle span {
+  direction: rtl;
+  text-align: left;
+}
+
+details.remote-logs summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--secondary);
+  list-style: none;
+}
+
+details.remote-logs summary::-webkit-details-marker {
+  display: none;
+}
+
+details.remote-logs summary:hover {
+  color: var(--label);
+}
+
+details.remote-logs pre.remote-log {
+  margin-top: 4px;
 }
 
 details.remote-action-guide {

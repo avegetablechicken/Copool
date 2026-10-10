@@ -441,6 +441,24 @@ function renderRemoteStates() {
     output.dataset.renderKey = outputKey;
     output.replaceChildren();
     const status = proxyController.remoteStatuses[id];
+    const details = el("dl", "kv remote-details");
+    P.remoteDetails(status).forEach((detail, index) => {
+      const label = [
+        tr("proxy.detail.base_url"),
+        tr("proxy.detail.api_key"),
+        extra("Service", "服务"),
+      ][index];
+      const value = el("dd", "copy-row");
+      const field = el("input", "field");
+      field.readOnly = true;
+      field.type = index === 1 && detail.canCopy ? "password" : "text";
+      field.value = detail.value;
+      field.setAttribute("aria-label", label);
+      value.append(field);
+      if (detail.canCopy) value.append(copyButton(detail.value));
+      details.append(el("dt", "", label), value);
+    });
+    output.append(details);
     if (status) {
       const metrics = el("div", "remote-metrics");
       for (const metric of P.remoteMetrics(status)) {
@@ -461,26 +479,7 @@ function renderRemoteStates() {
         );
         metrics.append(card);
       }
-      output.append(metrics);
-      for (const [label, value, secret] of [
-        ["proxy.detail.base_url", status.baseURL, false],
-        ["proxy.detail.api_key", status.apiKey, true],
-      ]) {
-        if (!value) continue;
-        const row = el("div", "copy-row");
-        const field = el("input", "field");
-        field.readOnly = true;
-        field.type = secret ? "password" : "text";
-        field.value = value;
-        field.setAttribute("aria-label", tr(label));
-        const copy = button("", "copy", "icon-btn", () =>
-          navigator.clipboard.writeText(value),
-        );
-        copy.type = "button";
-        copy.setAttribute("aria-label", tr("common.copy"));
-        row.append(field, copy);
-        output.append(row);
-      }
+      output.prepend(metrics);
       if (status.lastError)
         output.append(el("p", "error", status.lastError));
     }
@@ -517,9 +516,27 @@ function renderRemoteStates() {
       card.append(adopt);
       output.append(card);
     }
-    if (proxyController.remoteLogs[id])
-      output.append(el("pre", "remote-log", proxyController.remoteLogs[id]));
+    const logs = P.remoteLogs(proxyController.remoteLogs[id]);
+    const logView = el("details", "remote-logs");
+    logView.open = logs.canCopy;
+    const summary = el("summary", "", tr("proxy.remote.logs"));
+    if (logs.canCopy) summary.append(copyButton(logs.content));
+    logView.append(summary, el("pre", "remote-log", logs.content));
+    output.append(logView);
   }
+}
+function copyButton(value) {
+  const copy = button("", "copy", "icon-btn", (event) => {
+    event.preventDefault();
+    navigator.clipboard
+      .writeText(value)
+      .then(() => notice(extra("Copied", "已复制")))
+      .catch((error) => notice(error, true));
+  });
+  copy.type = "button";
+  copy.title = tr("common.copy");
+  copy.setAttribute("aria-label", copy.title);
+  return copy;
 }
 $("remote-add").onclick = () =>
   action(async () => {
@@ -545,12 +562,21 @@ function renderTunnelControls() {
   const row = el("label", "row");
   row.append(el("span", "row-label", tr("proxy.section.public_access")));
   const mode = el("select", "select");
-  for (const value of ["quick", "named"]) {
-    const option = el("option", "", tr(`proxy.public.mode.${value}_kicker`));
-    option.value = value;
+  const modes = P.publicModes(
+    tunnelConfiguration.tunnelMode,
+    !proxyController.tunnelStatus.running,
+  );
+  for (const choice of modes) {
+    const option = el(
+      "option",
+      "",
+      tr(`proxy.public.mode.${choice.mode}_kicker`),
+    );
+    option.value = choice.mode;
+    option.selected = choice.selected;
     mode.append(option);
   }
-  mode.value = tunnelConfiguration.tunnelMode;
+  mode.disabled = !modes[0].isEnabled;
   mode.onchange = () => {
     tunnelConfiguration.tunnelMode = mode.value;
     saveTunnelConfiguration();
@@ -599,20 +625,35 @@ function renderTunnelControls() {
     control.dataset.tunnelAction = op;
     actions.append(control);
   }
-  root.append(actions, el("p", "", ""));
-  root.lastChild.id = "tunnel-status";
+  const statusList = el("dl", "kv");
+  statusList.id = "tunnel-status";
+  root.append(actions, statusList);
   renderTunnelState();
 }
 function renderTunnelState() {
   const status = proxyController.tunnelStatus;
   $("public-enabled").checked = tunnelConfiguration.enabled;
-  const text = $("tunnel-status");
-  if (text)
-    text.textContent =
-      status.publicUrl ||
-      status.publicURL ||
-      status.lastError ||
-      tr(status.running ? "proxy.status.running" : "proxy.status.stopped");
+  const list = $("tunnel-status");
+  if (list) {
+    const labels = {
+      status: "proxy.public.status_title",
+      url: "proxy.public.url_title",
+      "install-path": "proxy.public.install_path_title",
+      "last-error": "proxy.detail.last_error",
+    };
+    list.replaceChildren();
+    for (const card of P.publicStatus({
+      ...status,
+      publicURL: status.publicURL ?? status.publicUrl ?? undefined,
+    })) {
+      const value = el("dd", `truncate-${card.truncation}`);
+      const text = tr(card.headline);
+      value.append(el("span", "", text));
+      value.title = text;
+      if (card.copyValue) value.append(copyButton(card.copyValue));
+      list.append(el("dt", "", tr(labels[card.id])), value);
+    }
+  }
   $("tunnel-install").closest(".value-card").hidden = status.installed;
   for (const node of document.querySelectorAll("[data-tunnel-action]")) {
     const intent = node.dataset.tunnelAction;
