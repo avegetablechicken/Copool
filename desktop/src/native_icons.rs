@@ -21,12 +21,8 @@ pub fn load() -> Result<NativeIcons, String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
     let mut icons = BTreeMap::new();
     let names = [
-        ("accounts", "person.2"),
         ("network", "network"),
-        ("settings", "gearshape"),
-        ("import", "square.and.arrow.down"),
         ("plus", "plus"),
-        ("wand", "wand.and.stars"),
         ("refresh", "arrow.clockwise"),
         ("chevron-up", "chevron.up"),
         ("chevron-down", "chevron.down"),
@@ -36,13 +32,13 @@ pub fn load() -> Result<NativeIcons, String> {
         ("copy", "doc.on.doc"),
         ("eye", "eye"),
         ("close", "xmark"),
-        ("document", "doc.badge.plus"),
         ("server", "server.rack"),
         ("folder", "folder"),
         ("warning", "exclamationmark.triangle"),
     ];
     for (key, symbol) in names {
-        for size in [12, 14, 15, 16, 17, 20, 25, 32] {
+        // The Coport-style panel draws icons at 11–14 pt.
+        for size in 11..=14 {
             let mut variants = Vec::new();
             for scale in 1..=3 {
                 let bytes = macos::render(symbol, size, scale, 0.23)?;
