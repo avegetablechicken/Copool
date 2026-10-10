@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Tauri's macOS-only pre-bundle hook; retain the original native WidgetKit UI."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+ROOT=Path(__file__).resolve().parents[1]
+if sys.platform != 'darwin' or os.environ.get('TAURI_ENV_PLATFORM', 'darwin') not in ('darwin','macos'):
+    raise SystemExit(0)
+config=json.loads((ROOT/'desktop/tauri.conf.json').read_text())
+output=ROOT/'.build/rust-widget'
+output.mkdir(parents=True,exist_ok=True)
+arch={'aarch64':'arm64','x86_64':'x86_64','universal':'arm64 x86_64'}.get(os.environ.get('TAURI_ENV_ARCH',''),os.uname().machine)
+command=['xcodebuild','-project','Copool.xcodeproj','-target','CopoolWidgetsMac','-configuration','Release','-sdk','macosx','CODE_SIGNING_ALLOWED=NO','CODE_SIGNING_REQUIRED=NO','SWIFT_ACTIVE_COMPILATION_CONDITIONS=COPOOL_RUST',f'PRODUCT_BUNDLE_IDENTIFIER={config["identifier"]}.widgets',f'MARKETING_VERSION={config["version"]}',f'CURRENT_PROJECT_VERSION={config["version"]}',f'ARCHS={arch}','ONLY_ACTIVE_ARCH=NO',f'CONFIGURATION_BUILD_DIR={output}/Release',f'OBJROOT={output}/Objects',f'SYMROOT={output}/Products',f'CLANG_MODULE_CACHE_PATH={output}/ModuleCache.noindex',f'SWIFT_MODULE_CACHE_PATH={output}/ModuleCache.noindex','build']
+log=output/'build.log'
+with log.open('w') as stream:
+    result=subprocess.run(command,cwd=ROOT,stdout=stream,stderr=subprocess.STDOUT)
+if result.returncode:
+    print('\n'.join(log.read_text(errors='replace').splitlines()[-60:]),file=sys.stderr)
+    raise SystemExit(result.returncode)
+bundle=output/'Release/CopoolWidgetsMac.appex'
+subprocess.run(['codesign','--force','--sign','-','--entitlements',str(ROOT/'desktop/native/widget.entitlements'),str(bundle)],check=True)
+print(f'WidgetKit extension: {bundle}')

@@ -1,3 +1,11 @@
+#[path = "../../src/proxy_session.rs"]
+mod proxy_session;
+#[path = "../../src/settings.rs"]
+mod settings;
+#[path = "../../src/repository.rs"]
+mod repository;
+#[path = "../../src/endpoint.rs"]
+mod endpoint;
 #[path = "../../src/auth.rs"]
 mod auth;
 #[path = "../../src/models.rs"]

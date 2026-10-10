@@ -36,63 +36,10 @@ pub(crate) fn sync_current_auth_account_on_startup(app: &AppHandle) -> Result<()
 }
 
 pub(crate) fn load_store_from_path(path: &Path) -> Result<AccountsStore, String> {
-    if !path.exists() {
-        return Ok(AccountsStore::default());
-    }
-
-    let raw = fs::read_to_string(path)
-        .map_err(|e| format!("读取账号存储文件失败 {}: {e}", path.display()))?;
-
-    match serde_json::from_str::<AccountsStore>(&raw) {
-        Ok(store) => Ok(store),
-        Err(primary_err) => {
-            let mut stream = serde_json::Deserializer::from_str(&raw).into_iter::<AccountsStore>();
-            if let Some(Ok(recovered)) = stream.next() {
-                log::warn!(
-                    "账号存储文件存在尾随内容，已自动恢复首个 JSON 对象 {}: {}",
-                    path.display(),
-                    primary_err
-                );
-                if let Err(repair_err) = write_store_file(path, &recovered) {
-                    log::warn!(
-                        "恢复后重写账号存储文件失败 {}: {}",
-                        path.display(),
-                        repair_err
-                    );
-                }
-                return Ok(recovered);
-            }
-
-            if let Err(backup_err) = backup_corrupted_store_file(path, &raw) {
-                log::warn!(
-                    "账号存储文件损坏，备份失败 {}: {}",
-                    path.display(),
-                    backup_err
-                );
-            }
-
-            let fallback = AccountsStore::default();
-            if let Err(repair_err) = write_store_file(path, &fallback) {
-                return Err(format!(
-                    "账号存储文件格式无效且修复失败 {}: {}; {}",
-                    path.display(),
-                    primary_err,
-                    repair_err
-                ));
-            }
-
-            log::warn!(
-                "账号存储文件格式无效，已重建默认存储 {}: {}",
-                path.display(),
-                primary_err
-            );
-            Ok(fallback)
-        }
-    }
+    crate::repository::load_accounts(path)
 }
-
 pub(crate) fn save_store_to_path(path: &Path, store: &AccountsStore) -> Result<(), String> {
-    write_store_file(path, store)
+    crate::repository::save_accounts(path, store)
 }
 
 pub(crate) fn sync_current_auth_account_on_startup_in_path(path: &Path) -> Result<(), String> {
@@ -125,6 +72,7 @@ pub(crate) fn sync_current_auth_account_on_startup_in_path(path: &Path) -> Resul
         .unwrap_or_else(|| format!("Codex {}", short_account(&extracted.account_id)));
 
     let stored = StoredAccount {
+        extra: Default::default(),
         id: Uuid::new_v4().to_string(),
         label,
         email: extracted.email,
@@ -171,73 +119,12 @@ fn write_store_file(path: &Path, store: &AccountsStore) -> Result<(), String> {
 }
 
 fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("无法解析存储目录 {}", path.display()))?;
-    let temp_path = parent.join(format!(
-        ".{}.tmp-{}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("accounts.json"),
-        Uuid::new_v4()
-    ));
-
-    let write_result = (|| -> Result<(), String> {
-        let mut temp_file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp_path)
-            .map_err(|e| format!("创建临时存储文件失败 {}: {e}", temp_path.display()))?;
-        temp_file
-            .write_all(contents)
-            .map_err(|e| format!("写入临时存储文件失败 {}: {e}", temp_path.display()))?;
-        temp_file
-            .sync_all()
-            .map_err(|e| format!("刷新临时存储文件失败 {}: {e}", temp_path.display()))?;
-        drop(temp_file);
-        set_private_permissions(&temp_path);
-
-        #[cfg(target_family = "unix")]
-        {
-            fs::rename(&temp_path, path).map_err(|e| {
-                format!(
-                    "替换账号存储文件失败 {} -> {}: {e}",
-                    temp_path.display(),
-                    path.display()
-                )
-            })?;
-
-            let parent_dir = fs::File::open(parent)
-                .map_err(|e| format!("打开存储目录失败 {}: {e}", parent.display()))?;
-            parent_dir
-                .sync_all()
-                .map_err(|e| format!("刷新存储目录失败 {}: {e}", parent.display()))?;
-        }
-
-        #[cfg(not(target_family = "unix"))]
-        {
-            if path.exists() {
-                fs::remove_file(path)
-                    .map_err(|e| format!("移除旧账号存储文件失败 {}: {e}", path.display()))?;
-            }
-            fs::rename(&temp_path, path).map_err(|e| {
-                format!(
-                    "替换账号存储文件失败 {} -> {}: {e}",
-                    temp_path.display(),
-                    path.display()
-                )
-            })?;
-        }
-
-        set_private_permissions(path);
-        Ok(())
-    })();
-
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-
-    write_result
+    let parent = path.parent().ok_or("Invalid storage directory")?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    temp.write_all(contents).map_err(|e| e.to_string())?;
+    temp.as_file().sync_all().map_err(|e| e.to_string())?;
+    temp.persist(path).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn backup_corrupted_store_file(path: &Path, raw: &str) -> Result<PathBuf, String> {

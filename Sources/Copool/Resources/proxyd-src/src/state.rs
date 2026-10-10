@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 

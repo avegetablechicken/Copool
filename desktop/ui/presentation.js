@@ -1,0 +1,570 @@
+/* Pure presentation rules ported from Swift. Used by the UI and node:test. */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  else root.CopoolPresentation = api;
+})(globalThis, function () {
+  const locales = [
+    "en",
+    "zh-Hans",
+    "zh-Hant",
+    "ja",
+    "ko",
+    "fr",
+    "de",
+    "it",
+    "es",
+    "ru",
+    "nl",
+  ];
+  const clean = (value) =>
+    typeof value === "string" && value.trim() ? value.trim() : null;
+  function formatLocalized(template, args = []) {
+    let cursor = 0;
+    return template.replace(
+      /%%|%(?:(\d+)\$)?(?:ll|l)?([@diuf])/g,
+      (match, position) => {
+        if (match === "%%") return "%";
+        const index = position ? Number(position) - 1 : cursor++;
+        return index < args.length ? String(args[index]) : match;
+      },
+    );
+  }
+  function resolveLocale(value) {
+    const v = String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replaceAll("_", "-");
+    if (/^zh-(hant|tw|hk|mo)/.test(v)) return "zh-Hant";
+    if (v.startsWith("zh")) return "zh-Hans";
+    return locales.find((locale) => v.startsWith(locale)) || "en";
+  }
+  function preferredLocale(values) {
+    for (const value of values) {
+      const locale = resolveLocale(value);
+      if (
+        locale !== "en" ||
+        String(value).trim().toLowerCase().startsWith("en")
+      )
+        return locale;
+    }
+    return "en";
+  }
+  function normalizedPlan(account) {
+    const raw =
+      typeof account === "object" && account !== null
+        ? clean(account.usage?.planType) || clean(account.planType)
+        : clean(account);
+    const p = (raw || "team").toUpperCase();
+    return ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE"].includes(p)
+      ? p
+      : "TEAM";
+  }
+  function workspaceTag(account) {
+    return (
+      clean(account.sourceTag) ||
+      (["TEAM", "BUSINESS", "ENTERPRISE"].includes(normalizedPlan(account))
+        ? clean(account.teamAlias) || clean(account.teamName)
+        : null)
+    );
+  }
+  function displayPercent(window, mode = "used", missing = null) {
+    if (!window || !Number.isFinite(window.usedPercent)) return missing;
+    const used = Math.max(0, Math.min(100, window.usedPercent));
+    return mode === "remaining" ? 100 - used : used;
+  }
+  function formatReset(epoch, locale = "en", timeZone) {
+    if (epoch == null) return "--";
+    const date = new Date(epoch * 1000),
+      language = resolveLocale(locale);
+    const options = timeZone ? { timeZone } : {};
+    return (
+      new Intl.DateTimeFormat(language, {
+        dateStyle: "short",
+        ...options,
+      }).format(date) +
+      ", " +
+      new Intl.DateTimeFormat(language, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+        ...options,
+      }).format(date)
+    );
+  }
+  function windowPresentation(
+    window,
+    mode = "used",
+    formatDate = (value) => formatReset(value),
+  ) {
+    const used = Math.round(displayPercent(window, "used", 100));
+    return {
+      progressPercent: mode === "remaining" ? 100 - used : used,
+      primaryKind: mode,
+      primaryPercent: mode === "remaining" ? 100 - used : used,
+      secondaryPercent: mode === "remaining" ? used : 100 - used,
+      reset: window?.resetAt != null ? formatDate(window.resetAt) : "--",
+    };
+  }
+  function card(account, collapsed = false, mode = "used") {
+    const plan = normalizedPlan(account),
+      name = (account.email ?? account.accountId ?? "").trim(),
+      credits = account.usage?.credits;
+    return {
+      plan,
+      accent:
+        {
+          PRO: "orange",
+          PLUS: "pink",
+          FREE: "gray",
+          BUSINESS: "indigo",
+          ENTERPRISE: "indigo",
+        }[plan] || "teal",
+      workspaceTag: workspaceTag(account),
+      name:
+        collapsed && name.includes("@")
+          ? name.slice(0, name.indexOf("@"))
+          : name,
+      status:
+        account.workspaceStatus === "deactivated" || account.available === false
+          ? "deactivated"
+          : null,
+      credits: credits?.unlimited
+        ? "unlimited"
+        : credits?.balance == null
+          ? "--"
+          : Number.isFinite(Number(credits.balance))
+            ? String(Math.round(Number(credits.balance)))
+            : credits.balance,
+      fiveHour: windowPresentation(account.usage?.fiveHour, mode),
+      oneWeek: windowPresentation(account.usage?.oneWeek, mode),
+      compact: [
+        displayPercent(account.usage?.fiveHour, mode),
+        displayPercent(account.usage?.oneWeek, mode),
+      ],
+      selectionAccent: account.isCurrent ? plan : null,
+    };
+  }
+  function collapsedInteraction({ collapsed, current, switching, hovered }) {
+    return {
+      canHover: collapsed && !current,
+      canReveal: collapsed && !current && !switching,
+      visible: collapsed && !current && (hovered || switching),
+    };
+  }
+  const layout = {
+    panelWidth: 542,
+    pagePadding: 16,
+    gap: 10,
+    cardWidth: 250,
+    compactHeight: 30,
+  };
+  function grid({
+    platform = "desktop",
+    collapsed = false,
+    width = 542,
+    height = 620,
+  } = {}) {
+    if (["desktop", "macOS", "windows", "linux"].includes(platform))
+      return {
+        count: collapsed ? 3 : 2,
+        width: collapsed ? (542 - 32 - 20) / 3 : 250,
+      };
+    const landscape = width > height,
+      mini = platform === "iPadMini",
+      phone = platform === "iPhone";
+    const desired = phone
+      ? collapsed
+        ? 2
+        : 1
+      : mini
+        ? collapsed
+          ? landscape
+            ? 5
+            : 3
+          : landscape
+            ? 3
+            : 2
+        : collapsed
+          ? landscape
+            ? 7
+            : 5
+          : landscape
+            ? 4
+            : 3;
+    const minimum = phone ? (collapsed ? 160 : 280) : collapsed ? 132 : 240;
+    return {
+      count: Math.min(
+        desired,
+        Math.max(1, Math.floor((width - 32 + 10) / (minimum + 10))),
+      ),
+      width: null,
+    };
+  }
+  function progressMetrics(progress, width, height = 12) {
+    const clamped = Math.max(0, Math.min(1, progress)),
+      grooveHeight = Math.max(0, height - 4),
+      grooveWidth = Math.max(0, width - 4),
+      raw = grooveWidth * clamped;
+    return {
+      fillScale: clamped,
+      showsFill: clamped > 0,
+      grooveHeight,
+      rawFillWidth: raw,
+      visibleFillWidth: raw > 0 ? Math.max(raw, grooveHeight) : 0,
+    };
+  }
+  function ringMetrics(lineWidth = 7, size = 54) {
+    const trackWidth = lineWidth * 1.22,
+      inset = Math.max(0.05, lineWidth * 0.01) + trackWidth / 2,
+      fillWidth = Math.max(6.2, trackWidth * 0.82);
+    return {
+      trackWidth,
+      fillWidth,
+      highlightWidth: Math.max(1.8, fillWidth * 0.38),
+      dotThreshold: Math.min(
+        1,
+        Math.max(5.8, fillWidth * 1.04) /
+          (2 * Math.PI * Math.max(0, size / 2 - inset)),
+      ),
+    };
+  }
+  function actions({
+    importing = false,
+    adding = false,
+    sub2api = false,
+    switching = false,
+    canRefresh = true,
+    spinning = false,
+  } = {}) {
+    return [
+      {
+        intent: "importCurrentAuth",
+        title: importing
+          ? "accounts.action.importing"
+          : "accounts.action.import_account",
+        enabled: !importing && !adding,
+        menu: [
+          "importCurrentAuth",
+          "importAuthFile",
+          ...(sub2api ? ["importSub2APIAccounts"] : []),
+        ],
+      },
+      {
+        intent: adding ? "cancelAddAccount" : "addAccount",
+        title: adding ? "common.cancel" : "accounts.action.add_account",
+        enabled: adding || !importing,
+        symbol: adding ? "xmark" : "plus",
+      },
+      { intent: "smartSwitch", enabled: !importing && !adding && !switching },
+      { intent: "refreshUsage", enabled: canRefresh, spinning },
+    ];
+  }
+  function settingsControls(settings = {}, editors = []) {
+    return {
+      usagePicker: {
+        selectedValue:
+          settings.usageProgressDisplayMode ?? settings.usageDisplay ?? "used",
+        options: ["used", "remaining"],
+      },
+      switchToggles: [
+        "autoSmartSwitch",
+        "syncOpencodeOpenaiAuth",
+        "restartEditorsOnSwitch",
+      ],
+      restartPicker: {
+        isEnabled:
+          Boolean(settings.restartEditorsOnSwitch) && editors.length > 0,
+        selectedValue: settings.restartEditorTargets?.[0] ?? null,
+        options: [
+          { value: null, title: "common.none" },
+          ...editors.map((e) => ({ value: e.id, title: e.label })),
+        ],
+      },
+      languagePicker: {
+        selectedValue: resolveLocale(settings.locale),
+        options: locales,
+      },
+    };
+  }
+  function trailingActions({
+    canRefresh = true,
+    spinning = false,
+    collapsed = false,
+  } = {}) {
+    return [
+      { intent: "refreshUsage", enabled: canRefresh, spinning },
+      {
+        intent: "toggleCollapse",
+        symbol: collapsed ? "chevron.down" : "chevron.up",
+        label: collapsed
+          ? "accounts.action.expand_all"
+          : "accounts.action.collapse_all",
+      },
+    ];
+  }
+  function leadingActions(options = {}) {
+    const all = actions(options);
+    return [
+      {
+        intent: "toggleUsageProgressDisplay",
+        symbol: "switch.2",
+        label: "accounts.action.toggle_usage_progress_display",
+      },
+      { ...all[0], label: "accounts.action.import_account" },
+      all[1],
+    ];
+  }
+  function publicCallout(running) {
+    return running
+      ? null
+      : {
+          title: "proxy.public.callout.start_local_first_title",
+          message: "proxy.public.callout.start_local_first_message",
+        };
+  }
+  function publicModes(selectedMode, enabled) {
+    return ["quick", "named"].map((mode) => ({
+      mode,
+      selected: mode === selectedMode,
+      isEnabled: enabled,
+    }));
+  }
+  function publicStatus(status = {}) {
+    return [
+      {
+        id: "status",
+        headline: status.running
+          ? "proxy.status.running"
+          : "proxy.status.stopped",
+        copyValue: null,
+        truncation: "tail",
+      },
+      {
+        id: "url",
+        headline: status.publicURL ?? "proxy.value.generated_after_start",
+        copyValue: status.publicURL ?? null,
+        truncation: "middle",
+      },
+      {
+        id: "install-path",
+        headline: status.binaryPath ?? "proxy.public.not_detected",
+        copyValue: null,
+        truncation: "middle",
+      },
+      {
+        id: "last-error",
+        headline: status.lastError ?? "common.none",
+        copyValue: null,
+        truncation: "tail",
+      },
+    ];
+  }
+  function remoteHeader({
+    label = "",
+    sshUser = "root",
+    host = "",
+    sshPort = 22,
+    expanded = false,
+    status = null,
+  } = {}) {
+    return {
+      title: label || "new-server",
+      subtitle: expanded ? null : `${sshUser}@${host}:${sshPort}`,
+      isRunning: status?.running === true,
+    };
+  }
+  function remoteMetrics(status) {
+    const boolean = (value) =>
+      value == null ? "Unknown" : value ? "Yes" : "No";
+    return ["installed", "serviceInstalled", "enabled", "running", "pid"].map(
+      (key) => ({
+        id: key,
+        value:
+          key === "pid" ? String(status?.pid ?? "--") : boolean(status?.[key]),
+      }),
+    );
+  }
+  function remoteDetails(status) {
+    return [
+      { value: status?.baseURL ?? "--", canCopy: status != null },
+      {
+        value: status?.apiKey ?? "Generated after first start",
+        canCopy: status?.apiKey != null,
+      },
+      { value: status?.serviceName ?? "Unknown", canCopy: status != null },
+    ];
+  }
+  function remoteLogs(logs) {
+    return {
+      content: logs || "Logs have not been loaded yet",
+      canCopy: Boolean(logs),
+    };
+  }
+  function proxyButtons(running, loading = false) {
+    return [
+      { intent: "refreshStatus", enabled: !loading },
+      {
+        intent: running ? "stop" : "start",
+        enabled: !loading,
+        surfaceStyle: "prominent",
+        role: running ? "destructive" : "standard",
+      },
+    ];
+  }
+  function publicButtons(running, loading, canStart) {
+    const buttons = proxyButtons(running, loading);
+    buttons[1].enabled = running ? !loading : canStart;
+    return buttons;
+  }
+  function remoteButtons(running, active = null) {
+    return [
+      "save",
+      "removeLocal",
+      "discover",
+      "deploy",
+      "syncAccounts",
+      "refresh",
+      running ? "stop" : "start",
+      "logs",
+      "uninstall",
+    ].map((intent) => ({
+      intent,
+      enabled: !active,
+      showsProgress: active === intent,
+      surfaceStyle: ["save", "deploy", "syncAccounts"].includes(intent)
+        ? "prominent"
+        : intent === "uninstall"
+          ? "dangerProminent"
+          : "regular",
+      role: ["removeLocal", "uninstall", "stop"].includes(intent)
+        ? "destructive"
+        : "standard",
+    }));
+  }
+  function remoteHelp(buttons) {
+    const names = {
+      removeLocal: "remove_local",
+      syncAccounts: "sync_accounts",
+      uninstall: "uninstall_remote",
+    };
+    return buttons.map((b) => ({
+      action: b.intent,
+      key: `proxy.remote.help.${names[b.intent] || b.intent}`,
+    }));
+  }
+  function normalizeLogs(log) {
+    const chars = Array.from(log || "");
+    return chars.length > 12000
+      ? "...\n" + chars.slice(-11996).join("")
+      : log || "";
+  }
+  function visibleAccounts(accounts) {
+    return accounts.filter(
+      (a) => !a.displayStatus || a.displayStatus === "list",
+    );
+  }
+  function pendingCards(accounts, directory = []) {
+    const pending = accounts
+      .filter(
+        (a) =>
+          a.displayStatus !== "deleted" &&
+          (["pending", "deactivated"].includes(a.displayStatus) ||
+            a.workspaceStatus === "deactivated"),
+      )
+      .map((a) => ({
+        id: a.id,
+        cardId: a.id,
+        workspaceId: a.accountId,
+        workspaceName: a.teamName || a.email || a.accountId,
+        email: a.email,
+        planType: a.planType,
+        status:
+          a.workspaceStatus === "deactivated" ? "deactivated" : a.displayStatus,
+        visibility: "visible",
+      }));
+    for (const row of directory) {
+      if (
+        row.visibility === "deleted" ||
+        accounts.some(
+          (a) =>
+            a.accountId?.trim().toLowerCase() ===
+            row.workspaceId?.trim().toLowerCase(),
+        )
+      )
+        continue;
+      pending.push({
+        ...row,
+        id: row.workspaceId,
+        status: row.status === "deactivated" ? "deactivated" : "pending",
+      });
+    }
+    return pending.sort(
+      (a, b) =>
+        (a.status === b.status ? 0 : a.status === "deactivated" ? -1 : 1) ||
+        a.workspaceName.localeCompare(b.workspaceName, undefined, {
+          sensitivity: "base",
+        }),
+    );
+  }
+  function needsReauthentication(
+    account,
+    translated = "Sign-in expired. Please sign in again.",
+  ) {
+    return (
+      account.sourceTag !== "SUB2API" &&
+      ["error.accounts.sign_in_expired", translated].includes(
+        account.usageError,
+      )
+    );
+  }
+  function cardsEqual(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  const darkGroovePalette = {
+    glassTintOpacity: 0.14,
+    topEdgeOpacity: 0.24,
+    centerGlowOpacity: 0.11,
+    ringOuterHighlightOpacity: 0.22,
+  };
+  return {
+    formatLocalized,
+    proxyButtons,
+    publicButtons,
+    remoteButtons,
+    remoteHelp,
+    normalizeLogs,
+    visibleAccounts,
+    pendingCards,
+    needsReauthentication,
+    cardsEqual,
+    settingsControls,
+    trailingActions,
+    leadingActions,
+    publicCallout,
+    publicModes,
+    publicStatus,
+    remoteHeader,
+    remoteMetrics,
+    remoteDetails,
+    remoteLogs,
+    darkGroovePalette,
+    locales,
+    clean,
+    resolveLocale,
+    preferredLocale,
+    normalizedPlan,
+    workspaceTag,
+    displayPercent,
+    windowPresentation,
+    formatReset,
+    card,
+    collapsedInteraction,
+    layout,
+    grid,
+    progressMetrics,
+    ringMetrics,
+    actions,
+  };
+});

@@ -44,3 +44,13 @@ plutil -extract CFBundleShortVersionString raw \
 - This is a locally ad-hoc-signed build, not a notarized distribution release. Do not apply `Copool.release.entitlements` to the ad-hoc-signed main app. Provisioning-dependent capabilities are not validated by signature verification alone.
 - An ordinary build does not include installing, launching, replacing an installed app, committing, uploading, or publishing. Perform those only when requested.
 - For an explicitly requested distribution release, follow `docs/release-macos.md` and `scripts/release_macos.sh` for Developer ID signing and notarization instead.
+
+## Rust Cross-Platform Development
+
+- When explicitly working on the Rust cross-platform version, use the root Cargo workspace: `cargo test -p copool-core --locked` and `cargo build -p copool-desktop --locked`. This is separate from the ordinary Swift macOS bundle workflow above.
+- The desktop UI is in `desktop/ui`; do not use the unrelated root Electron package scripts.
+- The core and packaged daemon share Rust sources in `Sources/Copool/Resources/proxyd-src/src`. After modifying these sources, also check the standalone daemon with `cargo check --manifest-path Sources/Copool/Resources/proxyd-src/proxyd/Cargo.toml --locked`.
+- Use temporary `COPOOL_DATA_DIR` and `COPOOL_CODEX_AUTH_FILE` paths for interactive smoke tests. Never import or switch the user's real credentials as part of testing.
+- Keep migration limitations and platform validation status current in `docs/rust-cross-platform.md`.
+
+- The Rust GUI must preserve the existing SwiftUI GUI, layout, controls, and interactions. References such as Coport inform native material and rendering implementation; they do not authorize redesigning Copool.

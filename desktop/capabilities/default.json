@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Local Copool window only; no shell or general filesystem access from the webview.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

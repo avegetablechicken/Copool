@@ -8,6 +8,15 @@ Copool is a SwiftUI app for macOS that manages Codex/ChatGPT auth accounts, usag
 
 Copool 是一个面向 macOS 和 iOS 的 SwiftUI 应用，用于管理 Codex/ChatGPT 授权账号、按用量智能切换，以及本地/远程 API 代理工作流。
 
+## Rust 跨平台开发版本
+
+`develop/rust-cross-platform` 提供 Rust 核心 + Tauri 2 桌面客户端，面向 macOS、Windows 和 Linux。已接入账号管理、用量刷新、智能切换与本地 API 代理；完整迁移范围和限制见 [Rust 跨平台开发文档](docs/rust-cross-platform.md)。原 Swift 版本仍然保留。
+
+```sh
+cargo test -p copool-core --locked
+cargo run -p copool-desktop --locked
+```
+
 ## Screenshots / 截图
 
 <img src="./account.png" alt="Accounts Overview" width="560" />

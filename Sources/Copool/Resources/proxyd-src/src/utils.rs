@@ -172,32 +172,46 @@ fn push_command_candidates_from_dir(candidates: &mut Vec<PathBuf>, dir: &Path, c
     }
 }
 
-// An explicit account proxy replaces environment proxy selection and never falls back to direct.
-pub(crate) fn with_account_proxy(
-    builder: reqwest::ClientBuilder,
-    proxy_url: &str,
-) -> Result<reqwest::ClientBuilder, String> {
-    let proxy_url = proxy_url.trim();
-    if proxy_url.is_empty() {
-        return Ok(builder);
+pub(crate) fn validate_account_proxy(value: &str) -> Result<Option<reqwest::Url>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
     }
-    let url = reqwest::Url::parse(proxy_url).map_err(|_| "Invalid account proxy URL".to_string())?;
-    if !matches!(url.scheme(), "http" | "https" | "socks5")
+    let url = reqwest::Url::parse(value).map_err(|_| "Invalid account proxy URL".to_string())?;
+    let authority = value
+        .split_once("://")
+        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
+        .unwrap_or_default();
+    let port = authority
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok());
+    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h")
         || url.host_str().is_none()
+        || !port.is_some_and(|p| p > 0)
+        || authority.contains('@')
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
-        || (url.path() != "" && url.path() != "/")
+        || !matches!(url.path(), "" | "/")
     {
-        return Err("Invalid account proxy URL".to_string());
+        return Err("Invalid account proxy URL".into());
     }
-    let address = if let Some(rest) = proxy_url.strip_prefix("socks5://") {
-        format!("socks5h://{rest}")
-    } else {
-        proxy_url.to_string()
+    Ok(Some(url))
+}
+// An explicit account proxy replaces environment selection and never fails over.
+pub(crate) fn with_account_proxy(
+    builder: reqwest::ClientBuilder,
+    value: &str,
+) -> Result<reqwest::ClientBuilder, String> {
+    let Some(mut url) = validate_account_proxy(value)? else {
+        return Ok(builder);
     };
-    let proxy = reqwest::Proxy::all(address).map_err(|_| "Invalid account proxy URL".to_string())?;
+    if url.scheme() == "socks5" {
+        url.set_scheme("socks5h")
+            .map_err(|_| "Invalid proxy scheme")?;
+    }
+    let proxy = reqwest::Proxy::all(url.as_str()).map_err(|_| "Invalid account proxy URL")?;
     Ok(builder.no_proxy().proxy(proxy))
 }
 
@@ -217,15 +231,28 @@ mod account_proxy_tests {
         with_proxy["proxyURL"] = serde_json::json!("socks5://127.0.0.1:1080");
         let account: crate::models::StoredAccount = serde_json::from_value(with_proxy).unwrap();
         assert_eq!(account.proxy_url, "socks5://127.0.0.1:1080");
-        assert_eq!(serde_json::to_value(account).unwrap()["proxyURL"], "socks5://127.0.0.1:1080");
+        assert_eq!(
+            serde_json::to_value(account).unwrap()["proxyURL"],
+            "socks5://127.0.0.1:1080"
+        );
     }
 
     #[test]
     fn accepts_supported_proxies_and_rejects_invalid_values() {
-        for value in ["", "http://127.0.0.1:8080", "https://127.0.0.1:8080", "socks5://127.0.0.1:1080"] {
+        for value in [
+            "",
+            "http://127.0.0.1:8080",
+            "https://127.0.0.1:8080",
+            "socks5://127.0.0.1:1080",
+        ] {
             assert!(with_account_proxy(reqwest::Client::builder(), value).is_ok());
         }
-        for value in ["bad", "ftp://localhost:21", "http://user:pass@localhost:80", "http://localhost:80/path"] {
+        for value in [
+            "bad",
+            "ftp://localhost:21",
+            "http://user:pass@localhost:80",
+            "http://localhost:80/path",
+        ] {
             assert!(with_account_proxy(reqwest::Client::builder(), value).is_err());
         }
     }

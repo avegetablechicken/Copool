@@ -5,7 +5,6 @@ use crate::models::CreditSnapshot;
 use crate::models::UsageSnapshot;
 use crate::models::UsageWindow;
 use crate::utils::now_unix_seconds;
-use crate::utils::truncate_for_error;
 
 const DEFAULT_CHATGPT_BASE_URL: &str = "https://chatgpt.com";
 const CODEX_USAGE_PATH: &str = "/api/codex/usage";
@@ -14,6 +13,7 @@ const BACKEND_API_PREFIX: &str = "/backend-api";
 
 #[derive(Debug, Deserialize)]
 struct UsageApiResponse {
+    rate_limit_reset_credits: Option<serde_json::Value>,
     plan_type: Option<String>,
     rate_limit: Option<RateLimitDetails>,
     additional_rate_limits: Option<Vec<AdditionalRateLimitDetails>>,
@@ -32,10 +32,10 @@ struct AdditionalRateLimitDetails {
 }
 
 #[derive(Debug, Deserialize)]
-struct UsageWindowRaw {
-    used_percent: f64,
-    limit_window_seconds: i64,
-    reset_at: i64,
+pub(crate) struct UsageWindowRaw {
+    pub(crate) used_percent: f64,
+    pub(crate) limit_window_seconds: i64,
+    pub(crate) reset_at: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,69 +52,60 @@ pub(crate) async fn fetch_usage_snapshot(
 ) -> Result<UsageSnapshot, String> {
     let usage_urls = resolve_usage_urls();
 
-    let client = crate::utils::with_account_proxy(
-        reqwest::Client::builder()
-            .user_agent("codex-tools/0.1")
-            .timeout(std::time::Duration::from_secs(18)),
-        proxy_url,
-    )?
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let client = background_client(proxy_url)?;
 
-    let mut errors: Vec<String> = Vec::new();
-    for usage_url in usage_urls {
-        let response = match client
-            .get(&usage_url)
-            .header("Authorization", format!("Bearer {access_token}"))
+    fetch_usage_from_urls(&client, &usage_urls, access_token, account_id).await
+}
+
+pub(crate) fn background_client(proxy_url: &str) -> Result<reqwest::Client, String> {
+    crate::proxy_session::client(proxy_url, Default::default())
+}
+
+pub(crate) async fn fetch_usage_from_urls(
+    client: &reqwest::Client,
+    usage_urls: &[String],
+    access_token: &str,
+    account_id: &str,
+) -> Result<UsageSnapshot, String> {
+    static ENDPOINTS: std::sync::LazyLock<crate::endpoint::EndpointRequests> =
+        std::sync::LazyLock::new(Default::default);
+    let client_for_request = client.clone();
+    let access = access_token.to_owned();
+    let account = account_id.to_owned();
+    let result = ENDPOINTS
+        .fetch(
+            &format!("usage:{}", usage_urls.join("|")),
+            usage_urls,
+            move |url| {
+                client_for_request
+                    .get(url)
+                    .bearer_auth(&access)
+                    .header("ChatGPT-Account-Id", &account)
+                    .header("Accept", "application/json")
+            },
+            |value| serde_json::from_value::<UsageApiResponse>(value).map_err(|e| e.to_string()),
+        )
+        .await?;
+    let mut snapshot = map_usage_payload(result.value);
+    if let Some((base, _)) = result.endpoint.rsplit_once('/') {
+        if let Ok(response) = client
+            .get(format!("{base}/rate-limit-reset-credits"))
+            .bearer_auth(access_token)
             .header("ChatGPT-Account-Id", account_id)
-            .header("Accept", "application/json")
+            .header("OpenAI-Beta", "codex-1")
+            .header("originator", "Codex Desktop")
             .send()
             .await
         {
-            Ok(response) => response,
-            Err(err) => {
-                errors.push(format!("{usage_url} -> {}", format_reqwest_error(&err)));
-                continue;
+            if response.status().is_success() {
+                if let Ok(value) = response.json::<serde_json::Value>().await {
+                    snapshot.remaining_reset_count =
+                        reset_count(&value).or(snapshot.remaining_reset_count);
+                }
             }
-        };
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            errors.push(format!(
-                "{usage_url} -> {status}: {}",
-                truncate_for_error(&body, 140)
-            ));
-            continue;
         }
-
-        let payload: UsageApiResponse = match response.json().await {
-            Ok(payload) => payload,
-            Err(err) => {
-                errors.push(format!("{usage_url} -> 解析返回失败: {err}"));
-                continue;
-            }
-        };
-        return Ok(map_usage_payload(payload));
     }
-
-    if errors.is_empty() {
-        return Err("请求用量接口失败: 未命中任何候选地址".to_string());
-    }
-    let preview = errors
-        .iter()
-        .take(2)
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .join(" | ");
-    if errors.len() > 2 {
-        Err(format!(
-            "请求用量接口失败: {preview} | 另有 {} 个候选地址失败",
-            errors.len() - 2
-        ))
-    } else {
-        Err(format!("请求用量接口失败: {preview}"))
-    }
+    Ok(snapshot)
 }
 
 fn resolve_usage_urls() -> Vec<String> {
@@ -213,6 +204,10 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
     let one_week = pick_nearest_window(&windows, 7 * 24 * 60 * 60).map(to_usage_window);
 
     UsageSnapshot {
+        remaining_reset_count: payload
+            .rate_limit_reset_credits
+            .as_ref()
+            .and_then(reset_count),
         fetched_at: now_unix_seconds(),
         plan_type: payload.plan_type,
         five_hour,
@@ -225,7 +220,10 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
     }
 }
 
-fn pick_nearest_window(windows: &[UsageWindowRaw], target_seconds: i64) -> Option<UsageWindowRaw> {
+pub(crate) fn pick_nearest_window(
+    windows: &[UsageWindowRaw],
+    target_seconds: i64,
+) -> Option<UsageWindowRaw> {
     windows
         .iter()
         .min_by_key(|window| (window.limit_window_seconds - target_seconds).abs())
@@ -242,4 +240,44 @@ fn to_usage_window(window: UsageWindowRaw) -> UsageWindow {
         window_seconds: window.limit_window_seconds,
         reset_at: Some(window.reset_at),
     }
+}
+
+fn reset_count(value: &serde_json::Value) -> Option<i64> {
+    let value = value.get("available_count")?;
+    value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok()))
+        .filter(|value| *value >= 0)
+}
+
+pub(crate) fn debug_request_summary(request: &reqwest::Request) -> String {
+    let headers: serde_json::Map<String, serde_json::Value> = request
+        .headers()
+        .iter()
+        .filter(|(name, _)| name.as_str() != "authorization")
+        .map(|(name, value)| {
+            let display = match name.as_str() {
+                "accept" => "Accept",
+                "chatgpt-account-id" => "ChatGPT-Account-Id",
+                "user-agent" => "User-Agent",
+                "content-type" => "Content-Type",
+                "authorization" => "Authorization",
+                other => other,
+            };
+            (display.into(), value.to_str().unwrap_or("<binary>").into())
+        })
+        .collect();
+    serde_json::json!({"method":request.method().as_str(),"url":request.url().as_str(),"headers":headers}).to_string()
+}
+pub(crate) fn debug_response_body(data: &[u8]) -> String {
+    std::str::from_utf8(data)
+        .map(str::to_owned)
+        .unwrap_or_else(|_| format!("<non-utf8 body: {} bytes>", data.len()))
+}
+
+pub(crate) fn parse_payload(value: serde_json::Value, now: i64) -> Result<UsageSnapshot, String> {
+    let payload: UsageApiResponse = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    let mut snapshot = map_usage_payload(payload);
+    snapshot.fetched_at = now;
+    Ok(snapshot)
 }

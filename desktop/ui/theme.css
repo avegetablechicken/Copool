@@ -1,0 +1,579 @@
+/* Coport's native-material approach, applied to Copool's existing layouts.
+   Static values are cross-platform fallbacks; WebKit uses AppKit semantics. */
+:root {
+  color-scheme: light dark;
+  --window: #ececec;
+  --text: rgba(0, 0, 0, 0.85);
+  --secondary: rgba(0, 0, 0, 0.5);
+  --tertiary: rgba(0, 0, 0, 0.26);
+  --separator: rgba(0, 0, 0, 0.12);
+  --surface: rgba(255, 255, 255, 0.46);
+  --group: rgba(255, 255, 255, 0.4);
+  --control: rgba(255, 255, 255, 0.62);
+  --control-border: rgba(0, 0, 0, 0.12);
+  --track: rgba(0, 0, 0, 0.08);
+  --control-accent: #007aff;
+  --teal: #30b0c7;
+  --mint: #00c7be;
+  --orange: #ff9500;
+  --pink: #ff2d55;
+  --indigo: #5856d6;
+  --red: #ff3b30;
+  --green: #28cd41;
+  --gray: #8e8e93;
+  --block-shadow: 0 0 5px rgba(0, 0, 0, 0.045);
+  --popover: rgba(244, 244, 244, 0.96);
+  --hover-overlay: rgba(240, 240, 245, 0.7);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --window: #29292b;
+    --text: rgba(255, 255, 255, 0.85);
+    --secondary: rgba(255, 255, 255, 0.55);
+    --tertiary: rgba(255, 255, 255, 0.25);
+    --separator: rgba(255, 255, 255, 0.12);
+    --surface: rgba(30, 30, 30, 0.46);
+    --group: rgba(30, 30, 30, 0.35);
+    --control: rgba(255, 255, 255, 0.07);
+    --control-border: rgba(255, 255, 255, 0.12);
+    --track: rgba(255, 255, 255, 0.1);
+    --control-accent: #0a84ff;
+    --teal: #40c8e0;
+    --mint: #63e6e2;
+    --orange: #ff9f0a;
+    --pink: #ff375f;
+    --indigo: #5e5ce6;
+    --red: #ff453a;
+    --green: #32d74b;
+    --gray: #98989d;
+    --block-shadow: 0 0 5px rgba(0, 0, 0, 0.12);
+    --popover: rgba(42, 42, 44, 0.96);
+    --hover-overlay: rgba(45, 45, 52, 0.7);
+  }
+}
+@supports (color: -apple-system-label) {
+  :root {
+    --text: -apple-system-label;
+    --secondary: -apple-system-secondary-label;
+    --tertiary: -apple-system-tertiary-label;
+    --separator: -apple-system-separator;
+    --control-accent: -apple-system-control-accent;
+    --orange: -apple-system-orange;
+    --red: -apple-system-red;
+    --green: -apple-system-green;
+    --gray: -apple-system-gray;
+  }
+}
+@supports (color: -apple-system-teal) {
+  :root {
+    --teal: -apple-system-teal;
+  }
+}
+@supports (color: -apple-system-mint) {
+  :root {
+    --mint: -apple-system-mint;
+  }
+}
+@supports (color: -apple-system-pink) {
+  :root {
+    --pink: -apple-system-pink;
+  }
+}
+@supports (color: -apple-system-indigo) {
+  :root {
+    --indigo: -apple-system-indigo;
+  }
+}
+
+/* Transparent only where the native Popover backdrop is actually installed. */
+html,
+body {
+  background: transparent;
+}
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI Variable Text",
+    "Segoe UI", Ubuntu, "Noto Sans", sans-serif;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  color: var(--text);
+}
+button,
+.capsule,
+.switch,
+.settings-row select {
+  cursor: default;
+}
+input,
+textarea,
+.copy-row input {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.panel {
+  background: var(--window);
+  border: 0;
+  border-radius: 16px;
+}
+.macos .panel {
+  background: transparent;
+}
+.tab-header {
+  padding-top: 15px;
+}
+.tab-switcher {
+  background: var(--control);
+  border: 0;
+  box-shadow: inset 0 0 0 0.5px var(--control-border);
+}
+.tab-switcher button[aria-selected="true"] {
+  background: color-mix(in srgb, var(--control-accent) 12%, var(--control));
+  box-shadow:
+    0 0.5px 1.5px rgba(0, 0, 0, 0.06),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.1);
+}
+.tab-switcher
+  button:not([aria-selected="true"]):has(
+    + button:not([aria-selected="true"])
+  ):after {
+  background: var(--separator);
+  width: 0.5px;
+}
+h2,
+h3,
+.card-name {
+  font-weight: 600;
+}
+.card-name {
+  font-size: 13px;
+}
+.account-card,
+.section-card {
+  border-color: transparent;
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--separator) 60%, transparent),
+    var(--block-shadow);
+}
+.account-card {
+  --tone: var(--teal);
+  --tag: color-mix(in srgb, var(--tone) 14%, transparent);
+}
+.account-card[data-plan="PRO"] {
+  --tone: var(--orange);
+  --tag: color-mix(in srgb, var(--orange) 14%, transparent);
+}
+.account-card[data-plan="PLUS"] {
+  --tone: var(--pink);
+  --tag: color-mix(in srgb, var(--pink) 14%, transparent);
+}
+.account-card[data-plan="FREE"] {
+  --tone: var(--gray);
+  --tag: color-mix(in srgb, var(--gray) 14%, transparent);
+}
+.account-card[data-plan="BUSINESS"],
+.account-card[data-plan="ENTERPRISE"] {
+  --tone: var(--indigo);
+  --tag: color-mix(in srgb, var(--indigo) 14%, transparent);
+}
+.account-card.current {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--tone) 3%, var(--surface));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--tone) 45%, transparent),
+    var(--block-shadow);
+}
+.tag {
+  font-weight: 700;
+}
+.capsule {
+  background: var(--control);
+  border-color: transparent;
+  box-shadow:
+    inset 0 0 0 0.5px var(--control-border),
+    0 0.5px 1px rgba(0, 0, 0, 0.06);
+  color: var(--text);
+}
+.capsule.prominent {
+  background: color-mix(in srgb, var(--control-accent) 14%, var(--control));
+  border-color: transparent;
+}
+.capsule.mint {
+  background: color-mix(in srgb, var(--mint) 18%, var(--control));
+  border-color: transparent;
+}
+.capsule.destructive {
+  background: color-mix(in srgb, var(--red) 18%, var(--control));
+  border-color: transparent;
+}
+.capsule:hover {
+  filter: none;
+  background: color-mix(in srgb, var(--text) 5%, var(--control));
+}
+.capsule.prominent:hover {
+  background: color-mix(in srgb, var(--control-accent) 20%, var(--control));
+}
+.capsule.mint:hover {
+  background: color-mix(in srgb, var(--mint) 24%, var(--control));
+}
+.capsule.destructive:hover {
+  background: color-mix(in srgb, var(--red) 24%, var(--control));
+}
+.capsule:active {
+  transform: scale(0.97);
+  filter: brightness(0.96);
+}
+.liquid-progress {
+  background: var(--track);
+  border: 0.5px solid color-mix(in srgb, var(--separator) 60%, transparent);
+  padding: 1.5px;
+  box-shadow: none;
+}
+.liquid-fill {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--teal) 92%, transparent),
+    color-mix(in srgb, var(--teal) 74%, transparent)
+  );
+  box-shadow: none;
+}
+.five-hour .liquid-fill {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--orange) 92%, transparent),
+    color-mix(in srgb, var(--orange) 74%, transparent)
+  );
+  box-shadow: none;
+}
+.ring-track {
+  stroke: var(--track);
+}
+.ring-fill,
+.ring.five-hour .ring-fill {
+  filter: none;
+}
+.ring-highlight {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.3);
+  stroke-width: 2;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: center;
+}
+.compact-switch-overlay {
+  background: var(--hover-overlay);
+}
+.settings-group {
+  background: var(--group);
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--separator) 25%, transparent);
+}
+.settings-row {
+  font-size: 13px;
+}
+.settings-row + .settings-row {
+  border-top: 0.5px solid color-mix(in srgb, var(--separator) 65%, transparent);
+}
+.settings-footer {
+  background: transparent;
+}
+.metric,
+.capsule-input {
+  background: var(--control);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 0.5px var(--control-border);
+}
+.status-dot {
+  background: var(--tertiary);
+}
+.running .status-dot {
+  background: var(--mint);
+}
+.value-card {
+  background: var(--group);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 0.5px
+    color-mix(in srgb, var(--separator) 50%, transparent);
+}
+.toggle-pill {
+  background: var(--control);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 0.5px var(--control-border);
+}
+.switch {
+  background: var(--track);
+  box-shadow: inset 0 0 0 0.5px
+    color-mix(in srgb, var(--separator) 50%, transparent);
+}
+.switch:checked {
+  background: var(--control-accent);
+}
+.switch:before {
+  background: #fff;
+  box-shadow: 0 0.5px 1.5px rgba(0, 0, 0, 0.25);
+}
+.switch:checked:before {
+  background: #fff;
+}
+.popover-menu,
+dialog {
+  background: var(--popover);
+  border: 0.5px solid var(--control-border);
+}
+.popover-menu button:hover {
+  background: var(--control-accent);
+  color: #fff;
+}
+dialog input:not(.switch),
+dialog textarea {
+  background: var(--track);
+  color: var(--text);
+  border: 0.5px solid var(--control-border);
+}
+.dialog-tabs {
+  border-color: transparent;
+  background: var(--track);
+}
+.dialog-tabs button[aria-pressed="true"] {
+  background: var(--control);
+  box-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.1);
+}
+/* Override browser popup selects with the same small system-style appearance. */
+.settings-row select {
+  border: 0;
+  appearance: none;
+  padding: 0 23px 0 7px;
+  min-height: 22px;
+  background: transparent
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='10' viewBox='0 0 8 10'%3E%3Cpath d='M1.5 3.5 4 1l2.5 2.5M1.5 6.5 4 9l2.5-2.5' fill='none' stroke='%23888' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E")
+    no-repeat right 6px center;
+}
+
+/* SF Symbols are generated at each exact logical size and backing scale.
+   Keep the glyph above the native material with no filter/transform layer. */
+.native-symbol {
+  position: relative;
+  display: inline-block;
+  background: currentColor;
+  mask-size: 100% 100%;
+  -webkit-mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  filter: none;
+  transform: none;
+  opacity: 1;
+}
+.card-name + .usage-window {
+  margin-top: 0;
+}
+.usage-heading {
+  line-height: 13px;
+}
+.reset-label {
+  font-size: 10px;
+  line-height: 12px;
+}
+.card-footer {
+  min-height: 17px;
+}
+/* HTML context menus use a translucent fallback; the import menu is native. */
+.popover-menu {
+  background: light-dark(rgba(245, 245, 245, 0.65), rgba(36, 36, 39, 0.65));
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  border: 0.5px solid var(--control-border);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-left: auto;
+}
+.card-header-actions > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  min-height: 30px;
+  line-height: 1;
+}
+.account-proxy-button {
+  flex: none;
+  width: 30px;
+  padding: 0;
+  color: var(--secondary);
+}
+.card-header-actions .native-symbol {
+  display: block;
+}
+.account-proxy-button .icon {
+  width: 14px;
+  height: 14px;
+}
+.provider-field {
+  gap: 12px;
+}
+.provider-field input {
+  min-width: 0;
+  width: 60%;
+  border: 0.5px solid var(--control-border);
+  background: var(--control);
+  border-radius: 5px;
+  padding: 5px;
+  color: var(--text);
+}
+.provider-actions {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.remote-form {
+  margin-top: 10px;
+}
+.remote-output {
+  padding: 8px;
+}
+.remote-log {
+  font:
+    10px/1.4 ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 250px;
+  overflow: auto;
+}
+.provider-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  text-align: left;
+}
+.provider-toggle .icon {
+  width: 14px;
+  height: 14px;
+}
+.provider-toggle .provider-chevron {
+  width: 12px;
+  height: 12px;
+}
+.provider-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+.provider-accent {
+  width: 3px;
+  height: 18px;
+  background: var(--control-accent);
+}
+.provider-body {
+  padding-left: 63px;
+}
+.provider-body .settings-row {
+  padding-left: 0;
+}
+.provider-body .caption {
+  padding-right: 12px;
+}
+.provider-save {
+  justify-content: flex-end;
+}
+.remote-card-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  text-align: left;
+  width: 100%;
+}
+.remote-heading {
+  flex: 1;
+  min-width: 0;
+}
+.remote-heading h3 {
+  margin: 0;
+}
+.remote-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.remote-fields .settings-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0;
+  min-height: auto;
+}
+.remote-fields .settings-row > span {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--secondary);
+}
+.remote-fields input {
+  width: 100%;
+}
+.remote-auth {
+  padding: 10px 0 4px;
+}
+.remote-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-identity .settings-row {
+  flex: 1;
+  padding: 4px 0;
+}
+.remote-identity input {
+  flex: 1;
+  width: auto;
+}
+.remote-private-key {
+  width: 100%;
+  height: 100px;
+  resize: vertical;
+  font:
+    11px ui-monospace,
+    monospace;
+  background: var(--control);
+  color: var(--text);
+  border: 0.5px solid var(--control-border);
+  border-radius: 6px;
+}
+.remote-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.remote-actions .capsule {
+  min-width: 0;
+  padding: 5px 8px;
+}
+.remote-feedback.value-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+.remote-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 8px;
+}
+.remote-metrics .value-card {
+  display: flex;
+  flex-direction: column;
+}
+.remote-action-guide {
+  margin-top: 8px;
+}
+dialog {
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  backdrop-filter: blur(24px) saturate(1.2);
+}

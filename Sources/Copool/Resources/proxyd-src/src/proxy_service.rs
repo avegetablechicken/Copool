@@ -35,7 +35,6 @@ use tauri::AppHandle;
 #[cfg(feature = "desktop")]
 use tauri::Manager;
 
-use crate::auth::current_auth_account_id;
 use crate::auth::extract_auth;
 use crate::auth::refresh_chatgpt_auth_tokens;
 use crate::auth::write_active_codex_auth;
@@ -53,11 +52,10 @@ use crate::store::save_store_to_path;
 use crate::usage::fetch_usage_snapshot;
 use crate::usage::resolve_chatgpt_base_origin;
 use crate::utils::now_unix_seconds;
-use crate::utils::set_private_permissions;
 use crate::utils::truncate_for_error;
 
 const DEFAULT_PROXY_PORT: u16 = 8787;
-const DEFAULT_PROXY_REQUEST_BODY_LIMIT_MIB: usize = 512;
+const DEFAULT_PROXY_REQUEST_BODY_LIMIT_MIB: usize = 8;
 const DEFAULT_PROXY_REQUEST_BODY_LIMIT_BYTES: usize =
     DEFAULT_PROXY_REQUEST_BODY_LIMIT_MIB * 1024 * 1024;
 const PROXY_REQUEST_BODY_LIMIT_MIB_ENV_VAR: &str = "CODEX_TOOLS_PROXY_MAX_BODY_MIB";
@@ -132,10 +130,29 @@ pub(crate) struct ProxyStorageContext {
     pub(crate) data_dir: PathBuf,
     pub(crate) store_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) sync_active_auth_on_refresh: bool,
+    pub(crate) prefer_local_selection: bool,
+    pub(crate) active_auth_path: Option<PathBuf>,
+    pub(crate) upstream_base_url: Option<String>,
+    pub(crate) on_auth_refreshed:
+        Option<Arc<dyn Fn(&str, &Value) -> Result<(), String> + Send + Sync>>,
+    pub(crate) provider_candidates:
+        Option<Arc<dyn Fn() -> Result<Vec<StoredAccount>, String> + Send + Sync>>,
+    pub(crate) on_selected: Option<
+        Arc<
+            dyn Fn(
+                    String,
+                    Value,
+                ) -> std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<(), String>> + Send>,
+                > + Send
+                + Sync,
+        >,
+    >,
 }
 
 #[derive(Clone)]
 struct ProxyCandidate {
+    is_preferred_current: bool,
     id: String,
     label: String,
     account_id: String,
@@ -270,6 +287,12 @@ pub(crate) fn new_proxy_storage_context(
         data_dir,
         store_lock,
         sync_active_auth_on_refresh,
+        prefer_local_selection: false,
+        active_auth_path: None,
+        upstream_base_url: None,
+        on_auth_refreshed: None,
+        provider_candidates: None,
+        on_selected: None,
     }
 }
 
@@ -374,7 +397,10 @@ pub(crate) async fn start_api_proxy_with_runtime(
     let context = Arc::new(ProxyContext {
         storage: storage.clone(),
         api_key: shared_api_key.clone(),
-        upstream_base_url: resolve_codex_upstream_base_url(),
+        upstream_base_url: storage
+            .upstream_base_url
+            .clone()
+            .unwrap_or_else(resolve_codex_upstream_base_url),
         client,
         shared: shared.clone(),
     });
@@ -451,7 +477,13 @@ pub(crate) async fn stop_api_proxy_with_runtime(
         let _ = shutdown_tx.send(());
     }
     handle.usage_refresh_task.abort();
-    let _ = handle.task.await;
+    if tokio::time::timeout(std::time::Duration::from_secs(5), &mut handle.task)
+        .await
+        .is_err()
+    {
+        handle.task.abort();
+        let _ = handle.task.await;
+    }
 
     let snapshot = handle.shared.lock().await.clone();
     Ok(stopped_status(
@@ -550,7 +582,6 @@ async fn chat_completions_handler(
 
     let (candidate, upstream_response) = upstream;
     update_proxy_target(&context, &candidate).await;
-    update_proxy_error(&context, None).await;
 
     if downstream_stream {
         build_chat_streaming_response(upstream_response)
@@ -615,7 +646,6 @@ async fn responses_handler(
 
     let (candidate, upstream_response) = upstream;
     update_proxy_target(&context, &candidate).await;
-    update_proxy_error(&context, None).await;
 
     if downstream_stream {
         build_passthrough_sse_response(upstream_response)
@@ -687,6 +717,12 @@ fn ensure_authorized(headers: &HeaderMap, api_key: &Arc<RwLock<String>>) -> Opti
 }
 
 fn parse_json_request(body: &Bytes) -> Result<Value, Response<Body>> {
+    if is_payload_oversized(body, resolve_proxy_request_body_limit_bytes()) {
+        return Err(json_error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Request body exceeds the configured limit",
+        ));
+    }
     serde_json::from_slice::<Value>(body)
         .map_err(|error| invalid_request_response(&format!("请求体不是合法 JSON: {error}")))
 }
@@ -754,7 +790,9 @@ fn convert_openai_chat_request_to_codex(request: &Value) -> Result<(Value, bool)
         "reasoning".to_string(),
         merged_reasoning_for_upstream(
             request_object.get("reasoning").and_then(Value::as_object),
-            request_object.get("reasoning_effort").and_then(Value::as_str),
+            request_object
+                .get("reasoning_effort")
+                .and_then(Value::as_str),
             model_resolution.default_reasoning_effort.as_deref(),
             Some(model.as_str()),
         ),
@@ -943,7 +981,10 @@ fn normalize_openai_responses_request(mut request: Value) -> Result<(Value, bool
                 .default_reasoning_effort
                 .as_deref()
                 .unwrap_or("medium");
-            reasoning_object.insert("effort".to_string(), Value::String(default_effort.to_string()));
+            reasoning_object.insert(
+                "effort".to_string(),
+                Value::String(default_effort.to_string()),
+            );
         }
         if !reasoning_object.contains_key("summary") {
             reasoning_object.insert("summary".to_string(), Value::String("auto".to_string()));
@@ -1050,6 +1091,26 @@ fn normalize_model_for_client(model: &str) -> String {
     client_display_model_name(model)
 }
 
+fn normalized_reasoning_summary(value: Option<&str>) -> String {
+    let value = value.unwrap_or_default().trim().to_lowercase();
+    if ["auto", "concise", "detailed"].contains(&value.as_str()) {
+        value
+    } else {
+        "auto".into()
+    }
+}
+fn normalized_reasoning_effort(value: Option<&str>, model: Option<&str>) -> String {
+    let value = value.unwrap_or_default().trim().to_lowercase();
+    let codex = model
+        .is_some_and(|m| matches!(resolve_upstream_route_family(m), UpstreamRouteFamily::Codex));
+    if ["low", "medium", "high", "xhigh"].contains(&value.as_str())
+        || (!codex && ["none", "minimal"].contains(&value.as_str()))
+    {
+        value
+    } else {
+        default_reasoning_effort_for_upstream(model).into()
+    }
+}
 fn merged_reasoning_for_upstream(
     existing: Option<&Map<String, Value>>,
     explicit_effort: Option<&str>,
@@ -1057,39 +1118,24 @@ fn merged_reasoning_for_upstream(
     upstream_model: Option<&str>,
 ) -> Value {
     let mut merged = existing.cloned().unwrap_or_default();
-    if let Some(explicit_effort) = explicit_effort {
-        merged.insert(
-            "effort".to_string(),
-            Value::String(explicit_effort.to_string()),
-        );
-    }
-
-    let existing_effort = merged
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if existing_effort.is_none() {
-        merged.insert(
-            "effort".to_string(),
-            Value::String(
-                default_effort
-                    .unwrap_or_else(|| default_reasoning_effort_for_upstream(upstream_model))
-                    .to_string(),
-            ),
-        );
-    }
-
-    let existing_summary = merged
-        .get("summary")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if existing_summary.is_none() {
-        merged.insert("summary".to_string(), Value::String("auto".to_string()));
-    }
-
-    Value::Object(merged)
+    let effort = normalized_reasoning_effort(
+        explicit_effort
+            .or_else(|| {
+                existing
+                    .and_then(|v| v.get("effort"))
+                    .and_then(Value::as_str)
+            })
+            .or(default_effort),
+        upstream_model,
+    );
+    let summary = normalized_reasoning_summary(
+        existing
+            .and_then(|v| v.get("summary"))
+            .and_then(Value::as_str),
+    );
+    merged.insert("effort".into(), effort.into());
+    merged.insert("summary".into(), summary.into());
+    merged.into()
 }
 
 fn default_reasoning_effort_for_upstream(upstream_model: Option<&str>) -> &'static str {
@@ -1143,7 +1189,10 @@ fn normalize_numeric_model_revision_if_needed(model: &str) -> String {
         return model.to_string();
     }
 
-    let remaining = segments.next().map(|value| format!("-{value}")).unwrap_or_default();
+    let remaining = segments
+        .next()
+        .map(|value| format!("-{value}"))
+        .unwrap_or_default();
     format!("gpt-5.{revision}{remaining}")
 }
 
@@ -1161,17 +1210,20 @@ fn client_display_model_name(model: &str) -> String {
         return model.to_string();
     }
 
-    let (version, suffix_start) = if parts.len() >= 3
-        && parts[1] == "5"
-        && parts[2].chars().all(|ch| ch.is_ascii_digit())
-    {
-        (format!("5.{}", parts[2]), 3)
-    } else {
-        (parts[1].to_string(), 2)
-    };
+    let (version, suffix_start) =
+        if parts.len() >= 3 && parts[1] == "5" && parts[2].chars().all(|ch| ch.is_ascii_digit()) {
+            (format!("5.{}", parts[2]), 3)
+        } else {
+            (parts[1].to_string(), 2)
+        };
 
     let mut display_parts = vec!["GPT".to_string(), version];
-    display_parts.extend(parts.iter().skip(suffix_start).map(|segment| display_segment(segment)));
+    display_parts.extend(
+        parts
+            .iter()
+            .skip(suffix_start)
+            .map(|segment| display_segment(segment)),
+    );
     display_parts.join("-")
 }
 
@@ -1181,7 +1233,11 @@ fn display_segment(segment: &str) -> String {
     }
     let mut chars = segment.chars();
     match chars.next() {
-        Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str().to_ascii_lowercase()),
+        Some(first) => format!(
+            "{}{}",
+            first.to_ascii_uppercase(),
+            chars.as_str().to_ascii_lowercase()
+        ),
         None => String::new(),
     }
 }
@@ -1467,7 +1523,10 @@ async fn send_codex_request_over_candidates(
                 }
             };
 
-            if !did_refresh && should_retry_with_token_refresh(status, &upstream_body) {
+            if candidate.auth_json.get("copoolProvider").is_none()
+                && !did_refresh
+                && should_retry_with_token_refresh(status, &upstream_body)
+            {
                 match refresh_proxy_candidate_auth(&context.storage, &candidate).await {
                     Ok(refreshed_candidate) => {
                         candidate = refreshed_candidate;
@@ -1527,7 +1586,21 @@ async fn forward_codex_request_with_candidate(
     headers: &HeaderMap,
     payload: &Value,
 ) -> Result<reqwest::Response, String> {
-    let upstream_url = format!("{}/responses", context.upstream_base_url);
+    let family = resolve_upstream_route_family(
+        payload
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
+    let provider = candidate.auth_json.get("copoolProvider");
+    let upstream_url = if let Some(base) = provider.and_then(|p| p["baseUrl"].as_str()) {
+        format!("{}/responses", base.trim_end_matches('/'))
+    } else {
+        format!(
+            "{}/responses",
+            resolve_upstream_base_url(&context.upstream_base_url, family)
+        )
+    };
     let session_id = headers
         .get("session_id")
         .and_then(|value| value.to_str().ok())
@@ -1549,23 +1622,26 @@ async fn forward_codex_request_with_candidate(
     let serialized =
         serde_json::to_vec(payload).map_err(|error| format!("序列化上游请求失败: {error}"))?;
 
-    let client = if candidate.proxy_url.trim().is_empty() {
+    let insecure = provider.is_some_and(|p| p["allowInsecureTLS"] == true);
+    let client = if candidate.proxy_url.trim().is_empty() && !insecure {
         context.client.clone()
     } else {
         crate::utils::with_account_proxy(
             reqwest::Client::builder()
+                .danger_accept_invalid_certs(insecure)
                 .user_agent("codex-tools-proxy/0.1")
                 .timeout(std::time::Duration::from_secs(180)),
             &candidate.proxy_url,
-        )?.build().map_err(|_| "Failed to create account proxy client".to_string())?
+        )?
+        .build()
+        .map_err(|_| "Failed to create account proxy client".to_string())?
     };
-    client
+    let mut request = client
         .post(&upstream_url)
         .header(
             "Authorization",
             format!("Bearer {}", candidate.access_token),
         )
-        .header("ChatGPT-Account-Id", &candidate.account_id)
         .header("Accept", "text/event-stream")
         .header("Content-Type", "application/json")
         .header("Originator", "codex_cli_rs")
@@ -1573,7 +1649,11 @@ async fn forward_codex_request_with_candidate(
         .header("Session_id", session_id)
         .header("User-Agent", user_agent)
         .header("Connection", "Keep-Alive")
-        .body(serialized)
+        .body(serialized);
+    if provider.is_none() {
+        request = request.header("ChatGPT-Account-Id", &candidate.account_id);
+    }
+    request
         .send()
         .await
         .map_err(|error| format!("请求 Codex 上游失败 {upstream_url}: {error}"))
@@ -1628,18 +1708,66 @@ async fn load_proxy_candidates(
     let _guard = storage.store_lock.lock().await;
     let store = load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?;
 
-    let mut candidates = store
-        .accounts
+    let selected = if storage.prefer_local_selection {
+        store
+            .extra
+            .get("currentAccountId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                storage
+                    .active_auth_path
+                    .as_ref()
+                    .and_then(|path| fs::read(path).ok())
+                    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    .and_then(|auth| crate::auth::account_identity(&auth).ok())
+                    .and_then(|identity| {
+                        store
+                            .accounts
+                            .iter()
+                            .find(|a| {
+                                crate::auth::account_identity(&a.auth_json).ok().as_ref()
+                                    == Some(&identity)
+                            })
+                            .map(|a| a.id.clone())
+                    })
+            })
+    } else {
+        None
+    };
+    let mut accounts = store.accounts;
+    if let Some(load) = &storage.provider_candidates {
+        accounts.extend(load()?);
+    }
+    let mut candidates = accounts
         .into_iter()
         .filter_map(account_to_proxy_candidate)
+        .map(|mut candidate| {
+            candidate.is_preferred_current = candidate
+                .auth_json
+                .pointer("/copoolProvider/preferred")
+                .and_then(Value::as_bool)
+                .unwrap_or_else(|| selected.as_ref().is_some_and(|id| *id == candidate.id));
+            candidate
+        })
         .collect::<Vec<_>>();
     candidates.sort_by(compare_proxy_candidates);
     Ok(candidates)
 }
 
 fn account_to_proxy_candidate(account: StoredAccount) -> Option<ProxyCandidate> {
-    let extracted = extract_auth(&account.auth_json).ok()?;
+    if !account.is_available() {
+        return None;
+    }
+    let extracted = if let Some(provider) = account.auth_json.get("copoolProvider") {
+        let mut auth = extract_auth(&account.auth_json).ok()?;
+        auth.access_token = provider["apiKey"].as_str()?.into();
+        auth
+    } else {
+        extract_auth(&account.auth_json).ok()?
+    };
     Some(ProxyCandidate {
+        is_preferred_current: false,
         id: account.id,
         label: account.label,
         account_id: extracted.account_id,
@@ -1658,6 +1786,10 @@ fn account_to_proxy_candidate(account: StoredAccount) -> Option<ProxyCandidate> 
 }
 
 fn compare_proxy_candidates(left: &ProxyCandidate, right: &ProxyCandidate) -> Ordering {
+    let preferred = right.is_preferred_current.cmp(&left.is_preferred_current);
+    if preferred != Ordering::Equal {
+        return preferred;
+    }
     match remaining_score(right).cmp(&remaining_score(left)) {
         Ordering::Equal => {}
         ordering => return ordering,
@@ -1679,8 +1811,18 @@ fn remaining_percent(window: Option<&UsageWindow>) -> i32 {
 }
 
 fn remaining_score(candidate: &ProxyCandidate) -> i32 {
-    let week = remaining_percent(candidate.usage.as_ref().and_then(|usage| usage.one_week.as_ref()));
-    let five = remaining_percent(candidate.usage.as_ref().and_then(|usage| usage.five_hour.as_ref()));
+    let week = remaining_percent(
+        candidate
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.one_week.as_ref()),
+    );
+    let five = remaining_percent(
+        candidate
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.five_hour.as_ref()),
+    );
     week * 7 + five * 3
 }
 
@@ -1704,14 +1846,27 @@ async fn order_proxy_candidates_for_runtime(
         .into_iter()
         .filter(|candidate| {
             cooldowns
-                .get(&candidate.account_id)
+                .get(&candidate.id)
                 .map(|until| *until <= now)
                 .unwrap_or(true)
         })
         .collect::<Vec<_>>();
 
     let sticky_account_id = sticky_account_id.as_deref();
-    ordered.sort_by(|left, right| compare_runtime_proxy_candidates(sticky_account_id, left, right));
+    ordered.sort_by(|left, right| {
+        if context.storage.prefer_local_selection {
+            right
+                .is_preferred_current
+                .cmp(&left.is_preferred_current)
+                .then_with(|| {
+                    (sticky_account_id == Some(right.id.as_str()))
+                        .cmp(&(sticky_account_id == Some(left.id.as_str())))
+                })
+                .then_with(|| compare_proxy_candidates(left, right))
+        } else {
+            compare_runtime_proxy_candidates(sticky_account_id, left, right)
+        }
+    });
     ordered
 }
 
@@ -1725,8 +1880,8 @@ fn compare_runtime_proxy_candidates(
         ordering => return ordering,
     }
 
-    let left_sticky = sticky_account_id == Some(left.account_id.as_str());
-    let right_sticky = sticky_account_id == Some(right.account_id.as_str());
+    let left_sticky = sticky_account_id == Some(left.id.as_str());
+    let right_sticky = sticky_account_id == Some(right.id.as_str());
     match right_sticky.cmp(&left_sticky) {
         Ordering::Equal => {}
         ordering => return ordering,
@@ -1811,8 +1966,13 @@ async fn refresh_proxy_candidate_usage(
     candidates: Vec<ProxyCandidate>,
 ) {
     for candidate in candidates {
-        let result = fetch_usage_snapshot(&candidate.access_token, &candidate.account_id, &candidate.proxy_url).await;
-        persist_candidate_usage_result(storage, &candidate.account_id, result).await;
+        let result = fetch_usage_snapshot(
+            &candidate.access_token,
+            &candidate.account_id,
+            &candidate.proxy_url,
+        )
+        .await;
+        persist_candidate_usage_result(storage, &candidate.id, result).await;
     }
 }
 
@@ -1834,7 +1994,7 @@ async fn persist_candidate_usage_result(
     let Some(account) = store
         .accounts
         .iter_mut()
-        .find(|account| account.account_id == account_id)
+        .find(|account| account.id == account_id)
     else {
         return;
     };
@@ -1871,21 +2031,26 @@ async fn mark_candidate_cooldown(
 ) {
     let mut snapshot = context.shared.lock().await;
     snapshot.cooldown_until_by_account_id.insert(
-        candidate.account_id.clone(),
+        candidate.id.clone(),
         now_unix_seconds() + cooldown_duration_seconds(category),
     );
-    if snapshot.sticky_account_id.as_deref() == Some(candidate.account_id.as_str()) {
+    if snapshot.sticky_account_id.as_deref() == Some(candidate.id.as_str()) {
         snapshot.sticky_account_id = None;
     }
 }
 
 async fn record_successful_candidate(context: &ProxyContext, candidate: &ProxyCandidate) {
+    update_proxy_target(context, candidate).await;
+    update_proxy_error(context, None).await;
+    if let Some(callback) = &context.storage.on_selected {
+        if let Err(error) = callback(candidate.id.clone(), candidate.auth_json.clone()).await {
+            update_proxy_error(context, Some(error)).await;
+        }
+    }
     {
         let mut snapshot = context.shared.lock().await;
-        snapshot.sticky_account_id = Some(candidate.account_id.clone());
-        snapshot
-            .cooldown_until_by_account_id
-            .remove(&candidate.account_id);
+        snapshot.sticky_account_id = Some(candidate.id.clone());
+        snapshot.cooldown_until_by_account_id.remove(&candidate.id);
     }
 }
 
@@ -1893,13 +2058,15 @@ async fn refresh_proxy_candidate_auth(
     storage: &ProxyStorageContext,
     candidate: &ProxyCandidate,
 ) -> Result<ProxyCandidate, String> {
-    let refreshed_auth_json = refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?;
-    persist_refreshed_candidate_auth(storage, &candidate.account_id, &refreshed_auth_json).await?;
+    let refreshed_auth_json =
+        refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?;
+    persist_refreshed_candidate_auth(storage, &candidate.id, &refreshed_auth_json).await?;
 
     let extracted = extract_auth(&refreshed_auth_json)
         .map_err(|error| format!("刷新后解析账号登录态失败: {error}"))?;
 
     Ok(ProxyCandidate {
+        is_preferred_current: candidate.is_preferred_current,
         id: candidate.id.clone(),
         label: candidate.label.clone(),
         account_id: extracted.account_id,
@@ -1924,16 +2091,25 @@ async fn persist_refreshed_candidate_auth(
     if let Some(account) = store
         .accounts
         .iter_mut()
-        .find(|account| account.account_id == account_id)
+        .find(|account| account.id == account_id)
     {
         account.auth_json = refreshed_auth_json.clone();
         account.updated_at = now_unix_seconds();
     }
 
     save_store_to_path(&store_path, &store)?;
+    if let Some(callback) = &storage.on_auth_refreshed {
+        callback(account_id, refreshed_auth_json)?;
+    }
 
     if storage.sync_active_auth_on_refresh
-        && current_auth_account_id().as_deref() == Some(account_id)
+        && crate::auth::read_current_codex_auth()
+            .ok()
+            .as_ref()
+            .is_some_and(|current| {
+                crate::auth::account_identity(current).ok()
+                    == crate::auth::account_identity(refreshed_auth_json).ok()
+            })
     {
         write_active_codex_auth(refreshed_auth_json)?;
     }
@@ -2276,80 +2452,13 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn write_private_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("无法解析 API Key 存储目录 {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("创建 API Key 存储目录失败 {}: {error}", parent.display()))?;
-
-    let temp_path = parent.join(format!(
-        ".{}.tmp-{}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("api-proxy.key"),
-        uuid::Uuid::new_v4()
-    ));
-
-    let write_result = (|| -> Result<(), String> {
-        let mut temp_file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp_path)
-            .map_err(|error| {
-                format!("创建 API Key 临时文件失败 {}: {error}", temp_path.display())
-            })?;
-        temp_file.write_all(contents).map_err(|error| {
-            format!("写入 API Key 临时文件失败 {}: {error}", temp_path.display())
-        })?;
-        temp_file.sync_all().map_err(|error| {
-            format!("刷新 API Key 临时文件失败 {}: {error}", temp_path.display())
-        })?;
-        drop(temp_file);
-        set_private_permissions(&temp_path);
-
-        #[cfg(target_family = "unix")]
-        {
-            fs::rename(&temp_path, path).map_err(|error| {
-                format!(
-                    "替换 API Key 存储文件失败 {} -> {}: {error}",
-                    temp_path.display(),
-                    path.display()
-                )
-            })?;
-
-            let parent_dir = fs::File::open(parent).map_err(|error| {
-                format!("打开 API Key 存储目录失败 {}: {error}", parent.display())
-            })?;
-            parent_dir.sync_all().map_err(|error| {
-                format!("刷新 API Key 存储目录失败 {}: {error}", parent.display())
-            })?;
-        }
-
-        #[cfg(not(target_family = "unix"))]
-        {
-            if path.exists() {
-                fs::remove_file(path).map_err(|error| {
-                    format!("移除旧 API Key 存储文件失败 {}: {error}", path.display())
-                })?;
-            }
-            fs::rename(&temp_path, path).map_err(|error| {
-                format!(
-                    "替换 API Key 存储文件失败 {} -> {}: {error}",
-                    temp_path.display(),
-                    path.display()
-                )
-            })?;
-        }
-
-        set_private_permissions(path);
-        Ok(())
-    })();
-
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-
-    write_result
+    let parent = path.parent().ok_or("Invalid key directory")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    file.write_all(contents).map_err(|e| e.to_string())?;
+    file.as_file().sync_all().map_err(|e| e.to_string())?;
+    file.persist(path).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn read_current_api_key(shared: &Arc<RwLock<String>>) -> String {
@@ -3102,11 +3211,22 @@ fn stopped_status(api_key: Option<String>, last_error: Option<String>) -> ApiPro
     }
 }
 
+fn resolve_upstream_base_url(configured: &str, family: UpstreamRouteFamily) -> String {
+    let base = configured.trim().trim_end_matches('/');
+    let base = base.strip_suffix("/responses").unwrap_or(base);
+    let base = base.strip_suffix("/codex").unwrap_or(base);
+    let base = if base.ends_with("/backend-api") {
+        base.to_owned()
+    } else {
+        format!("{base}/backend-api")
+    };
+    match family {
+        UpstreamRouteFamily::Codex => format!("{base}/codex"),
+        UpstreamRouteFamily::General => base,
+    }
+}
 fn resolve_codex_upstream_base_url() -> String {
-    format!(
-        "{}/backend-api/codex",
-        resolve_chatgpt_base_origin().trim_end_matches('/')
-    )
+    resolve_upstream_base_url(&resolve_chatgpt_base_origin(), UpstreamRouteFamily::Codex)
 }
 
 fn proxy_base_url(port: u16) -> String {
@@ -3163,9 +3283,16 @@ mod tests {
     use super::CODEX_CLIENT_VERSION;
     use super::DEFAULT_PROXY_REQUEST_BODY_LIMIT_BYTES;
     use super::MODELS;
+    use super::{
+        new_proxy_storage_context, persist_candidate_usage_result, persist_refreshed_candidate_auth,
+    };
     use crate::models::UsageSnapshot;
     use crate::models::UsageWindow;
+    use crate::store::{
+        account_store_path_from_data_dir, load_store_from_path, save_store_to_path,
+    };
     use serde_json::json;
+    use std::sync::Arc;
 
     #[test]
     fn parses_codex_version_only_from_recognized_user_agent_products() {
@@ -3414,8 +3541,7 @@ mod tests {
             "gpt-5.4-mini"
         );
         assert_eq!(
-            map_client_model_to_upstream("GPT-5.3-Codex-Medium")
-                .expect("alias model should map"),
+            map_client_model_to_upstream("GPT-5.3-Codex-Medium").expect("alias model should map"),
             "gpt-5.3-codex"
         );
     }
@@ -3841,8 +3967,51 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         let older = make_proxy_candidate("older", "acc-c", None, None, 5);
         let newer = make_proxy_candidate("newer", "acc-d", None, None, 15);
 
-        assert_eq!(compare_proxy_candidates(&richer, &older), std::cmp::Ordering::Less);
-        assert_eq!(compare_proxy_candidates(&older, &newer), std::cmp::Ordering::Less);
+        assert_eq!(
+            compare_proxy_candidates(&richer, &older),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_proxy_candidates(&older, &newer),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[tokio::test]
+    async fn refreshed_credentials_and_usage_update_only_the_selected_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        let account = |id: &str| json!({"id":id,"label":id,"accountId":"shared-team","authJson":{"tokens":{"access_token":id,"id_token":"test", "account_id":"shared-team"}},"addedAt":1,"updatedAt":1});
+        let saved =
+            serde_json::from_value(json!({"accounts":[account("alice"),account("bob")]})).unwrap();
+        let path = account_store_path_from_data_dir(dir.path());
+        save_store_to_path(&path, &saved).unwrap();
+        persist_refreshed_candidate_auth(&storage, "bob", &json!({"updated":"bob"}))
+            .await
+            .unwrap();
+        persist_candidate_usage_result(&storage, "bob", Err("bob-only".into())).await;
+        let saved = load_store_from_path(&path).unwrap();
+        assert_eq!(
+            saved.accounts[0].auth_json["tokens"]["access_token"],
+            "alice"
+        );
+        assert_eq!(saved.accounts[0].usage_error, None);
+        assert_eq!(saved.accounts[1].auth_json["updated"], "bob");
+        assert_eq!(saved.accounts[1].usage_error.as_deref(), Some("bob-only"));
+    }
+
+    #[test]
+    fn stickiness_is_per_record_even_when_workspace_is_shared() {
+        let alice = make_proxy_candidate("alice", "shared-team", Some(10.0), Some(10.0), 1);
+        let bob = make_proxy_candidate("bob", "shared-team", Some(10.0), Some(10.0), 1);
+        assert_eq!(
+            compare_runtime_proxy_candidates(Some("bob"), &alice, &bob),
+            std::cmp::Ordering::Greater
+        );
     }
 
     #[test]
@@ -3851,18 +4020,19 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         let richer = make_proxy_candidate("richer", "acc-b", Some(1.0), Some(1.0), 2);
 
         assert_eq!(
-            compare_runtime_proxy_candidates(Some("acc-a"), &richer, &sticky),
+            compare_runtime_proxy_candidates(Some("sticky"), &richer, &sticky),
             std::cmp::Ordering::Less
         );
         assert_eq!(
-            compare_runtime_proxy_candidates(Some("acc-a"), &sticky, &richer),
+            compare_runtime_proxy_candidates(Some("sticky"), &sticky, &richer),
             std::cmp::Ordering::Greater
         );
     }
 
     #[test]
     fn compare_proxy_candidates_ignores_local_current_selection_for_remote_autonomy() {
-        let selected_low_remaining = make_proxy_candidate("selected", "acc-a", Some(99.0), Some(99.0), 1);
+        let selected_low_remaining =
+            make_proxy_candidate("selected", "acc-a", Some(99.0), Some(99.0), 1);
         let richer = make_proxy_candidate("richer", "acc-b", Some(1.0), Some(1.0), 2);
 
         assert_eq!(
@@ -3879,13 +4049,19 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
 
         let tick_one = usage_refresh_candidates_for_tick(1, Some("acc-active"), candidates.clone());
         assert_eq!(
-            tick_one.iter().map(|candidate| candidate.account_id.as_str()).collect::<Vec<_>>(),
+            tick_one
+                .iter()
+                .map(|candidate| candidate.account_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["acc-active"]
         );
 
         let tick_six = usage_refresh_candidates_for_tick(6, Some("acc-active"), candidates);
         assert_eq!(
-            tick_six.iter().map(|candidate| candidate.account_id.as_str()).collect::<Vec<_>>(),
+            tick_six
+                .iter()
+                .map(|candidate| candidate.account_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["acc-active", "acc-idle"]
         );
     }
@@ -3898,6 +4074,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         added_at: i64,
     ) -> ProxyCandidate {
         ProxyCandidate {
+            is_preferred_current: false,
             id: id.to_string(),
             label: id.to_string(),
             account_id: account_id.to_string(),
@@ -3907,6 +4084,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             plan_type: None,
             added_at,
             usage: Some(UsageSnapshot {
+                remaining_reset_count: None,
                 fetched_at: 0,
                 plan_type: None,
                 five_hour: five_hour_used.map(|used_percent| UsageWindow {
@@ -3923,4 +4101,30 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             }),
         }
     }
+}
+
+#[cfg(test)]
+#[path = "legacy_proxy_tests.rs"]
+mod swift_contracts;
+
+fn is_payload_oversized(buffer: &[u8], limit: usize) -> bool {
+    if buffer.len() > limit {
+        return true;
+    }
+    if !buffer.starts_with(b"POST ")
+        && !buffer.starts_with(b"PUT ")
+        && !buffer.starts_with(b"PATCH ")
+    {
+        return false;
+    }
+    let headers = buffer
+        .split(|b| *b == b'\n')
+        .take_while(|line| !line.is_empty() && *line != b"\r");
+    headers
+        .filter_map(|line| std::str::from_utf8(line).ok())
+        .filter_map(|line| line.split_once(':'))
+        .any(|(name, value)| {
+            name.eq_ignore_ascii_case("content-length")
+                && value.trim().parse::<u64>().is_ok_and(|n| n > limit as u64)
+        })
 }

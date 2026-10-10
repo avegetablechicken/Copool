@@ -4,11 +4,14 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AccountsStore {
+    #[serde(flatten)]
+    pub(crate) extra: serde_json::Map<String, Value>,
     #[serde(default = "default_store_version")]
     pub(crate) version: u8,
     #[serde(default)]
     pub(crate) accounts: Vec<StoredAccount>,
     #[serde(default)]
+    #[serde(rename = "currentSelection", alias = "current_selection")]
     pub(crate) current_selection: Option<CurrentAccountSelection>,
     #[serde(default)]
     pub(crate) settings: AppSettings,
@@ -21,6 +24,7 @@ fn default_store_version() -> u8 {
 impl Default for AccountsStore {
     fn default() -> Self {
         Self {
+            extra: Default::default(),
             version: default_store_version(),
             accounts: Vec::new(),
             current_selection: None,
@@ -32,6 +36,8 @@ impl Default for AccountsStore {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StoredAccount {
+    #[serde(flatten)]
+    pub(crate) extra: serde_json::Map<String, Value>,
     pub(crate) id: String,
     pub(crate) label: String,
     pub(crate) email: Option<String>,
@@ -52,8 +58,10 @@ pub(crate) struct StoredAccount {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CurrentAccountSelection {
+    #[serde(rename = "cardId", alias = "accountId")]
     pub(crate) account_id: String,
     pub(crate) selected_at: i64,
+    #[serde(rename = "sourceDeviceID", alias = "sourceDeviceId")]
     pub(crate) source_device_id: String,
     #[serde(default)]
     pub(crate) account_key: Option<String>,
@@ -61,43 +69,51 @@ pub(crate) struct CurrentAccountSelection {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct AccountSummary {
-    pub(crate) id: String,
-    pub(crate) label: String,
-    pub(crate) email: Option<String>,
-    pub(crate) account_id: String,
-    pub(crate) plan_type: Option<String>,
-    pub(crate) added_at: i64,
-    pub(crate) updated_at: i64,
-    pub(crate) usage: Option<UsageSnapshot>,
-    pub(crate) usage_error: Option<String>,
-    pub(crate) is_current: bool,
+pub struct AccountSummary {
+    pub display_status: String,
+    pub workspace_status: String,
+    pub source_tag: Option<String>,
+    pub team_name: Option<String>,
+    pub available: bool,
+    pub proxy_url: String,
+    pub id: String,
+    pub label: String,
+    pub email: Option<String>,
+    pub account_id: String,
+    pub plan_type: Option<String>,
+    pub added_at: i64,
+    pub updated_at: i64,
+    pub usage: Option<UsageSnapshot>,
+    pub usage_error: Option<String>,
+    pub is_current: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct UsageSnapshot {
-    pub(crate) fetched_at: i64,
-    pub(crate) plan_type: Option<String>,
-    pub(crate) five_hour: Option<UsageWindow>,
-    pub(crate) one_week: Option<UsageWindow>,
-    pub(crate) credits: Option<CreditSnapshot>,
+pub struct UsageSnapshot {
+    #[serde(default)]
+    pub remaining_reset_count: Option<i64>,
+    pub fetched_at: i64,
+    pub plan_type: Option<String>,
+    pub five_hour: Option<UsageWindow>,
+    pub one_week: Option<UsageWindow>,
+    pub credits: Option<CreditSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct UsageWindow {
-    pub(crate) used_percent: f64,
-    pub(crate) window_seconds: i64,
-    pub(crate) reset_at: Option<i64>,
+pub struct UsageWindow {
+    pub used_percent: f64,
+    pub window_seconds: i64,
+    pub reset_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CreditSnapshot {
-    pub(crate) has_credits: bool,
-    pub(crate) unlimited: bool,
-    pub(crate) balance: Option<String>,
+pub struct CreditSnapshot {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,6 +143,8 @@ pub(crate) struct CurrentAuthStatus {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExtractedAuth {
+    pub(crate) principal_id: Option<String>,
+    pub(crate) team_name: Option<String>,
     pub(crate) account_id: String,
     pub(crate) access_token: String,
     pub(crate) email: Option<String>,
@@ -159,14 +177,14 @@ pub(crate) struct ImportAccountsResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ApiProxyStatus {
-    pub(crate) running: bool,
-    pub(crate) port: Option<u16>,
-    pub(crate) api_key: Option<String>,
-    pub(crate) base_url: Option<String>,
-    pub(crate) active_account_id: Option<String>,
-    pub(crate) active_account_label: Option<String>,
-    pub(crate) last_error: Option<String>,
+pub struct ApiProxyStatus {
+    pub running: bool,
+    pub port: Option<u16>,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub active_account_id: Option<String>,
+    pub active_account_label: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,7 +335,7 @@ pub(crate) struct AppSettings {
     pub(crate) auto_start_api_proxy: bool,
     pub(crate) remote_servers: Vec<RemoteServerConfig>,
     pub(crate) api_proxy_api_key: Option<String>,
-    pub(crate) locale: AppLocale,
+    pub(crate) locale: String,
 }
 
 impl Default for AppSettings {
@@ -332,7 +350,7 @@ impl Default for AppSettings {
             auto_start_api_proxy: false,
             remote_servers: Vec::new(),
             api_proxy_api_key: None,
-            locale: AppLocale::default(),
+            locale: "en".into(),
         }
     }
 }
@@ -352,8 +370,38 @@ pub(crate) struct AppSettingsPatch {
 }
 
 impl StoredAccount {
+    pub(crate) fn is_available(&self) -> bool {
+        self.extra.get("workspaceStatus").and_then(Value::as_str) != Some("deactivated")
+            && self
+                .extra
+                .get("displayStatus")
+                .and_then(Value::as_str)
+                .map_or(true, |s| s == "list")
+    }
+
     pub(crate) fn to_summary(&self, current_account_id: Option<&str>) -> AccountSummary {
         AccountSummary {
+            display_status: self
+                .extra
+                .get("displayStatus")
+                .and_then(Value::as_str)
+                .unwrap_or("list")
+                .into(),
+            workspace_status: self
+                .extra
+                .get("workspaceStatus")
+                .and_then(Value::as_str)
+                .unwrap_or("active")
+                .into(),
+            source_tag: None,
+            team_name: self.team_alias.clone().or_else(|| {
+                self.extra
+                    .get("teamName")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            }),
+            available: self.is_available(),
+            proxy_url: self.proxy_url.clone(),
             id: self.id.clone(),
             label: self.label.clone(),
             email: self.email.clone(),
@@ -366,6 +414,38 @@ impl StoredAccount {
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),
+        }
+    }
+}
+
+impl AccountsStore {
+    pub(crate) fn account_summaries(&self) -> Vec<AccountSummary> {
+        let current = self.extra.get("currentAccountId").and_then(Value::as_str);
+        self.accounts
+            .iter()
+            .map(|a| {
+                let mut summary = a.to_summary(None);
+                summary.is_current = current == Some(a.id.as_str());
+                summary
+            })
+            .collect()
+    }
+}
+
+impl AccountSummary {
+    pub fn normalized_plan_label(&self) -> String {
+        let raw = self
+            .usage
+            .as_ref()
+            .and_then(|u| u.plan_type.as_ref())
+            .filter(|s| !s.trim().is_empty())
+            .or(self.plan_type.as_ref())
+            .map(|s| s.trim().to_uppercase())
+            .unwrap_or_default();
+        if ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE"].contains(&raw.as_str()) {
+            raw
+        } else {
+            "TEAM".into()
         }
     }
 }

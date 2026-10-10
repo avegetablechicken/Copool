@@ -1,0 +1,1 @@
+{"main":{"identifier":"main","description":"Local Copool window only; no shell or general filesystem access from the webview.","local":true,"windows":["main"],"permissions":["core:default"]}}

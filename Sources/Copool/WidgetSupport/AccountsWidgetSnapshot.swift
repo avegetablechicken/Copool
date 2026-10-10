@@ -4,7 +4,11 @@ import WidgetKit
 
 enum AccountsWidgetConfiguration {
     static let kind = "CopoolAccountsWidget"
+    #if COPOOL_RUST
+    static let appGroupIdentifier = "group.io.github.copool.rust"
+    #else
     static let appGroupIdentifier = "group.com.alick.copool"
+    #endif
     static let snapshotFilename = "accounts-widget-snapshot.json"
     static let usageProgressDisplayModeDefaultsKey = "accountsWidgetUsageProgressDisplayMode"
 }
