@@ -146,6 +146,12 @@ function translate() {
   // features.js defines the controllers after this script's first translate().
   if (typeof accountsController !== "undefined") renderToolbar();
 }
+// Toolbar shortcuts: Cmd (Ctrl elsewhere) with these keys.
+const TOOLBAR_SHORTCUTS = { i: "import-open", n: "add-account", r: "refresh-all" };
+function withShortcut(text, key) {
+  const mac = navigator.userAgent.includes("Mac");
+  return `${text} (${mac ? "⌘" : "Ctrl+"}${key.toUpperCase()})`;
+}
 /// The account toolbar, as the SwiftUI leading and trailing action groups.
 function renderToolbar() {
   const options = {
@@ -164,12 +170,16 @@ function renderToolbar() {
   };
   setIcon($("usage-toggle"), SYMBOL_ICONS[usageToggle.symbol]);
   label($("usage-toggle"), usageToggle.label);
-  $("import-open").textContent = $("import-open").title = tr(importAccount.label);
+  $("import-open").textContent = tr(importAccount.label);
+  $("import-open").title = withShortcut(tr(importAccount.label), "i");
   $("import-open").disabled = !importAccount.enabled;
-  $("add-account").textContent = $("add-account").title = tr(addAccount.title);
+  $("add-account").textContent = tr(addAccount.title);
+  $("add-account").title = withShortcut(tr(addAccount.title), "n");
   $("add-account").disabled = !addAccount.enabled;
   $("smart-switch").title = $("smart-switch").textContent;
   $("smart-switch").disabled = !smartSwitch.enabled || !accountsCache.length;
+  label($("refresh-all"), "common.refresh_usage");
+  $("refresh-all").title = withShortcut($("refresh-all").title, "r");
   $("refresh-all").disabled = !refresh.enabled;
   $("refresh-all").classList.toggle("spinning", Boolean(refresh.spinning));
   setIcon($("collapse-all"), SYMBOL_ICONS[collapse.symbol]);
@@ -253,20 +263,26 @@ const METER_HEIGHT = 4; // .meter in style.css
 function usageMode() {
   return preferences?.usageDisplay || "used";
 }
-function usageWindow(window, view, title, tone) {
+function usageWindow(view, title, tone) {
   const remaining = usageMode() === "remaining";
   const used = remaining ? view.secondaryPercent : view.primaryPercent;
   const track = el(
     "div",
-    `meter${window && used >= 95 ? " full" : window && used >= 80 ? " high" : ""}`,
+    `meter${view.available && used >= 95 ? " full" : view.available && used >= 80 ? " high" : ""}`,
   );
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", title);
-  track.setAttribute("aria-valuenow", String(view.progressPercent));
+  if (view.available)
+    track.setAttribute("aria-valuenow", String(view.progressPercent));
   track.setAttribute("aria-valuemin", "0");
   track.setAttribute("aria-valuemax", "100");
   const fill = el("div", "meter-fill");
-  const metrics = P.progressMetrics(view.progressPercent / 100, 0, METER_HEIGHT, 0);
+  const metrics = P.progressMetrics(
+    view.available ? view.progressPercent / 100 : 0,
+    0,
+    METER_HEIGHT,
+    0,
+  );
   fill.hidden = !metrics.showsFill;
   fill.style.width = `${metrics.fillScale * 100}%`;
   fill.style.minWidth = `${metrics.grooveHeight}px`;
@@ -274,15 +290,27 @@ function usageWindow(window, view, title, tone) {
   const [primary, secondary] = remaining
     ? ["accounts.window.remaining_format", "accounts.window.used_format"]
     : ["accounts.window.used_format", "accounts.window.remaining_format"];
-  const row = el("div", `usage ${tone}`);
+  const reset =
+    view.available && view.reset !== "--"
+      ? tr("accounts.window.reset_at_format", view.reset)
+      : tr("accounts.window.reset_unavailable");
+  const row = el("div", `usage ${tone}${view.available ? "" : " no-data"}`);
   row.append(
     el("span", "usage-label", title),
     track,
-    el("span", "usage-value", tr(primary, `${view.primaryPercent}%`)),
+    el(
+      "span",
+      "usage-value",
+      view.available
+        ? tr(primary, `${view.primaryPercent}%`)
+        : tr("accounts.window.no_data"),
+    ),
     el(
       "span",
       "usage-reset",
-      `${tr(secondary, `${view.secondaryPercent}%`)} · ${tr("accounts.window.reset_at_format", view.reset)}`,
+      view.available
+        ? `${tr(secondary, `${view.secondaryPercent}%`)} · ${reset}`
+        : reset,
     ),
   );
   return row;
@@ -371,7 +399,8 @@ function accountControls(account, full) {
   refresh.setAttribute("aria-label", `${refresh.title} ${full}`);
   refresh.classList.toggle(
     "spinning",
-    accountsController.refreshingIds.has(account.id),
+    accountsController.refreshingIds.has(account.id) ||
+      accountsController.remoteRefreshingIds.has(account.id),
   );
   actions.append(refresh);
   if (!account.isCurrent) {
@@ -410,6 +439,7 @@ function renderAccounts(accounts) {
     locale,
     preferences?.usageDisplay,
     [...accountsController.refreshingIds],
+    [...accountsController.remoteRefreshingIds],
     switchingId,
   ];
   if (P.cardsEqual(renderState, renderedAccountsState)) return;
@@ -498,13 +528,11 @@ function renderAccounts(accounts) {
       head,
       name,
       usageWindow(
-        account.usage?.fiveHour,
         view.fiveHour,
         tr("accounts.window.five_hour"),
         "five-hour",
       ),
       usageWindow(
-        account.usage?.oneWeek,
         view.oneWeek,
         tr("accounts.window.one_week"),
         "one-week",
@@ -513,6 +541,20 @@ function renderAccounts(accounts) {
     );
     list.append(card);
   }
+  alignMeters(list);
+}
+/// Gives every usage row the widest label and value, so all meters line up.
+function alignMeters(list) {
+  list.style.removeProperty("--usage-label-width");
+  list.style.removeProperty("--usage-value-width");
+  const widest = (selector) =>
+    Math.ceil(
+      Math.max(0, ...[...list.querySelectorAll(selector)].map((n) => n.scrollWidth)),
+    );
+  const label = widest(".usage .usage-label");
+  const value = widest(".usage .usage-value");
+  if (label) list.style.setProperty("--usage-label-width", `${label}px`);
+  if (value) list.style.setProperty("--usage-value-width", `${value}px`);
 }
 function renderProxy() {
   const proxy = proxyCache;
@@ -598,6 +640,7 @@ function showPage(page) {
   selectedPage = page;
   if (selectedPage === "proxy")
     proxyController.refresh().catch((error) => notice(error, true));
+  closeMenu();
   document
     .querySelectorAll("main>section")
     .forEach(
@@ -614,6 +657,8 @@ function showPage(page) {
   $("top-main").hidden = selectedPage !== "accounts";
   $("top-sub").hidden = selectedPage === "accounts";
   $("page-title").textContent = tr(`tab.${selectedPage}`);
+  // Widths measure as zero while the page is hidden.
+  if (selectedPage === "accounts") alignMeters($("accounts"));
   requestAnimationFrame(applyNativeIcons);
 }
 document
@@ -639,39 +684,125 @@ $("usage-toggle").onclick = () =>
   savePreference({
     usageDisplay: usageMode() === "remaining" ? "used" : "remaining",
   });
-$("import-open").onclick = async () => {
-  const bounds = $("import-open").getBoundingClientRect();
-  try {
-    await invoke("import_menu", {
-      labels: [
-        tr("accounts.action.import_current_auth"),
-        tr("accounts.action.import_auth_file"),
-        tr("accounts.action.import_sub2api"),
-      ],
-      x: bounds.left,
-      y: bounds.bottom + 4,
-    });
-  } catch (error) {
-    notice(error, true);
+// In-panel menus, as Coport's: they keep focus in the panel window, which a
+// native menu would take away.
+let openMenu = null;
+function closeMenu(restoreFocus = false) {
+  if (!openMenu) return;
+  const { menu, trigger } = openMenu;
+  openMenu = null;
+  menu.remove();
+  trigger.setAttribute("aria-expanded", "false");
+  if (restoreFocus) trigger.focus();
+}
+function showMenu(trigger, items) {
+  closeMenu();
+  const menu = el("div", "select-menu action-menu");
+  menu.setAttribute("role", "menu");
+  for (const item of items) {
+    const option = el("button", "", item.label);
+    option.type = "button";
+    option.setAttribute("role", "menuitem");
+    option.onclick = () => {
+      closeMenu(true);
+      item.run();
+    };
+    menu.append(option);
   }
+  document.body.append(menu);
+  // Below the trigger, or above it when the panel is too short; kept inside.
+  const bounds = trigger.getBoundingClientRect();
+  const left = Math.min(bounds.left, innerWidth - menu.offsetWidth - 8);
+  const below = bounds.bottom + 4;
+  const top =
+    below + menu.offsetHeight <= innerHeight - 8
+      ? below
+      : Math.max(8, bounds.top - menu.offsetHeight - 4);
+  menu.style.left = `${Math.max(8, left)}px`;
+  menu.style.top = `${top}px`;
+  menu.style.maxHeight = `${innerHeight - top - 8}px`;
+  trigger.setAttribute("aria-expanded", "true");
+  openMenu = { menu, trigger };
+  menu.querySelector("button")?.focus();
+}
+document.addEventListener("pointerdown", (event) => {
+  if (
+    openMenu &&
+    !openMenu.menu.contains(event.target) &&
+    !openMenu.trigger.contains(event.target)
+  )
+    closeMenu();
+});
+$("import-open").onclick = () => {
+  if (openMenu?.trigger === $("import-open")) {
+    closeMenu(true);
+    return;
+  }
+  showMenu($("import-open"), [
+    {
+      label: tr("accounts.action.import_current_auth"),
+      run: () => action(() => accountsController.importCurrent()),
+    },
+    {
+      label: tr("accounts.action.import_auth_file"),
+      run: () => importAccountFile(),
+    },
+    {
+      label: tr("accounts.action.import_sub2api"),
+      run: () => openProviderImport(),
+    },
+  ]);
 };
-const importActions = {
-  "import-current": () => action(() => accountsController.importCurrent()),
-  "import-file-open": () => importAccountFile(),
-  "import-providers": () => openProviderImport(),
-};
-window.__TAURI__.event
-  .listen("import-action", ({ payload }) => importActions[payload]?.())
-  .catch((error) => notice(error, true));
+// Coport's panel shortcuts. An open dialog keeps Escape and Return for
+// cancel and submit, as the SwiftUI dialogs did.
 document.addEventListener("keydown", (event) => {
-  const dialogOpen = Boolean(document.querySelector("dialog[open]"));
-  // Like a menu, Escape dismisses the panel once no dialog is open.
-  if (event.key === "Escape" && !dialogOpen)
-    invoke("hide_panel").catch(() => {});
-  const back = navigator.userAgent.includes("Mac")
-    ? event.metaKey && event.key === "["
-    : event.altKey && event.key === "ArrowLeft";
-  if (back && selectedPage !== "accounts" && !dialogOpen) showPage("accounts");
+  if (document.querySelector("dialog[open]")) return;
+  if (openMenu) {
+    const items = [...openMenu.menu.querySelectorAll("button")];
+    const index = items.indexOf(document.activeElement);
+    if (event.key === "Escape" || event.key === "Tab") {
+      event.preventDefault();
+      closeMenu(true);
+    } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const next =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? items.length - 1
+            : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) %
+              items.length;
+      items[next].focus();
+    }
+    return;
+  }
+  const mac = navigator.userAgent.includes("Mac");
+  const mod = event.metaKey || event.ctrlKey;
+  const back =
+    !event.shiftKey &&
+    (mac
+      ? event.metaKey && !event.ctrlKey && !event.altKey && event.key === "["
+      : event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft");
+  if (event.key === "Escape") {
+    // Back from a subpage first; on the accounts page, dismiss like a menu.
+    if (selectedPage !== "accounts") showPage("accounts");
+    else invoke("hide_panel").catch(() => {});
+  } else if (back) {
+    event.preventDefault();
+    if (selectedPage !== "accounts") showPage("accounts");
+  } else if (mod && event.key === "q") {
+    event.preventDefault();
+    providerController.quit().catch((error) => notice(error, true));
+  } else if (mod && event.key === ",") {
+    event.preventDefault();
+    showPage("settings");
+  } else if (mod && !event.altKey && !event.shiftKey && TOOLBAR_SHORTCUTS[event.key]) {
+    // Always handled, so Cmd+R never reloads the page; a disabled button
+    // ignores its shortcut as it ignores clicks.
+    event.preventDefault();
+    if (selectedPage !== "accounts") showPage("accounts");
+    $(TOOLBAR_SHORTCUTS[event.key]).click();
+  }
 });
 function openAccountProxy(account) {
   editingAccount = account;
@@ -804,6 +935,7 @@ let panelHiddenAt = null;
 window.__TAURI__.event
   .listen("panel-hidden", () => {
     panelHiddenAt = Date.now();
+    closeMenu();
   })
   .catch((error) => notice(error, true));
 window.__TAURI__.event

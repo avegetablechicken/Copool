@@ -23,11 +23,13 @@
               class="text-link"
               data-page="settings"
               aria-selected="false"
+              aria-keyshortcuts="Meta+,"
               data-l10n="tab.settings"
             ></button
             ><button
               id="quit"
               class="text-link"
+              aria-keyshortcuts="Meta+Q"
               data-l10n="common.quit"
             ></button>
           </nav>
@@ -60,8 +62,13 @@
                 id="import-open"
                 class="btn quiet"
                 aria-haspopup="menu"
+                aria-keyshortcuts="Meta+I"
               ></button>
-              <button id="add-account" class="btn quiet"></button>
+              <button
+                id="add-account"
+                class="btn quiet"
+                aria-keyshortcuts="Meta+N"
+              ></button>
               <button
                 id="smart-switch"
                 class="btn quiet"
@@ -71,6 +78,7 @@
                 <button
                   id="refresh-all"
                   class="icon-btn"
+                  aria-keyshortcuts="Meta+R"
                   data-title="common.refresh_usage"
                 >
                   <span data-icon="refresh"></span>

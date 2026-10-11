@@ -196,34 +196,6 @@ fn account_menu(
     )
     .map_err(|e| e.to_string())
 }
-#[tauri::command]
-fn import_menu(
-    window: tauri::WebviewWindow,
-    state: State<'_, NativeMenuState>,
-    labels: Vec<String>,
-    x: f64,
-    y: f64,
-) -> Result<(), String> {
-    use tauri::menu::ContextMenu;
-    if labels.len() != 3 || !x.is_finite() || !y.is_finite() {
-        return Err("Invalid menu".into());
-    }
-    let app = window.app_handle();
-    let items = ["import-current", "import-file-open", "import-providers"]
-        .into_iter()
-        .zip(labels)
-        .map(|(id, label)| MenuItem::with_id(app, id, label, true, None::<&str>))
-        .collect::<tauri::Result<Vec<_>>>()
-        .map_err(|e| e.to_string())?;
-    let menu =
-        Menu::with_items(app, &[&items[0], &items[1], &items[2]]).map_err(|e| e.to_string())?;
-    *state.0.lock().unwrap() = Some(menu.clone());
-    menu.popup_at(
-        window.as_ref().window().clone(),
-        tauri::LogicalPosition::new(x, y),
-    )
-    .map_err(|e| e.to_string())
-}
 #[derive(Default)]
 struct LoginState(tokio::sync::Mutex<Option<Arc<copool_core::login::Login>>>);
 #[tauri::command]
@@ -474,12 +446,6 @@ fn main() {
         .manage(WorkspaceRefreshState::default())
         .plugin(tauri_plugin_dialog::init())
         .on_menu_event(|app, event| {
-            if matches!(
-                event.id.as_ref(),
-                "import-current" | "import-file-open" | "import-providers"
-            ) {
-                let _ = app.emit("import-action", event.id.as_ref());
-            }
             if let Some(id) = event.id.as_ref().strip_prefix("account-proxy:") {
                 let _ = app.emit("account-proxy-menu", id);
             }
@@ -580,7 +546,6 @@ fn main() {
             save_provider,
             remove_provider,
             refresh_provider,
-            import_menu,
             account_menu,
             installed_editors,
             begin_login,
