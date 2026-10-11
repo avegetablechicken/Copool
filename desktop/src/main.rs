@@ -166,37 +166,6 @@ fn installed_editors() -> Vec<copool_core::platform::Editor> {
     copool_core::platform::editors()
 }
 #[derive(Default)]
-struct NativeMenuState(std::sync::Mutex<Option<Menu<tauri::Wry>>>);
-#[tauri::command]
-fn account_menu(
-    window: tauri::WebviewWindow,
-    state: State<'_, NativeMenuState>,
-    id: String,
-    title: String,
-    x: f64,
-    y: f64,
-) -> Result<(), String> {
-    use tauri::menu::ContextMenu;
-    if id.is_empty() || !x.is_finite() || !y.is_finite() {
-        return Err("Invalid menu".into());
-    }
-    let item = MenuItem::with_id(
-        window.app_handle(),
-        format!("account-proxy:{id}"),
-        title,
-        true,
-        None::<&str>,
-    )
-    .map_err(|e| e.to_string())?;
-    let menu = Menu::with_items(window.app_handle(), &[&item]).map_err(|e| e.to_string())?;
-    *state.0.lock().unwrap() = Some(menu.clone());
-    menu.popup_at(
-        window.as_ref().window().clone(),
-        tauri::LogicalPosition::new(x, y),
-    )
-    .map_err(|e| e.to_string())
-}
-#[derive(Default)]
 struct LoginState(tokio::sync::Mutex<Option<Arc<copool_core::login::Login>>>);
 #[tauri::command]
 async fn begin_login(
@@ -440,16 +409,10 @@ fn main() {
     let app = tauri::Builder::default()
         .on_window_event(panel::on_window_event)
         .manage(panel::PanelState::default())
-        .manage(NativeMenuState::default())
         .manage(LoginState::default())
         .manage(TunnelState::default())
         .manage(WorkspaceRefreshState::default())
         .plugin(tauri_plugin_dialog::init())
-        .on_menu_event(|app, event| {
-            if let Some(id) = event.id.as_ref().strip_prefix("account-proxy:") {
-                let _ = app.emit("account-proxy-menu", id);
-            }
-        })
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             panel::show(app, None)
         }))
@@ -546,7 +509,6 @@ fn main() {
             save_provider,
             remove_provider,
             refresh_provider,
-            account_menu,
             installed_editors,
             begin_login,
             finish_login,

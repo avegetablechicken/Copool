@@ -322,21 +322,11 @@ function compactUsage(value, label) {
   node.setAttribute("aria-label", `${label}: ${text}`);
   return node;
 }
-function accountMenu(event, account) {
-  event.preventDefault();
-  invoke("account_menu", {
-    id: account.id,
-    title: tr("accounts.proxy.title"),
-    x: event.clientX,
-    y: event.clientY,
-  }).catch((error) => notice(error, true));
-}
-window.__TAURI__.event
-  .listen("account-proxy-menu", ({ payload }) => {
-    const account = accountsCache.find((a) => a.id === payload);
-    if (account) openAccountProxy(account);
-  })
-  .catch((error) => notice(error, true));
+// As in Coport: no WebKit context menu (Reload, …) outside text.
+document.addEventListener("contextmenu", (event) => {
+  if (!event.target.closest("input, textarea, pre, dd, .message-body"))
+    event.preventDefault();
+});
 let renderedAccountsState;
 /// Proxy and removal, in the card's top row as in the SwiftUI card.
 function accountManagement(account) {
@@ -477,9 +467,6 @@ function renderAccounts(accounts) {
       row.classList.toggle("can-reveal", interaction.canReveal);
       row.classList.toggle("revealed", interaction.visible);
       row.dataset.plan = view.plan;
-      row.addEventListener("contextmenu", (event) =>
-        accountMenu(event, account),
-      );
       const name = el("span", "account-row-name", view.name);
       name.title = full;
       row.append(
@@ -498,9 +485,6 @@ function renderAccounts(accounts) {
       `block account${account.isCurrent ? " current" : ""}`,
     );
     card.dataset.plan = view.plan;
-    card.addEventListener("contextmenu", (event) =>
-      accountMenu(event, account),
-    );
     const head = el("div", "block-head");
     head.append(accountTags(account, view), accountManagement(account));
     const name = el("div", "account-name");
