@@ -1048,7 +1048,7 @@ textarea::placeholder {
 }
 
 .account-row .tag {
-  justify-self: end;
+  justify-self: start;
 }
 
 .account-row .block-aside {
@@ -1056,9 +1056,13 @@ textarea::placeholder {
   margin-left: 0;
 }
 
+/* Window label on the left, value on the right, in every row. */
 .account-row .usage-value {
+  display: flex;
+  justify-content: space-between;
+  gap: 3px;
   color: var(--secondary);
-  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .account-row .usage-value b {
