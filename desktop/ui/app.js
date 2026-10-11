@@ -208,10 +208,13 @@ function notice(message, error = false) {
   );
   $("notice").classList.toggle("error", error);
   $("notice").hidden = false;
-  if (!error)
-    noticeTimer = setTimeout(() => {
+  // As NoticeMessage.autoDismissDelay: 3 s, or 5 s for errors.
+  noticeTimer = setTimeout(
+    () => {
       $("notice").hidden = true;
-    }, 4500);
+    },
+    error ? 5000 : 3000,
+  );
 }
 function syncButtons() {
   document.querySelectorAll("button").forEach((button) => {
@@ -620,6 +623,10 @@ async function savePreference(patch) {
     installedEditors.length
   )
     patch.restartEditorTargets = [installedEditors[0].id];
+  const updatedKey =
+    "restartEditorTargets" in patch && !("restartEditorsOnSwitch" in patch)
+      ? "settings.notice.restart_target_updated"
+      : "settings.notice.updated";
   const result = await action(async () => {
     preferences = await providerController.savePreferences(preferences, patch);
     locale = appLocale();
@@ -628,7 +635,7 @@ async function savePreference(patch) {
     renderProviders();
     renderRemotes();
     renderTunnelControls();
-  });
+  }, () => tr(updatedKey));
   if (!result) renderPreferences();
 }
 mountIcons();

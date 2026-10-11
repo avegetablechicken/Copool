@@ -35,8 +35,13 @@ function providerField(form, provider, key, label, type = "text") {
   input.autocomplete = type === "password" ? "new-password" : "off";
   input.setAttribute("aria-label", tr(label));
   input.oninput = () => (provider[key] = input.value);
-  if (type === "password")
-    input.placeholder = tr("settings.sub2api.password_keep");
+  // Only a saved provider has a password to keep, as in the SwiftUI form.
+  const saved = providerController.persisted.some((p) => p.id === provider.id);
+  input.placeholder = tr(
+    type === "password" && saved
+      ? "settings.sub2api.password_keep"
+      : `${label}_placeholder`,
+  );
   row.append(input);
   form.append(row);
 }
@@ -59,13 +64,17 @@ function renderProviders() {
     chevron.classList.add("provider-chevron");
     if (!expandedProviders.has(id)) chevron.classList.add("collapsed");
     toggle.append(chevron, el("span", "", provider.providerID || "Sub2api"));
-    const remove = button("", "trash", "icon-btn", () =>
-      action(async () => {
-        await providerController.remove(id);
-        expandedProviders.delete(id);
-        renderProviders();
-      }),
-    );
+    const remove = button("", "trash", "icon-btn", () => {
+      const saved = providerController.persisted.some((p) => p.id === id);
+      action(
+        async () => {
+          await providerController.remove(id);
+          expandedProviders.delete(id);
+          renderProviders();
+        },
+        saved ? tr("settings.notice.sub2api_saved") : undefined,
+      );
+    });
     remove.type = "button";
     remove.title = tr("settings.sub2api.remove_provider");
     remove.setAttribute("aria-label", remove.title);
