@@ -4,16 +4,22 @@
   <img src="./Copool.png" alt="Copool Icon" width="160" />
 </p>
 
-Copool is a cross-platform desktop app (macOS, Windows, Linux) that manages Codex/ChatGPT auth accounts, usage-based smart switching, and local/remote API proxy workflows. It is built with a Rust core and a Tauri 2 shell.
+Copool is a cross-platform desktop app (macOS, Windows, Linux) that manages Codex/ChatGPT and Claude Code account pools, usage-based smart switching, and local/remote API proxy workflows. It is built with a Rust core and a Tauri 2 shell.
 
-Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管理 Codex/ChatGPT 授权账号、按用量智能切换，以及本地/远程 API 代理工作流。采用 Rust 核心与 Tauri 2 外壳。
+Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管理 Codex/ChatGPT 与 Claude Code 账号池、按用量智能切换，以及本地/远程 API 代理工作流。采用 Rust 核心与 Tauri 2 外壳。
 
 ## Features / 功能
 
+- Two account pools, Codex and Claude Code, switched by the colored icons beside the app name (⌘1 / ⌘2)
+- Codex 与 Claude Code 两个账号池，由应用名旁的有色图标切换显示（⌘1 / ⌘2）
 - Account import/switch/delete and usage refresh (5h / 1week)
 - 账号导入/切换/删除与用量刷新（5h / 1week）
-- Import and refresh Sub2api OpenAI/Codex upstream accounts
-- 导入并刷新 Sub2api 的 OpenAI/Codex 上游账号
+- Claude Code accounts: import the Claude Code login or sign in on claude.ai; switching rewrites Claude Code's credentials (the macOS Keychain or `.credentials.json`) and `oauthAccount`, keeping everything else
+- Claude Code 账号：导入 Claude Code 当前登录或在 claude.ai 登录添加；切换时改写 Claude Code 的凭据（macOS 钥匙串或 `.credentials.json`）与 `oauthAccount`，其余内容保持不变
+- Import and refresh Sub2api upstream accounts: OpenAI/Codex for the Codex pool, and Claude for the Claude pool (switching points Claude Code at the Sub2api gateway through `~/.claude/settings.json`)
+- 导入并刷新 Sub2api 上游账号：Codex 池为 OpenAI/Codex 账号，Claude 池为 Claude 账号（切换时经 `~/.claude/settings.json` 让 Claude Code 使用 Sub2api 网关）
+- A proxy per account; new accounts wait for a manual refresh before contacting upstream, so their proxy can be set first (configurable)
+- 每个账号可设独立代理；新导入的账号默认在手动刷新前不向上游发出请求，以便先设置代理（可在设置中更改）
 - Smart switch based on remaining quota score, manual or automatic
 - 基于剩余额度评分的智能切换，可手动或自动
 - Local OpenAI-compatible API proxy with model compatibility mapping
@@ -48,7 +54,7 @@ See [docs/rust-cross-platform.md](docs/rust-cross-platform.md) for details, data
 
 ## Project Structure / 项目结构
 
-- `crates/copool-core`: accounts, usage, switching, proxy, tunnel, remote servers and settings
+- `crates/copool-core`: accounts, usage, switching, proxy, tunnel, remote servers and settings; the Claude Code pool in `src/claude.rs` and its Sub2api in `src/claude/sub2api.rs`
 - `desktop`: Tauri shell (`src`), web UI (`ui`), UI tests (`tests`), macOS widget (`widget`)
 - `resources/proxyd-src`: proxy engine shared by the core and the standalone remote daemon
 - `resources/proxyd-prebuilt*`: prebuilt Linux daemons for remote deployment
@@ -58,6 +64,8 @@ See [docs/rust-cross-platform.md](docs/rust-cross-platform.md) for details, data
 ## Reference Project / 参考项目
 
 - [170-carry/codex-tools](https://github.com/170-carry/codex-tools)
+- [ming86/cc-account-switcher](https://github.com/ming86/cc-account-switcher) and [farion1231/cc-switch](https://github.com/farion1231/cc-switch): how Claude Code accounts and third-party gateways are switched
+- [ming86/cc-account-switcher](https://github.com/ming86/cc-account-switcher) 与 [farion1231/cc-switch](https://github.com/farion1231/cc-switch)：Claude Code 账号与第三方网关的切换方式
 
 Copool began as a Swift-native migration and redesign of the original Tauri-based implementation, and has since moved to a cross-platform Rust/Tauri app that keeps the SwiftUI app's interface and behavior.
 
