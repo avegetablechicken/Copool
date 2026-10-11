@@ -127,7 +127,7 @@ pub struct Application {
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
     pub(crate) changes: Arc<std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
 }
-struct RefreshGuard<'a> {
+pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
     id: String,
 }
@@ -184,7 +184,7 @@ impl Application {
     pub fn refresh_activity(&self) -> Vec<String> {
         self.refreshing.lock().unwrap().keys().cloned().collect()
     }
-    fn begin_refresh(&self, id: &str) -> RefreshGuard<'_> {
+    pub(crate) fn begin_refresh(&self, id: &str) -> RefreshGuard<'_> {
         *self
             .refreshing
             .lock()
@@ -835,16 +835,22 @@ impl Application {
                     .await
                     .map_err(|error| format!("{}: {error}", account.label))
             });
-        let mut errors: Vec<String> = futures_util::future::join_all(refreshes)
-            .await
+        let providers = self.configuration()?.sub2_api_provider.providers;
+        let provider_refreshes = providers.iter().map(|p| async move {
+            self.refresh_provider(&p.provider_id, false)
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("{}: {error}", p.provider_id))
+        });
+        let (accounts, providers) = tokio::join!(
+            futures_util::future::join_all(refreshes),
+            futures_util::future::join_all(provider_refreshes)
+        );
+        let errors: Vec<String> = accounts
             .into_iter()
+            .chain(providers)
             .filter_map(Result::err)
             .collect();
-        for p in self.configuration()?.sub2_api_provider.providers {
-            if let Err(error) = self.refresh_provider(&p.provider_id, false).await {
-                errors.push(format!("{}: {error}", p.provider_id));
-            }
-        }
         self.auto_switch_if_needed().await?;
         if errors.is_empty() {
             Ok(())
@@ -909,22 +915,26 @@ impl Application {
                     && ids.as_ref().is_none_or(|ids| ids.contains(&a.id))
             })
             .map(|account| self.refresh_usage(&account.id));
-        let mut errors: Vec<String> = futures_util::future::join_all(refreshes)
-            .await
-            .into_iter()
-            .filter_map(Result::err)
-            .collect();
         let current = crate::codex_config::resolve_path(&self.codex_config_path());
-        if self
+        let provider = self
             .configuration()?
             .sub2_api_provider
             .provider(&current.id)
             .is_some()
-        {
-            if let Err(error) = self.refresh_provider(&current.id, false).await {
-                errors.push(error);
+            .then_some(current.id);
+        let provider_refresh = async {
+            match &provider {
+                Some(id) => self.refresh_provider(id, false).await.map(|_| ()),
+                None => Ok(()),
             }
-        }
+        };
+        let (accounts, provider) =
+            tokio::join!(futures_util::future::join_all(refreshes), provider_refresh);
+        let errors: Vec<String> = accounts
+            .into_iter()
+            .chain([provider])
+            .filter_map(Result::err)
+            .collect();
         self.auto_switch_if_needed().await?;
         if errors.is_empty() {
             Ok(())

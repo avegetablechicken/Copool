@@ -190,6 +190,24 @@ impl Application {
         sync_membership: bool,
     ) -> Result<usize, String> {
         let snapshot = self.configuration()?;
+        // The provider's cards show as refreshing until its accounts land.
+        let _activity: Vec<_> = snapshot
+            .sub2_api_provider
+            .providers
+            .iter()
+            .filter(|p| p.provider_id.eq_ignore_ascii_case(provider_id))
+            .flat_map(|p| {
+                p.cached_accounts.iter().filter_map(|raw| {
+                    let mut account =
+                        serde_json::from_value::<sub2api::Account>(raw.clone()).ok()?;
+                    account.provider_id = Some(p.provider_id.clone());
+                    Some(account.card_id())
+                })
+            })
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|id| self.begin_refresh(id))
+            .collect();
         let connection = sub2api::connection(
             &self.codex_config_path(),
             &snapshot.sub2_api_provider,
