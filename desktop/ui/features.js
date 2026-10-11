@@ -58,11 +58,7 @@ function renderProviders() {
     const chevron = icon("chevron-down");
     chevron.classList.add("provider-chevron");
     if (!expandedProviders.has(id)) chevron.classList.add("collapsed");
-    toggle.append(
-      chevron,
-      icon("server"),
-      el("span", "", provider.providerID || "Sub2api"),
-    );
+    toggle.append(chevron, el("span", "", provider.providerID || "Sub2api"));
     const remove = button("", "trash", "icon-btn", () =>
       action(async () => {
         await providerController.remove(id);
