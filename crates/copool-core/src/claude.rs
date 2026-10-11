@@ -11,7 +11,10 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{fs, path::PathBuf, sync::Arc};
+// Only the macOS Keychain commands are timed.
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 
 type Result<T> = std::result::Result<T, String>;
 
