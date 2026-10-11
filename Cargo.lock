@@ -689,6 +689,7 @@ dependencies = [
  "chrono",
  "dirs",
  "flate2",
+ "futures-util",
  "keyring",
  "log",
  "reqwest 0.12.28",

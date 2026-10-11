@@ -824,17 +824,22 @@ impl Application {
         }
     }
     pub async fn refresh_all(&self) -> Result<()> {
-        let mut errors = Vec::new();
-        for account in self
-            .accounts()
-            .await?
-            .into_iter()
+        // Accounts refresh concurrently: one slow or unreachable endpoint must
+        // not hold back the rest of the pool.
+        let accounts = self.accounts().await?;
+        let refreshes = accounts
+            .iter()
             .filter(|a| a.source_tag.as_deref() != Some("SUB2API"))
-        {
-            if let Err(error) = self.refresh_usage(&account.id).await {
-                errors.push(format!("{}: {error}", account.label));
-            }
-        }
+            .map(|account| async move {
+                self.refresh_usage(&account.id)
+                    .await
+                    .map_err(|error| format!("{}: {error}", account.label))
+            });
+        let mut errors: Vec<String> = futures_util::future::join_all(refreshes)
+            .await
+            .into_iter()
+            .filter_map(Result::err)
+            .collect();
         for p in self.configuration()?.sub2_api_provider.providers {
             if let Err(error) = self.refresh_provider(&p.provider_id, false).await {
                 errors.push(format!("{}: {error}", p.provider_id));
@@ -897,15 +902,18 @@ impl Application {
     pub async fn refresh_recurring(&self, tick: u64) -> Result<()> {
         let accounts = self.accounts().await?;
         let ids = crate::refresh_policy::recurring_ids(tick, &accounts);
-        let mut errors = vec![];
-        for account in accounts.into_iter().filter(|a| {
-            a.source_tag.as_deref() != Some("SUB2API")
-                && ids.as_ref().map_or(true, |ids| ids.contains(&a.id))
-        }) {
-            if let Err(error) = self.refresh_usage(&account.id).await {
-                errors.push(error);
-            }
-        }
+        let refreshes = accounts
+            .iter()
+            .filter(|a| {
+                a.source_tag.as_deref() != Some("SUB2API")
+                    && ids.as_ref().is_none_or(|ids| ids.contains(&a.id))
+            })
+            .map(|account| self.refresh_usage(&account.id));
+        let mut errors: Vec<String> = futures_util::future::join_all(refreshes)
+            .await
+            .into_iter()
+            .filter_map(Result::err)
+            .collect();
         let current = crate::codex_config::resolve_path(&self.codex_config_path());
         if self
             .configuration()?
@@ -928,7 +936,10 @@ impl Application {
         if self.preferences().is_ok_and(|p| p.auto_start_proxy) {
             let _ = self.start_proxy().await;
         }
+        // Refresh the whole pool at launch; the UI shows the stored values
+        // meanwhile and updates each card as its refresh lands.
         let mut tick = 0u64;
+        let _ = self.refresh_recurring(tick).await;
         loop {
             let seconds = self.preferences().map(|p| p.refresh_seconds).unwrap_or(10);
             tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
