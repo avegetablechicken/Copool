@@ -842,6 +842,27 @@ impl Application {
         self.claude_save(&store)?;
         Ok((id, label))
     }
+    /// Resolve an existing account before requesting its profile. New accounts
+    /// have no saved proxy yet; never borrow the currently selected account's.
+    fn claude_profile_proxy(&self, oauth: &Value, account: Option<&Value>) -> Result<String> {
+        let account_identity = account.and_then(identity);
+        let store = self.claude_load()?;
+        let mut matches = store.accounts.iter().filter(|stored| {
+            if let Some(expected) = &account_identity {
+                return identity(&stored.account).as_ref() == Some(expected);
+            }
+            ["accessToken", "refreshToken"].iter().any(|key| {
+                text(&oauth[key]).is_some_and(|token| text(&stored.oauth[key]) == Some(token))
+            })
+        });
+        let Some(first) = matches.next() else {
+            return Ok(String::new());
+        };
+        if matches.any(|other| other.proxy_url != first.proxy_url) {
+            return Err("Cannot determine the Claude account proxy unambiguously".into());
+        }
+        Ok(first.proxy_url.clone())
+    }
     /// Imports the login Claude Code uses; returns the account label.
     pub async fn claude_import_current(&self) -> Result<String> {
         let _op = self.claude.operations.lock().await;
@@ -853,7 +874,8 @@ impl Application {
             Some(account) => account,
             None => {
                 let token = text(&oauth["accessToken"]).unwrap_or_default();
-                let profile = self.claude_network().profile(&token, "").await?;
+                let proxy = self.claude_profile_proxy(&oauth, None)?;
+                let profile = self.claude_network().profile(&token, &proxy).await?;
                 profile_account(Some(&profile), &Value::Null).0
             }
         };
@@ -867,7 +889,9 @@ impl Application {
         let mut oauth = json!({});
         apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
         let token = text(&oauth["accessToken"]).unwrap_or_default();
-        let profile = self.claude_network().profile(&token, "").await.ok();
+        let account = profile_account(None, &tokens).0;
+        let proxy = self.claude_profile_proxy(&oauth, Some(&account))?;
+        let profile = self.claude_network().profile(&token, &proxy).await.ok();
         let (account, subscription, tier) = profile_account(profile.as_ref(), &tokens);
         if let Some(subscription) = subscription {
             oauth["subscriptionType"] = subscription.into();
@@ -1168,6 +1192,7 @@ mod tests {
     pub(super) struct Fake {
         usage: Mutex<Vec<(u16, Value)>>,
         refreshed: Mutex<Vec<String>>,
+        profile_proxies: Mutex<Vec<String>>,
     }
     impl Network for Fake {
         fn usage<'a>(&'a self, _: &'a str, _: &'a str) -> Response<'a, (u16, Value)> {
@@ -1191,8 +1216,9 @@ mod tests {
                 )
             })
         }
-        fn profile<'a>(&'a self, _: &'a str, _: &'a str) -> Response<'a, Value> {
-            Box::pin(async {
+        fn profile<'a>(&'a self, _: &'a str, proxy: &'a str) -> Response<'a, Value> {
+            Box::pin(async move {
+                self.profile_proxies.lock().unwrap().push(proxy.into());
                 Ok(
                     json!({"account":{"uuid":"acct-new","email":"new@example.com"},"organization":{"uuid":"org-new","name":"New","organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}),
                 )
@@ -1369,6 +1395,87 @@ mod tests {
             }
         );
         assert_eq!(live_access(&location), "new-access");
+    }
+
+    #[tokio::test]
+    async fn browser_profile_uses_the_existing_account_proxy_with_rotated_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir);
+        // The currently selected account must not supply the new login's proxy.
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let alice = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_save_account_proxy(&alice, "http://127.0.0.1:8001")
+            .await
+            .unwrap();
+        let (oauth, account) = login("new", LATER);
+        let (id, _) = app.claude_upsert(oauth, account, false).await.unwrap();
+        app.claude_save_account_proxy(&id, "socks5://127.0.0.1:8002")
+            .await
+            .unwrap();
+        app.claude_import_login(json!({
+            "access_token": "rotated-access", "refresh_token": "rotated-refresh",
+            "expires_in": 3600,
+            "account": {"uuid": "acct-new"}, "organization": {"uuid": "org-new"}
+        }))
+        .await
+        .unwrap();
+        assert_eq!(
+            *fake.profile_proxies.lock().unwrap(),
+            vec!["socks5://127.0.0.1:8002"]
+        );
+        assert_eq!(app.claude_load().unwrap().accounts.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn importing_without_local_identity_resolves_profile_proxy_from_credentials() {
+        for retained in ["accessToken", "refreshToken"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (app, location, fake) = app(&dir);
+            sign_in(&location, "new", LATER);
+            app.claude_import_current().await.unwrap();
+            let id = app.claude_load().unwrap().accounts[0].id.clone();
+            app.claude_save_account_proxy(&id, "http://127.0.0.1:8002")
+                .await
+                .unwrap();
+            let (mut oauth, _) = login("new", LATER);
+            let changed = if retained == "accessToken" {
+                "refreshToken"
+            } else {
+                "accessToken"
+            };
+            oauth[changed] = "rotated".into();
+            write_json(
+                &location.credentials_file(),
+                &json!({"claudeAiOauth": oauth}),
+            )
+            .unwrap();
+            write_json(&location.global_config, &json!({})).unwrap();
+            app.claude_import_current().await.unwrap();
+            assert_eq!(
+                *fake.profile_proxies.lock().unwrap(),
+                vec!["http://127.0.0.1:8002"]
+            );
+            assert_eq!(app.claude_load().unwrap().accounts.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_profile_does_not_use_another_accounts_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_save_account_proxy(&id, "http://127.0.0.1:8001")
+            .await
+            .unwrap();
+        app.claude_import_login(json!({
+            "access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600
+        }))
+        .await
+        .unwrap();
+        assert_eq!(*fake.profile_proxies.lock().unwrap(), vec![""]);
     }
 
     #[test]
