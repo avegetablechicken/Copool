@@ -844,6 +844,18 @@ textarea::placeholder {
   line-height: 20px;
 }
 
+/* An icon beside the title is centered on it; only the title is truncated. */
+.toolbar .btn.labeled {
+  display: inline-flex;
+  align-items: center;
+}
+
+.toolbar .btn.labeled > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .toolbar-aside {
   display: flex;
   align-items: center;

@@ -94,6 +94,7 @@ function setIcon(button, glyph) {
 }
 /// An icon and a short title, as the SwiftUI toolbar's labeled buttons.
 function setLabeledIcon(button, glyph, text) {
+  button.classList.add("labeled");
   if (!button.querySelector(`[data-glyph="${glyph}"]`))
     button.replaceChildren(icon(glyph), el("span"));
   button.lastChild.textContent = text;
