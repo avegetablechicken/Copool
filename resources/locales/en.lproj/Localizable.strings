@@ -484,7 +484,7 @@
 "error.claude.login_not_found" = "Claude Code login not found. Sign in with Claude Code first.";
 "accounts.notice.claude_switch_done" = "Switched Claude account; restart Claude Code to use it";
 "accounts.notice.claude_settings_override_format" = "settings.json sets %@, so Claude Code keeps using it instead of this account";
-"settings.sub2api.claude_help" = "Switching to its accounts points Claude Code at this Sub2api through ~/.claude/settings.json.";
+"settings.sub2api.claude_help" = "Optional admin API URL; leave blank to derive it from Claude Code settings.json. The gateway and API Key are read from that configuration when saving.";
 "settings.sub2api.claude_name" = "Name";
 "settings.sub2api.claude_name_placeholder" = "For example, team-sub2api";
 "settings.sub2api.claude_base_url" = "Sub2api URL";
@@ -494,7 +494,7 @@
 "settings.sub2api.claude_api_key_keep" = "Leave blank to keep the saved key";
 "accounts.notice.claude_provider_switched_format" = "Claude Code now uses Sub2api %@; restart Claude Code to use it";
 "error.claude.sub2api_not_configured" = "Add a Claude Sub2api provider in Settings first.";
-"error.claude.sub2api_api_key_missing" = "Set the API key for Claude Code in this Sub2api provider first.";
+"error.claude.sub2api_api_key_missing" = "Configure this provider’s gateway and API Key in Claude Code settings.json, then save the provider again.";
 "settings.request_new_accounts" = "Contact upstream right after importing a new account";
 "settings.request_new_accounts.description" = "When off, Copool sends nothing upstream for a newly imported account (usage, workspaces, profile, proxy routing) until you refresh its card or refresh all, so that you can set its proxy first. Signing in and exchanging tokens still happen during the import.";
 "accounts.card.awaiting_first_request" = "Not yet refreshed";

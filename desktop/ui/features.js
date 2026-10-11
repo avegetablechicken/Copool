@@ -1013,27 +1013,25 @@ function renderClaudeProviders() {
     form.append(header);
     if (expandedClaudeProviders.has(id)) {
       const body = el("div", "provider-body");
-      body.append(
-        el("p", "setting-description", tr("settings.sub2api.claude_help")),
-      );
       for (const [key, label, type] of [
         ["name", "claude_name"],
-        ["baseURL", "claude_base_url"],
+        ["adminBaseURL", "admin_base_url"],
         ["username", "username"],
         ["password", "password", "password"],
-        ["apiKey", "claude_api_key", "password"],
-      ])
+      ]) {
         providerField(
           body,
           provider,
           key,
           `settings.sub2api.${label}`,
           type,
-          key === "apiKey" ? !!saved?.hasApiKey : !!saved,
-          key === "apiKey"
-            ? "settings.sub2api.claude_api_key_keep"
-            : "settings.sub2api.password_keep",
+          !!saved,
         );
+        if (key === "adminBaseURL")
+          body.append(
+            el("p", "setting-description", tr("settings.sub2api.claude_help")),
+          );
+      }
       const row = el("label", "row");
       row.append(
         el("span", "row-label", tr("settings.sub2api.allow_insecure_tls")),
@@ -1070,7 +1068,7 @@ function addClaudeProvider() {
   claudeProviderDrafts.set(id, {
     id,
     name: "",
-    baseURL: "",
+    adminBaseURL: "",
     username: "",
     password: "",
     apiKey: "",

@@ -484,7 +484,7 @@
 "error.claude.login_not_found" = "未找到 Claude Code 登录，请先在 Claude Code 中登录";
 "accounts.notice.claude_switch_done" = "已切换 Claude 账号，重启 Claude Code 后生效";
 "accounts.notice.claude_settings_override_format" = "settings.json 设置了 %@，Claude Code 会继续使用它而不是此账号";
-"settings.sub2api.claude_help" = "切换到其账号时，Claude Code 将通过 ~/.claude/settings.json 使用此 Sub2api。";
+"settings.sub2api.claude_help" = "管理 API 地址选填，留空从 Claude Code settings.json 中推导。保存时从该配置读取网关与 API Key，无需重复填写。";
 "settings.sub2api.claude_name" = "名称";
 "settings.sub2api.claude_name_placeholder" = "例如 team-sub2api";
 "settings.sub2api.claude_base_url" = "Sub2api 地址";
@@ -494,7 +494,7 @@
 "settings.sub2api.claude_api_key_keep" = "留空保留已保存的 Key";
 "accounts.notice.claude_provider_switched_format" = "Claude Code 已改用 Sub2api %@，重启 Claude Code 后生效";
 "error.claude.sub2api_not_configured" = "请先在设置中添加 Claude 的 Sub2api Provider。";
-"error.claude.sub2api_api_key_missing" = "请先在此 Sub2api Provider 中填写 Claude Code 使用的 API Key。";
+"error.claude.sub2api_api_key_missing" = "请先在 Claude Code settings.json 中配置此 Provider 的网关和 API Key，再重新保存 Provider。";
 "settings.request_new_accounts" = "导入新账号后立即请求上游";
 "settings.request_new_accounts.description" = "关闭时，新导入的账号在你刷新该卡片或刷新全部之前，Copool 不会为它向上游发出任何请求（额度、工作区、账号资料、代理转发），以便先为它设置代理。登录和换取令牌仍在导入时进行。";
 "accounts.card.awaiting_first_request" = "待首次刷新";

@@ -26,6 +26,9 @@ pub struct Provider {
     /// The Sub2api address: the gateway root, or its admin API (`…/api/v1`).
     #[serde(rename = "baseURL")]
     pub base_url: String,
+    /// Optional admin API override, independent of the Claude Code gateway.
+    #[serde(rename = "adminBaseURL")]
+    pub admin_base_url: String,
     pub username: String,
     /// Only in a draft from the form; the system keyring keeps it.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -195,21 +198,47 @@ impl Application {
         draft.name = draft.name.trim().into();
         draft.username = draft.username.trim().into();
         draft.base_url = draft.base_url.trim().trim_end_matches('/').into();
+        draft.admin_base_url = draft.admin_base_url.trim().trim_end_matches('/').into();
         draft.proxy_url = draft.proxy_url.trim().into();
+        let env = settings_env(&self.claude_location());
+        let configured_base = env.get(BASE_URL).and_then(Value::as_str).unwrap_or("");
+        if draft.base_url.is_empty() {
+            draft.base_url = if configured_base.trim().is_empty() {
+                gateway(&draft.admin_base_url)
+            } else {
+                configured_base.trim().trim_end_matches('/').into()
+            };
+        }
+        // Only reuse a credential when Claude Code points to this gateway.
+        if draft.api_key.trim().is_empty()
+            && !configured_base.trim().is_empty()
+            && gateway(configured_base).eq_ignore_ascii_case(&draft.gateway())
+        {
+            draft.api_key = [AUTH_TOKEN, "ANTHROPIC_API_KEY"]
+                .iter()
+                .filter_map(|key| env.get(*key).and_then(Value::as_str))
+                .find(|key| !key.trim().is_empty())
+                .unwrap_or("")
+                .into();
+        }
         if draft.id.trim().is_empty() {
             draft.id = uuid::Uuid::new_v4().to_string();
         }
         crate::utils::validate_account_proxy(&draft.proxy_url)?;
-        let url =
-            reqwest::Url::parse(&draft.base_url).map_err(|_| "error.sub2api.invalid_base_url")?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err("error.sub2api.invalid_base_url".into());
+        for base in [&draft.base_url, &draft.admin_base_url] {
+            if base.is_empty() {
+                continue;
+            }
+            let url = reqwest::Url::parse(base).map_err(|_| "error.sub2api.invalid_base_url")?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err("error.sub2api.invalid_base_url".into());
+            }
         }
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
@@ -284,7 +313,11 @@ impl Application {
                 env_key: None,
                 requires_openai_auth: None,
             },
-            admin_base: sub2api::admin_base(&p.base_url)?,
+            admin_base: sub2api::admin_base(if p.admin_base_url.is_empty() {
+                &p.base_url
+            } else {
+                &p.admin_base_url
+            })?,
         })
     }
     async fn claude_fetch_sub2api(
@@ -522,6 +555,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_form_derives_gateway_and_key_and_keeps_admin_url_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = Application::open_with_secrets(
+            crate::Paths {
+                data_dir: dir.path().join("data"),
+                codex_auth: dir.path().join("codex/auth.json"),
+            },
+            std::sync::Arc::new(Secrets::default()),
+        )
+        .unwrap();
+        let location = Location::files(dir.path().join("claude"));
+        app.set_claude_location(location.clone());
+        edit_env(&location, |env| {
+            env.insert(BASE_URL.into(), "https://gateway.example".into());
+            env.insert(AUTH_TOKEN.into(), "sk-from-claude".into());
+        })
+        .unwrap();
+        let mut saved = app
+            .claude_save_sub2api_provider(Provider {
+                name: "team".into(),
+                username: "admin".into(),
+                password: "admin-password".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(saved.gateway(), "https://gateway.example");
+        assert!(saved.has_api_key);
+        assert!(saved.password.is_empty() && saved.api_key.is_empty());
+        assert_eq!(
+            app.claude_sub2api_connection(&saved).unwrap().admin_base,
+            "https://gateway.example/api/v1"
+        );
+
+        saved.admin_base_url = "https://admin.example/api/v1/".into();
+        saved = app.claude_save_sub2api_provider(saved).await.unwrap();
+        let connection = app.claude_sub2api_connection(&saved).unwrap();
+        assert_eq!(connection.admin_base, "https://admin.example/api/v1");
+        assert_eq!(
+            connection.definition.base_url.as_deref(),
+            Some("https://gateway.example")
+        );
+        assert_eq!(connection.configuration.password, "admin-password");
+        let stored = fs::read_to_string(app.claude_store_path()).unwrap();
+        assert!(!stored.contains("sk-from-claude") && !stored.contains("admin-password"));
+
+        // A credential for another gateway must never be copied to this provider.
+        edit_env(&location, |env| {
+            env.insert(BASE_URL.into(), "https://other.example".into());
+            env.insert(AUTH_TOKEN.into(), "sk-other".into());
+        })
+        .unwrap();
+        saved = app.claude_save_sub2api_provider(saved).await.unwrap();
+        assert_eq!(
+            app.secrets
+                .get(&api_key_secret(&saved.id))
+                .unwrap()
+                .as_deref(),
+            Some("sk-from-claude")
+        );
+        let other = app
+            .claude_save_sub2api_provider(Provider {
+                name: "unrelated".into(),
+                base_url: "https://unrelated.example".into(),
+                username: "admin".into(),
+                password: "password".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!other.has_api_key);
+        saved.admin_base_url = "https://user:password@admin.example".into();
+        assert_eq!(
+            app.claude_save_sub2api_provider(saved).await.unwrap_err(),
+            "error.sub2api.invalid_base_url"
+        );
+    }
+
+    #[tokio::test]
     async fn syncs_claude_accounts_and_switches_claude_code_between_gateway_and_login() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::open_with_secrets(
@@ -587,12 +699,14 @@ mod tests {
             app.claude_switch_account(&card.id).await.unwrap_err(),
             "error.claude.sub2api_api_key_missing"
         );
-        app.claude_save_sub2api_provider(Provider {
-            api_key: "sk-team".into(),
-            ..saved.clone()
+        edit_env(&location, |env| {
+            env.insert(BASE_URL.into(), base.clone().into());
+            env.insert("ANTHROPIC_API_KEY".into(), "sk-team".into());
         })
-        .await
         .unwrap();
+        app.claude_save_sub2api_provider(saved.clone())
+            .await
+            .unwrap();
         let execution = app.claude_switch_account(&card.id).await.unwrap();
         assert_eq!(execution.provider.as_deref(), Some("team"));
         let text = fs::read_to_string(settings_path(&location)).unwrap();

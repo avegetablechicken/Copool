@@ -456,7 +456,7 @@
 "error.claude.login_not_found" = "No se encontró el inicio de sesión de Claude Code. Inicia sesión primero en Claude Code.";
 "accounts.notice.claude_switch_done" = "Cuenta de Claude cambiada; reinicia Claude Code para usarla";
 "accounts.notice.claude_settings_override_format" = "settings.json define %@, así que Claude Code sigue usándolo en lugar de esta cuenta";
-"settings.sub2api.claude_help" = "Al cambiar a sus cuentas, Claude Code usa este Sub2api mediante ~/.claude/settings.json.";
+"settings.sub2api.claude_help" = "URL de API de administración opcional; si está vacía, se obtiene de Claude Code settings.json. La puerta de enlace y la clave API se leen al guardar.";
 "settings.sub2api.claude_name" = "Nombre";
 "settings.sub2api.claude_name_placeholder" = "Por ejemplo, team-sub2api";
 "settings.sub2api.claude_base_url" = "URL de Sub2api";
@@ -466,7 +466,7 @@
 "settings.sub2api.claude_api_key_keep" = "Déjalo vacío para conservar la clave guardada";
 "accounts.notice.claude_provider_switched_format" = "Claude Code ahora usa Sub2api %@; reinicia Claude Code para usarlo";
 "error.claude.sub2api_not_configured" = "Añade primero un proveedor Sub2api para Claude en Ajustes.";
-"error.claude.sub2api_api_key_missing" = "Indica primero la clave API para Claude Code en este proveedor Sub2api.";
+"error.claude.sub2api_api_key_missing" = "Configure la puerta de enlace y la clave API en Claude Code settings.json y vuelva a guardar el proveedor.";
 "settings.request_new_accounts" = "Contactar con el upstream justo después de importar una cuenta nueva";
 "settings.request_new_accounts.description" = "Si está desactivado, Copool no envía nada al upstream para una cuenta recién importada (uso, espacios de trabajo, perfil, enrutamiento del proxy) hasta que actualices su tarjeta o todas, para que puedas configurar antes su proxy. El inicio de sesión y el intercambio de tokens siguen ocurriendo al importar.";
 "accounts.card.awaiting_first_request" = "Aún sin actualizar";

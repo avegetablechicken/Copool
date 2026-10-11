@@ -474,7 +474,7 @@
 "error.claude.login_not_found" = "Claude Code のログインが見つかりません。先に Claude Code でサインインしてください。";
 "accounts.notice.claude_switch_done" = "Claude アカウントを切り替えました。Claude Code を再起動すると反映されます";
 "accounts.notice.claude_settings_override_format" = "settings.json で %@ が設定されているため、Claude Code はこのアカウントではなくそちらを使い続けます";
-"settings.sub2api.claude_help" = "このアカウントに切り替えると、Claude Code は ~/.claude/settings.json を通じてこの Sub2api を使います。";
+"settings.sub2api.claude_help" = "管理 API URL は省略可能です。空欄の場合、Claude Code settings.json から推定します。保存時に同設定からゲートウェイと API Key を読み取ります。";
 "settings.sub2api.claude_name" = "名前";
 "settings.sub2api.claude_name_placeholder" = "例：team-sub2api";
 "settings.sub2api.claude_base_url" = "Sub2api の URL";
@@ -484,7 +484,7 @@
 "settings.sub2api.claude_api_key_keep" = "空欄のままにすると保存済みのキーを保持します";
 "accounts.notice.claude_provider_switched_format" = "Claude Code は Sub2api %@ を使用します。Claude Code を再起動すると反映されます";
 "error.claude.sub2api_not_configured" = "先に設定で Claude 用の Sub2api プロバイダーを追加してください。";
-"error.claude.sub2api_api_key_missing" = "先にこの Sub2api プロバイダーに Claude Code 用 API キーを設定してください。";
+"error.claude.sub2api_api_key_missing" = "Claude Code settings.json にこの Provider のゲートウェイと API Key を設定し、Provider を再保存してください。";
 "settings.request_new_accounts" = "新しいアカウントのインポート直後に上流へリクエストする";
 "settings.request_new_accounts.description" = "オフのとき、新しくインポートしたアカウントについては、カードまたはすべてを更新するまで上流へ何も送信しません（使用量、ワークスペース、プロフィール、プロキシ転送）。先にプロキシを設定できます。サインインとトークン交換はインポート時に行われます。";
 "accounts.card.awaiting_first_request" = "未更新";
