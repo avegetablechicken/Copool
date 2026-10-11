@@ -79,6 +79,27 @@ fn testResolvesUpstreamRouteFamilyByModel() {
     }
 }
 #[test]
+fn later_gpt_generations_use_the_codex_endpoint() {
+    for model in ["gpt-6-astra", "gpt-6", "GPT-6.1", "gpt7-mini", "gpt5.4"] {
+        assert!(
+            matches!(
+                resolve_upstream_route_family(model),
+                UpstreamRouteFamily::Codex
+            ),
+            "{model}"
+        );
+    }
+    for model in ["gpt-4o", "gpt-4.1-mini", "o3", "gpt-image-1"] {
+        assert!(
+            matches!(
+                resolve_upstream_route_family(model),
+                UpstreamRouteFamily::General
+            ),
+            "{model}"
+        );
+    }
+}
+#[test]
 fn testMapsDisplayModelNamesToUpstream() {
     for (input, expected) in [
         ("GPT-5.4", "gpt-5.4"),

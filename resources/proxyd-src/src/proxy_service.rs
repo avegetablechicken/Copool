@@ -1172,14 +1172,16 @@ fn default_reasoning_effort_for_upstream(upstream_model: Option<&str>) -> &'stat
     }
 }
 
+/// Codex models and every GPT generation from 5 on (`gpt-5.4`, `gpt5.4`,
+/// `gpt-6-…`) are served by the Codex endpoint.
 fn resolve_upstream_route_family(model: &str) -> UpstreamRouteFamily {
     let normalized = model.trim().to_lowercase();
-    if normalized.contains("codex")
-        || normalized.starts_with("gpt-5")
-        || normalized.starts_with("gpt-5.4")
-        || normalized.starts_with("gpt5.4")
-        || normalized.starts_with("gpt-5-4")
-    {
+    let generation = normalized
+        .strip_prefix("gpt")
+        .map(|rest| rest.trim_start_matches('-'))
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|digits| digits.parse::<u32>().ok());
+    if normalized.contains("codex") || generation.is_some_and(|g| g >= 5) {
         UpstreamRouteFamily::Codex
     } else {
         UpstreamRouteFamily::General
