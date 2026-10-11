@@ -191,10 +191,13 @@ impl Application {
             .map_err(|_| "This Copool data directory is already in use")?;
         // Recover malformed account JSON only after a private backup succeeds.
         store::load_store_from_path(&paths.store())?;
+        let network = Arc::new(crate::account_network::Network {
+            codex_config: paths.codex_auth.with_file_name("config.toml"),
+        });
         let app = Self {
             paths,
             secrets,
-            network: Arc::new(crate::account_network::Network),
+            network,
             state: AppState::default(),
             operations: Mutex::new(()),
             proxy_operations: Mutex::new(()),
@@ -262,14 +265,11 @@ impl Application {
         );
         storage.prefer_local_selection = true;
         storage.active_auth_path = Some(self.paths.codex_auth.clone());
-        storage.upstream_base_url = fs::read_to_string(self.codex_config_path())
-            .ok()
-            .and_then(|s| s.parse::<toml_edit::DocumentMut>().ok())
-            .and_then(|d| {
-                d.get("chatgpt_base_url")
-                    .and_then(toml_edit::Item::as_str)
-                    .map(str::to_owned)
-            });
+        // Always resolved here: the engine's own fallback reads ~/.codex, not
+        // the Codex configuration Copool uses.
+        storage.upstream_base_url = Some(crate::usage::chatgpt_base_origin(
+            crate::codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
+        ));
         let paths = self.paths.clone();
         storage.on_auth_refreshed = Some(Arc::new(move |id, auth| {
             crate::proxy_integration::sync_refreshed_auth(&paths, id, auth)

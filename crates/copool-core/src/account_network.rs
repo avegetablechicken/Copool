@@ -7,12 +7,24 @@ pub(crate) trait AccountNetwork: Send + Sync {
     fn refresh<'a>(&'a self, auth: &'a Value, proxy: &'a str) -> Response<'a, Value>;
     fn workspaces<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Vec<Metadata>>;
 }
-pub(crate) struct Network;
+/// Requests follow `chatgpt_base_url` in Copool's Codex configuration, as
+/// the proxy does.
+pub(crate) struct Network {
+    pub(crate) codex_config: std::path::PathBuf,
+}
+impl Network {
+    pub(crate) fn origin(&self) -> String {
+        crate::usage::chatgpt_base_origin(
+            crate::codex_config::chatgpt_base_url(&self.codex_config).as_deref(),
+        )
+    }
+}
 impl AccountNetwork for Network {
     fn usage<'a>(&'a self, auth: &'a Value, proxy: &'a str) -> Response<'a, UsageSnapshot> {
         Box::pin(async move {
             let extracted = crate::auth::extract_auth(auth)?;
-            crate::usage::fetch_usage_snapshot(
+            crate::usage::fetch_usage_snapshot_from(
+                &self.origin(),
                 &extracted.access_token,
                 &extracted.account_id,
                 proxy,
@@ -26,7 +38,7 @@ impl AccountNetwork for Network {
     fn workspaces<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Vec<Metadata>> {
         Box::pin(async move {
             let client = crate::proxy_session::client(proxy, Default::default())?;
-            let base = crate::usage::resolve_chatgpt_base_origin();
+            let base = self.origin();
             let mut endpoints = vec![
                 format!(
                     "{}/accounts",

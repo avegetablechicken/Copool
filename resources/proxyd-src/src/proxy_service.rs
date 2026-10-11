@@ -49,8 +49,8 @@ use crate::state::AppState;
 use crate::store::account_store_path_from_data_dir;
 use crate::store::load_store_from_path;
 use crate::store::save_store_to_path;
-use crate::usage::fetch_usage_snapshot;
-use crate::usage::resolve_chatgpt_base_origin;
+use crate::usage::fetch_usage_snapshot_from;
+use crate::usage::{chatgpt_base_origin, resolve_chatgpt_base_origin};
 use crate::utils::now_unix_seconds;
 use crate::utils::truncate_for_error;
 
@@ -1990,8 +1990,15 @@ async fn refresh_proxy_candidate_usage(
     storage: &ProxyStorageContext,
     candidates: Vec<ProxyCandidate>,
 ) {
+    // The upstream the proxy forwards to is also where usage is read.
+    let origin = storage
+        .upstream_base_url
+        .as_deref()
+        .map(|configured| chatgpt_base_origin(Some(configured)))
+        .unwrap_or_else(resolve_chatgpt_base_origin);
     for candidate in candidates {
-        let result = fetch_usage_snapshot(
+        let result = fetch_usage_snapshot_from(
+            &origin,
             &candidate.access_token,
             &candidate.account_id,
             &candidate.proxy_url,

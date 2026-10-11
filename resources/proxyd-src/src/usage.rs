@@ -44,12 +44,15 @@ struct CreditDetails {
     balance: Option<String>,
 }
 
-pub(crate) async fn fetch_usage_snapshot(
+/// Usage under a resolved ChatGPT origin (`chatgpt_base_origin`), then the
+/// official endpoints.
+pub(crate) async fn fetch_usage_snapshot_from(
+    origin: &str,
     access_token: &str,
     account_id: &str,
     proxy_url: &str,
 ) -> Result<UsageSnapshot, String> {
-    let usage_urls = resolve_usage_urls();
+    let usage_urls = usage_urls(origin);
 
     let client = background_client(proxy_url)?;
 
@@ -121,10 +124,6 @@ pub(crate) async fn fetch_usage_from_urls(
     Ok(snapshot)
 }
 
-fn resolve_usage_urls() -> Vec<String> {
-    usage_urls(&resolve_chatgpt_base_origin())
-}
-
 /// Usage endpoints under the configured ChatGPT origin, then the official ones.
 pub(crate) fn usage_urls(normalized: &str) -> Vec<String> {
     let mut candidates = Vec::new();
@@ -175,22 +174,35 @@ fn format_reqwest_error(err: &reqwest::Error) -> String {
     parts.join(" -> ")
 }
 
+/// The daemon's Codex configuration: `CODEX_HOME`, else `~/.codex`. The
+/// desktop reads its own Codex configuration instead (`codex_config`).
 fn read_chatgpt_base_url_from_config() -> Option<String> {
-    let home = dirs::home_dir()?;
-    let config_path = home.join(".codex").join("config.toml");
-    let contents = std::fs::read_to_string(config_path).ok()?;
+    let home = std::env::var_os("CODEX_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))?;
+    chatgpt_base_url_in(&std::fs::read_to_string(home.join("config.toml")).ok()?)
+}
 
+/// The top-level `chatgpt_base_url` of a Codex `config.toml`. Values inside
+/// tables such as `[profiles.name]` are not the global setting.
+pub(crate) fn chatgpt_base_url_in(contents: &str) -> Option<String> {
     for line in contents.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("chatgpt_base_url") {
+        let line = line.trim();
+        if line.starts_with('[') {
+            return None;
+        }
+        let Some(value) = line
+            .strip_prefix("chatgpt_base_url")
+            .and_then(|rest| rest.trim_start().strip_prefix('='))
+        else {
             continue;
-        }
-
-        let (_, value) = trimmed.split_once('=')?;
-        let cleaned = value.trim().trim_matches('"').trim_matches('\'');
-        if !cleaned.is_empty() {
-            return Some(cleaned.to_string());
-        }
+        };
+        let value = value.trim();
+        let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        let end = value[1..].find(quote)?;
+        let url = value[1..1 + end].trim();
+        return (!url.is_empty()).then(|| url.to_owned());
     }
 
     None

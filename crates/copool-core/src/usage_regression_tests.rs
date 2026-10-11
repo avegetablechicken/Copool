@@ -32,6 +32,55 @@ fn loopback_chatgpt_base_url_is_tried_before_the_official_endpoints() {
     );
 }
 
+#[test]
+fn only_the_top_level_chatgpt_base_url_is_the_setting() {
+    let config = "model = \"gpt-5\"\nchatgpt_base_url = 'http://127.0.0.1:8787/backend-api' # relay\n[profiles.work]\nchatgpt_base_url = \"https://work.invalid\"\n";
+    assert_eq!(
+        chatgpt_base_url_in(config).as_deref(),
+        Some("http://127.0.0.1:8787/backend-api")
+    );
+    assert_eq!(
+        chatgpt_base_url_in("[profiles.work]\nchatgpt_base_url = \"https://work.invalid\"\n"),
+        None
+    );
+    assert_eq!(
+        chatgpt_base_url_in("chatgpt_base_url_extra = \"x\"\n"),
+        None
+    );
+}
+
+/// Usage, workspaces and the proxy follow the Codex configuration Copool
+/// uses (CODEX_HOME or COPOOL_CODEX_AUTH_FILE), not ~/.codex.
+#[test]
+fn every_codex_request_reads_the_configuration_copool_uses() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = crate::Application::open(crate::Paths {
+        data_dir: dir.path().join("data"),
+        codex_auth: dir.path().join("codex/auth.json"),
+    })
+    .unwrap();
+    let config = dir.path().join("codex/config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        "chatgpt_base_url = \"https://127.0.0.1:8787/backend-api/\"\n[profiles.work]\nchatgpt_base_url = \"https://work.invalid\"\n",
+    )
+    .unwrap();
+    let configured = "http://127.0.0.1:8787/backend-api";
+    let network = crate::account_network::Network {
+        codex_config: config.clone(),
+    };
+    assert_eq!(network.origin(), configured);
+    assert_eq!(app.storage().upstream_base_url.as_deref(), Some(configured));
+    // Without a setting both use the official origin, never ~/.codex.
+    std::fs::write(&config, "model = \"gpt-5\"\n").unwrap();
+    assert_eq!(network.origin(), "https://chatgpt.com");
+    assert_eq!(
+        app.storage().upstream_base_url.as_deref(),
+        Some("https://chatgpt.com")
+    );
+}
+
 #[tokio::test]
 async fn codex_usage_fallback_uses_original_headers_and_official_reset_path() {
     let requests = Arc::new(std::sync::Mutex::new(Vec::new()));

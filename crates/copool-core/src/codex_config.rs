@@ -59,6 +59,16 @@ fn selected(doc: &DocumentMut) -> String {
         .trim()
         .into()
 }
+/// The top-level `chatgpt_base_url`: where Codex, the proxy and the account
+/// usage and workspace requests send ChatGPT requests.
+pub fn chatgpt_base_url(path: &Path) -> Option<String> {
+    let doc = fs::read_to_string(path).ok()?.parse::<DocumentMut>().ok()?;
+    doc.get("chatgpt_base_url")
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
 pub fn resolve(raw: &str) -> Definition {
     let doc = raw.parse::<DocumentMut>().unwrap_or_default();
     definition(&doc, &selected(&doc))
