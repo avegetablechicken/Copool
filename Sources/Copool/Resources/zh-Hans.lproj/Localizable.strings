@@ -139,6 +139,8 @@
 "accounts.window.used_format" = "已用 %@";
 "accounts.window.remaining_format" = "剩余 %@";
 "accounts.window.reset_at_format" = "重置时间：%@";
+"accounts.window.no_data" = "无数据";
+"accounts.window.reset_unavailable" = "重置时间不可用";
 "accounts.compact.used" = "已用";
 "accounts.notice.imported_format" = "已导入账号：%@";
 "accounts.notice.imported_new_format" = "新账号已导入：%@";

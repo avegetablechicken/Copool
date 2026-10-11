@@ -128,6 +128,8 @@
 "accounts.window.used_format" = "Использовано %@";
 "accounts.window.remaining_format" = "Осталось %@";
 "accounts.window.reset_at_format" = "Сброс: %@";
+"accounts.window.no_data" = "Нет данных";
+"accounts.window.reset_unavailable" = "Время сброса недоступно";
 "accounts.compact.used" = "ИСПОЛЬЗОВАНО";
 "accounts.notice.imported_format" = "Аккаунт импортирован: %@";
 "accounts.notice.imported_new_format" = "Новый аккаунт импортирован: %@";

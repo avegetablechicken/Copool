@@ -65,7 +65,7 @@ impl Account {
             source_tag: Some("SUB2API".into()),
             added_at: self.id,
             updated_at: self.usage.as_ref().map(|u| u.fetched_at).unwrap_or(0),
-            usage: self.usage.clone(),
+            usage: self.usage.clone().map(UsageSnapshot::with_matching_windows),
             usage_error: self.usage_error.clone(),
             is_current: false,
             available: self.status.eq_ignore_ascii_case("active"),

@@ -250,11 +250,10 @@ async fn check_sub2api(explicit: Option<&str>) {
     let u = a.usage.as_ref().unwrap();
     assert_eq!(u.fetched_at, 1787431578);
     assert_eq!(u.plan_type.as_deref(), Some("prolite"));
-    let five = u.five_hour.as_ref().unwrap();
-    assert_eq!(
-        (five.used_percent, five.window_seconds, five.reset_at),
-        (0., 18000, Some(1787449578))
-    );
+    // Deliberately unlike the Swift original, which showed the Codex Spark
+    // limit as the account's five-hour window: as in OpenQuota, an account
+    // with only a weekly limit has no five-hour data.
+    assert!(u.five_hour.is_none());
     let week = u.one_week.as_ref().unwrap();
     assert_eq!(
         (week.used_percent, week.window_seconds, week.reset_at),

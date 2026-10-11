@@ -1817,12 +1817,11 @@ fn remaining_score(candidate: &ProxyCandidate) -> i32 {
             .as_ref()
             .and_then(|usage| usage.one_week.as_ref()),
     );
-    let five = remaining_percent(
-        candidate
-            .usage
-            .as_ref()
-            .and_then(|usage| usage.five_hour.as_ref()),
-    );
+    let five = candidate
+        .usage
+        .as_ref()
+        .and_then(|usage| usage.five_hour_remaining())
+        .map_or(0, |remaining| remaining.round() as i32);
     week * 7 + five * 3
 }
 

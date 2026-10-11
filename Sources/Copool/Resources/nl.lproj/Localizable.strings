@@ -128,6 +128,8 @@
 "accounts.window.used_format" = "Gebruikt %@";
 "accounts.window.remaining_format" = "Resterend %@";
 "accounts.window.reset_at_format" = "Reset op: %@";
+"accounts.window.no_data" = "Geen gegevens";
+"accounts.window.reset_unavailable" = "Reset niet beschikbaar";
 "accounts.compact.used" = "GEBRUIKT";
 "accounts.notice.imported_format" = "Account geïmporteerd: %@";
 "accounts.notice.imported_new_format" = "Nieuw account geïmporteerd: %@";

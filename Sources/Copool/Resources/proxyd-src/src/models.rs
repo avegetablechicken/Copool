@@ -100,6 +100,28 @@ pub struct UsageSnapshot {
     pub credits: Option<CreditSnapshot>,
 }
 
+impl UsageSnapshot {
+    /// Snapshots stored by earlier versions may hold another window (weekly,
+    /// or a free plan's 30 days) in a slot; only a five-hour window, a weekly
+    /// window or one without a duration is shown.
+    pub(crate) fn with_matching_windows(mut self) -> Self {
+        let keep = |w: &UsageWindow, seconds| w.window_seconds == seconds || w.window_seconds <= 0;
+        self.five_hour = self.five_hour.filter(|w| keep(w, 5 * 60 * 60));
+        self.one_week = self.one_week.filter(|w| keep(w, 7 * 24 * 60 * 60));
+        self
+    }
+
+    /// Percent left in the five-hour window. With a weekly window but none of
+    /// five hours, the account has no five-hour limit, so none of it is used.
+    pub fn five_hour_remaining(&self) -> Option<f64> {
+        match (&self.five_hour, &self.one_week) {
+            (Some(window), _) => Some((100.0 - window.used_percent).clamp(0.0, 100.0)),
+            (None, Some(_)) => Some(100.0),
+            (None, None) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
@@ -409,7 +431,7 @@ impl StoredAccount {
             plan_type: self.plan_type.clone(),
             added_at: self.added_at,
             updated_at: self.updated_at,
-            usage: self.usage.clone(),
+            usage: self.usage.clone().map(UsageSnapshot::with_matching_windows),
             usage_error: self.usage_error.clone(),
             is_current: current_account_id
                 .map(|id| id == self.account_id)

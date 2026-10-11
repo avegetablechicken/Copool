@@ -128,6 +128,8 @@
 "accounts.window.used_format" = "Usato %@";
 "accounts.window.remaining_format" = "Residuo %@";
 "accounts.window.reset_at_format" = "Reset alle: %@";
+"accounts.window.no_data" = "Nessun dato";
+"accounts.window.reset_unavailable" = "Reset non disponibile";
 "accounts.compact.used" = "USATO";
 "accounts.notice.imported_format" = "Account importato: %@";
 "accounts.notice.imported_new_format" = "Nuovo account importato: %@";

@@ -6,7 +6,11 @@ pub(crate) fn remaining_score(a: &AccountSummary) -> f64 {
             .unwrap_or(0.0)
     };
     0.7 * remaining(a.usage.as_ref().and_then(|u| u.one_week.as_ref()))
-        + 0.3 * remaining(a.usage.as_ref().and_then(|u| u.five_hour.as_ref()))
+        + 0.3
+            * a.usage
+                .as_ref()
+                .and_then(|u| u.five_hour_remaining())
+                .unwrap_or(0.0)
 }
 pub(crate) fn sort_for_display(accounts: &mut [AccountSummary]) {
     accounts.sort_by(|a, b| {

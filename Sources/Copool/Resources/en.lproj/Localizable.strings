@@ -139,6 +139,8 @@
 "accounts.window.used_format" = "Used %@";
 "accounts.window.remaining_format" = "Remaining %@";
 "accounts.window.reset_at_format" = "Reset at: %@";
+"accounts.window.no_data" = "No data";
+"accounts.window.reset_unavailable" = "Reset unavailable";
 "accounts.compact.used" = "USED";
 "accounts.notice.imported_format" = "Account imported: %@";
 "accounts.notice.imported_new_format" = "New account imported: %@";

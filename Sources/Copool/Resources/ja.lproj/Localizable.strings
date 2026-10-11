@@ -128,6 +128,8 @@
 "accounts.window.used_format" = "使用 %@";
 "accounts.window.remaining_format" = "残り %@";
 "accounts.window.reset_at_format" = "リセット時刻: %@";
+"accounts.window.no_data" = "データなし";
+"accounts.window.reset_unavailable" = "リセット時刻は不明";
 "accounts.compact.used" = "USED";
 "accounts.notice.imported_format" = "アカウントを取り込みました: %@";
 "accounts.notice.imported_new_format" = "新しいアカウントを取り込みました: %@";

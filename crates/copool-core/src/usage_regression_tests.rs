@@ -70,3 +70,136 @@ async fn codex_usage_fallback_uses_original_headers_and_official_reset_path() {
         ]
     );
 }
+
+type Window = Option<(f64, i64, Option<i64>)>;
+
+/// Five-hour and weekly windows, as `(used percent, duration, reset)`.
+fn windows(body: serde_json::Value) -> (Window, Window) {
+    let usage = parse_payload(body, 0).unwrap();
+    let view = |w: Option<crate::models::UsageWindow>| {
+        w.map(|w| (w.used_percent, w.window_seconds, w.reset_at))
+    };
+    (view(usage.five_hour), view(usage.one_week))
+}
+
+#[test]
+fn usage_windows_are_classified_by_duration() {
+    let five =
+        serde_json::json!({"used_percent": 10, "limit_window_seconds": 18000, "reset_at": 100});
+    let week =
+        serde_json::json!({"used_percent": 20, "limit_window_seconds": 604800, "reset_at": 200});
+    let expected = (
+        Some((10., 18000, Some(100))),
+        Some((20., 604800, Some(200))),
+    );
+    assert_eq!(
+        windows(
+            serde_json::json!({"rate_limit": {"primary_window": five, "secondary_window": week}})
+        ),
+        expected
+    );
+    // The slots do not decide a window of known duration.
+    assert_eq!(
+        windows(
+            serde_json::json!({"rate_limit": {"primary_window": week, "secondary_window": five}})
+        ),
+        expected
+    );
+}
+
+#[test]
+fn a_sole_weekly_limit_leaves_the_five_hour_window_empty() {
+    assert_eq!(
+        windows(serde_json::json!({"rate_limit": {
+            "primary_window": {"used_percent": 38, "limit_window_seconds": 604800, "reset_at": 300},
+            "secondary_window": null
+        }})),
+        (None, Some((38., 604800, Some(300))))
+    );
+}
+
+#[test]
+fn codex_spark_limits_do_not_stand_in_for_the_account_windows() {
+    assert_eq!(
+        windows(serde_json::json!({
+            "rate_limit": {"primary_window": {"used_percent": 38, "limit_window_seconds": 604800, "reset_at": 300}},
+            "additional_rate_limits": [{
+                "limit_name": "GPT-5.3-Codex-Spark",
+                "rate_limit": {"primary_window": {"used_percent": 0, "limit_window_seconds": 18000, "reset_at": 400}}
+            }]
+        })),
+        (None, Some((38., 604800, Some(300))))
+    );
+}
+
+#[test]
+fn windows_of_other_durations_are_not_shown() {
+    assert_eq!(
+        windows(serde_json::json!({"rate_limit": {
+            "primary_window": {"used_percent": 100, "limit_window_seconds": 2592000, "reset_at": 600},
+            "secondary_window": {"used_percent": 30, "limit_window_seconds": 86400, "reset_at": 700}
+        }})),
+        (None, None)
+    );
+}
+
+#[test]
+fn stored_windows_of_other_durations_are_not_shown() {
+    let window = |window_seconds| crate::models::UsageWindow {
+        used_percent: 63.,
+        window_seconds,
+        reset_at: Some(1),
+    };
+    let stored = |five, week| {
+        crate::models::UsageSnapshot {
+            remaining_reset_count: None,
+            fetched_at: 0,
+            plan_type: None,
+            five_hour: Some(window(five)),
+            one_week: Some(window(week)),
+            credits: None,
+        }
+        .with_matching_windows()
+    };
+    let shown = |u: crate::models::UsageSnapshot| (u.five_hour.is_some(), u.one_week.is_some());
+    // Earlier versions copied the weekly window into the five-hour slot, or
+    // a free plan's 30-day window into either.
+    assert_eq!(shown(stored(604800, 604800)), (false, true));
+    assert_eq!(shown(stored(2592000, 2592000)), (false, false));
+    assert_eq!(shown(stored(18000, 604800)), (true, true));
+    assert_eq!(shown(stored(0, 0)), (true, true));
+}
+
+#[test]
+fn windows_without_a_duration_keep_their_slots() {
+    assert_eq!(
+        windows(serde_json::json!({"rate_limit": {
+            "primary_window": {"used_percent": 11, "reset_at": 500},
+            "secondary_window": {"used_percent": 22}
+        }})),
+        (Some((11., 0, Some(500))), Some((22., 0, None)))
+    );
+}
+
+#[test]
+fn a_missing_five_hour_window_counts_as_no_five_hour_limit() {
+    let usage = |five: Option<f64>, week: Option<f64>| crate::models::UsageSnapshot {
+        remaining_reset_count: None,
+        fetched_at: 0,
+        plan_type: None,
+        five_hour: five.map(|used_percent| crate::models::UsageWindow {
+            used_percent,
+            window_seconds: 18000,
+            reset_at: None,
+        }),
+        one_week: week.map(|used_percent| crate::models::UsageWindow {
+            used_percent,
+            window_seconds: 604800,
+            reset_at: None,
+        }),
+        credits: None,
+    };
+    assert_eq!(usage(Some(60.), Some(20.)).five_hour_remaining(), Some(40.));
+    assert_eq!(usage(None, Some(20.)).five_hour_remaining(), Some(100.));
+    assert_eq!(usage(None, None).five_hour_remaining(), None);
+}

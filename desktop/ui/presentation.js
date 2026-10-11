@@ -100,6 +100,8 @@
   ) {
     const used = Math.round(displayPercent(window, "used", 100));
     return {
+      // A missing window (e.g. no five-hour limit) has no data to show.
+      available: displayPercent(window) !== null,
       progressPercent: mode === "remaining" ? 100 - used : used,
       primaryKind: mode,
       primaryPercent: mode === "remaining" ? 100 - used : used,

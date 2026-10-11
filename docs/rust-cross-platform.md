@@ -93,7 +93,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 
 ## 验证范围
 
-`python3 scripts/audit_rust_test_migration.py --require-complete` 盘点原版 Swift 测试：338 项已移植，12 项随 Coport 风格面板退役（542 点网格与 iOS 列数、用量圆环的圆点阈值、玻璃凹槽配色），每项原因记录在脚本中，不计为已移植。工具栏、细进度条、折叠行悬停、公网访问模式与状态、远程服务器详情与日志由同一组展示模型渲染并通过对应的原版测试。用量回归测试 `crates/copool-core/src/usage_regression_tests.rs` 覆盖原版请求头、`/api/codex/usage` 的重置次数路径、默认官方地址及回环 `chatgpt_base_url`。
+`python3 scripts/audit_rust_test_migration.py --require-complete` 盘点原版 Swift 测试：338 项已移植，12 项随 Coport 风格面板退役（542 点网格与 iOS 列数、用量圆环的圆点阈值、玻璃凹槽配色），每项原因记录在脚本中，不计为已移植。工具栏、细进度条、折叠行悬停、公网访问模式与状态、远程服务器详情与日志由同一组展示模型渲染并通过对应的原版测试。用量窗口按 OpenQuota 的规则按时长识别：只显示 5h（18000 秒）与周额度（604800 秒），无时长的窗口按位置兜底，其他时长（如免费计划的 30 天）不显示；只有每周限额的账号 5h 显示“无数据 / 重置时间不可用”，不再借用每周或 Codex Spark 的窗口；排序时把没有 5h 限额视为 5h 无约束。用量回归测试 `crates/copool-core/src/usage_regression_tests.rs` 覆盖原版请求头、`/api/codex/usage` 的重置次数路径、默认官方地址及回环 `chatgpt_base_url`。
 
 核心测试使用临时目录和合成凭据，覆盖同工作区多主体、重复导入、批量失败回滚、损坏文件保护、Swift 附加字段、账号选择、文件替换与权限、代理鉴权/密钥轮换/停止以及原代理引擎的请求转换和 SSE 回归测试。
 

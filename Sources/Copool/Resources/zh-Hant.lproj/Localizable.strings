@@ -128,6 +128,8 @@
 "accounts.window.used_format" = "已用 %@";
 "accounts.window.remaining_format" = "剩餘 %@";
 "accounts.window.reset_at_format" = "重置時間：%@";
+"accounts.window.no_data" = "無資料";
+"accounts.window.reset_unavailable" = "重置時間無法取得";
 "accounts.compact.used" = "已用";
 "accounts.notice.imported_format" = "已匯入帳號：%@";
 "accounts.notice.imported_new_format" = "已匯入新帳號：%@";

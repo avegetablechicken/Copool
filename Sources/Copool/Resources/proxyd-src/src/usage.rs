@@ -7,6 +7,8 @@ use crate::models::UsageWindow;
 use crate::utils::now_unix_seconds;
 
 const DEFAULT_CHATGPT_BASE_URL: &str = "https://chatgpt.com";
+const FIVE_HOUR_SECONDS: i64 = 5 * 60 * 60;
+const ONE_WEEK_SECONDS: i64 = 7 * 24 * 60 * 60;
 const CODEX_USAGE_PATH: &str = "/api/codex/usage";
 const WHAM_USAGE_PATH: &str = "/wham/usage";
 const BACKEND_API_PREFIX: &str = "/backend-api";
@@ -16,7 +18,6 @@ struct UsageApiResponse {
     rate_limit_reset_credits: Option<serde_json::Value>,
     plan_type: Option<String>,
     rate_limit: Option<RateLimitDetails>,
-    additional_rate_limits: Option<Vec<AdditionalRateLimitDetails>>,
     credits: Option<CreditDetails>,
 }
 
@@ -26,15 +27,13 @@ struct RateLimitDetails {
     secondary_window: Option<UsageWindowRaw>,
 }
 
-#[derive(Debug, Deserialize)]
-struct AdditionalRateLimitDetails {
-    rate_limit: Option<RateLimitDetails>,
-}
-
+/// A missing duration or reset time reads as 0: unknown.
 #[derive(Debug, Deserialize)]
 pub(crate) struct UsageWindowRaw {
     pub(crate) used_percent: f64,
+    #[serde(default)]
     pub(crate) limit_window_seconds: i64,
+    #[serde(default)]
     pub(crate) reset_at: i64,
 }
 
@@ -198,32 +197,11 @@ fn read_chatgpt_base_url_from_config() -> Option<String> {
 }
 
 fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
-    let mut windows: Vec<UsageWindowRaw> = Vec::new();
-
-    if let Some(rate_limit) = payload.rate_limit {
-        if let Some(primary) = rate_limit.primary_window {
-            windows.push(primary);
-        }
-        if let Some(secondary) = rate_limit.secondary_window {
-            windows.push(secondary);
-        }
-    }
-
-    if let Some(additional) = payload.additional_rate_limits {
-        for limit in additional {
-            if let Some(rate_limit) = limit.rate_limit {
-                if let Some(primary) = rate_limit.primary_window {
-                    windows.push(primary);
-                }
-                if let Some(secondary) = rate_limit.secondary_window {
-                    windows.push(secondary);
-                }
-            }
-        }
-    }
-
-    let five_hour = pick_nearest_window(&windows, 5 * 60 * 60).map(to_usage_window);
-    let one_week = pick_nearest_window(&windows, 7 * 24 * 60 * 60).map(to_usage_window);
+    let (five_hour, one_week) = classify_windows(payload.rate_limit);
+    let (five_hour, one_week) = (
+        five_hour.map(to_usage_window),
+        one_week.map(to_usage_window),
+    );
 
     UsageSnapshot {
         remaining_reset_count: payload
@@ -240,6 +218,39 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
             balance: credit.balance,
         }),
     }
+}
+
+/// Splits the account's rate limit into its five-hour and weekly windows, as
+/// OpenQuota does: a window is matched by its duration, so an account with
+/// only a weekly limit has no five-hour window rather than a copy of the
+/// weekly one. Only a window without a duration falls back to its slot
+/// (primary five-hour, secondary weekly). Windows of any other duration, such
+/// as a free plan's 30 days, are neither and are not shown. Additional limits,
+/// such as Codex Spark, are separate quotas and never stand in for these.
+fn classify_windows(
+    rate_limit: Option<RateLimitDetails>,
+) -> (Option<UsageWindowRaw>, Option<UsageWindowRaw>) {
+    let (primary, secondary) = rate_limit
+        .map(|limit| (limit.primary_window, limit.secondary_window))
+        .unwrap_or((None, None));
+    let mut known = Vec::new();
+    let mut undated = [None, None];
+    for (slot, window) in [primary, secondary].into_iter().enumerate() {
+        match window {
+            Some(w) if [FIVE_HOUR_SECONDS, ONE_WEEK_SECONDS].contains(&w.limit_window_seconds) => {
+                known.push(w)
+            }
+            Some(w) if w.limit_window_seconds <= 0 => undated[slot] = Some(w),
+            _ => {}
+        }
+    }
+    let exact =
+        |target| pick_nearest_window(&known, target).filter(|w| w.limit_window_seconds == target);
+    let [primary, secondary] = undated;
+    (
+        exact(FIVE_HOUR_SECONDS).or(primary),
+        exact(ONE_WEEK_SECONDS).or(secondary),
+    )
 }
 
 pub(crate) fn pick_nearest_window(
@@ -260,7 +271,7 @@ fn to_usage_window(window: UsageWindowRaw) -> UsageWindow {
     UsageWindow {
         used_percent: window.used_percent,
         window_seconds: window.limit_window_seconds,
-        reset_at: Some(window.reset_at),
+        reset_at: Some(window.reset_at).filter(|at| *at > 0),
     }
 }
 

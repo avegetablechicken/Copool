@@ -251,3 +251,13 @@ legacy(
     assert.equal(m.visibleFillWidth, m.rawFillWidth);
   },
 );
+test("A missing usage window has no data", () => {
+  const c = P.card({
+    accountId: "weekly-only",
+    usage: { oneWeek: { usedPercent: 38, resetAt: 1763216000 } },
+  });
+  assert.equal(c.fiveHour.available, false);
+  assert.equal(c.fiveHour.reset, "--");
+  assert.equal(c.compact[0], null);
+  assert.equal(c.oneWeek.available, true);
+});
