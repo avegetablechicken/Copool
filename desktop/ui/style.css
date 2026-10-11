@@ -1132,6 +1132,10 @@ html:not(.macos) .select-menu {
 }
 
 .account-row .block-aside {
+  /* Reserve both action slots even when the current account has no switch. */
+  display: grid;
+  grid-template-columns: repeat(2, 20px);
+  gap: 2px;
   justify-self: end;
   margin-left: 0;
 }
@@ -1148,10 +1152,6 @@ html:not(.macos) .select-menu {
 .account-row .usage-value b {
   color: var(--label);
   font-weight: 400;
-}
-
-.account-row .block-aside {
-  gap: 2px;
 }
 
 /* Row controls appear on hover; a switch in progress stays revealed. */
