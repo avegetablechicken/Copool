@@ -495,8 +495,8 @@
 "accounts.notice.claude_provider_switched_format" = "Claude Code 已改用 Sub2api %@，重启 Claude Code 后生效";
 "error.claude.sub2api_not_configured" = "请先在设置中添加 Claude 的 Sub2api Provider。";
 "error.claude.sub2api_api_key_missing" = "请先在 Claude Code settings.json 中配置此 Provider 的网关和 API Key，再重新保存 Provider。";
-"settings.request_new_accounts" = "导入新账号后立即请求上游";
-"settings.request_new_accounts.description" = "关闭时，新导入的账号在你刷新该卡片或刷新全部之前，Copool 不会为它向上游发出任何请求（额度、工作区、账号资料、代理转发），以便先为它设置代理。登录和换取令牌仍在导入时进行。";
+"settings.request_new_accounts" = "初次导入后立即刷新";
+"settings.request_new_accounts.description" = "关闭后，新账号暂停上游请求，手动刷新后启用，可先设置代理。导入时的登录与令牌交换不受影响。";
 "accounts.card.awaiting_first_request" = "待首次刷新";
 "accounts.card.awaiting_first_request.help" = "Copool 尚未为此账号向上游发出请求。如需代理请先设置，然后刷新此卡片。";
 
