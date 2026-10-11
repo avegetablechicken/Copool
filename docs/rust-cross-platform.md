@@ -101,6 +101,8 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 
 ## 验证范围
 
+2026-10-12（Sub2api 安全存储）：macOS 的 Provider 密码和 Key 改用 Security Framework 的 SecItem 接口按 service/account 查询，避免旧 keyring 后端先解析默认钥匙串文件的路径依赖；保持原 service/account，继续使用系统钥匙串。只有条目不存在才返回空值，存储不可用、锁定和授权失败仍报错，空账号标识在访问前拒绝。Windows/Linux 后端不变。本机 `python3 scripts/test_rust.py --offline` 通过（328 项核心测试、120 项前端测试、格式和独立 daemon 检查），桌面 `cargo check -p copool-desktop --locked --offline` 通过；未访问真实 Provider 凭据，真实钥匙串兼容性及刷新恢复仍待应用运行验证。
+
 2026-10-12：最近一次 GitHub Actions（运行 `38168314678`）中 macOS/Linux 的测试及桌面构建通过，Windows 在字体测试中因 CRLF 换行误报 `body rule is missing`，尚未执行桌面构建。已修正匹配并覆盖 LF/CRLF 两种格式；本机 macOS 验证 323 项核心测试、117 项前端测试、JavaScript 语法、Rust 格式与独立 daemon 检查通过。修复后的 Windows 完整 CI 仍待运行。
 
 原版 Swift 测试在移除前已全部盘点：337 项以原测试名（`Suite.testName`）移植到 `crates/copool-core` 与 `desktop/tests`，13 项随 Coport 风格面板退役（542 点网格与 iOS 列数、用量圆环的圆点阈值、玻璃凹槽配色、工具栏用量显示切换——只在设置页切换）。工具栏、细进度条、折叠行悬停、公网访问模式与状态、远程服务器详情与日志由同一组展示模型渲染并通过对应的原版测试。用量窗口按 OpenQuota 的规则按时长识别：只显示 5h（18000 秒）与周额度（604800 秒），无时长的窗口按位置兜底，其他时长（如免费计划的 30 天）不显示；只有每周限额的账号 5h 显示“无数据 / 重置时间不可用”，不再借用每周或 Codex Spark 的窗口；排序时把没有 5h 限额视为 5h 无约束。用量回归测试 `crates/copool-core/src/usage_regression_tests.rs` 覆盖原版请求头、`/api/codex/usage` 的重置次数路径、默认官方地址及回环 `chatgpt_base_url`。
