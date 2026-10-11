@@ -11,12 +11,15 @@ test("System typography retains automatic optical sizing without forced variatio
   assert.match(rule, /font-optical-sizing:\s*auto/);
   assert.match(rule, /font-variation-settings:\s*normal/);
 });
-test("Body text uses Coport's small system type without synthesized faces", () => {
-  const rule = css.match(/\n\nbody\s*\{([^}]+)\}/)?.[1];
-  assert(rule, "body rule is missing");
-  assert.match(rule, /font:\s*11px\/1\.35\s+-apple-system/);
-  assert.match(rule, /font-synthesis:\s*none/);
-});
+for (const [format, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
+  test(`Body text uses Coport's small system type without synthesized faces (${format})`, () => {
+    const source = css.replace(/\r?\n/g, newline);
+    const rule = source.match(/\r?\n\r?\nbody\s*\{([^}]+)\}/)?.[1];
+    assert(rule, "body rule is missing");
+    assert.match(rule, /font:\s*11px\/1\.35\s+-apple-system/);
+    assert.match(rule, /font-synthesis:\s*none/);
+  });
+}
 test("A single Coport stylesheet is loaded", () => {
   const sheets = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)];
   assert.deepEqual(

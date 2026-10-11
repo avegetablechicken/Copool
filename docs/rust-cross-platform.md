@@ -101,6 +101,8 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 
 ## 验证范围
 
+2026-10-12：最近一次 GitHub Actions（运行 `38168314678`）中 macOS/Linux 的测试及桌面构建通过，Windows 在字体测试中因 CRLF 换行误报 `body rule is missing`，尚未执行桌面构建。已修正匹配并覆盖 LF/CRLF 两种格式；本机 macOS 验证 323 项核心测试、117 项前端测试、JavaScript 语法、Rust 格式与独立 daemon 检查通过。修复后的 Windows 完整 CI 仍待运行。
+
 原版 Swift 测试在移除前已全部盘点：337 项以原测试名（`Suite.testName`）移植到 `crates/copool-core` 与 `desktop/tests`，13 项随 Coport 风格面板退役（542 点网格与 iOS 列数、用量圆环的圆点阈值、玻璃凹槽配色、工具栏用量显示切换——只在设置页切换）。工具栏、细进度条、折叠行悬停、公网访问模式与状态、远程服务器详情与日志由同一组展示模型渲染并通过对应的原版测试。用量窗口按 OpenQuota 的规则按时长识别：只显示 5h（18000 秒）与周额度（604800 秒），无时长的窗口按位置兜底，其他时长（如免费计划的 30 天）不显示；只有每周限额的账号 5h 显示“无数据 / 重置时间不可用”，不再借用每周或 Codex Spark 的窗口；排序时把没有 5h 限额视为 5h 无约束。用量回归测试 `crates/copool-core/src/usage_regression_tests.rs` 覆盖原版请求头、`/api/codex/usage` 的重置次数路径、默认官方地址及回环 `chatgpt_base_url`。
 
 核心测试使用临时目录和合成凭据，覆盖同工作区多主体、重复导入、批量失败回滚、损坏文件保护、Swift 附加字段、账号选择、文件替换与权限、代理鉴权/密钥轮换/停止以及原代理引擎的请求转换和 SSE 回归测试。
