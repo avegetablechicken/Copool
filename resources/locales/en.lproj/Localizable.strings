@@ -482,3 +482,5 @@
 "accounts.action.import_current_claude" = "Import current Claude Code login";
 "accounts.empty.message.no_claude_accounts" = "No Claude accounts yet. Add an account or import the Claude Code login.";
 "error.claude.login_not_found" = "Claude Code login not found. Sign in with Claude Code first.";
+"accounts.notice.claude_switch_done" = "Switched Claude account; restart Claude Code to use it";
+"accounts.notice.claude_settings_override_format" = "settings.json sets %@, so Claude Code keeps using it instead of this account";

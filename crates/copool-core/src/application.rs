@@ -89,6 +89,8 @@ pub struct SwitchExecution {
     pub restarted_editors: Vec<String>,
     pub editor_restart_error: Option<String>,
     pub launch_error: Option<String>,
+    /// Claude Code settings that bypass the switched-to account login.
+    pub login_overrides: Vec<String>,
 }
 /// Smart Switch: no target, already on the best account, or switched.
 #[derive(Clone, Debug, PartialEq, Serialize)]

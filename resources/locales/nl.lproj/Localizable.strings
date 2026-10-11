@@ -454,3 +454,5 @@
 "accounts.action.import_current_claude" = "Huidige Claude Code-aanmelding importeren";
 "accounts.empty.message.no_claude_accounts" = "Nog geen Claude-accounts. Voeg een account toe of importeer de Claude Code-aanmelding.";
 "error.claude.login_not_found" = "Geen Claude Code-aanmelding gevonden. Meld je eerst aan in Claude Code.";
+"accounts.notice.claude_switch_done" = "Claude-account gewisseld; herstart Claude Code om het te gebruiken";
+"accounts.notice.claude_settings_override_format" = "settings.json stelt %@ in, dus Claude Code blijft dat gebruiken in plaats van dit account";

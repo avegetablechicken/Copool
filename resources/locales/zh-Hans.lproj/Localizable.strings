@@ -482,3 +482,5 @@
 "accounts.action.import_current_claude" = "导入当前 Claude Code 登录";
 "accounts.empty.message.no_claude_accounts" = "暂无 Claude 账号，请添加账号或导入 Claude Code 登录";
 "error.claude.login_not_found" = "未找到 Claude Code 登录，请先在 Claude Code 中登录";
+"accounts.notice.claude_switch_done" = "已切换 Claude 账号，重启 Claude Code 后生效";
+"accounts.notice.claude_settings_override_format" = "settings.json 设置了 %@，Claude Code 会继续使用它而不是此账号";

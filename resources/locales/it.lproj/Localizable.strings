@@ -454,3 +454,5 @@
 "accounts.action.import_current_claude" = "Importa l’accesso attuale di Claude Code";
 "accounts.empty.message.no_claude_accounts" = "Nessun account Claude. Aggiungi un account o importa l’accesso di Claude Code.";
 "error.claude.login_not_found" = "Accesso di Claude Code non trovato. Accedi prima a Claude Code.";
+"accounts.notice.claude_switch_done" = "Account Claude cambiato; riavvia Claude Code per usarlo";
+"accounts.notice.claude_settings_override_format" = "settings.json imposta %@, quindi Claude Code continua a usarlo al posto di questo account";

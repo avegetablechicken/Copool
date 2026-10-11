@@ -454,3 +454,5 @@
 "accounts.action.import_current_claude" = "Aktuelle Claude Code-Anmeldung importieren";
 "accounts.empty.message.no_claude_accounts" = "Noch keine Claude-Konten. Füge ein Konto hinzu oder importiere die Claude Code-Anmeldung.";
 "error.claude.login_not_found" = "Keine Claude Code-Anmeldung gefunden. Melde dich zuerst in Claude Code an.";
+"accounts.notice.claude_switch_done" = "Claude-Konto gewechselt; starte Claude Code neu, um es zu verwenden";
+"accounts.notice.claude_settings_override_format" = "settings.json setzt %@, daher verwendet Claude Code weiterhin dies statt dieses Kontos";

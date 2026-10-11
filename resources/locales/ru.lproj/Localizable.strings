@@ -454,3 +454,5 @@
 "accounts.action.import_current_claude" = "Импортировать текущий вход Claude Code";
 "accounts.empty.message.no_claude_accounts" = "Аккаунтов Claude пока нет. Добавьте аккаунт или импортируйте вход Claude Code.";
 "error.claude.login_not_found" = "Вход Claude Code не найден. Сначала войдите в Claude Code.";
+"accounts.notice.claude_switch_done" = "Аккаунт Claude переключён; перезапустите Claude Code, чтобы использовать его";
+"accounts.notice.claude_settings_override_format" = "В settings.json задано %@, поэтому Claude Code продолжает использовать это вместо аккаунта";

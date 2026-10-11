@@ -454,3 +454,5 @@
 "accounts.action.import_current_claude" = "Importar el inicio de sesión actual de Claude Code";
 "accounts.empty.message.no_claude_accounts" = "Aún no hay cuentas de Claude. Añade una cuenta o importa el inicio de sesión de Claude Code.";
 "error.claude.login_not_found" = "No se encontró el inicio de sesión de Claude Code. Inicia sesión primero en Claude Code.";
+"accounts.notice.claude_switch_done" = "Cuenta de Claude cambiada; reinicia Claude Code para usarla";
+"accounts.notice.claude_settings_override_format" = "settings.json define %@, así que Claude Code sigue usándolo en lugar de esta cuenta";

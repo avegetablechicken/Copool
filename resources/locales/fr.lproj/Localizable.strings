@@ -454,3 +454,5 @@
 "accounts.action.import_current_claude" = "Importer la connexion Claude Code actuelle";
 "accounts.empty.message.no_claude_accounts" = "Aucun compte Claude. Ajoutez un compte ou importez la connexion Claude Code.";
 "error.claude.login_not_found" = "Connexion Claude Code introuvable. Connectez-vous d’abord dans Claude Code.";
+"accounts.notice.claude_switch_done" = "Compte Claude changé ; redémarrez Claude Code pour l’utiliser";
+"accounts.notice.claude_settings_override_format" = "settings.json définit %@ : Claude Code continue de l’utiliser au lieu de ce compte";

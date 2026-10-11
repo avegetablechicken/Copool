@@ -74,6 +74,67 @@ impl Location {
     fn credentials_file(&self) -> PathBuf {
         self.config_dir.join(".credentials.json")
     }
+    /// The file holding `oauthAccount`: the global configuration, or a
+    /// `.claude.json` inside the configuration directory that has one (as
+    /// cc-account-switcher accepts), else the global configuration.
+    fn account_file(&self) -> PathBuf {
+        let inner = self.config_dir.join(".claude.json");
+        let has_account = |path: &PathBuf| {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .is_some_and(|v| v["oauthAccount"].is_object())
+        };
+        if !has_account(&self.global_config) && has_account(&inner) {
+            inner
+        } else {
+            self.global_config.clone()
+        }
+    }
+}
+
+/// Keys of the user's `settings.json` that make Claude Code use an API key,
+/// a gateway or a cloud provider instead of the account login (the
+/// connection keys cc-switch manages there).
+pub fn login_overrides(location: &Location) -> Vec<String> {
+    let Some(settings) = fs::read_to_string(location.config_dir.join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+    else {
+        return vec![];
+    };
+    let set = |v: &Value| match v {
+        Value::Null => false,
+        Value::String(s) => !s.trim().is_empty(),
+        Value::Bool(b) => *b,
+        _ => true,
+    };
+    let mut keys: Vec<String> = ["apiKeyHelper"]
+        .into_iter()
+        .filter(|key| settings.get(key).is_some_and(set))
+        .map(str::to_owned)
+        .collect();
+    if let Some(env) = settings["env"].as_object() {
+        keys.extend(
+            [
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_BASE_URL",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "CLAUDE_CODE_USE_BEDROCK",
+                "CLAUDE_CODE_USE_VERTEX",
+                "CLAUDE_CODE_USE_FOUNDRY",
+            ]
+            .into_iter()
+            .filter(|key| {
+                env.get(*key).is_some_and(|v| {
+                    set(v) && !matches!(v.as_str().map(str::trim), Some("0" | "false"))
+                })
+            })
+            .map(str::to_owned),
+        );
+    }
+    keys
 }
 
 pub(crate) trait Network: Send + Sync {
@@ -570,7 +631,7 @@ async fn read_live(location: &Location) -> Result<Option<Live>> {
     let Some(document) = document else {
         return Ok(None);
     };
-    let account = match fs::read_to_string(&location.global_config) {
+    let account = match fs::read_to_string(location.account_file()) {
         Ok(text) => serde_json::from_str::<Value>(&text)
             .ok()
             .and_then(|v| v.get("oauthAccount").cloned())
@@ -591,14 +652,15 @@ async fn write_credentials(location: &Location, document: &Value) -> Result<()> 
     write_json(&file, document)
 }
 fn write_account(location: &Location, account: &Value) -> Result<()> {
-    let document = match fs::read_to_string(&location.global_config) {
+    let path = location.account_file();
+    let document = match fs::read_to_string(&path) {
         Ok(text) if !text.trim().is_empty() => text,
         Ok(_) => "{}".into(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
         Err(e) => return Err(e.to_string()),
     };
     let updated = set_member(&document, "oauthAccount", account)?;
-    write_text(&location.global_config, &updated)
+    write_text(&path, &updated)
 }
 fn write_text(path: &std::path::Path, text: &str) -> Result<()> {
     use std::io::Write;
@@ -855,7 +917,10 @@ impl Application {
             }
             return rollback(error).await;
         }
-        Ok(SwitchExecution::default())
+        Ok(SwitchExecution {
+            login_overrides: login_overrides(&location),
+            ..Default::default()
+        })
     }
     /// As the Codex pool's Smart Switch, over the Claude accounts.
     pub async fn claude_smart_switch(&self) -> Result<SmartSwitchOutcome> {
@@ -1255,6 +1320,40 @@ mod tests {
             json!({"x":"\"}","k":2})
         );
         assert!(set_member("[]", "k", &value).is_err());
+    }
+
+    #[test]
+    fn settings_that_bypass_the_account_login_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let location = Location::files(dir.path().to_path_buf());
+        assert!(login_overrides(&location).is_empty());
+        fs::write(
+            dir.path().join("settings.json"),
+            r#"{"apiKeyHelper":"","env":{"ANTHROPIC_BASE_URL":"https://gateway.invalid","ANTHROPIC_AUTH_TOKEN":"","CLAUDE_CODE_USE_BEDROCK":"0","DISABLE_TELEMETRY":"1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(login_overrides(&location), vec!["ANTHROPIC_BASE_URL"]);
+    }
+
+    #[test]
+    fn the_account_follows_a_claude_json_inside_the_configuration_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let location = Location {
+            config_dir: dir.path().join(".claude"),
+            global_config: dir.path().join(".claude.json"),
+            keychain: None,
+        };
+        assert_eq!(location.account_file(), location.global_config);
+        fs::create_dir_all(&location.config_dir).unwrap();
+        let inner = location.config_dir.join(".claude.json");
+        fs::write(&inner, r#"{"oauthAccount":{"accountUuid":"a"}}"#).unwrap();
+        assert_eq!(location.account_file(), inner);
+        fs::write(
+            &location.global_config,
+            r#"{"oauthAccount":{"accountUuid":"b"}}"#,
+        )
+        .unwrap();
+        assert_eq!(location.account_file(), location.global_config);
     }
 
     #[test]

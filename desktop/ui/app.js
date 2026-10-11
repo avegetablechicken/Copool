@@ -988,8 +988,22 @@ function switchNotice(execution) {
   const segments = [
     execution.provider
       ? tr("accounts.notice.provider_switched_format", execution.provider)
-      : tr("accounts.notice.switch_done"),
+      : tr(
+          pool === "claude"
+            ? "accounts.notice.claude_switch_done"
+            : "accounts.notice.switch_done",
+        ),
   ];
+  // settings.json keys that keep Claude Code off the account login.
+  if (execution.loginOverrides?.length) {
+    error = true;
+    segments.push(
+      tr(
+        "accounts.notice.claude_settings_override_format",
+        execution.loginOverrides.join(", "),
+      ),
+    );
+  }
   if (execution.opencodeSyncError) {
     error = true;
     segments.push(

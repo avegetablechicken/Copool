@@ -454,3 +454,5 @@
 "accounts.action.import_current_claude" = "匯入目前的 Claude Code 登入";
 "accounts.empty.message.no_claude_accounts" = "尚無 Claude 帳號，請新增帳號或匯入 Claude Code 登入";
 "error.claude.login_not_found" = "找不到 Claude Code 登入，請先在 Claude Code 中登入";
+"accounts.notice.claude_switch_done" = "已切換 Claude 帳號，重新啟動 Claude Code 後生效";
+"accounts.notice.claude_settings_override_format" = "settings.json 設定了 %@，Claude Code 會繼續使用它而非此帳號";

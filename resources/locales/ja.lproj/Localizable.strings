@@ -472,3 +472,5 @@
 "accounts.action.import_current_claude" = "現在の Claude Code ログインをインポート";
 "accounts.empty.message.no_claude_accounts" = "Claude アカウントはまだありません。アカウントを追加するか、Claude Code のログインをインポートしてください。";
 "error.claude.login_not_found" = "Claude Code のログインが見つかりません。先に Claude Code でサインインしてください。";
+"accounts.notice.claude_switch_done" = "Claude アカウントを切り替えました。Claude Code を再起動すると反映されます";
+"accounts.notice.claude_settings_override_format" = "settings.json で %@ が設定されているため、Claude Code はこのアカウントではなくそちらを使い続けます";
