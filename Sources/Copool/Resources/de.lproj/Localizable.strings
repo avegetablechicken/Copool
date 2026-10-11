@@ -106,6 +106,8 @@
 "error.sub2api.account_not_found" = "Das Sub2api-Konto wurde nicht gefunden.";
 "accounts.action.importing" = "Importiere...";
 "accounts.action.add_account" = "Konto hinzufügen";
+"accounts.action.import" = "Importieren";
+"accounts.action.add" = "Hinzufügen";
 "accounts.action.waiting_for_login" = "Warte auf Anmeldung...";
 "accounts.action.toggle_usage_progress_display" = "Fortschrittsanzeige wechseln";
 "accounts.loading.message" = "Konten werden geladen...";

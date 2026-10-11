@@ -106,6 +106,8 @@
 "error.sub2api.account_not_found" = "Sub2api アカウントが見つかりません。";
 "accounts.action.importing" = "取り込み中...";
 "accounts.action.add_account" = "アカウント追加";
+"accounts.action.import" = "取り込む";
+"accounts.action.add" = "追加";
 "accounts.action.waiting_for_login" = "ログイン待機中...";
 "accounts.action.toggle_usage_progress_display" = "進捗表示を切り替え";
 "accounts.loading.message" = "アカウントを読み込み中...";

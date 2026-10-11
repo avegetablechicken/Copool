@@ -23,6 +23,7 @@ pub fn load() -> Result<NativeIcons, String> {
     let names = [
         ("network", "network"),
         ("plus", "plus"),
+        ("import", "square.and.arrow.down"),
         ("refresh", "arrow.clockwise"),
         ("chevron-up", "chevron.up"),
         ("chevron-down", "chevron.down"),

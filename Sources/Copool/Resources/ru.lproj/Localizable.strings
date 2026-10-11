@@ -106,6 +106,8 @@
 "error.sub2api.account_not_found" = "Аккаунт Sub2api не найден.";
 "accounts.action.importing" = "Импорт...";
 "accounts.action.add_account" = "Добавить аккаунт";
+"accounts.action.import" = "Импорт";
+"accounts.action.add" = "Добавить";
 "accounts.action.waiting_for_login" = "Ожидание входа...";
 "accounts.action.toggle_usage_progress_display" = "Переключить отображение прогресса";
 "accounts.loading.message" = "Загрузка аккаунтов...";

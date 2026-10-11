@@ -199,11 +199,24 @@ legacy(
       ["importCurrentAuth", "addAccount", "smartSwitch", "refreshUsage"],
     );
     assert.equal(p[0].title, "accounts.action.importing");
+    assert.equal(p[0].label, "accounts.action.importing");
     assert.deepEqual(
       p.slice(0, 3).map((a) => a.enabled),
       [false, false, false],
     );
     assert.deepEqual(p[0].menu, ["importCurrentAuth", "importAuthFile"]);
+  },
+);
+test(
+  "desktop import and add buttons use the Swift symbols with short titles",
+  () => {
+    const [importAccount, addAccount] = P.actions();
+    assert.equal(importAccount.symbol, "square.and.arrow.down");
+    assert.equal(importAccount.label, "accounts.action.import");
+    assert.equal(importAccount.title, "accounts.action.import_account");
+    assert.equal(addAccount.symbol, "plus");
+    assert.equal(addAccount.label, "accounts.action.add");
+    assert.equal(addAccount.title, "accounts.action.add_account");
   },
 );
 legacy(
@@ -214,6 +227,7 @@ legacy(
     assert.equal(p[1].intent, "cancelAddAccount");
     assert.equal(p[1].title, "common.cancel");
     assert.equal(p[1].symbol, "xmark");
+    assert.equal(p[1].label, "common.cancel");
     assert.equal(p[1].enabled, true);
   },
 );

@@ -182,7 +182,9 @@
         title: importing
           ? "accounts.action.importing"
           : "accounts.action.import_account",
+        label: importing ? "accounts.action.importing" : "accounts.action.import",
         enabled: !importing && !adding,
+        symbol: "square.and.arrow.down",
         menu: [
           "importCurrentAuth",
           "importAuthFile",
@@ -192,6 +194,7 @@
       {
         intent: adding ? "cancelAddAccount" : "addAccount",
         title: adding ? "common.cancel" : "accounts.action.add_account",
+        label: adding ? "common.cancel" : "accounts.action.add",
         enabled: adding || !importing,
         symbol: adding ? "xmark" : "plus",
       },

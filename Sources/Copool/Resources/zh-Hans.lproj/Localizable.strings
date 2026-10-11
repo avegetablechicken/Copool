@@ -106,6 +106,8 @@
 "error.sub2api.account_not_found" = "未找到该 Sub2api 账号。";
 "accounts.action.importing" = "导入中...";
 "accounts.action.add_account" = "添加账号";
+"accounts.action.import" = "导入";
+"accounts.action.add" = "添加";
 "accounts.action.waiting_for_login" = "等待登录完成...";
 "accounts.action.toggle_usage_progress_display" = "切换进度显示";
 "accounts.loading.message" = "正在加载账号...";

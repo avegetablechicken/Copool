@@ -106,6 +106,8 @@
 "error.sub2api.account_not_found" = "Het Sub2api-account is niet gevonden.";
 "accounts.action.importing" = "Importeren...";
 "accounts.action.add_account" = "Account toevoegen";
+"accounts.action.import" = "Importeren";
+"accounts.action.add" = "Toevoegen";
 "accounts.action.waiting_for_login" = "Wachten op inloggen...";
 "accounts.action.toggle_usage_progress_display" = "Voortgangsweergave wisselen";
 "accounts.loading.message" = "Accounts laden...";

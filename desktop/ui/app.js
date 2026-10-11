@@ -32,6 +32,7 @@ const ICONS = {
   eye: '<path d="M1 11s4-7 10-7 10 7 10 7-4 7-10 7S1 11 1 11Z"/><circle cx="11" cy="11" r="3"/>',
   close: '<path d="m5 5 12 12M5 17 17 5"/>',
   "chevron-left": '<path d="m14 5-6 6 6 6"/>',
+  import: '<path d="M7 8H4v12h14V8h-3M11 2v11M7.5 9.5 11 13l3.5-3.5"/>',
   server:
     '<rect x="2" y="3" width="18" height="6" rx="2"/><rect x="2" y="13" width="18" height="6" rx="2"/><path d="M5 6h1M5 16h1M10 6h7M10 16h7"/>',
   warning: '<path d="m11 2 10 18H1Z"/><path d="M11 8v5M11 16v1"/>',
@@ -83,10 +84,19 @@ function mountIcons(root = document) {
 const SYMBOL_ICONS = {
   "chevron.down": "chevron-down",
   "chevron.up": "chevron-up",
+  "square.and.arrow.down": "import",
+  plus: "plus",
+  xmark: "close",
 };
 function setIcon(button, glyph) {
   if (button.querySelector(`[data-glyph="${glyph}"]`)) return;
   button.replaceChildren(icon(glyph));
+}
+/// An icon and a short title, as the SwiftUI toolbar's labeled buttons.
+function setLabeledIcon(button, glyph, text) {
+  if (!button.querySelector(`[data-glyph="${glyph}"]`))
+    button.replaceChildren(icon(glyph), el("span"));
+  button.lastChild.textContent = text;
 }
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -164,11 +174,21 @@ function renderToolbar() {
     button.title = tr(key);
     button.setAttribute("aria-label", button.title);
   };
-  $("import-open").textContent = tr(importAccount.title);
+  setLabeledIcon(
+    $("import-open"),
+    SYMBOL_ICONS[importAccount.symbol],
+    tr(importAccount.label),
+  );
   $("import-open").title = withShortcut(tr(importAccount.title), "i");
+  $("import-open").setAttribute("aria-label", tr(importAccount.title));
   $("import-open").disabled = !importAccount.enabled;
-  $("add-account").textContent = tr(addAccount.title);
+  setLabeledIcon(
+    $("add-account"),
+    SYMBOL_ICONS[addAccount.symbol],
+    tr(addAccount.label),
+  );
   $("add-account").title = withShortcut(tr(addAccount.title), "n");
+  $("add-account").setAttribute("aria-label", tr(addAccount.title));
   $("add-account").disabled = !addAccount.enabled;
   $("smart-switch").title = $("smart-switch").textContent;
   $("smart-switch").disabled = !smartSwitch.enabled || !accountsCache.length;
