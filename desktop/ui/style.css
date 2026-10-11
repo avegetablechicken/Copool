@@ -803,6 +803,22 @@ textarea::placeholder {
   }
 }
 
+/* Without the native material (WebKitGTK, WebView2), backdrop-filter may not
+   blur, which leaves the panel showing through: an opaque menu instead, as
+   those desktops draw theirs. */
+html:not(.macos) .select-menu {
+  --menu-sheen: transparent;
+  --menu-tint: #ffffff;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not(.macos) .select-menu {
+    --menu-tint: #353538;
+  }
+}
+
 .select-menu button {
   display: block;
   width: 100%;
