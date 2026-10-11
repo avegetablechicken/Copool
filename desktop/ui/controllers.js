@@ -399,7 +399,7 @@
       this.lastSyncedConfiguration = null;
       this.schedule = options.schedule || setTimeout;
       this.clearSchedule = options.clearSchedule || clearTimeout;
-      this.successDelay = options.successDelay ?? 4000;
+      this.successDelay = options.successDelay ?? 3000;
       this.identityPicker =
         options.identityPicker || (() => this.invoke("pick_identity_file"));
     }
@@ -481,14 +481,28 @@
       this.onUpdate();
       return changed;
     }
+    get namedTunnelReady() {
+      const c = this.tunnelConfiguration;
+      return [c.apiToken, c.accountId, c.zoneId, c.namedHostname].every(
+        (value) => !!value?.trim(),
+      );
+    }
+    /// ProxyPageModel.canStartCloudflared.
     get canStartTunnel() {
       return (
         this.tunnelConfiguration.enabled &&
         this.proxyStatus.running &&
+        this.proxyStatus.port != null &&
         this.tunnelStatus.installed &&
         !this.tunnelStatus.running &&
-        !this.loading
+        !this.loading &&
+        (this.tunnelConfiguration.tunnelMode === "quick" ||
+          this.namedTunnelReady)
       );
+    }
+    /// ProxyPageModel.canEditCloudflaredInput.
+    get canEditTunnel() {
+      return !this.loading && !this.tunnelStatus.running;
     }
     get apiButtons() {
       return P.proxyButtons(this.proxyStatus.running, this.loading);
@@ -500,6 +514,8 @@
         this.canStartTunnel,
       );
     }
+    /// The local proxy and tunnel only, as Swift's refreshStatus and tab entry;
+    /// remote servers are asked over SSH once, by loadRemoteStatuses().
     async refresh() {
       const [proxy, configuration, tunnel] = await Promise.all([
         this.invoke("proxy_status"),
@@ -508,9 +524,37 @@
       ]);
       this.remoteServers = configuration.remoteServers;
       this.applyLocal(proxy, configuration.proxyConfiguration, tunnel);
+      return proxy;
+    }
+    /// The Refresh button: the local status, under the proxy's loading state.
+    refreshStatus() {
+      return this.whileLoading(() => this.refresh());
+    }
+    /// As Swift's first load(): every remote server's status, once.
+    async loadRemoteStatuses() {
+      if (this.remoteStatusesLoaded) return;
+      this.remoteStatusesLoaded = true;
       if (this.remoteServers.length)
         await this.remoteStatusesFor(this.remoteServers);
-      return proxy;
+    }
+    async whileLoading(task, notice = null) {
+      if (this.loading) return null;
+      this.loading = true;
+      this.onUpdate();
+      try {
+        const result = await task();
+        if (notice) this.notice = notice;
+        return result;
+      } finally {
+        this.loading = false;
+        this.onUpdate();
+      }
+    }
+    rotateKey() {
+      return this.whileLoading(
+        async () => (this.proxyStatus = await this.invoke("rotate_proxy_key")),
+        { style: "success", key: "proxy.notice.api_key_refreshed" },
+      );
     }
     async updateTunnel(patch) {
       Object.assign(this.tunnelConfiguration, patch);
@@ -525,51 +569,45 @@
     async startProxy(port = Number(this.preferredPortText)) {
       if (!Number.isInteger(port) || port < 1 || port > 65535)
         throw new Error(`Invalid proxy port: ${port}`);
-      this.loading = true;
-      this.onUpdate();
-      try {
-        this.proxyStatus = await this.invoke("start_proxy", { port });
-        this.onUpdate();
-        return this.proxyStatus;
-      } finally {
-        this.loading = false;
-        this.onUpdate();
-      }
+      return this.whileLoading(
+        async () =>
+          (this.proxyStatus = await this.invoke("start_proxy", { port })),
+        { style: "success", key: "proxy.notice.api_proxy_started" },
+      );
     }
-    async stopProxy() {
-      this.loading = true;
-      this.onUpdate();
-      try {
-        this.proxyStatus = await this.invoke("stop_proxy");
-        this.tunnelStatus = {
-          ...this.tunnelStatus,
-          running: false,
-          publicUrl: null,
-        };
-        return this.proxyStatus;
-      } finally {
-        this.loading = false;
-        this.onUpdate();
-      }
+    stopProxy() {
+      return this.whileLoading(
+        async () => {
+          this.proxyStatus = await this.invoke("stop_proxy");
+          this.tunnelStatus = {
+            ...this.tunnelStatus,
+            running: false,
+            publicUrl: null,
+          };
+          return this.proxyStatus;
+        },
+        { style: "info", key: "proxy.notice.api_proxy_stopped" },
+      );
     }
     async tunnelAction(action) {
       if (action === "start" && !this.canStartTunnel)
         throw new Error("error.cloudflared.start_api_proxy_first");
-      this.loading = true;
-      this.onUpdate();
-      try {
-        this.tunnelStatus = await this.invoke("tunnel_action", {
-          action,
-          value:
-            action === "start"
-              ? structuredClone(this.tunnelConfiguration)
-              : null,
-        });
-        return this.tunnelStatus;
-      } finally {
-        this.loading = false;
-        this.onUpdate();
-      }
+      const notices = {
+        install: { style: "success", key: "proxy.notice.cloudflared_installed" },
+        start: { style: "success", key: "proxy.notice.cloudflared_started" },
+        stop: { style: "info", key: "proxy.notice.cloudflared_stopped" },
+      };
+      return this.whileLoading(
+        async () =>
+          (this.tunnelStatus = await this.invoke("tunnel_action", {
+            action,
+            value:
+              action === "start"
+                ? structuredClone(this.tunnelConfiguration)
+                : null,
+          })),
+        notices[action],
+      );
     }
     chooseIdentityFile() {
       return this.identityPicker();
@@ -622,11 +660,52 @@
       delete this.timers[id];
       this.onUpdate();
     }
-    async remoteAction(id, action, label = id) {
+    /// Swift's withRemoteAction: one card's action locks only that card.
+    async withRemote(id, intent, task) {
       if (this.activeActions[id]) return null;
-      this.activeActions[id] = action;
+      this.activeActions[id] = intent;
+      this.onUpdate();
+      try {
+        return await task();
+      } catch (error) {
+        this.notice = { style: "error", message: messageOf(error) };
+        return null;
+      } finally {
+        delete this.activeActions[id];
+        this.onUpdate();
+      }
+    }
+    saveRemoteCard(server, previousId = null) {
+      return this.withRemote(previousId || server.id, "save", async () => {
+        const saved = await this.saveRemote(server, previousId);
+        this.notice = {
+          style: "success",
+          key: "settings.notice.remote_servers_saved",
+        };
+        return saved;
+      });
+    }
+    removeRemote(id) {
+      return this.withRemote(id, "removeLocal", async () => {
+        await this.invoke("remove_remote", { id });
+        this.remoteServers = this.remoteServers.filter((s) => s.id !== id);
+        this.notice = {
+          style: "success",
+          key: "proxy.notice.remote_server_removed",
+        };
+        return true;
+      });
+    }
+    async remoteAction(id, action, label = id, intent = action) {
+      if (this.activeActions[id]) return null;
+      this.activeActions[id] = intent;
       if (action === "deploy") {
         if (this.timers[id]) this.clearSchedule(this.timers[id]);
+        this.notice = {
+          style: "info",
+          key: "proxy.notice.remote_deploying_format",
+          args: [label],
+        };
         this.feedbacks[id] = {
           state: "deploying",
           key: "proxy.notice.remote_deploying_format",
@@ -640,6 +719,27 @@
           this.remoteLogs[id] = P.normalizeLogs(result.logs);
         else if (action === "discover") this.remoteDiscoveries[id] = result;
         else this.remoteStatuses[id] = result;
+        // The notices of ProxyPageModel+RemoteServerActions.
+        const notices = {
+          sync: ["success", "proxy.notice.remote_accounts_synced_format"],
+          start: ["success", "proxy.notice.remote_started_format"],
+          stop: ["info", "proxy.notice.remote_stopped_format"],
+          uninstall: ["success", "proxy.notice.remote_uninstalled_format"],
+        };
+        if (notices[action])
+          this.notice = {
+            style: notices[action][0],
+            key: notices[action][1],
+            args: [label],
+          };
+        else if (action === "discover")
+          this.notice = result?.length
+            ? {
+                style: "success",
+                key: "proxy.notice.remote_discovery_found_format",
+                args: [String(result.length)],
+              }
+            : { style: "info", key: "proxy.notice.remote_discovery_empty" };
         if (action === "deploy") {
           this.notice = {
             style: "success",
@@ -655,6 +755,7 @@
             () => this.dismissFeedback(id),
             this.successDelay,
           );
+
         }
         return result;
       } catch (error) {

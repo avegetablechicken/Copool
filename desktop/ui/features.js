@@ -19,7 +19,7 @@ const proxyController = new window.CopoolControllers.Proxy(invoke, () => {
   proxyCache = proxyController.proxyStatus;
   renderProxy();
   renderRemoteStates();
-  renderTunnelState();
+  syncButtons();
   if (proxyController.notice && proxyController.notice !== lastProxyNotice) {
     lastProxyNotice = proxyController.notice;
     const n = lastProxyNotice;
@@ -253,7 +253,15 @@ function importAccountFile() {
   );
 }
 const remoteDrafts = new Map();
-function remoteField(form, server, key, label, type = "text") {
+function remoteField(
+  form,
+  server,
+  key,
+  label,
+  type = "text",
+  onEdit = null,
+  disabled = false,
+) {
   const row = el("label", "row provider-field");
   row.append(el("span", "", tr(label)));
   const input = el("input");
@@ -264,8 +272,11 @@ function remoteField(form, server, key, label, type = "text") {
     input.min = "1";
     input.max = "65535";
   }
-  input.oninput = () =>
-    (server[key] = type === "number" ? Number(input.value) : input.value);
+  input.disabled = disabled;
+  input.oninput = () => {
+    server[key] = type === "number" ? Number(input.value) : input.value;
+    onEdit?.();
+  };
   row.append(input);
   form.append(row);
 }
@@ -302,9 +313,13 @@ function renderRemotes() {
     const text = el("div", "remote-heading");
     text.append(el("h3", "", heading.title));
     if (heading.subtitle) text.append(el("span", "", heading.subtitle));
+    // The status pill, collapsed or not, as RemoteServerCardPrimitives.
+    const pill = el("span", "state remote-state");
+    pill.append(el("span", "dot"), el("span"));
     header.append(
       icon("server"),
       text,
+      pill,
       icon(expandedRemotes.has(id) ? "chevron-up" : "chevron-down"),
     );
     form.append(header);
@@ -397,11 +412,10 @@ function renderRemotes() {
   renderRemoteStates();
 }
 async function saveRemoteDraft(id) {
-  await action(async () => {
-    const saved = await proxyController.saveRemote(remoteDrafts.get(id));
-    remoteDrafts.set(id, saved);
-    renderRemotes();
-  }, tr("settings.notice.remote_servers_saved"));
+  const saved = await proxyController.saveRemoteCard(remoteDrafts.get(id));
+  if (!saved) return;
+  remoteDrafts.set(id, saved);
+  renderRemotes();
 }
 function renderRemoteStates() {
   for (const form of document.querySelectorAll(
@@ -410,6 +424,13 @@ function renderRemoteStates() {
     const id = form.dataset.serverId,
       server = remoteDrafts.get(id),
       actions = form.querySelector(".remote-actions");
+    const status = proxyController.remoteStatuses[id];
+    const pill = form.querySelector(".remote-state");
+    pill.classList.toggle("running", !!status?.running);
+    // RemoteServerConfiguration.statusLabel, "Unknown" included.
+    pill.lastChild.textContent = !status
+      ? "Unknown"
+      : tr(status.running ? "proxy.status.running" : "proxy.status.stopped");
     if (!actions) continue;
     const descriptors = proxyController.remoteButtons(id);
     const key = JSON.stringify(descriptors);
@@ -429,18 +450,18 @@ function renderRemoteStates() {
               return;
             }
             if (descriptor.intent === "removeLocal") {
-              await action(async () => {
-                await invoke("remove_remote", { id });
+              if (await proxyController.removeRemote(id)) {
                 remoteDrafts.delete(id);
                 expandedRemotes.delete(id);
                 renderRemotes();
-              });
+              }
               return;
             }
             await proxyController.remoteAction(
               id,
               remoteOperations[descriptor.intent] || descriptor.intent,
               server.label,
+              descriptor.intent,
             );
           },
         );
@@ -477,7 +498,6 @@ function renderRemoteStates() {
     if (output.dataset.renderKey === outputKey) continue;
     output.dataset.renderKey = outputKey;
     output.replaceChildren();
-    const status = proxyController.remoteStatuses[id];
     const details = el("dl", "kv remote-details");
     P.remoteDetails(status).forEach((detail, index) => {
       const label = [
@@ -520,37 +540,76 @@ function renderRemoteStates() {
       if (status.lastError)
         output.append(el("p", "error", status.lastError));
     }
-    for (const found of proxyController.remoteDiscoveries[id] || []) {
+    // RemoteServerDiscoverySection and its cards.
+    const discoveries = proxyController.remoteDiscoveries[id] || [];
+    if (discoveries.length)
+      output.append(
+        el("div", "subhead", tr("proxy.remote.discovery.title")),
+      );
+    for (const found of discoveries) {
       const card = el("div", "remote-discovery");
-      card.append(
+      const flag = (key) => found[key] === "1";
+      const label = found.label?.trim() || found.service_name;
+      const summary = el("div", "remote-discovery-summary");
+      summary.append(el("span", "row-name", label));
+      if (label !== found.service_name)
+        summary.append(el("span", "secondary mono", found.service_name));
+      summary.append(
         el(
           "span",
-          "",
-          `${found.label || found.service_name} · ${found.remote_dir}:${found.listen_port}`,
+          "secondary",
+          [
+            flag("running") ? "running" : "stopped",
+            flag("enabled") ? "enabled" : "disabled",
+            flag("installed") ? "binary_present" : "binary_missing",
+          ]
+            .map((state) => tr(`proxy.remote.discovery.state.${state}`))
+            .join(" · "),
         ),
       );
+      const values = el("dl", "kv");
+      for (const [key, value] of [
+        ["remote_dir", found.remote_dir],
+        ["listen_port", found.listen_port],
+        ["base_url", `http://${server.host}:${found.listen_port}/v1`],
+        [
+          "api_key",
+          tr(
+            flag("api_key_present")
+              ? "proxy.remote.discovery.api_key_present"
+              : "proxy.remote.discovery.api_key_missing",
+          ),
+        ],
+      ])
+        values.append(
+          el("dt", "", tr(`proxy.remote.discovery.${key}`)),
+          el("dd", "", value),
+        );
+      card.append(summary);
       const adopt = button(
         tr("proxy.remote.discovery.use_instance"),
         null,
         "btn quiet prominent",
-        () =>
-          action(async () => {
-            const next = {
-              ...server,
-              id: found.server_id || id,
-              remoteDir: found.remote_dir,
-              listenPort: Number(found.listen_port),
-              label: found.label || server.label,
-            };
-            const saved = await proxyController.adopt(next, id);
-            remoteDrafts.delete(id);
-            remoteDrafts.set(saved.id, saved);
-            expandedRemotes.add(saved.id);
-            renderRemotes();
-          }),
+        async () => {
+          const next = {
+            ...server,
+            id: found.server_id || id,
+            remoteDir: found.remote_dir,
+            listenPort: Number(found.listen_port),
+            label: found.label || server.label,
+          };
+          const saved = await proxyController.saveRemoteCard(next, id);
+          if (!saved) return;
+          remoteDrafts.delete(id);
+          remoteDrafts.set(saved.id, saved);
+          expandedRemotes.add(saved.id);
+          renderRemotes();
+          await proxyController.remoteAction(saved.id, "status", saved.label, "refresh");
+        },
       );
+      adopt.disabled = !!proxyController.activeActions[id];
       adopt.type = "button";
-      card.append(adopt);
+      card.append(adopt, values);
       output.append(card);
     }
     const logs = P.remoteLogs(proxyController.remoteLogs[id]);
@@ -575,6 +634,7 @@ function copyButton(value) {
   copy.setAttribute("aria-label", copy.title);
   return copy;
 }
+// Adding a server takes no lock, as Swift's addRemoteServer.
 $("remote-add").onclick = () =>
   action(async () => {
     const id = crypto.randomUUID();
@@ -613,7 +673,7 @@ function renderTunnelControls() {
     option.selected = choice.selected;
     mode.append(option);
   }
-  mode.disabled = !modes[0].isEnabled;
+  mode.disabled = !modes[0].isEnabled || !proxyController.canEditTunnel;
   mode.onchange = () => {
     tunnelConfiguration.tunnelMode = mode.value;
     saveTunnelConfiguration();
@@ -626,6 +686,7 @@ function renderTunnelControls() {
   const toggle = el("input", "switch");
   toggle.type = "checkbox";
   toggle.checked = tunnelConfiguration.useHTTP2;
+  toggle.disabled = !proxyController.canEditTunnel;
   toggle.onchange = () => {
     tunnelConfiguration.useHTTP2 = toggle.checked;
     saveTunnelConfiguration();
@@ -645,6 +706,12 @@ function renderTunnelControls() {
         key,
         `proxy.public.field.${label}`,
         type,
+        // Edits enable Start; the hostname is saved as it is typed.
+        () => {
+          if (key === "namedHostname") scheduleTunnelSave();
+          renderTunnelState();
+        },
+        !proxyController.canEditTunnel,
       );
   else
     root.append(
@@ -692,6 +759,19 @@ function renderTunnelState() {
     }
   }
   $("tunnel-install").closest(".value-card").hidden = status.installed;
+  // Without cloudflared only the install card shows, as PublicAccessSection.
+  $("tunnel-controls").hidden = !status.installed;
+  // Open while the tunnel runs, as applyCloudflaredStatus.
+  if (status.running) openDisclosure("public-details");
+  const editable = proxyController.canEditTunnel;
+  for (const control of $("tunnel-controls").querySelectorAll(
+    "select, input",
+  ))
+    control.disabled =
+      !editable ||
+      (control.tagName === "SELECT" &&
+        !P.publicModes(tunnelConfiguration.tunnelMode, !status.running)[0]
+          .isEnabled);
   for (const node of document.querySelectorAll("[data-tunnel-action]")) {
     const intent = node.dataset.tunnelAction;
     const descriptor = proxyController.publicButtons.find(
@@ -706,6 +786,8 @@ async function runTunnel(operation) {
 }
 $("public-enabled").onchange = () => {
   tunnelConfiguration.enabled = $("public-enabled").checked;
+  // Enabling opens the section, as setPublicAccessEnabled.
+  if (tunnelConfiguration.enabled) openDisclosure("public-details");
   saveTunnelConfiguration();
 };
 $("tunnel-install").onclick = () => runTunnel("install");
@@ -714,7 +796,9 @@ initializeFeatures = async () => {
   await initializeBaseFeatures();
   for (const server of configurationCache.remoteServers) {
     remoteDrafts.set(server.id, server);
-    if (!server.host) expandedRemotes.add(server.id);
+    // A placeholder draft opens, as RemoteServerCardView.isPlaceholderDraft.
+    if (!server.label?.trim() || server.label.trim() === "new-server")
+      expandedRemotes.add(server.id);
   }
   renderRemotes();
   Object.assign(
@@ -783,7 +867,18 @@ function renderPendingWorkspaces() {
   root.append(block);
 }
 async function saveTunnelConfiguration() {
-  await action(() => proxyController.updateTunnel(tunnelConfiguration));
+  clearTimeout(tunnelSaveTimer);
+  await action(
+    () => proxyController.updateTunnel(tunnelConfiguration),
+    null,
+    false,
+  );
+}
+let tunnelSaveTimer;
+/// Swift's scheduleProxyConfigurationSync: a 350 ms debounce.
+function scheduleTunnelSave() {
+  clearTimeout(tunnelSaveTimer);
+  tunnelSaveTimer = setTimeout(saveTunnelConfiguration, 350);
 }
 
 async function refreshFeatureState() {

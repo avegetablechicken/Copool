@@ -224,6 +224,8 @@ function syncButtons() {
   const proxyLoading = proxyController.loading;
   $("proxy-start").disabled = proxyLoading || Boolean(proxyCache?.running);
   $("proxy-stop").disabled = proxyLoading || !proxyCache?.running;
+  $("proxy-refresh").disabled = proxyLoading;
+  $("proxy-key-refresh").disabled = proxyLoading;
   $("proxy-start").hidden = !!proxyCache?.running;
   $("proxy-stop").hidden = !proxyCache?.running;
   // A card refreshing its usage only locks its own refresh button.
@@ -598,6 +600,10 @@ function renderProxy() {
   $("proxy-url").value =
     proxy.baseUrl || tr("proxy.value.generated_after_start");
   $("proxy-key").value = proxy.apiKey || "";
+  $("proxy-key").placeholder = tr("proxy.value.generated_after_first_start");
+  // Only real values copy, as ProxyCopyableValueCard's canCopy.
+  document.querySelector('[data-copy="proxy-url"]').disabled = !proxy.baseUrl;
+  document.querySelector('[data-copy="proxy-key"]').disabled = !proxy.apiKey;
   $("proxy-active").textContent =
     proxy.activeAccountLabel || tr("proxy.info.no_request_matched");
   $("proxy-active-id").textContent =
@@ -632,7 +638,9 @@ function renderPreferences() {
   $("usage-display").value = controls.usagePicker.selectedValue;
   $("restart-target").disabled = !controls.restartPicker.isEnabled;
   $("restart-target").value = controls.restartPicker.selectedValue || "";
-  $("proxy-port").value = preferences.proxyPort;
+  // An edit still waiting to be saved is not overwritten.
+  if (document.activeElement !== $("proxy-port"))
+    $("proxy-port").value = preferences.proxyPort;
 }
 async function savePreference(patch) {
   if (
@@ -664,8 +672,12 @@ $("notice-close").onclick = () => {
 };
 function showPage(page) {
   selectedPage = page;
+  // Entering the tab refreshes the local status; remote servers load once.
   if (selectedPage === "proxy")
-    proxyController.refresh().catch((error) => notice(error, true));
+    proxyController
+      .refresh()
+      .then(() => proxyController.loadRemoteStatuses())
+      .catch((error) => notice(error, true));
   closeMenu();
   document
     .querySelectorAll("main>section")
@@ -692,14 +704,21 @@ document
   .forEach((link) =>
     link.addEventListener("click", () => showPage(link.dataset.page)),
   );
+function setDisclosure(button, opened) {
+  button.setAttribute("aria-expanded", String(opened));
+  button.replaceChildren(icon(opened ? "chevron-up" : "chevron-down"));
+  $(button.dataset.target).hidden = !opened;
+  requestAnimationFrame(applyNativeIcons);
+}
+function openDisclosure(target) {
+  const button = document.querySelector(`.disclosure[data-target="${target}"]`);
+  if (button && button.getAttribute("aria-expanded") !== "true")
+    setDisclosure(button, true);
+}
 document.querySelectorAll(".disclosure").forEach((button) =>
-  button.addEventListener("click", () => {
-    const opened = button.getAttribute("aria-expanded") !== "true";
-    button.setAttribute("aria-expanded", String(opened));
-    button.replaceChildren(icon(opened ? "chevron-up" : "chevron-down"));
-    $(button.dataset.target).hidden = !opened;
-    requestAnimationFrame(applyNativeIcons);
-  }),
+  button.addEventListener("click", () =>
+    setDisclosure(button, button.getAttribute("aria-expanded") !== "true"),
+  ),
 );
 $("collapse-all").onclick = () => {
   collapsed = !collapsed;
@@ -968,7 +987,23 @@ $("smart-switch").onclick = async () => {
 $("proxy-start").onclick = () =>
   action(() => proxyController.startProxy(Number($("proxy-port").value)));
 $("proxy-stop").onclick = () => action(() => proxyController.stopProxy());
-$("proxy-refresh").onclick = () => action(() => proxyController.refresh());
+$("proxy-refresh").onclick = () =>
+  action(() => proxyController.refreshStatus(), null, false);
+$("proxy-key-refresh").onclick = () =>
+  action(() => proxyController.rotateKey(), null, false);
+// The preferred port is saved as it is edited, as updatePreferredPortText.
+let portSaveTimer;
+$("proxy-port").oninput = () => {
+  clearTimeout(portSaveTimer);
+  const port = Number($("proxy-port").value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+  portSaveTimer = setTimeout(() => {
+    preferences = { ...preferences, proxyPort: port };
+    providerController
+      .savePreferences(preferences, {})
+      .catch((error) => notice(error, true));
+  }, 350);
+};
 $("toggle-key").onclick = () => {
   $("proxy-key").type =
     $("proxy-key").type === "password" ? "text" : "password";

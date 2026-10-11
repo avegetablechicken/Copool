@@ -1211,6 +1211,12 @@ textarea::placeholder {
   color: var(--secondary);
 }
 
+.remote-state {
+  flex: none;
+  font-size: 10px;
+  color: var(--secondary);
+}
+
 .remote-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1308,7 +1314,8 @@ textarea.remote-private-key {
 
 .remote-discovery {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 8px;
 }
 
@@ -1316,6 +1323,20 @@ textarea.remote-private-key {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.remote-discovery-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.remote-discovery > .kv {
+  flex-basis: 100%;
 }
 
 pre.remote-log {

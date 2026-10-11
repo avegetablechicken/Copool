@@ -423,3 +423,53 @@ legacy(
     assert(maximum >= 2);
   },
 );
+test("Refreshing the proxy stays local; remote servers load once", async () => {
+  const calls = [];
+  const model = new Proxy(async (command, args) => {
+    calls.push(args?.action ? `${command}:${args.action}` : command);
+    if (command === "proxy_status") return { running: false };
+    if (command === "configuration")
+      return {
+        remoteServers: [{ id: "server-1", label: "Tokyo" }],
+        proxyConfiguration: { preferredPortText: "8787", cloudflared: {} },
+      };
+    if (command === "tunnel_action") return { installed: true, running: false };
+    if (command === "remote_action") return { running: true };
+  });
+  await model.refreshStatus();
+  assert.equal(calls.includes("remote_action:status"), false);
+  await model.loadRemoteStatuses();
+  await model.loadRemoteStatuses();
+  assert.equal(calls.filter((c) => c === "remote_action:status").length, 1);
+});
+test("A named tunnel starts only with every field filled in", () => {
+  const model = new Proxy();
+  model.applySnapshot({
+    proxyStatus: { running: true, port: 8787 },
+    cloudflaredStatus: { installed: true, running: false },
+    publicAccessEnabled: true,
+    cloudflaredTunnelMode: "named",
+    cloudflaredNamedInput: { hostname: "api.example.test" },
+  });
+  assert.equal(model.canStartTunnel, false);
+  Object.assign(model.tunnelConfiguration, {
+    apiToken: "token",
+    accountId: "account",
+    zoneId: "zone",
+  });
+  assert.equal(model.canStartTunnel, true);
+});
+test("Saving a remote card locks only that card", async () => {
+  let release;
+  const model = new Proxy(async (command, { value }) => {
+    if (command === "save_remote")
+      return new Promise((resolve) => (release = () => resolve(value)));
+  });
+  const task = model.saveRemoteCard({ id: "server-1", label: "Tokyo" });
+  assert.equal(model.activeActions["server-1"], "save");
+  assert.equal(model.remoteButtons("server-2")[0].enabled, true);
+  release();
+  await task;
+  assert.equal(model.activeActions["server-1"], undefined);
+  assert.equal(model.notice.key, "settings.notice.remote_servers_saved");
+});
