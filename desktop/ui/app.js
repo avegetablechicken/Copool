@@ -568,9 +568,11 @@ function renderProxy() {
     "proxy.port_line_format",
     proxy.port ?? "--",
   );
+  // The proxy's own routable candidates, as Swift's availableAccounts: not
+  // every listed card (a free or cooling-down account is left out).
   $("proxy-count").textContent = tr(
     "proxy.available_accounts_format",
-    accountsCache.filter((a) => a.available).length,
+    String(proxy.availableAccounts ?? 0),
   );
   $("proxy-url").value =
     proxy.baseUrl || tr("proxy.value.generated_after_start");

@@ -1044,6 +1044,16 @@ mod tests {
         assert!(app.paths.data_dir.join("auth-before-switch.json").exists());
     }
     #[tokio::test]
+    async fn proxy_status_counts_the_routable_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(&dir);
+        assert_eq!(app.proxy_status().await.unwrap().available_accounts, 0);
+        app.import_json(&json!([document("alice"), document("bob")]).to_string())
+            .await
+            .unwrap();
+        assert_eq!(app.proxy_status().await.unwrap().available_accounts, 2);
+    }
+    #[tokio::test]
     async fn invalid_batch_is_atomic_and_corruption_has_a_private_backup() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);

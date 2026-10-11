@@ -326,13 +326,33 @@ pub(crate) async fn get_api_proxy_status_with_runtime(
         guard.as_ref().map(snapshot_handle_state)
     };
 
-    match handle_state {
-        Some(handle_state) => Ok(status_from_handle_state(handle_state).await),
-        None => Ok(stopped_status(
-            read_persisted_api_proxy_key(storage).await?,
-            None,
-        )),
-    }
+    let shared = handle_state.as_ref().map(|state| state.shared.clone());
+    let mut status = match handle_state {
+        Some(handle_state) => status_from_handle_state(handle_state).await,
+        None => stopped_status(read_persisted_api_proxy_key(storage).await?, None),
+    };
+    status.available_accounts = available_candidate_count(storage, shared).await;
+    Ok(status)
+}
+
+/// SwiftNativeProxyRuntimeService.status: currentCandidates().count, which
+/// leaves out accounts in a cooldown after the upstream refused them.
+async fn available_candidate_count(
+    storage: &ProxyStorageContext,
+    shared: Option<Arc<tokio::sync::Mutex<ApiProxyRuntimeSnapshot>>>,
+) -> i64 {
+    let Ok(candidates) = load_proxy_candidates(storage).await else {
+        return -1;
+    };
+    let now = now_unix_seconds();
+    let cooldowns = match shared {
+        Some(shared) => shared.lock().await.cooldown_until_by_account_id.clone(),
+        None => Default::default(),
+    };
+    candidates
+        .iter()
+        .filter(|c| cooldowns.get(&c.id).is_none_or(|until| *until <= now))
+        .count() as i64
 }
 
 #[cfg(feature = "desktop")]
@@ -3184,6 +3204,7 @@ async fn status_from_handle_state(handle: ApiProxyHandleState) -> ApiProxyStatus
             active_account_id: snapshot.active_account_id,
             active_account_label: snapshot.active_account_label,
             last_error: snapshot.last_error,
+            available_accounts: 0,
         }
     } else {
         ApiProxyStatus {
@@ -3194,6 +3215,7 @@ async fn status_from_handle_state(handle: ApiProxyHandleState) -> ApiProxyStatus
             active_account_id: snapshot.active_account_id,
             active_account_label: snapshot.active_account_label,
             last_error: snapshot.last_error,
+            available_accounts: 0,
         }
     }
 }
@@ -3207,6 +3229,7 @@ fn stopped_status(api_key: Option<String>, last_error: Option<String>) -> ApiPro
         active_account_id: None,
         active_account_label: None,
         last_error,
+        available_accounts: 0,
     }
 }
 

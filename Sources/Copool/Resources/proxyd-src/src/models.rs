@@ -207,6 +207,10 @@ pub struct ApiProxyStatus {
     pub active_account_id: Option<String>,
     pub active_account_label: Option<String>,
     pub last_error: Option<String>,
+    /// Accounts the proxy can route to now, cooling-down ones excluded, as
+    /// Swift's ApiProxyStatus.availableAccounts; -1 when they cannot be read.
+    #[serde(default)]
+    pub available_accounts: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
