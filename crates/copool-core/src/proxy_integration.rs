@@ -9,12 +9,17 @@ use crate::{
 use serde_json::{json, Value};
 use std::fs;
 
-fn api_key(definition: &codex_config::Definition, _paths: &Paths) -> Option<String> {
+fn api_key(definition: &codex_config::Definition, paths: &Paths) -> Option<String> {
     if let Some(name) = &definition.env_key {
         if let Ok(value) = std::env::var(name) {
             if !value.trim().is_empty() {
                 return Some(value);
             }
+        }
+        // Codex loads CODEX_HOME/.env into its environment; a key kept there
+        // is as available to Codex as an exported one.
+        if let Some(value) = codex_dotenv(paths, name) {
+            return Some(value);
         }
         #[cfg(unix)]
         if !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
@@ -37,6 +42,25 @@ fn api_key(definition: &codex_config::Definition, _paths: &Paths) -> Option<Stri
     None
 }
 
+/// `name` from CODEX_HOME/.env: `KEY=value` lines, optionally `export`ed or
+/// quoted; blank lines and `#` comments are skipped.
+fn codex_dotenv(paths: &Paths, name: &str) -> Option<String> {
+    let text = fs::read_to_string(paths.codex_auth.with_file_name(".env")).ok()?;
+    text.lines().find_map(|line| {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let (key, value) = line.split_once('=')?;
+        if line.starts_with('#') || key.trim() != name {
+            return None;
+        }
+        let value = value.trim();
+        let value = [('"', '"'), ('\'', '\'')]
+            .iter()
+            .find_map(|(open, close)| value.strip_prefix(*open)?.strip_suffix(*close))
+            .unwrap_or(value);
+        (!value.is_empty()).then(|| value.to_owned())
+    })
+}
 #[cfg(unix)]
 fn login_shell_key(shell: &str, name: &str, timeout: std::time::Duration) -> Option<String> {
     use std::io::Read;
@@ -244,6 +268,27 @@ pub(crate) fn sync_refreshed_auth(
 #[cfg(test)]
 mod refresh_tests {
     use super::*;
+    #[test]
+    fn provider_keys_are_read_from_the_codex_dotenv() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            data_dir: dir.path().join("data"),
+            codex_auth: dir.path().join("auth.json"),
+        };
+        assert_eq!(codex_dotenv(&paths, "SHARECODER_API_KEY"), None);
+        fs::write(
+            dir.path().join(".env"),
+            "# SHARECODER_API_KEY=commented\nOTHER=1\nexport SHARECODER_API_KEY = \"sk-test\"\nEMPTY=\nSINGLE='sk-single'\n",
+        )
+        .unwrap();
+        assert_eq!(
+            codex_dotenv(&paths, "SHARECODER_API_KEY").as_deref(),
+            Some("sk-test")
+        );
+        assert_eq!(codex_dotenv(&paths, "SINGLE").as_deref(), Some("sk-single"));
+        assert_eq!(codex_dotenv(&paths, "EMPTY"), None);
+        assert_eq!(codex_dotenv(&paths, "MISSING"), None);
+    }
     #[tokio::test]
     async fn refreshed_proxy_auth_updates_only_current_account_and_respects_host_only() {
         let dir = tempfile::tempdir().unwrap();
