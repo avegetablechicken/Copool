@@ -202,6 +202,10 @@ function syncButtons() {
   $("proxy-stop").disabled = busy || !proxyCache?.running;
   $("proxy-start").hidden = !!proxyCache?.running;
   $("proxy-stop").hidden = !proxyCache?.running;
+  // A card refreshing its usage only locks its own refresh button.
+  document
+    .querySelectorAll(".card-refresh.spinning")
+    .forEach((button) => (button.disabled = true));
   document.querySelectorAll(".card-switch").forEach((button) => {
     button.disabled = busy || button.dataset.available === "false";
   });
@@ -375,7 +379,7 @@ function accountControls(account, full) {
     "icon-btn card-refresh",
     reauthenticate
       ? () => signIn(account.accountId)
-      : () => action(() => accountsController.refresh(account.id)),
+      : () => refreshUsage(account.id),
   );
   refresh.title = tr(
     reauthenticate ? "accounts.card.sign_in_again" : "common.refresh_usage",
@@ -804,8 +808,17 @@ $("edit-form").onsubmit = (event) => {
     }
   });
 };
+/// Refreshes one account, or all without an id. As in the Swift app this
+/// takes no panel-wide lock: each card updates and becomes operable again as
+/// its own refresh lands ("copool-changed"), while the others stay usable.
+function refreshUsage(id = null) {
+  accountsController
+    .refresh(id)
+    .catch((error) => notice(error, true))
+    .finally(() => refreshView().catch((error) => notice(error, true)));
+}
 $("refresh-all").onclick = () => {
-  if (!busy) action(() => accountsController.refresh());
+  if (!busy) refreshUsage();
 };
 $("smart-switch").onclick = () =>
   action(
