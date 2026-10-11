@@ -964,3 +964,27 @@ async fn testTrayMenuModelAutoSmartSwitchWritesAuthAndLaunchesCodex() {
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(crate::auth::extract_auth(&auth).unwrap().account_id, "b");
 }
+#[tokio::test]
+async fn testRefreshUsageKeepsAuthSwitchedOutsideCopool() {
+    let (_dir, app, _) = super::network_fixture::fixture();
+    let mut a = stored("a", "a", "account-1");
+    a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1})).into();
+    let b = stored("b", "b", "account-2");
+    let b_auth = b["authJson"].clone();
+    save_fixture(
+        &app,
+        json!({"accounts":[a.clone(),b],"currentAccountId":"a"}),
+    );
+    crate::persistence::write_json(&app.paths.codex_auth, &b_auth).unwrap();
+    app.refresh_usage("a").await.unwrap();
+    let current: Value =
+        serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
+    assert_eq!(current, b_auth);
+
+    crate::persistence::write_json(&app.paths.codex_auth, &a["authJson"]).unwrap();
+    save_fixture(&app, json!({"accounts":[a],"currentAccountId":"a"}));
+    app.refresh_usage("a").await.unwrap();
+    let current: Value =
+        serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
+    assert_eq!(current["tokens"]["access_token"], "refreshed-test-only");
+}

@@ -61,6 +61,34 @@ async fn testListAccountsKeepsCurrentCardIDWhenSelectionIsStale() {
     assert_eq!(accounts.iter().find(|a| a.is_current).unwrap().id, "acct-1");
 }
 #[tokio::test]
+async fn testListAccountsFollowsAuthChangedOutsideCopool() {
+    let (_dir, app) = fixture();
+    save_fixture(
+        &app,
+        json!({"accounts":[stored("acct-1","first","account-1"),stored("acct-2","second","account-2")],"currentAccountId":"acct-1","currentSelection":{"cardId":"acct-1","selectedAt":2000,"sourceDeviceId":"macos-local"}}),
+    );
+    crate::persistence::write_json(&app.paths.codex_auth, &auth("second", "account-2")).unwrap();
+    let accounts = app.accounts().await.unwrap();
+    assert_eq!(accounts.iter().filter(|a| a.is_current).count(), 1);
+    assert_eq!(accounts.iter().find(|a| a.is_current).unwrap().id, "acct-2");
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(app.paths.data_dir.join("accounts.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["currentAccountId"], "acct-2");
+    assert_eq!(saved["currentSelection"]["cardId"], "acct-2");
+}
+#[tokio::test]
+async fn testListAccountsMarksNoneCurrentForUnknownAuth() {
+    let (_dir, app) = fixture();
+    save_fixture(
+        &app,
+        json!({"accounts":[stored("acct-1","first","account-1")],"currentAccountId":"acct-1"}),
+    );
+    crate::persistence::write_json(&app.paths.codex_auth, &auth("other", "account-9")).unwrap();
+    let accounts = app.accounts().await.unwrap();
+    assert!(accounts.iter().all(|a| !a.is_current));
+}
+#[tokio::test]
 async fn testImportCurrentAuthPrefersExactPrincipalMatchOverLegacyWildcardRow() {
     let (_dir, app) = fixture();
     let mut legacy = stored("legacy", "principal-1", "shared-account");

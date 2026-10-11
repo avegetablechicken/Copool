@@ -384,6 +384,32 @@ impl Application {
                 }
             }
         }
+        // auth.json may be changed outside Copool; the login Codex actually uses wins over
+        // the stored selection. A missing or unreadable login keeps the stored selection.
+        let current = self.current_auth()?.as_ref().and_then(|v| identity(v).ok());
+        if let Some(current) = &current {
+            let matches = |a: &StoredAccount| identity(&a.auth_json).ok().as_ref() == Some(current);
+            let stored_id = store.extra.get("currentAccountId").and_then(Value::as_str);
+            if !store
+                .accounts
+                .iter()
+                .any(|a| Some(a.id.as_str()) == stored_id && matches(a))
+            {
+                match store
+                    .accounts
+                    .iter()
+                    .find(|a| matches(a))
+                    .map(|a| a.id.clone())
+                {
+                    Some(id) => {
+                        store.extra.insert("currentAccountId".into(), id.into());
+                    }
+                    None => {
+                        store.extra.remove("currentAccountId");
+                    }
+                }
+            }
+        }
         if let Some(current_id) = store.extra.get("currentAccountId").and_then(Value::as_str) {
             if let Some(account) = store.accounts.iter().find(|a| a.id == current_id) {
                 if let (Some(selection), Ok((workspace, principal))) =
@@ -397,24 +423,12 @@ impl Application {
         if serde_json::to_value(&store).map_err(|e| e.to_string())? != before {
             self.persist_accounts(&store)?;
         }
-        let current = self.current_auth()?.as_ref().and_then(|v| identity(v).ok());
         let selected = store
             .extra
             .get("currentAccountId")
             .and_then(Value::as_str)
             .filter(|id| store.accounts.iter().any(|a| a.id == *id))
-            .map(str::to_owned)
-            .or_else(|| {
-                store
-                    .accounts
-                    .iter()
-                    .find(|a| {
-                        current
-                            .as_ref()
-                            .is_some_and(|id| identity(&a.auth_json).ok().as_ref() == Some(id))
-                    })
-                    .map(|a| a.id.clone())
-            });
+            .map(str::to_owned);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
@@ -817,7 +831,13 @@ impl Application {
                     {
                         target.extra.insert("displayStatus".into(), "list".into());
                     }
-                    if current && auth != &account.auth_json {
+                    // Only refresh the login Codex is still using; never revert a switch
+                    // made outside Copool to the stored selection.
+                    if current
+                        && auth != &account.auth_json
+                        && self.current_auth()?.as_ref().and_then(|v| identity(v).ok())
+                            == identity(auth).ok()
+                    {
                         write_json(
                             &self.paths.codex_auth,
                             &crate::auth::normalized_auth_for_write(auth.clone())?,
