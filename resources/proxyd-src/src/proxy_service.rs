@@ -3247,8 +3247,7 @@ fn stopped_status(api_key: Option<String>, last_error: Option<String>) -> ApiPro
 }
 
 fn resolve_upstream_base_url(configured: &str, family: UpstreamRouteFamily) -> String {
-    let base = crate::utils::loopback_plain_http(configured);
-    let base = base.trim_end_matches('/');
+    let base = configured.trim().trim_end_matches('/');
     let base = base.strip_suffix("/responses").unwrap_or(base);
     let base = base.strip_suffix("/codex").unwrap_or(base);
     let base = if base.ends_with("/backend-api") {
@@ -4148,14 +4147,16 @@ mod loopback_upstream_tests {
     use super::{resolve_upstream_base_url, UpstreamRouteFamily};
 
     #[test]
-    fn loopback_upstream_uses_plain_http_on_the_same_port() {
-        assert_eq!(
-            resolve_upstream_base_url(
-                "https://127.0.0.1:8787/backend-api",
-                UpstreamRouteFamily::Codex
-            ),
-            "http://127.0.0.1:8787/backend-api/codex"
-        );
+    fn loopback_upstream_preserves_the_configured_scheme() {
+        for scheme in ["http", "https"] {
+            for host in ["127.0.0.1", "localhost", "[::1]"] {
+                let base = format!("{scheme}://{host}:8787/backend-api");
+                assert_eq!(
+                    resolve_upstream_base_url(&base, UpstreamRouteFamily::Codex),
+                    format!("{base}/codex")
+                );
+            }
+        }
     }
 }
 

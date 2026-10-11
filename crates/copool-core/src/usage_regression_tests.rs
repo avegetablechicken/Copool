@@ -19,17 +19,22 @@ fn account_usage_endpoints_are_official() {
 
 #[test]
 fn loopback_chatgpt_base_url_is_tried_before_the_official_endpoints() {
-    assert_eq!(
-        usage_urls(&chatgpt_base_origin(Some(
-            "https://127.0.0.1:8787/backend-api/"
-        ))),
-        vec![
-            "http://127.0.0.1:8787/backend-api/wham/usage",
-            "http://127.0.0.1:8787/api/codex/usage",
-            "https://chatgpt.com/backend-api/wham/usage",
-            "https://chatgpt.com/api/codex/usage",
-        ]
-    );
+    for scheme in ["http", "https"] {
+        for host in ["127.0.0.1", "localhost", "[::1]"] {
+            let origin = format!("{scheme}://{host}:8787");
+            assert_eq!(
+                usage_urls(&chatgpt_base_origin(Some(&format!(
+                    "{origin}/backend-api/"
+                )))),
+                vec![
+                    format!("{origin}/backend-api/wham/usage"),
+                    format!("{origin}/api/codex/usage"),
+                    "https://chatgpt.com/backend-api/wham/usage".into(),
+                    "https://chatgpt.com/api/codex/usage".into(),
+                ]
+            );
+        }
+    }
 }
 
 #[test]
@@ -66,7 +71,7 @@ fn every_codex_request_reads_the_configuration_copool_uses() {
         "chatgpt_base_url = \"https://127.0.0.1:8787/backend-api/\"\n[profiles.work]\nchatgpt_base_url = \"https://work.invalid\"\n",
     )
     .unwrap();
-    let configured = "http://127.0.0.1:8787/backend-api";
+    let configured = "https://127.0.0.1:8787/backend-api";
     let network = crate::account_network::Network {
         codex_config: config.clone(),
     };

@@ -158,7 +158,7 @@ pub(crate) fn resolve_chatgpt_base_origin() -> String {
 /// The configured `chatgpt_base_url`, or the official origin without one.
 pub(crate) fn chatgpt_base_origin(configured: Option<&str>) -> String {
     let base_url = configured.unwrap_or(DEFAULT_CHATGPT_BASE_URL);
-    crate::utils::loopback_plain_http(base_url.trim_end_matches('/'))
+    base_url.trim().trim_end_matches('/').to_owned()
 }
 
 fn format_reqwest_error(err: &reqwest::Error) -> String {
