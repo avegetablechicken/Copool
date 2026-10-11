@@ -118,3 +118,5 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 移除前（2026-10-09）原版 Swift 套件 332 项 XCTest 与 5 项 Swift Testing 全部通过；这是原版基线，不代表 Rust 已通过原版所有行为的等价测试。
 
 2026-10-12（Claude 刷新诊断与限流退避）：Claude profile、usage 与令牌刷新保留 reqwest 底层错误链，证书不受信任等错误不再仅显示 `error sending request`。usage 返回 HTTP 429 后，将该账号的重试时间持久化并冷却 5 分钟；手动与后台刷新均遵守，冷却后允许重试。这是本地固定退避策略，尚未解析服务端 Retry-After，也不保证 5 分钟后上游解除限流。本机 macOS 的 19 项 Claude 模块测试通过（模拟凭据及临时本机 HTTP 服务），覆盖冷却、到期恢复与错误链。无凭据 Rust 连通性探测中，本机 7893 到 profile/usage 均返回预期的 401；8787 均因 `UnknownIssuer` 失败。未绕过 TLS 校验，未修改系统证书信任；真实账号刷新及 Windows/Linux 尚未验证。
+
+2026-10-12（macOS 本地代理 TLS 信任修复）：共享账号 HTTP 客户端在 macOS 显式使用 reqwest native-tls，通过 Security Framework 遵循钥匙串证书信任设置，修复 Coport 8787 代理访问 Claude 时 Rustls 返回 `UnknownIssuer` 的问题；核心和独立 daemon 均加入仅 macOS 启用的依赖并更新锁文件。保留证书与主机名校验，未修改系统信任；Windows/Linux 继续使用 Rustls，尚未在对应平台验证。该次修复尚保留 Codex 本地 `chatgpt_base_url` 的回环 HTTP 兼容行为；后续已移除，见下文。本机通过实际共享客户端、不携带凭据访问 8787 的 Claude profile/usage，均收到预期 HTTP 401，确认不再卡在 TLS 验证；真实账号额度刷新未验证。330 项核心测试、120 项前端测试、Rust 格式、UI 语法、桌面和独立 daemon 编译检查通过。核心网络测试与连通性探测需在沙盒外运行（沙盒禁止本机端口操作）。本次未打包或替换已安装应用。

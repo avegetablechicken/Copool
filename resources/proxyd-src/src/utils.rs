@@ -215,6 +215,11 @@ pub(crate) fn with_account_proxy(
     builder: reqwest::ClientBuilder,
     value: &str,
 ) -> Result<reqwest::ClientBuilder, String> {
+    // Honor macOS Keychain trust, including locally trusted relay certificates.
+    // Loading native roots into Rustls does not reproduce Security Framework's
+    // trust evaluation. Select explicitly because both TLS features are enabled.
+    #[cfg(target_os = "macos")]
+    let builder = builder.use_native_tls();
     let Some(mut url) = validate_account_proxy(value)? else {
         return Ok(match SYSTEM_PROXY.get() {
             Some(resolve) => builder.proxy(reqwest::Proxy::custom(move |url| resolve(url))),
