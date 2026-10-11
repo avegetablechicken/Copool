@@ -966,11 +966,16 @@ textarea::placeholder {
   grid-column: 2 / -1;
   margin-top: -2px;
   font-size: 10px;
-  color: var(--tertiary);
+  color: var(--secondary);
   font-variant-numeric: tabular-nums;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* Only a window without data keeps the faint reset line. */
+.usage.no-data .usage-reset {
+  color: var(--tertiary);
 }
 
 /* Monochrome data; only the nearly exhausted windows take a color. */
