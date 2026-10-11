@@ -323,6 +323,20 @@ async fn import_account_file(
     handle: tauri::AppHandle,
     app: State<'_, App>,
 ) -> Result<Option<usize>, String> {
+    import_account_file_for_pool(handle, app, false).await
+}
+#[tauri::command]
+async fn claude_import_account_file(
+    handle: tauri::AppHandle,
+    app: State<'_, App>,
+) -> Result<Option<usize>, String> {
+    import_account_file_for_pool(handle, app, true).await
+}
+async fn import_account_file_for_pool(
+    handle: tauri::AppHandle,
+    app: State<'_, App>,
+    claude: bool,
+) -> Result<Option<usize>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     panel::set_modal(&handle, true);
@@ -343,9 +357,12 @@ async fn import_account_file(
     if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
         return Err("File exceeds 16 MiB".into());
     }
-    let count = app
-        .import_json(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)
-        .await?;
+    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let count = if claude {
+        app.claude_import_json(&content).await?
+    } else {
+        app.import_json(&content).await?
+    };
     Ok(Some(count))
 }
 #[tauri::command]
@@ -609,6 +626,7 @@ fn main() {
             hide_panel,
             claude_accounts,
             claude_import_current,
+            claude_import_account_file,
             claude_delete_account,
             claude_switch_account,
             claude_smart_switch,

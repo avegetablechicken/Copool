@@ -948,6 +948,53 @@ impl Application {
         let live = read_live(&self.claude_location())
             .await?
             .ok_or("error.claude.login_not_found")?;
+        let (id, label, waiting) = self.claude_import_live(live, true).await?;
+        drop(_op);
+        if !waiting {
+            let _ = self.claude_refresh_usage(&id).await;
+        }
+        Ok(label)
+    }
+    /// Imports an exported Claude Code credentials JSON without selecting it.
+    pub async fn claude_import_json(&self, content: &str) -> Result<usize> {
+        if content.len() > 16 * 1024 * 1024 {
+            return Err("Import exceeds 16 MiB".into());
+        }
+        let invalid = "error.claude.credentials_json_invalid";
+        let document: Value =
+            serde_json::from_str(content.trim_start_matches('\u{feff}')).map_err(|_| invalid)?;
+        let oauth = document.get("claudeAiOauth").unwrap_or(&document);
+        if !oauth.is_object()
+            || text(&oauth["accessToken"]).is_none()
+            || oauth.get("refreshToken").is_some_and(|v| text(v).is_none())
+            || oauth.get("expiresAt").is_some_and(|v| v.as_i64().is_none())
+            || oauth.get("scopes").is_some_and(|v| {
+                v.as_array()
+                    .is_none_or(|items| items.iter().any(|v| !v.is_string()))
+            })
+        {
+            return Err(invalid.into());
+        }
+        let live = Live {
+            account: document
+                .get("oauthAccount")
+                .filter(|a| identity(a).is_some())
+                .cloned(),
+            document: json!({"claudeAiOauth": oauth}),
+        };
+        let _op = self.claude.operations.lock().await;
+        let (id, _, waiting) = self.claude_import_live(live, false).await?;
+        drop(_op);
+        if !waiting {
+            let _ = self.claude_refresh_usage(&id).await;
+        }
+        Ok(1)
+    }
+    async fn claude_import_live(
+        &self,
+        live: Live,
+        current: bool,
+    ) -> Result<(String, String, bool)> {
         let oauth = live.oauth().ok_or("error.claude.login_not_found")?.clone();
         let account = match live.account.clone() {
             Some(account) => account,
@@ -967,12 +1014,7 @@ impl Application {
             },
         };
         let defer = !self.preferences()?.request_new_accounts;
-        let (id, label, waiting) = self.claude_upsert(oauth, account, true, defer).await?;
-        drop(_op);
-        if !waiting {
-            let _ = self.claude_refresh_usage(&id).await;
-        }
-        Ok(label)
+        self.claude_upsert(oauth, account, current, defer).await
     }
     /// Stores a browser sign-in without changing Claude Code's login.
     pub async fn claude_import_login(&self, tokens: Value) -> Result<String> {
@@ -1454,6 +1496,111 @@ mod tests {
             .into()
     }
     const LATER: i64 = 4_000_000_000_000;
+
+    #[tokio::test]
+    async fn json_import_is_offline_deduplicated_and_only_switch_writes_live_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let credentials = fs::read(location.credentials_file()).unwrap();
+        let config = fs::read(location.account_file()).unwrap();
+        let (oauth, _) = login("bob", LATER);
+        let document = json!({"claudeAiOauth": oauth, "mcpOAuth": {"foreign": true}});
+        assert_eq!(
+            app.claude_import_json(&document.to_string()).await.unwrap(),
+            1
+        );
+        let imported = app.claude_load().unwrap();
+        let bob = imported.accounts.iter().find(|a| a.oauth == oauth).unwrap();
+        let bob_id = bob.id.clone();
+        assert!(bob.first_request_pending);
+        assert_ne!(
+            imported.current_account_id.as_deref(),
+            Some(bob_id.as_str())
+        );
+        assert!(fake.profile_proxies.lock().unwrap().is_empty());
+        assert!(fake.refreshed.lock().unwrap().is_empty());
+        // A bare token object and a BOM-prefixed export update the same entry.
+        app.claude_import_json(&oauth.to_string()).await.unwrap();
+        app.claude_import_json(&format!("\u{feff}{document}"))
+            .await
+            .unwrap();
+        let repeated = app.claude_load().unwrap();
+        assert_eq!(repeated.accounts.len(), 2);
+        assert!(repeated.accounts.iter().any(|a| a.id == bob_id));
+        assert_eq!(fs::read(location.credentials_file()).unwrap(), credentials);
+        assert_eq!(fs::read(location.account_file()).unwrap(), config);
+        app.claude_switch_account(&bob_id).await.unwrap();
+        assert_eq!(live_access(&location), "bob-access");
+        let live = read_live(&location).await.unwrap().unwrap();
+        assert_eq!(live.document["mcpOAuth"], json!({"kept": true}));
+        assert!(live.account.is_none());
+    }
+
+    #[tokio::test]
+    async fn json_import_rejects_invalid_documents_without_changing_the_pool() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let saved = fs::read(app.claude_store_path()).unwrap();
+        let live = fs::read(location.credentials_file()).unwrap();
+        for invalid in [
+            "not JSON",
+            "null",
+            "[]",
+            "{}",
+            "42",
+            r#"{"claudeAiOauth":null}"#,
+            r#"{"claudeAiOauth":{"accessToken":" "}}"#,
+            r#"{"accessToken":123}"#,
+            r#"{"accessToken":"test","refreshToken":42}"#,
+            r#"{"accessToken":"test","expiresAt":"tomorrow"}"#,
+            r#"{"accessToken":"test","scopes":[42]}"#,
+            r#"{"tokens":{"access_token":"codex-token"}}"#,
+        ] {
+            assert_eq!(
+                app.claude_import_json(invalid).await.unwrap_err(),
+                "error.claude.credentials_json_invalid"
+            );
+            assert_eq!(fs::read(app.claude_store_path()).unwrap(), saved);
+            assert_eq!(fs::read(location.credentials_file()).unwrap(), live);
+        }
+        assert!(app
+            .claude_import_json(&" ".repeat(16 * 1024 * 1024 + 1))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn json_import_keeps_supplied_identity_or_resolves_it_when_requests_are_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        let (oauth, account) = login("bob", LATER);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string(),
+        )
+        .await
+        .unwrap();
+        let store = app.claude_load().unwrap();
+        assert_eq!(store.accounts[0].account, account);
+        assert!(store.current_account_id.is_none());
+        assert!(!location.credentials_file().exists());
+        assert!(!location.account_file().exists());
+        let (other, _) = login("carol", LATER);
+        app.claude_import_json(&json!({"claudeAiOauth": other}).to_string())
+            .await
+            .unwrap();
+        let store = app.claude_load().unwrap();
+        assert_eq!(store.accounts.len(), 2);
+        assert!(store
+            .accounts
+            .iter()
+            .any(|a| a.account["emailAddress"] == "new@example.com"));
+        assert!(!fake.profile_proxies.lock().unwrap().is_empty());
+        assert!(!location.credentials_file().exists());
+    }
 
     #[tokio::test]
     async fn imports_switches_and_follows_the_claude_code_login() {

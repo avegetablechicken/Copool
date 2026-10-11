@@ -21,6 +21,7 @@ let pool = localStorage.getItem("copool.pool") === "claude" ? "claude" : "codex"
 const CLAUDE_COMMANDS = {
   accounts: "claude_accounts",
   import_current: "claude_import_current",
+  import_account_file: "claude_import_account_file",
   delete_account: "claude_delete_account",
   save_account_proxy: "claude_save_account_proxy",
   refresh_usage: "claude_refresh_usage",
@@ -869,6 +870,10 @@ $("import-open").onclick = () => {
             () => accountsController.importCurrent(),
             "accounts.notice.imported_format",
           ),
+      },
+      {
+        label: tr("accounts.action.import_auth_file"),
+        run: () => importAccountFile(),
       },
       {
         label: tr("accounts.action.import_sub2api"),

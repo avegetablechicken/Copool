@@ -489,3 +489,5 @@
 "settings.request_new_accounts.description" = "オフのとき、新しくインポートしたアカウントについては、カードまたはすべてを更新するまで上流へ何も送信しません（使用量、ワークスペース、プロフィール、プロキシ転送）。先にプロキシを設定できます。サインインとトークン交換はインポート時に行われます。";
 "accounts.card.awaiting_first_request" = "未更新";
 "accounts.card.awaiting_first_request.help" = "このアカウントではまだ上流に接続していません。必要ならプロキシを設定してから、このカードを更新してください。";
+
+"error.claude.credentials_json_invalid" = "Claude 認証情報の JSON が無効です。有効な accessToken を含む claudeAiOauth オブジェクトが必要です。";

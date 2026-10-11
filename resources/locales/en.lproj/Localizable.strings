@@ -499,3 +499,5 @@
 "settings.request_new_accounts.description" = "When off, Copool sends nothing upstream for a newly imported account (usage, workspaces, profile, proxy routing) until you refresh its card or refresh all, so that you can set its proxy first. Signing in and exchanging tokens still happen during the import.";
 "accounts.card.awaiting_first_request" = "Not yet refreshed";
 "accounts.card.awaiting_first_request.help" = "Copool has not contacted upstream for this account. Set its proxy if needed, then refresh this card.";
+
+"error.claude.credentials_json_invalid" = "Invalid Claude credentials JSON. Expected claudeAiOauth with a non-empty accessToken.";

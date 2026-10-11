@@ -499,3 +499,5 @@
 "settings.request_new_accounts.description" = "关闭时，新导入的账号在你刷新该卡片或刷新全部之前，Copool 不会为它向上游发出任何请求（额度、工作区、账号资料、代理转发），以便先为它设置代理。登录和换取令牌仍在导入时进行。";
 "accounts.card.awaiting_first_request" = "待首次刷新";
 "accounts.card.awaiting_first_request.help" = "Copool 尚未为此账号向上游发出请求。如需代理请先设置，然后刷新此卡片。";
+
+"error.claude.credentials_json_invalid" = "Claude 凭据 JSON 无效，需要包含有效 accessToken 的 claudeAiOauth 对象。";
