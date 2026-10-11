@@ -209,7 +209,8 @@ pub(crate) fn set_system_proxy(resolve: SystemProxy) {
     let _ = SYSTEM_PROXY.set(resolve);
 }
 // An explicit account proxy replaces environment selection and never fails
-// over; without one, the system proxy for each URL applies.
+// over; without one, the system proxy for each URL applies. Loopback hosts are
+// always reached directly.
 pub(crate) fn with_account_proxy(
     builder: reqwest::ClientBuilder,
     value: &str,
@@ -224,7 +225,11 @@ pub(crate) fn with_account_proxy(
         url.set_scheme("socks5h")
             .map_err(|_| "Invalid proxy scheme")?;
     }
-    let proxy = reqwest::Proxy::all(url.as_str()).map_err(|_| "Invalid account proxy URL")?;
+    // A loopback upstream, such as a local relay in chatgpt_base_url, is never
+    // reachable through the account's proxy: it is connected to directly.
+    let proxy = reqwest::Proxy::all(url.as_str())
+        .map_err(|_| "Invalid account proxy URL")?
+        .no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.0/8,::1"));
     Ok(builder.no_proxy().proxy(proxy))
 }
 
@@ -301,6 +306,33 @@ mod loopback_tests {
 #[cfg(test)]
 mod account_proxy_tests {
     use super::with_account_proxy;
+
+    #[tokio::test]
+    async fn account_proxy_does_not_carry_loopback_upstreams() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request).await;
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        // Nothing listens on port 9: a request sent through it would fail.
+        let client = with_account_proxy(reqwest::Client::builder(), "http://127.0.0.1:9")
+            .unwrap()
+            .build()
+            .unwrap();
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 204);
+    }
 
     #[test]
     fn account_store_preserves_swift_proxy_field_and_accepts_legacy_accounts() {
