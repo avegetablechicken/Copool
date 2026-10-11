@@ -105,7 +105,8 @@ type SwitchEffect = Arc<
     dyn Fn(
             Preferences,
             Option<Value>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SwitchExecution>> + Send>>
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SwitchExecution>> + Send>>
         + Send
         + Sync,
 >;
@@ -736,13 +737,14 @@ impl Application {
         let accounts = self.accounts().await?;
         // Swift's max(by:) keeps the first of equal scores, so a tie with the
         // current account (listed first) is no reason to switch.
-        let best = accounts
-            .iter()
-            .filter(|a| a.available)
-            .fold(None::<&AccountSummary>, |best, a| match best {
-                Some(b) if score(a) <= score(b) => Some(b),
-                _ => Some(a),
-            });
+        let best =
+            accounts
+                .iter()
+                .filter(|a| a.available)
+                .fold(None::<&AccountSummary>, |best, a| match best {
+                    Some(b) if score(a) <= score(b) => Some(b),
+                    _ => Some(a),
+                });
         let Some(best) = best else {
             return Ok(SmartSwitchOutcome::NoTarget);
         };
@@ -1087,13 +1089,19 @@ mod tests {
     async fn smart_switch_reports_no_target_and_keeps_an_equally_good_current_account() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
-        assert_eq!(app.smart_switch().await.unwrap(), SmartSwitchOutcome::NoTarget);
+        assert_eq!(
+            app.smart_switch().await.unwrap(),
+            SmartSwitchOutcome::NoTarget
+        );
         app.import_json(&json!([document("alice"), document("bob")]).to_string())
             .await
             .unwrap();
         let accounts = app.accounts().await.unwrap();
         app.switch_account(&accounts[1].id).await.unwrap();
-        assert_eq!(app.smart_switch().await.unwrap(), SmartSwitchOutcome::AlreadyBest);
+        assert_eq!(
+            app.smart_switch().await.unwrap(),
+            SmartSwitchOutcome::AlreadyBest
+        );
     }
     #[tokio::test]
     async fn proxy_status_counts_the_routable_candidates() {
