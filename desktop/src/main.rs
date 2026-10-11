@@ -269,6 +269,27 @@ async fn claude_save_account_proxy(
     app.claude_save_account_proxy(&id, &value).await
 }
 #[tauri::command]
+fn claude_sub2api_providers(
+    app: State<'_, App>,
+) -> Result<Vec<copool_core::claude::Sub2ApiProvider>, String> {
+    app.claude_sub2api_providers()
+}
+#[tauri::command]
+async fn claude_save_sub2api_provider(
+    app: State<'_, App>,
+    value: copool_core::claude::Sub2ApiProvider,
+) -> Result<copool_core::claude::Sub2ApiProvider, String> {
+    app.claude_save_sub2api_provider(value).await
+}
+#[tauri::command]
+async fn claude_remove_sub2api_provider(app: State<'_, App>, id: String) -> Result<(), String> {
+    app.claude_remove_sub2api_provider(&id).await
+}
+#[tauri::command]
+async fn claude_sync_sub2api(app: State<'_, App>) -> Result<usize, String> {
+    app.claude_sync_sub2api().await
+}
+#[tauri::command]
 async fn cancel_login(state: State<'_, LoginState>) -> Result<(), String> {
     if let Some(login) = state.0.lock().await.take() {
         login.cancel();
@@ -589,7 +610,11 @@ fn main() {
             claude_switch_account,
             claude_smart_switch,
             claude_refresh_usage,
-            claude_save_account_proxy
+            claude_save_account_proxy,
+            claude_sub2api_providers,
+            claude_save_sub2api_provider,
+            claude_remove_sub2api_provider,
+            claude_sync_sub2api
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build Copool");

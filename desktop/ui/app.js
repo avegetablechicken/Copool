@@ -703,6 +703,7 @@ async function savePreference(patch) {
     translate();
     renderPreferences();
     renderProviders();
+    renderClaudeProviders();
     renderRemotes();
     renderTunnelControls();
   }, () => tr(updatedKey));
@@ -855,6 +856,10 @@ $("import-open").onclick = () => {
             "accounts.notice.imported_format",
           ),
       },
+      {
+        label: tr("accounts.action.import_sub2api"),
+        run: () => syncClaudeSub2api(),
+      },
     ]);
     return;
   }
@@ -987,7 +992,12 @@ function switchNotice(execution) {
   let error = false;
   const segments = [
     execution.provider
-      ? tr("accounts.notice.provider_switched_format", execution.provider)
+      ? tr(
+          pool === "claude"
+            ? "accounts.notice.claude_provider_switched_format"
+            : "accounts.notice.provider_switched_format",
+          execution.provider,
+        )
       : tr(
           pool === "claude"
             ? "accounts.notice.claude_switch_done"

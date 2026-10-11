@@ -39,7 +39,15 @@ const proxyController = new window.CopoolControllers.Proxy(invoke, () => {
     notice(n.message || tr(n.key, ...(n.args || [])), n.style === "error");
   }
 });
-function providerField(form, provider, key, label, type = "text") {
+function providerField(
+  form,
+  provider,
+  key,
+  label,
+  type = "text",
+  saved = providerController.persisted.some((p) => p.id === provider.id),
+  keepLabel = "settings.sub2api.password_keep",
+) {
   const row = el("label", "row provider-field");
   row.append(el("span", "", tr(label)));
   const input = el("input");
@@ -49,11 +57,8 @@ function providerField(form, provider, key, label, type = "text") {
   input.setAttribute("aria-label", tr(label));
   input.oninput = () => (provider[key] = input.value);
   // Only a saved provider has a password to keep, as in the SwiftUI form.
-  const saved = providerController.persisted.some((p) => p.id === provider.id);
   input.placeholder = tr(
-    type === "password" && saved
-      ? "settings.sub2api.password_keep"
-      : `${label}_placeholder`,
+    type === "password" && saved ? keepLabel : `${label}_placeholder`,
   );
   row.append(input);
   form.append(row);
@@ -915,3 +920,133 @@ async function refreshFeatureState() {
 window.__TAURI__.event
   .listen("remote-sync-error", ({ payload }) => notice(payload, true))
   .catch((error) => notice(error, true));
+
+// Sub2api providers of the Claude pool: their Claude accounts join the pool,
+// and switching to one points Claude Code at the provider's gateway.
+const claudeProviderDrafts = new Map();
+let claudeProvidersSaved = [];
+const expandedClaudeProviders = new Set();
+async function loadClaudeProviders() {
+  claudeProvidersSaved = await invoke("claude_sub2api_providers");
+  for (const saved of claudeProvidersSaved)
+    if (!claudeProviderDrafts.has(saved.id))
+      claudeProviderDrafts.set(saved.id, { ...saved, password: "", apiKey: "" });
+  renderClaudeProviders();
+}
+function renderClaudeProviders() {
+  const root = $("claude-provider-forms");
+  root.replaceChildren();
+  $("claude-provider-count").textContent = String(claudeProviderDrafts.size);
+  for (const [id, provider] of claudeProviderDrafts) {
+    const saved = claudeProvidersSaved.find((p) => p.id === id);
+    const form = el("form", "provider-form");
+    const header = el("div", "row provider-header");
+    const toggle = button("", null, "provider-toggle", () => {
+      if (expandedClaudeProviders.has(id)) expandedClaudeProviders.delete(id);
+      else expandedClaudeProviders.add(id);
+      renderClaudeProviders();
+    });
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", String(expandedClaudeProviders.has(id)));
+    const chevron = icon("chevron-down");
+    chevron.classList.add("provider-chevron");
+    if (!expandedClaudeProviders.has(id)) chevron.classList.add("collapsed");
+    toggle.append(chevron, el("span", "", provider.name || "Sub2api"));
+    const remove = button("", "trash", "icon-btn", () =>
+      action(
+        async () => {
+          if (saved) await invoke("claude_remove_sub2api_provider", { id });
+          claudeProviderDrafts.delete(id);
+          expandedClaudeProviders.delete(id);
+          await loadClaudeProviders();
+        },
+        saved ? tr("settings.notice.sub2api_saved") : undefined,
+      ),
+    );
+    remove.type = "button";
+    remove.title = tr("settings.sub2api.remove_provider");
+    remove.setAttribute("aria-label", remove.title);
+    header.append(toggle, remove);
+    form.append(header);
+    if (expandedClaudeProviders.has(id)) {
+      const body = el("div", "provider-body");
+      for (const [key, label, type] of [
+        ["name", "claude_name"],
+        ["baseURL", "claude_base_url"],
+        ["username", "username"],
+        ["password", "password", "password"],
+        ["apiKey", "claude_api_key", "password"],
+      ])
+        providerField(
+          body,
+          provider,
+          key,
+          `settings.sub2api.${label}`,
+          type,
+          key === "apiKey" ? !!saved?.hasApiKey : !!saved,
+          key === "apiKey"
+            ? "settings.sub2api.claude_api_key_keep"
+            : "settings.sub2api.password_keep",
+        );
+      const row = el("label", "row");
+      row.append(
+        el("span", "row-label", tr("settings.sub2api.allow_insecure_tls")),
+      );
+      const check = el("input", "switch");
+      check.type = "checkbox";
+      check.checked = !!provider.allowInsecureTLS;
+      check.onchange = () => (provider.allowInsecureTLS = check.checked);
+      row.append(check);
+      body.append(row);
+      const actions = el("div", "provider-save");
+      const save = button(tr("common.save"), null, "btn primary");
+      save.type = "submit";
+      actions.append(save);
+      body.append(actions);
+      form.append(body);
+    }
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      action(async () => {
+        const value = await invoke("claude_save_sub2api_provider", {
+          value: structuredClone(provider),
+        });
+        claudeProviderDrafts.delete(id);
+        claudeProviderDrafts.set(value.id, { ...value, password: "", apiKey: "" });
+        await loadClaudeProviders();
+      }, tr("settings.notice.sub2api_saved"));
+    };
+    root.append(form);
+  }
+}
+$("claude-provider-add").onclick = () => {
+  const id = crypto.randomUUID();
+  claudeProviderDrafts.set(id, {
+    id,
+    name: "",
+    baseURL: "",
+    username: "",
+    password: "",
+    apiKey: "",
+    allowInsecureTLS: false,
+  });
+  expandedClaudeProviders.add(id);
+  renderClaudeProviders();
+};
+/// Imports the Claude accounts of every Claude Sub2api provider.
+async function syncClaudeSub2api() {
+  if (accountsController.importing) return;
+  accountsController.importing = true;
+  syncButtons();
+  await action(async () => {
+    const count = await invoke("claude_sync_sub2api");
+    notice(tr("accounts.notice.sub2api_imported_format", count));
+  });
+  accountsController.importing = false;
+  syncButtons();
+}
+const initializeClaudeFeatures = initializeFeatures;
+initializeFeatures = async () => {
+  await initializeClaudeFeatures();
+  await loadClaudeProviders();
+};

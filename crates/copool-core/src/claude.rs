@@ -15,6 +15,9 @@ use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 type Result<T> = std::result::Result<T, String>;
 
+mod sub2api;
+pub use sub2api::Provider as Sub2ApiProvider;
+
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
@@ -245,6 +248,8 @@ impl Default for State {
 struct Store {
     accounts: Vec<Stored>,
     current_account_id: Option<String>,
+    /// Sub2api providers whose Claude accounts join the pool.
+    providers: Vec<sub2api::Provider>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -397,6 +402,26 @@ fn usage_snapshot(body: &Value, plan: Option<String>, now: i64) -> Result<UsageS
         one_week: window("seven_day", 7 * 24 * 60 * 60),
         credits: None,
     })
+}
+/// Usage of a Claude account as Sub2api reports it. Sub2api reports an idle
+/// five-hour window as zero without a reset, which is no window at all.
+pub(crate) fn sub2api_usage(body: &Value, now: i64) -> Result<UsageSnapshot> {
+    let mut body = body.clone();
+    let idle = body
+        .get("five_hour")
+        .filter(|w| w.is_object())
+        .is_some_and(|w| {
+            number(&w["utilization"]).unwrap_or(0.0) <= 0.0
+                && reset_at(&w["resets_at"]).is_none()
+                && number(&w["remaining_seconds"]).unwrap_or(0.0) <= 0.0
+        });
+    if idle {
+        if let Some(object) = body.as_object_mut() {
+            object.remove("five_hour");
+        }
+    }
+    let plan = text(&body["subscription_tier"]).map(|t| t.to_lowercase());
+    usage_snapshot(&body, plan, now)
 }
 /// Applies a token response to a `claudeAiOauth` entry.
 fn apply_tokens(oauth: &mut Value, tokens: &Value, now_ms: i64) -> Result<()> {
@@ -741,20 +766,30 @@ impl Application {
     }
     /// The Claude pool, following the login Claude Code uses.
     pub async fn claude_accounts(&self) -> Result<Vec<AccountSummary>> {
-        // An empty pool never reads the Keychain.
-        if self.claude_load()?.accounts.is_empty() {
-            return Ok(vec![]);
-        }
-        let live = read_live(&self.claude_location()).await.ok().flatten();
+        let location = self.claude_location();
+        let saved = self.claude_load()?;
+        // A pool without account logins never reads the Keychain.
+        let live = if saved.accounts.is_empty() {
+            None
+        } else {
+            read_live(&location).await.ok().flatten()
+        };
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         if follow_live(&mut store, live.as_ref()) {
             self.claude_save(&store)?;
         }
+        // A Sub2api gateway in settings.json takes Claude Code off its login.
+        let gateway = sub2api::active(&store, &location);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
-            .map(|a| a.summary(store.current_account_id.as_deref() == Some(a.id.as_str())))
+            .map(|a| {
+                a.summary(
+                    gateway.is_none() && store.current_account_id.as_deref() == Some(a.id.as_str()),
+                )
+            })
+            .chain(sub2api::summaries(&store, gateway))
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
         Ok(summaries)
@@ -849,6 +884,10 @@ impl Application {
     pub async fn claude_delete_account(&self, id: &str) -> Result<()> {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
+        if sub2api::is_card(id) {
+            self.claude_remove_sub2api_card(&mut store, id)?;
+            return self.claude_save(&store);
+        }
         let before = store.accounts.len();
         store.accounts.retain(|a| a.id != id);
         if store.accounts.len() == before {
@@ -863,6 +902,10 @@ impl Application {
         crate::utils::validate_account_proxy(value)?;
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
+        if sub2api::is_card(id) {
+            self.claude_sub2api_card_proxy(&mut store, id, value)?;
+            return self.claude_save(&store);
+        }
         store
             .accounts
             .iter_mut()
@@ -875,6 +918,9 @@ impl Application {
     /// is kept in `claude-before-switch.json`; a failed step is rolled back.
     pub async fn claude_switch_account(&self, id: &str) -> Result<SwitchExecution> {
         let _op = self.claude.operations.lock().await;
+        if sub2api::is_card(id) {
+            return self.claude_switch_sub2api(id).await;
+        }
         // Keep tokens Claude Code refreshed for the account being left.
         self.claude_accounts().await?;
         let location = self.claude_location();
@@ -910,8 +956,18 @@ impl Application {
         if let Err(error) = write_account(&location, &target.account) {
             return rollback(error).await;
         }
+        let settings = match sub2api::leave(&store, &location) {
+            Ok(previous) => previous,
+            Err(error) => {
+                if let Some(previous) = &previous_account {
+                    let _ = write_account(&location, previous);
+                }
+                return rollback(error).await;
+            }
+        };
         store.current_account_id = Some(id.into());
         if let Err(error) = self.claude_save(&store) {
+            let _ = sub2api::restore_settings(&location, settings);
             if let Some(previous) = &previous_account {
                 let _ = write_account(&location, previous);
             }
@@ -949,6 +1005,9 @@ impl Application {
     /// Usage of one account, refreshing its token when it expired or was
     /// rejected. The current account's new token is handed to Claude Code.
     pub async fn claude_refresh_usage(&self, id: &str) -> Result<()> {
+        if sub2api::is_card(id) {
+            return self.claude_refresh_sub2api_card(id).await;
+        }
         let _activity = self.begin_refresh(id);
         let location = self.claude_location();
         // Tokens Claude Code rotated must be used, never its stale refresh token.
@@ -1042,16 +1101,21 @@ impl Application {
         let accounts = self.claude_accounts().await?;
         let refreshes = accounts
             .iter()
+            .filter(|a| !sub2api::is_card(&a.id))
             .filter(|a| ids.as_ref().is_none_or(|ids| ids.contains(&a.id)))
             .map(|a| async move {
                 self.claude_refresh_usage(&a.id)
                     .await
                     .map_err(|error| format!("{}: {error}", a.label))
             });
-        let errors: Vec<String> = futures_util::future::join_all(refreshes)
-            .await
+        let (accounts, providers) = tokio::join!(
+            futures_util::future::join_all(refreshes),
+            self.claude_refresh_sub2api_cards(ids.as_deref())
+        );
+        let errors: Vec<String> = accounts
             .into_iter()
             .filter_map(Result::err)
+            .chain(providers)
             .collect();
         self.claude_auto_switch_if_needed().await?;
         if errors.is_empty() {
@@ -1101,7 +1165,7 @@ mod tests {
     use std::sync::Mutex;
 
     #[derive(Default)]
-    struct Fake {
+    pub(super) struct Fake {
         usage: Mutex<Vec<(u16, Value)>>,
         refreshed: Mutex<Vec<String>>,
     }
@@ -1141,7 +1205,7 @@ mod tests {
             json!({"accountUuid": format!("acct-{user}"), "organizationUuid": format!("org-{user}"), "emailAddress": format!("{user}@example.com")}),
         )
     }
-    fn sign_in(location: &Location, user: &str, expires: i64) {
+    pub(super) fn sign_in(location: &Location, user: &str, expires: i64) {
         let (oauth, account) = login(user, expires);
         fs::create_dir_all(&location.config_dir).unwrap();
         write_json(

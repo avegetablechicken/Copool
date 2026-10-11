@@ -474,3 +474,15 @@
 "error.claude.login_not_found" = "Claude Code のログインが見つかりません。先に Claude Code でサインインしてください。";
 "accounts.notice.claude_switch_done" = "Claude アカウントを切り替えました。Claude Code を再起動すると反映されます";
 "accounts.notice.claude_settings_override_format" = "settings.json で %@ が設定されているため、Claude Code はこのアカウントではなくそちらを使い続けます";
+"settings.section.sub2api_claude" = "非公式プロバイダー · Claude";
+"settings.sub2api.claude_help" = "その Claude アカウントが Claude プールに加わります。切り替えると ~/.claude/settings.json に ANTHROPIC_BASE_URL と ANTHROPIC_AUTH_TOKEN を書き込み、Claude Code がこの Sub2api を使います。Claude アカウントに戻すと削除されます。";
+"settings.sub2api.claude_name" = "名前";
+"settings.sub2api.claude_name_placeholder" = "例：team-sub2api";
+"settings.sub2api.claude_base_url" = "Sub2api の URL";
+"settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.claude_api_key" = "Claude Code 用 API キー";
+"settings.sub2api.claude_api_key_placeholder" = "Sub2api の API キー（sk-…）";
+"settings.sub2api.claude_api_key_keep" = "空欄のままにすると保存済みのキーを保持します";
+"accounts.notice.claude_provider_switched_format" = "Claude Code は Sub2api %@ を使用します。Claude Code を再起動すると反映されます";
+"error.claude.sub2api_not_configured" = "先に設定で Claude 用の Sub2api プロバイダーを追加してください。";
+"error.claude.sub2api_api_key_missing" = "先にこの Sub2api プロバイダーに Claude Code 用 API キーを設定してください。";

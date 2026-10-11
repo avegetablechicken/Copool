@@ -456,3 +456,15 @@
 "error.claude.login_not_found" = "找不到 Claude Code 登入，請先在 Claude Code 中登入";
 "accounts.notice.claude_switch_done" = "已切換 Claude 帳號，重新啟動 Claude Code 後生效";
 "accounts.notice.claude_settings_override_format" = "settings.json 設定了 %@，Claude Code 會繼續使用它而非此帳號";
+"settings.section.sub2api_claude" = "非官方 Provider · Claude";
+"settings.sub2api.claude_help" = "其中的 Claude 帳號加入 Claude 帳號池。切換到這些帳號時，會在 ~/.claude/settings.json 寫入 ANTHROPIC_BASE_URL 與 ANTHROPIC_AUTH_TOKEN，讓 Claude Code 使用此 Sub2api；切回 Claude 帳號時移除。";
+"settings.sub2api.claude_name" = "名稱";
+"settings.sub2api.claude_name_placeholder" = "例如 team-sub2api";
+"settings.sub2api.claude_base_url" = "Sub2api 位址";
+"settings.sub2api.claude_base_url_placeholder" = "https://主機:6060";
+"settings.sub2api.claude_api_key" = "Claude Code 使用的 API Key";
+"settings.sub2api.claude_api_key_placeholder" = "Sub2api 的 API Key（sk-…）";
+"settings.sub2api.claude_api_key_keep" = "留空保留已儲存的 Key";
+"accounts.notice.claude_provider_switched_format" = "Claude Code 已改用 Sub2api %@，重新啟動 Claude Code 後生效";
+"error.claude.sub2api_not_configured" = "請先在設定中新增 Claude 的 Sub2api Provider。";
+"error.claude.sub2api_api_key_missing" = "請先在此 Sub2api Provider 中填寫 Claude Code 使用的 API Key。";

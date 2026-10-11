@@ -474,3 +474,15 @@
 "error.claude.login_not_found" = "Claude Code 로그인을 찾을 수 없습니다. 먼저 Claude Code에서 로그인하세요.";
 "accounts.notice.claude_switch_done" = "Claude 계정을 전환했습니다. Claude Code를 다시 시작하면 적용됩니다";
 "accounts.notice.claude_settings_override_format" = "settings.json에 %@이(가) 설정되어 있어 Claude Code가 이 계정 대신 계속 사용합니다";
+"settings.section.sub2api_claude" = "비공식 Provider · Claude";
+"settings.sub2api.claude_help" = "이 Provider의 Claude 계정이 Claude 풀에 추가됩니다. 전환하면 ~/.claude/settings.json에 ANTHROPIC_BASE_URL과 ANTHROPIC_AUTH_TOKEN을 기록해 Claude Code가 이 Sub2api를 사용하며, Claude 계정으로 되돌리면 제거됩니다.";
+"settings.sub2api.claude_name" = "이름";
+"settings.sub2api.claude_name_placeholder" = "예: team-sub2api";
+"settings.sub2api.claude_base_url" = "Sub2api 주소";
+"settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.claude_api_key" = "Claude Code용 API 키";
+"settings.sub2api.claude_api_key_placeholder" = "Sub2api API 키(sk-…)";
+"settings.sub2api.claude_api_key_keep" = "비워 두면 저장된 키를 유지합니다";
+"accounts.notice.claude_provider_switched_format" = "Claude Code가 이제 Sub2api %@을(를) 사용합니다. Claude Code를 다시 시작하면 적용됩니다";
+"error.claude.sub2api_not_configured" = "먼저 설정에서 Claude용 Sub2api Provider를 추가하세요.";
+"error.claude.sub2api_api_key_missing" = "먼저 이 Sub2api Provider에 Claude Code용 API 키를 입력하세요.";

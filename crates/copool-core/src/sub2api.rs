@@ -73,10 +73,39 @@ impl Account {
         }
     }
 }
+/// The upstream platform whose OAuth accounts a pool shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Platform {
+    OpenAi,
+    Anthropic,
+}
+impl Platform {
+    fn name(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+        }
+    }
+}
 pub struct Connection {
     pub configuration: Provider,
     pub definition: Definition,
     pub admin_base: String,
+}
+/// The admin API root (`…/api/v1`) of a Sub2api base or admin URL.
+pub fn admin_base(raw: &str) -> Result<String, String> {
+    let raw = raw.trim().trim_end_matches('/');
+    let base = raw
+        .strip_suffix("/api/v1")
+        .or_else(|| raw.strip_suffix("/v1"))
+        .unwrap_or(raw);
+    let url = reqwest::Url::parse(base).map_err(|_| {
+        "The Sub2api admin API URL is invalid and could not be derived from the provider base URL."
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err("Invalid Sub2api admin API URL".into());
+    }
+    Ok(format!("{base}/api/v1"))
 }
 pub fn connection(
     config_path: &Path,
@@ -105,18 +134,7 @@ pub fn connection(
     } else {
         definition.base_url.as_deref().ok_or(PROVIDER_NOT_FOUND)?
     };
-    let raw = raw.trim().trim_end_matches('/');
-    let base = raw
-        .strip_suffix("/api/v1")
-        .or_else(|| raw.strip_suffix("/v1"))
-        .unwrap_or(raw);
-    let url = reqwest::Url::parse(base).map_err(|_| {
-        "The Sub2api admin API URL is invalid and could not be derived from the provider base URL."
-    })?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err("Invalid Sub2api admin API URL".into());
-    }
-    let admin_base = format!("{base}/api/v1");
+    let admin_base = admin_base(raw)?;
     Ok(Connection {
         configuration,
         definition,
@@ -158,6 +176,16 @@ impl Connection {
         ids: Option<&[i64]>,
         now: i64,
     ) -> Result<Vec<Account>, String> {
+        self.fetch_platform_accounts(Platform::OpenAi, ids, now)
+            .await
+    }
+    /// Active OAuth accounts of a platform, with their usage.
+    pub async fn fetch_platform_accounts(
+        &self,
+        platform: Platform,
+        ids: Option<&[i64]>,
+        now: i64,
+    ) -> Result<Vec<Account>, String> {
         let list_proxy = ids
             .filter(|v| v.len() == 1)
             .map(|v| self.configuration.proxy_for(v[0]))
@@ -178,7 +206,7 @@ impl Connection {
                     .query(&[
                         ("page", page.to_string()),
                         ("page_size", "200".into()),
-                        ("platform", "openai".into()),
+                        ("platform", platform.name().into()),
                         ("type", "oauth".into()),
                         ("status", "active".into()),
                         ("lite", "1".into()),
@@ -214,7 +242,7 @@ impl Connection {
             if !item["parent_account_id"].is_null()
                 || !["platform", "type", "status"]
                     .into_iter()
-                    .zip(["openai", "oauth", "active"])
+                    .zip([platform.name(), "oauth", "active"])
                     .all(|(key, value)| {
                         item[key]
                             .as_str()
@@ -245,12 +273,13 @@ impl Connection {
                     .cloned(),
             };
             let quota_client = self.client(&self.configuration.proxy_for(id))?;
+            let quota_url = match platform {
+                Platform::OpenAi => format!("{}/admin/openai/accounts/{id}/quota", self.admin_base),
+                Platform::Anthropic => format!("{}/admin/accounts/{id}/usage", self.admin_base),
+            };
             let quota = async {
                 let response = quota_client
-                    .get(format!(
-                        "{}/admin/openai/accounts/{id}/quota",
-                        self.admin_base
-                    ))
+                    .get(quota_url)
                     .bearer_auth(token)
                     .send()
                     .await
@@ -259,6 +288,16 @@ impl Connection {
             }
             .await;
             match quota {
+                Ok(value) if platform == Platform::Anthropic => {
+                    match crate::claude::sub2api_usage(&value, now) {
+                        Ok(usage) => {
+                            account.plan_type = usage.plan_type.clone();
+                            account.usage = Some(usage);
+                            account.usage_error = None;
+                        }
+                        Err(e) => account.usage_error = Some(e),
+                    }
+                }
                 Ok(value) => {
                     account.email = value["email"].as_str().map(str::to_owned).or(account.email);
                     account.account_id = value["account_id"].as_str().map(str::to_owned);
