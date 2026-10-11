@@ -177,6 +177,8 @@ impl Application {
         paths: Paths,
         secrets: Arc<dyn crate::credentials::SecretStore>,
     ) -> Result<Self> {
+        // Upstream accounts without a proxy of their own use the system's.
+        crate::utils::set_system_proxy(crate::system_proxy::for_url);
         fs::create_dir_all(&paths.data_dir).map_err(|e| e.to_string())?;
         let file = fs::OpenOptions::new()
             .create(true)

@@ -199,13 +199,26 @@ pub(crate) fn validate_account_proxy(value: &str) -> Result<Option<reqwest::Url>
     }
     Ok(Some(url))
 }
-// An explicit account proxy replaces environment selection and never fails over.
+/// Chooses the proxy for one upstream URL from the system configuration (or
+/// `None` to connect directly). Hosts register one; without it, reqwest's own
+/// environment selection applies.
+pub(crate) type SystemProxy = fn(&reqwest::Url) -> Option<reqwest::Url>;
+static SYSTEM_PROXY: std::sync::OnceLock<SystemProxy> = std::sync::OnceLock::new();
+#[allow(dead_code)] // registered by the desktop core, not the remote daemon
+pub(crate) fn set_system_proxy(resolve: SystemProxy) {
+    let _ = SYSTEM_PROXY.set(resolve);
+}
+// An explicit account proxy replaces environment selection and never fails
+// over; without one, the system proxy for each URL applies.
 pub(crate) fn with_account_proxy(
     builder: reqwest::ClientBuilder,
     value: &str,
 ) -> Result<reqwest::ClientBuilder, String> {
     let Some(mut url) = validate_account_proxy(value)? else {
-        return Ok(builder);
+        return Ok(match SYSTEM_PROXY.get() {
+            Some(resolve) => builder.proxy(reqwest::Proxy::custom(move |url| resolve(url))),
+            None => builder,
+        });
     };
     if url.scheme() == "socks5" {
         url.set_scheme("socks5h")

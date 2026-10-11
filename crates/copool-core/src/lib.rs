@@ -23,6 +23,7 @@ pub use models::{AccountSummary, ApiProxyStatus, CreditSnapshot, UsageSnapshot, 
 #[cfg(test)]
 mod legacy_tests;
 mod ranking;
+mod system_proxy;
 
 mod refresh_policy;
 

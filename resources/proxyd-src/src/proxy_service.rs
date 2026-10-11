@@ -407,11 +407,15 @@ pub(crate) async fn start_api_proxy_with_runtime(
     let api_key = ensure_persisted_api_proxy_key(storage).await?;
     let shared_api_key = Arc::new(RwLock::new(api_key));
 
-    let client = reqwest::Client::builder()
-        .user_agent("codex-tools-proxy/0.1")
-        .timeout(std::time::Duration::from_secs(180))
-        .build()
-        .map_err(|error| format!("创建代理 HTTP 客户端失败: {error}"))?;
+    // Accounts without their own proxy share this client: the system proxy.
+    let client = crate::utils::with_account_proxy(
+        reqwest::Client::builder()
+            .user_agent("codex-tools-proxy/0.1")
+            .timeout(std::time::Duration::from_secs(180)),
+        "",
+    )?
+    .build()
+    .map_err(|error| format!("创建代理 HTTP 客户端失败: {error}"))?;
 
     let shared = Arc::new(tokio::sync::Mutex::new(ApiProxyRuntimeSnapshot::default()));
     let context = Arc::new(ProxyContext {
