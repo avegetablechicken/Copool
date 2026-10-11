@@ -160,6 +160,21 @@ fn client(proxy: &str) -> Result<reqwest::Client> {
         },
     )
 }
+// reqwest's Display omits the cause (TLS trust, proxy connection, DNS, etc.).
+// Keep the chain without Debug-formatting requests or exposing auth headers.
+fn request_error(error: reqwest::Error) -> String {
+    use std::error::Error;
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let message = cause.to_string();
+        if !parts.contains(&message) {
+            parts.push(message);
+        }
+        source = cause.source();
+    }
+    parts.join(" -> ")
+}
 impl Network for Http {
     fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
         Box::pin(async move {
@@ -170,7 +185,7 @@ impl Network for Http {
                 .header("anthropic-beta", "oauth-2025-04-20")
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(request_error)?;
             let status = response.status().as_u16();
             Ok((status, response.json().await.unwrap_or(Value::Null)))
         })
@@ -187,7 +202,7 @@ impl Network for Http {
                 }))
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(request_error)?;
             let status = response.status();
             let body: Value = response.json().await.unwrap_or(Value::Null);
             if status.is_success() {
@@ -214,7 +229,7 @@ impl Network for Http {
                 .header("anthropic-beta", "oauth-2025-04-20")
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(request_error)?;
             if response.status() == reqwest::StatusCode::UNAUTHORIZED {
                 return Err(SIGN_IN_EXPIRED.into());
             }
@@ -224,7 +239,7 @@ impl Network for Http {
                     response.status().as_u16()
                 ));
             }
-            response.json().await.map_err(|e| e.to_string())
+            response.json().await.map_err(request_error)
         })
     }
 }
@@ -274,6 +289,9 @@ struct Stored {
     usage: Option<UsageSnapshot>,
     #[serde(default)]
     usage_error: Option<String>,
+    /// A local backoff after the usage endpoint returns HTTP 429.
+    #[serde(default)]
+    usage_retry_at: Option<i64>,
     /// Newly imported; nothing goes upstream for it until a manual refresh.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     first_request_pending: bool,
@@ -896,6 +914,7 @@ impl Application {
                     updated_at: now,
                     usage: None,
                     usage_error: None,
+                    usage_retry_at: None,
                     first_request_pending: defer,
                 });
                 (id, defer)
@@ -1193,12 +1212,21 @@ impl Application {
         if account.first_request_pending {
             return Ok(());
         }
+        if account
+            .usage_retry_at
+            .is_some_and(|until| until > now_unix_seconds())
+        {
+            return Err(account.usage_error.clone().unwrap_or_else(|| {
+                "Claude usage request failed: HTTP 429; retry paused for 5 minutes".into()
+            }));
+        }
         let network = self.claude_network();
         let proxy = account.proxy_url.as_str();
         // A refresh rotates the refresh token, so its result is kept even
         // when the usage request then fails.
         let mut oauth = account.oauth.clone();
         let mut profiled = None;
+        let mut rate_limited = false;
         let result = async {
             let refresh = |oauth: &Value| {
                 let network = network.clone();
@@ -1264,6 +1292,7 @@ impl Application {
                     }
                 }
             }
+            rate_limited = status == 429;
             match status {
                 200..=299 => usage_snapshot(&body, plan(&oauth), now_unix_seconds()),
                 401 => Err(SIGN_IN_EXPIRED.to_string()),
@@ -1299,6 +1328,7 @@ impl Application {
         let mut store = self.claude_load()?;
         if let Some(target) = store.accounts.iter_mut().find(|a| a.id == id) {
             target.updated_at = now_unix_seconds();
+            target.usage_retry_at = rate_limited.then(|| now_unix_seconds() + 300);
             match &result {
                 Ok(usage) => {
                     target.usage = Some(usage.clone());
@@ -1410,6 +1440,75 @@ mod tests {
     use super::*;
     use crate::Preferences;
     use std::sync::Mutex;
+
+    #[tokio::test]
+    async fn usage_rate_limits_pause_manual_and_background_refresh_until_backoff_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_accounts().await.unwrap()[0].id.clone();
+        fake.usage
+            .lock()
+            .unwrap()
+            .push((429, json!({"error":{"message":"Rate limited"}})));
+        let error = app.claude_refresh_usage(&id).await.unwrap_err();
+        assert!(error.contains("HTTP 429"));
+        let until = app.claude_load().unwrap().accounts[0]
+            .usage_retry_at
+            .unwrap();
+        assert!(until > now_unix_seconds());
+        fake.usage
+            .lock()
+            .unwrap()
+            .push((200, json!({"five_hour":{"utilization":42}})));
+        assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), error);
+        assert!(app.claude_refresh_recurring(0).await.is_err());
+        assert_eq!(fake.usage.lock().unwrap().len(), 1);
+        let mut store = app.claude_load().unwrap();
+        store.accounts[0].usage_retry_at = Some(now_unix_seconds() - 1);
+        app.claude_save(&store).unwrap();
+        app.claude_refresh_usage(&id).await.unwrap();
+        let stored = app.claude_load().unwrap();
+        assert!(stored.accounts[0].usage_retry_at.is_none());
+        assert!(stored.accounts[0].usage_error.is_none());
+        assert!(fake.usage.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn request_errors_preserve_the_cause_without_auth_headers() {
+        // A truncated response produces a real transport error deterministically.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{")
+                .await
+                .unwrap();
+        });
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .bearer_auth("synthetic-secret")
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap_err();
+        let top_level = error.to_string();
+        let message = request_error(error);
+        assert!(message.starts_with(&top_level));
+        assert!(message.contains(" -> "), "{message}");
+        assert!(!message.contains("synthetic-secret"));
+        server.await.unwrap();
+    }
 
     #[derive(Default)]
     pub(super) struct Fake {

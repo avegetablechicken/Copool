@@ -116,3 +116,5 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 本机验证 macOS 编译、45 项核心测试及回环代理行为，并使用临时目录和合成账号检查原生窗口、展开/折叠卡片、代理页、设置页和 Retina 图标。Windows/Linux 原生构建需通过三平台 CI 或对应机器验证。未使用真实账号验证在线 OAuth、额度接口或上游付费请求，也未发布此版本。
 
 移除前（2026-10-09）原版 Swift 套件 332 项 XCTest 与 5 项 Swift Testing 全部通过；这是原版基线，不代表 Rust 已通过原版所有行为的等价测试。
+
+2026-10-12（Claude 刷新诊断与限流退避）：Claude profile、usage 与令牌刷新保留 reqwest 底层错误链，证书不受信任等错误不再仅显示 `error sending request`。usage 返回 HTTP 429 后，将该账号的重试时间持久化并冷却 5 分钟；手动与后台刷新均遵守，冷却后允许重试。这是本地固定退避策略，尚未解析服务端 Retry-After，也不保证 5 分钟后上游解除限流。本机 macOS 的 19 项 Claude 模块测试通过（模拟凭据及临时本机 HTTP 服务），覆盖冷却、到期恢复与错误链。无凭据 Rust 连通性探测中，本机 7893 到 profile/usage 均返回预期的 401；8787 均因 `UnknownIssuer` 失败。未绕过 TLS 校验，未修改系统证书信任；真实账号刷新及 Windows/Linux 尚未验证。
