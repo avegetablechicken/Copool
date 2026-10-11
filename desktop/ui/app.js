@@ -487,12 +487,8 @@ function renderAccounts(accounts) {
     card.dataset.plan = view.plan;
     const head = el("div", "block-head");
     head.append(accountTags(account, view), accountManagement(account));
+    // The CURRENT tag alone marks the active account, as in the SwiftUI card.
     const name = el("div", "account-name");
-    if (account.isCurrent) {
-      const state = el("span", "state running");
-      state.append(el("span", "dot"));
-      name.append(state);
-    }
     const title = el("span", "block-title", full);
     title.title = full;
     name.append(title);
