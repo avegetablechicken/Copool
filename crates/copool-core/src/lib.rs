@@ -70,3 +70,5 @@ mod workspace_directory;
 mod account_network;
 
 mod import_login;
+
+pub mod claude;

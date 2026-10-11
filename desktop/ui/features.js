@@ -3,17 +3,30 @@ let configurationCache = null;
 let installedEditors = [];
 const providerController = new window.CopoolControllers.Settings(invoke);
 const providerDrafts = providerController.providers;
-const accountsController = new window.CopoolControllers.Accounts(
-  invoke,
-  null,
-  () => {
-    accountsCache = accountsController.accounts;
-    renderAccounts(accountsCache);
-    renderPendingWorkspaces();
-    syncButtons();
-  },
-  () => invoke("sync_remote_accounts").catch((error) => notice(error, true)),
-);
+/// One controller per account pool; only the shown pool renders.
+function poolController(target, onMutation) {
+  const controller = new window.CopoolControllers.Accounts(
+    poolInvoke(target),
+    null,
+    () => {
+      if (controller !== accountsController) return;
+      accountsCache = accountsController.accounts;
+      renderAccounts(accountsCache);
+      renderPendingWorkspaces();
+      syncButtons();
+    },
+    onMutation,
+  );
+  return controller;
+}
+const poolControllers = {
+  codex: poolController("codex", () =>
+    invoke("sync_remote_accounts").catch((error) => notice(error, true)),
+  ),
+  // Remote servers only serve the Codex pool.
+  claude: poolController("claude", () => {}),
+};
+let accountsController = poolControllers[pool];
 let lastProxyNotice;
 const proxyController = new window.CopoolControllers.Proxy(invoke, () => {
   proxyCache = proxyController.proxyStatus;

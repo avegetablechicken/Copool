@@ -72,10 +72,13 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 - macOS 图标由本机 AppKit 按准确逻辑尺寸生成 SF Symbols 的 1×/2×/3×资源；菜单栏使用原版 figure.pool.swim 模板符号。其他平台保留矢量图标与原应用图标资源。
 - 原版 11 种语言文案由 scripts/sync_rust_locales.py 同步，不另建翻译副本。
 - 系统托盘入口、单实例、独立数据目录。
+- Claude Code 账号池（`crates/copool-core/src/claude.rs`）：账号页顶栏 Copool 旁的 Codex / Claude 有色图标切换显示两个池（⌘1 / ⌘2，选择保存在界面本地存储）。Claude 池支持导入当前 Claude Code 登录、浏览器 OAuth 添加账号（claude.ai，Claude Code 的公开客户端，回环端口随机）、`/api/oauth/usage` 的 5 小时与每周额度、令牌过期或被拒时刷新、账号代理、删除、切换、智能切换，以及沿用“自动智能切换”设置的定时自动切换。卡片沿用 Codex 卡片布局，不显示 credits/重置次数；Max 套餐显示倍数（如 MAX 20X）。
 
 ## 数据与迁移
 
 新版本默认写入系统本地数据目录的 `CopoolRust` 子目录：macOS 为 `~/Library/Application Support/CopoolRust`，Windows 为 `%LOCALAPPDATA%\CopoolRust`，Linux 为 `$XDG_DATA_HOME/CopoolRust` 或 `~/.local/share/CopoolRust`。
+
+Claude 池保存在数据目录的 `claude-accounts.json`。Claude Code 的当前登录：macOS 为钥匙串 `Claude Code-credentials`（设置 `CLAUDE_CONFIG_DIR` 时为按目录哈希的条目，经 `/usr/bin/security` 读写，写入走标准输入），其他平台为 `~/.claude/.credentials.json`（或 `$CLAUDE_CONFIG_DIR/.credentials.json`）；账号身份为 `~/.claude.json`（或 `$CLAUDE_CONFIG_DIR/.claude.json`）中的 `oauthAccount`。当前账号跟随 Claude Code 的登录，并采用它刷新后的令牌；Copool 为当前账号刷新的令牌会写回 Claude Code。切换只替换凭据中的 `claudeAiOauth`（保留 MCP 等其他条目）和 `.claude.json` 的 `oauthAccount` 成员（其余内容逐字节保留），切换前的登录保存为 `claude-before-switch.json`，失败时回滚。测试时可用 `COPOOL_CLAUDE_CONFIG_DIR` 指定独立目录（只用其中的文件，不访问钥匙串）。
 
 可使用 `COPOOL_DATA_DIR` 指定独立账号库。Codex 认证文件遵循 `CODEX_HOME/auth.json` 或 `~/.codex/auth.json`；测试时可通过 `COPOOL_CODEX_AUTH_FILE` 指定独立认证文件，不必修改开发工具自身的环境目录。
 
@@ -92,6 +95,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 - 非 macOS 托盘右键菜单（Open/Quit Copool）尚未本地化；原版 macOS 只有 MenuBarExtra 面板，没有此菜单。
 - 少量新增提示（如复制成功、Sub2api 未配置）只提供中英文，其余文案复用全部 11 种语言。
 - 不包含原版的 iOS 客户端；范围为桌面。
+- Claude 池只管理账号与 Claude Code 登录，本地 API 代理、远程服务器同步和小组件仍只服务 Codex 池；切换后正在运行的 Claude Code 会话可能需要重启才使用新账号。Claude 的 OAuth 登录、额度与令牌刷新接口来自 Claude Code / OpenQuota 的公开实现，仅用合成数据测试，未用真实账号验证。
 
 ## 验证范围
 

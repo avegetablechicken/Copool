@@ -446,3 +446,11 @@
 "settings.sub2api.admin_base_url_help" = "Optional für Sub2api-Anmeldung, Konten und Kontingente. Leer lassen, um die URL aus Codex abzuleiten. Modellanfragen verwenden weiterhin die Codex-URL. Beispiel: https://host:6060/api/v1.";
 
 "settings.sub2api.password_keep" = "Leer lassen, um das gespeicherte Passwort beizubehalten";
+
+/* Claude pool */
+"pool.codex" = "Codex";
+"pool.claude" = "Claude";
+"accounts.pool.switcher" = "Kontopool";
+"accounts.action.import_current_claude" = "Aktuelle Claude Code-Anmeldung importieren";
+"accounts.empty.message.no_claude_accounts" = "Noch keine Claude-Konten. Füge ein Konto hinzu oder importiere die Claude Code-Anmeldung.";
+"error.claude.login_not_found" = "Keine Claude Code-Anmeldung gefunden. Melde dich zuerst in Claude Code an.";

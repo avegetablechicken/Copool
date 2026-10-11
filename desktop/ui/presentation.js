@@ -56,6 +56,8 @@
         ? clean(account.usage?.planType) || clean(account.planType)
         : clean(account);
     const p = (raw || "team").toUpperCase();
+    // Claude's Max plans keep their usage multiplier ("MAX 20X").
+    if (/^MAX( \d+X)?$/.test(p)) return p;
     return ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE"].includes(p)
       ? p
       : "TEAM";

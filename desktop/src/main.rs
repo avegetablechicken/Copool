@@ -203,6 +203,9 @@ async fn finish_login(
     let result = tokio::select! {
         result=async {
             let document=login.finish().await?;
+            if login.is_claude() {
+                return app.claude_import_login(document).await.map(|_| 1);
+            }
             let consent=document.get("consentWorkspaces").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
             app.import_authorized(document,login.workspace(),&consent).await
         }=>result,
@@ -216,6 +219,54 @@ async fn finish_login(
         panel::show(&handle, None);
     }
     result
+}
+/// A Claude Code sign-in; finish_login and cancel_login complete it.
+#[tauri::command]
+async fn begin_claude_login(state: State<'_, LoginState>) -> Result<String, String> {
+    let mut current = state.0.lock().await;
+    if current.is_some() {
+        return Err("Login already in progress".into());
+    }
+    let login = copool_core::login::Login::begin_claude().await?;
+    copool_core::platform::open_url(&login.url)?;
+    let id = login.id.clone();
+    *current = Some(login);
+    Ok(id)
+}
+#[tauri::command]
+async fn claude_accounts(app: State<'_, App>) -> Result<Vec<AccountSummary>, String> {
+    app.claude_accounts().await
+}
+#[tauri::command]
+async fn claude_import_current(app: State<'_, App>) -> Result<usize, String> {
+    app.claude_import_current().await.map(|_| 1)
+}
+#[tauri::command]
+async fn claude_delete_account(app: State<'_, App>, id: String) -> Result<(), String> {
+    app.claude_delete_account(&id).await
+}
+#[tauri::command]
+async fn claude_switch_account(app: State<'_, App>, id: String) -> Result<SwitchExecution, String> {
+    app.claude_switch_account(&id).await
+}
+#[tauri::command]
+async fn claude_smart_switch(app: State<'_, App>) -> Result<SmartSwitchOutcome, String> {
+    app.claude_smart_switch().await
+}
+#[tauri::command]
+async fn claude_refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), String> {
+    match id {
+        Some(id) => app.claude_refresh_usage(&id).await,
+        None => app.claude_refresh(None).await,
+    }
+}
+#[tauri::command]
+async fn claude_save_account_proxy(
+    app: State<'_, App>,
+    id: String,
+    value: String,
+) -> Result<(), String> {
+    app.claude_save_account_proxy(&id, &value).await
 }
 #[tauri::command]
 async fn cancel_login(state: State<'_, LoginState>) -> Result<(), String> {
@@ -515,6 +566,7 @@ fn main() {
             refresh_provider,
             installed_editors,
             begin_login,
+            begin_claude_login,
             finish_login,
             cancel_login,
             import_account_file,
@@ -530,7 +582,14 @@ fn main() {
             refresh_workspace_names,
             dismiss_workspace,
             fit_panel,
-            hide_panel
+            hide_panel,
+            claude_accounts,
+            claude_import_current,
+            claude_delete_account,
+            claude_switch_account,
+            claude_smart_switch,
+            claude_refresh_usage,
+            claude_save_account_proxy
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build Copool");

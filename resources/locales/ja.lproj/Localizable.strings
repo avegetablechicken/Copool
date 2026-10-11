@@ -464,3 +464,11 @@
 "settings.sub2api.admin_base_url_help" = "任意。Sub2api のログイン、アカウント、使用量の照会に使用します。空欄の場合は Codex の URL から導出します。モデルへのリクエストは引き続き Codex の URL を使用します。例：https://host:6060/api/v1。";
 
 "settings.sub2api.password_keep" = "空欄の場合は保存済みのパスワードを使用";
+
+/* Claude pool */
+"pool.codex" = "Codex";
+"pool.claude" = "Claude";
+"accounts.pool.switcher" = "アカウントプール";
+"accounts.action.import_current_claude" = "現在の Claude Code ログインをインポート";
+"accounts.empty.message.no_claude_accounts" = "Claude アカウントはまだありません。アカウントを追加するか、Claude Code のログインをインポートしてください。";
+"error.claude.login_not_found" = "Claude Code のログインが見つかりません。先に Claude Code でサインインしてください。";

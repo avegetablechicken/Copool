@@ -24,6 +24,11 @@ legacy(
     assert.equal(P.normalizedPlan(null), "TEAM");
   },
 );
+test("Claude Max plans keep their multiplier", () => {
+  assert.equal(P.normalizedPlan("max 20x"), "MAX 20X");
+  assert.equal(P.normalizedPlan({ planType: "max" }), "MAX");
+  assert.equal(P.normalizedPlan("maximum"), "TEAM");
+});
 legacy(
   "AccountSummaryPresentationTests",
   "testWorkspaceDisplayNameNormalizationTrimsWhitespaceAndDropsEmptyValues",

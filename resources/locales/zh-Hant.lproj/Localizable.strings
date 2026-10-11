@@ -446,3 +446,11 @@
 "settings.sub2api.admin_base_url_help" = "選填，用於 Sub2api 登入、帳號和額度查詢；留空則從 Codex Provider 位址推導。模型請求仍使用 Codex 中的位址。請填寫基礎位址，例如 https://主機:6060/api/v1。";
 
 "settings.sub2api.password_keep" = "留空保留原密碼";
+
+/* Claude pool */
+"pool.codex" = "Codex";
+"pool.claude" = "Claude";
+"accounts.pool.switcher" = "帳號池";
+"accounts.action.import_current_claude" = "匯入目前的 Claude Code 登入";
+"accounts.empty.message.no_claude_accounts" = "尚無 Claude 帳號，請新增帳號或匯入 Claude Code 登入";
+"error.claude.login_not_found" = "找不到 Claude Code 登入，請先在 Claude Code 中登入";

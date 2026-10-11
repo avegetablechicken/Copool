@@ -16,6 +16,31 @@ let locale = "en";
 let noticeTimer;
 let nativeIcons = {};
 let iconFrame = 0;
+// The account pool on the accounts page: Codex or Claude Code.
+let pool = localStorage.getItem("copool.pool") === "claude" ? "claude" : "codex";
+const CLAUDE_COMMANDS = {
+  accounts: "claude_accounts",
+  import_current: "claude_import_current",
+  delete_account: "claude_delete_account",
+  save_account_proxy: "claude_save_account_proxy",
+  refresh_usage: "claude_refresh_usage",
+  switch_account: "claude_switch_account",
+  smart_switch: "claude_smart_switch",
+  begin_login: "begin_claude_login",
+};
+function poolCommand(command, target = pool) {
+  return target === "claude" ? CLAUDE_COMMANDS[command] || command : command;
+}
+/// The commands of one pool. Claude has no workspaces or remote servers.
+function poolInvoke(target) {
+  return (command, args = {}) => {
+    if (target === "claude" && command === "workspace_directory")
+      return Promise.resolve([]);
+    if (target === "claude" && command === "cancel_workspace_refresh")
+      return Promise.resolve(null);
+    return invoke(poolCommand(command, target), args);
+  };
+}
 const ICONS = {
   folder: '<path d="M2 5h7l2 3h9v12H2Z"/>',
   network:
@@ -152,6 +177,13 @@ function translate() {
   );
   $("language").value = locale;
   $("page-title").textContent = tr(`tab.${selectedPage}`);
+  document.querySelectorAll(".pool-btn").forEach((button) => {
+    button.title = withShortcut(
+      tr(`pool.${button.dataset.pool}`),
+      button.dataset.pool === "codex" ? "1" : "2",
+    );
+    button.setAttribute("aria-label", tr(`pool.${button.dataset.pool}`));
+  });
   // features.js defines the controllers after this script's first translate().
   if (typeof accountsController !== "undefined") renderToolbar();
 }
@@ -465,6 +497,7 @@ function renderAccounts(accounts) {
     switchingId,
     accountsController.adding,
     accountsController.authorizing,
+    pool,
   ];
   if (P.cardsEqual(renderState, renderedAccountsState)) return;
   renderedAccountsState = structuredClone(renderState);
@@ -477,7 +510,15 @@ function renderAccounts(accounts) {
     const empty = el("div", "empty");
     empty.append(
       el("span", "row-name", tr("accounts.empty.title")),
-      el("span", "setting-description", tr("accounts.empty.message.no_accounts")),
+      el(
+        "span",
+        "setting-description",
+        tr(
+          pool === "claude"
+            ? "accounts.empty.message.no_claude_accounts"
+            : "accounts.empty.message.no_accounts",
+        ),
+      ),
     );
     list.append(empty);
     return;
@@ -533,16 +574,19 @@ function renderAccounts(accounts) {
     const count = account.usage?.remainingResetCount;
     const resets = count != null && count >= 0 ? count : null;
     const footer = el("div", "account-footer");
+    // Claude reports neither credits nor resets.
     footer.append(
       el(
         "span",
         "account-footer-text",
-        `${tr("accounts.card.credits_format", credits)} · ${tr(
-          resets !== null
-            ? "accounts.card.remaining_resets_format"
-            : "accounts.card.resets_unavailable_format",
-          resets ?? "--",
-        )}`,
+        pool === "claude"
+          ? ""
+          : `${tr("accounts.card.credits_format", credits)} · ${tr(
+              resets !== null
+                ? "accounts.card.remaining_resets_format"
+                : "accounts.card.resets_unavailable_format",
+              resets ?? "--",
+            )}`,
       ),
       accountControls(account, full, view),
     );
@@ -720,6 +764,28 @@ document.querySelectorAll(".disclosure").forEach((button) =>
     setDisclosure(button, button.getAttribute("aria-expanded") !== "true"),
   ),
 );
+/// Shows the Codex or the Claude pool; each keeps its own controller state.
+function showPool(next) {
+  if (next !== "codex" && next !== "claude") return;
+  document
+    .querySelectorAll(".pool-btn")
+    .forEach((button) =>
+      button.setAttribute("aria-selected", String(button.dataset.pool === next)),
+    );
+  if (next === pool) return;
+  pool = next;
+  localStorage.setItem("copool.pool", pool);
+  closeMenu();
+  accountsController = poolControllers[pool];
+  accountsCache = accountsController.accounts;
+  renderAccounts(accountsCache);
+  renderPendingWorkspaces();
+  syncButtons();
+  refreshView().catch((error) => notice(error, true));
+}
+document
+  .querySelectorAll(".pool-btn")
+  .forEach((button) => (button.onclick = () => showPool(button.dataset.pool)));
 $("collapse-all").onclick = () => {
   collapsed = !collapsed;
   renderAccounts(accountsCache);
@@ -777,6 +843,19 @@ document.addEventListener("pointerdown", (event) => {
 $("import-open").onclick = () => {
   if (openMenu?.trigger === $("import-open")) {
     closeMenu(true);
+    return;
+  }
+  if (pool === "claude") {
+    showMenu($("import-open"), [
+      {
+        label: tr("accounts.action.import_current_claude"),
+        run: () =>
+          importAccounts(
+            () => accountsController.importCurrent(),
+            "accounts.notice.imported_format",
+          ),
+      },
+    ]);
     return;
   }
   showMenu($("import-open"), [
@@ -838,6 +917,10 @@ document.addEventListener("keydown", (event) => {
   } else if (mod && event.key === "q") {
     event.preventDefault();
     providerController.quit().catch((error) => notice(error, true));
+  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2"].includes(event.key)) {
+    event.preventDefault();
+    if (selectedPage !== "accounts") showPage("accounts");
+    showPool(event.key === "1" ? "codex" : "claude");
   } else if (mod && event.key === ",") {
     event.preventDefault();
     showPage("settings");
@@ -943,7 +1026,7 @@ async function switchAccount(account) {
   syncButtons();
   try {
     const result = switchNotice(
-      await invoke("switch_account", { id: account.id }),
+      await invoke(poolCommand("switch_account"), { id: account.id }),
     );
     notice(result.text, result.error);
   } catch (error) {
@@ -958,7 +1041,7 @@ $("smart-switch").onclick = async () => {
   switchingId = "";
   syncButtons();
   try {
-    const outcome = await invoke("smart_switch");
+    const outcome = await invoke(poolCommand("smart_switch"));
     if (outcome.kind === "noTarget")
       notice(tr("accounts.notice.no_switch_target"));
     else if (outcome.kind === "alreadyBest")
@@ -1040,6 +1123,7 @@ document.addEventListener(
         invoke("native_symbols"),
       ]);
       applyNativeIcons();
+      showPool(pool);
       locale = appLocale();
       translate();
       await initializeFeatures();

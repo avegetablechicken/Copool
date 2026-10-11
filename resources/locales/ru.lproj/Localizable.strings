@@ -446,3 +446,11 @@
 "settings.sub2api.admin_base_url_help" = "Необязательно: для входа в Sub2api, запросов аккаунтов и квот. Если пусто, адрес определяется из Codex. Запросы к модели по-прежнему используют URL Codex. Пример: https://host:6060/api/v1.";
 
 "settings.sub2api.password_keep" = "Оставьте пустым, чтобы сохранить текущий пароль";
+
+/* Claude pool */
+"pool.codex" = "Codex";
+"pool.claude" = "Claude";
+"accounts.pool.switcher" = "Пул аккаунтов";
+"accounts.action.import_current_claude" = "Импортировать текущий вход Claude Code";
+"accounts.empty.message.no_claude_accounts" = "Аккаунтов Claude пока нет. Добавьте аккаунт или импортируйте вход Claude Code.";
+"error.claude.login_not_found" = "Вход Claude Code не найден. Сначала войдите в Claude Code.";

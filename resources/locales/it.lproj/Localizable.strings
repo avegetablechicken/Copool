@@ -446,3 +446,11 @@
 "settings.sub2api.admin_base_url_help" = "Facoltativo per accesso Sub2api, account e quote. Se vuoto, viene ricavato da Codex. Le richieste al modello usano ancora l’URL Codex. Esempio: https://host:6060/api/v1.";
 
 "settings.sub2api.password_keep" = "Lascia vuoto per mantenere la password salvata";
+
+/* Claude pool */
+"pool.codex" = "Codex";
+"pool.claude" = "Claude";
+"accounts.pool.switcher" = "Pool di account";
+"accounts.action.import_current_claude" = "Importa l’accesso attuale di Claude Code";
+"accounts.empty.message.no_claude_accounts" = "Nessun account Claude. Aggiungi un account o importa l’accesso di Claude Code.";
+"error.claude.login_not_found" = "Accesso di Claude Code non trovato. Accedi prima a Claude Code.";

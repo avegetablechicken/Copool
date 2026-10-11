@@ -150,6 +150,7 @@ pub struct Application {
     switch_effects: Arc<std::sync::RwLock<Option<SwitchEffect>>>,
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
     pub(crate) changes: Arc<std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    pub(crate) claude: crate::claude::State,
 }
 pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
@@ -205,6 +206,7 @@ impl Application {
             switch_effects: Arc::new(std::sync::RwLock::new(None)),
             refreshing: Default::default(),
             changes: Arc::new(std::sync::RwLock::new(None)),
+            claude: Default::default(),
         };
         app.migrate_provider_credentials()?;
         app.preferences()?;
@@ -1013,12 +1015,18 @@ impl Application {
         // Refresh the whole pool at launch; the UI shows the stored values
         // meanwhile and updates each card as its refresh lands.
         let mut tick = 0u64;
-        let _ = self.refresh_recurring(tick).await;
+        let _ = tokio::join!(
+            self.refresh_recurring(tick),
+            self.claude_refresh_recurring(tick)
+        );
         loop {
             let seconds = self.preferences().map(|p| p.refresh_seconds).unwrap_or(10);
             tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
             tick = tick.wrapping_add(1);
-            let _ = self.refresh_recurring(tick).await;
+            let _ = tokio::join!(
+                self.refresh_recurring(tick),
+                self.claude_refresh_recurring(tick)
+            );
         }
     }
 }
@@ -1055,7 +1063,7 @@ fn score(a: &AccountSummary) -> f64 {
 fn exhausted(a: &AccountSummary) -> bool {
     crate::ranking::exhausted(a)
 }
-fn eligible(a: &AccountSummary) -> bool {
+pub(crate) fn eligible(a: &AccountSummary) -> bool {
     a.available
         && a.usage_error.is_none()
         && !exhausted(a)
