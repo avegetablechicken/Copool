@@ -537,7 +537,7 @@ function renderAccounts(accounts) {
     return;
   }
   for (const account of accounts) {
-    const full = account.email || account.accountId;
+    const full = account.email || account.accountId || account.label;
     const view = P.card(account, collapsed, usageMode(), (epoch) =>
       P.formatReset(epoch, locale),
     );

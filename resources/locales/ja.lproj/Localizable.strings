@@ -490,4 +490,3 @@
 "settings.request_new_accounts.description" = "オフのとき、新しくインポートしたアカウントについては、カードまたはすべてを更新するまで上流へ何も送信しません（使用量、ワークスペース、プロフィール、プロキシ転送）。先にプロキシを設定できます。サインインとトークン交換はインポート時に行われます。";
 "accounts.card.awaiting_first_request" = "未更新";
 "accounts.card.awaiting_first_request.help" = "このアカウントではまだ上流に接続していません。必要ならプロキシを設定してから、このカードを更新してください。";
-"error.claude.account_unnamed" = "この Claude Code のログインにはアカウント情報がありません。ブラウザでサインインして追加するか、「新しいアカウントのインポート直後に上流へリクエストする」をオンにして照会してください。";

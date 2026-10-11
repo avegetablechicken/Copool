@@ -72,7 +72,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 - macOS 图标由本机 AppKit 按准确逻辑尺寸生成 SF Symbols 的 1×/2×/3×资源；菜单栏使用原版 figure.pool.swim 模板符号。其他平台保留矢量图标与原应用图标资源。
 - 原版 11 种语言文案由 scripts/sync_rust_locales.py 同步，不另建翻译副本。
 - 系统托盘入口、单实例、独立数据目录。
-- 设置“导入新账号后立即请求上游”（默认关闭）：关闭时，池中原本没有的新账号（Codex 与 Claude 的导入当前登录、浏览器登录、文件或 Refresh Token 导入）标记为“待首次刷新”（Codex 存于账号的 `firstRequestPending`，Claude 为 `firstRequestPending` 字段）。在手动刷新该卡片或“刷新全部”之前，导入时的额度、工作区名称、Claude 账号资料查询，后台定时刷新，待授权工作区目录刷新，以及本地 API 代理的路由与候选额度刷新都跳过它，以便先设置账号代理；后台刷新不会放行。重新导入或重新登录仍在等待的账号同样不联网；已放行的账号沿用其代理。登录换令牌与 Refresh Token 兑换属于导入本身，改为经系统代理。Claude 浏览器添加时如未查询资料，首次刷新时经账号代理补查套餐；套餐未知的 Claude 卡片不显示套餐标签。只有资料能标明账号、且 Claude Code 登录缺少 `oauthAccount` 的罕见情况，在关闭时提示改用浏览器添加。
+- 设置“导入新账号后立即请求上游”（默认关闭）：关闭时，池中原本没有的新账号（Codex 与 Claude 的导入当前登录、浏览器登录、文件或 Refresh Token 导入）标记为“待首次刷新”（Codex 存于账号的 `firstRequestPending`，Claude 为 `firstRequestPending` 字段）。在手动刷新该卡片或“刷新全部”之前，导入时的额度、工作区名称、Claude 账号资料查询，后台定时刷新，待授权工作区目录刷新，以及本地 API 代理的路由与候选额度刷新都跳过它，以便先设置账号代理；后台刷新不会放行。重新导入或重新登录仍在等待的账号同样不联网；已放行的账号沿用其代理。登录换令牌与 Refresh Token 兑换属于导入本身，改为经系统代理。Claude 浏览器添加时如未查询资料，首次刷新时经账号代理补查套餐；套餐未知的 Claude 卡片不显示套餐标签。Claude Code 登录缺少 `oauthAccount` 时，先按令牌匹配池中账号；匹配不到则（选项关闭时，或打开但查询失败时）以“Claude Code”为名加入池中，首次手动刷新时先经账号代理查询 profile 识别账号（令牌过期则先刷新），识别为池中已有账号时合并为一张卡片并转移当前选择；切换到尚未识别的账号时 `.claude.json` 的 `oauthAccount` 写为 null，由 Claude Code 自行补全。刷新后写回 Claude Code 的令牌只在身份确实相同或 refresh token 相同时写入。
 - Claude Code 账号池（`crates/copool-core/src/claude.rs`）：账号页顶栏 Copool 旁的 Codex / Claude 有色图标切换显示两个池（⌘1 / ⌘2，选择保存在界面本地存储）。Claude 池支持导入当前 Claude Code 登录、浏览器 OAuth 添加账号（claude.ai，Claude Code 的公开客户端，回环端口随机）、`/api/oauth/usage` 的 5 小时与每周额度、令牌过期或被拒时刷新、账号代理、删除、切换、智能切换，以及沿用“自动智能切换”设置的定时自动切换。卡片沿用 Codex 卡片布局，不显示 credits/重置次数；Max 套餐显示倍数（如 MAX 20X）。
 
 ## 数据与迁移
