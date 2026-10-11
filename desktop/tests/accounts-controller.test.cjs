@@ -710,3 +710,36 @@ legacy(
     assert.equal(model.accounts.length, 2);
   },
 );
+test("Imports report the imported labels and a cancelled picker reports nothing", async () => {
+  const { model, db } = fixture([account("a")], [], {
+    import_account_file: (_, db) => {
+      db.accounts.push(account("b"));
+      return 1;
+    },
+  });
+  const states = [];
+  model.onUpdate = () => states.push(model.importing);
+  assert.deepEqual(await model.importFile(), ["b"]);
+  assert.equal(states.includes(true), true);
+  assert.equal(model.importing, false);
+  db.mutations = 0;
+  const cancelled = fixture([account("a")], [], {
+    import_account_file: () => null,
+  });
+  assert.equal(await cancelled.model.importFile(), null);
+  assert.equal(cancelled.db.mutations, 0);
+});
+test("Authorizing a pending workspace does not turn Add into Cancel", async () => {
+  let release;
+  const { model } = fixture([account("a")], [], {
+    finish_login: () => new Promise((resolve) => (release = resolve)),
+  });
+  const task = model.login("account-b", () => {}, "pending-b");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(model.adding, false);
+  assert.equal(model.authorizing, "pending-b");
+  assert.equal(await model.login(), false);
+  release(1);
+  await task;
+  assert.equal(model.authorizing, null);
+});

@@ -5,7 +5,6 @@ const $ = (id) => document.getElementById(id);
 const invoke = (command, args = {}) =>
   window.__TAURI__.core.invoke(command, args);
 const P = window.CopoolPresentation;
-let busy = false;
 let collapsed = false;
 let selectedPage = "accounts";
 let editingAccount = null;
@@ -33,6 +32,8 @@ const ICONS = {
   close: '<path d="m5 5 12 12M5 17 17 5"/>',
   "chevron-left": '<path d="m14 5-6 6 6 6"/>',
   import: '<path d="M7 8H4v12h14V8h-3M11 2v11M7.5 9.5 11 13l3.5-3.5"/>',
+  reauthenticate:
+    '<circle cx="10" cy="11" r="8"/><circle cx="10" cy="9" r="2.6"/><path d="M5 16.5c1.4-2 3-2.8 5-2.8s3.6.8 5 2.8M18 2v4M18 8.5v.5"/>',
   server:
     '<rect x="2" y="3" width="18" height="6" rx="2"/><rect x="2" y="13" width="18" height="6" rx="2"/><path d="M5 6h1M5 16h1M10 6h7M10 16h7"/>',
   warning: '<path d="m11 2 10 18H1Z"/><path d="M11 8v5M11 16v1"/>',
@@ -162,10 +163,12 @@ function withShortcut(text, key) {
 }
 /// The account toolbar, as the SwiftUI leading and trailing action groups.
 function renderToolbar() {
+  // As Swift's AccountsActionPresentation: each action waits only for its own.
   const options = {
-    importing: busy,
-    switching: busy,
-    canRefresh: !busy && accountsCache.length > 0,
+    importing: accountsController.importing,
+    adding: accountsController.adding,
+    switching: switchingId !== null,
+    canRefresh: !accountsController.adding,
     spinning: accountsController.spinner,
     collapsed,
   };
@@ -217,21 +220,20 @@ function notice(message, error = false) {
   );
 }
 function syncButtons() {
-  document.querySelectorAll("button").forEach((button) => {
-    button.disabled =
-      busy && !["login-cancel", "notice-close"].includes(button.id);
-  });
   renderToolbar();
-  $("proxy-start").disabled = busy || Boolean(proxyCache?.running);
-  $("proxy-stop").disabled = busy || !proxyCache?.running;
+  const proxyLoading = proxyController.loading;
+  $("proxy-start").disabled = proxyLoading || Boolean(proxyCache?.running);
+  $("proxy-stop").disabled = proxyLoading || !proxyCache?.running;
   $("proxy-start").hidden = !!proxyCache?.running;
   $("proxy-stop").hidden = !proxyCache?.running;
   // A card refreshing its usage only locks its own refresh button.
   document
     .querySelectorAll(".card-refresh.spinning")
     .forEach((button) => (button.disabled = true));
+  // A switch locks only its own card's switch button.
   document.querySelectorAll(".card-switch").forEach((button) => {
-    button.disabled = busy || button.dataset.available === "false";
+    button.disabled =
+      button.dataset.available === "false" || button.dataset.id === switchingId;
   });
   document
     .querySelectorAll(".remote-actions button")
@@ -240,10 +242,9 @@ function syncButtons() {
     );
   renderTunnelState();
 }
+/// Runs a task and reports it. No panel-wide lock, as in the Swift app:
+/// each operation disables only its own controls through its own state.
 async function action(task, message, reload = true) {
-  if (busy) return false;
-  busy = true;
-  syncButtons();
   try {
     const result = await task();
     if (message)
@@ -253,7 +254,6 @@ async function action(task, message, reload = true) {
     notice(error, true);
     return false;
   } finally {
-    busy = false;
     if (reload) await refreshView().catch((error) => notice(error, true));
     syncButtons();
   }
@@ -373,7 +373,14 @@ function accountManagement(account) {
         true,
       )
     )
-      await action(() => accountsController.removeAccount(account.id));
+      await action(
+        () => accountsController.removeAccount(account.id),
+        tr(
+          account.sourceTag === "SUB2API"
+            ? "accounts.notice.sub2api_removed"
+            : "accounts.notice.account_deleted",
+        ),
+      );
   });
   remove.title = tr("common.remove");
   remove.setAttribute("aria-label", `${tr("common.remove")} ${account.label}`);
@@ -382,13 +389,17 @@ function accountManagement(account) {
 }
 /// Usage warning, refresh and switch, at the card's bottom right as in the
 /// SwiftUI card, clear of long account names.
-function accountControls(account, full) {
+function accountControls(account, full, view) {
   const actions = el("span", "block-aside");
   const reauthenticate = P.needsReauthentication(
     account,
     tr("error.accounts.sign_in_expired"),
   );
-  if (!collapsed && account.usageError) {
+  const refreshing =
+    accountsController.refreshingIds.has(account.id) ||
+    accountsController.remoteRefreshingIds.has(account.id);
+  // The usage error is hidden while the card refreshes, as in AccountCardView.
+  if (!collapsed && account.usageError && !refreshing) {
     const warning = button("", "warning", "icon-btn error-indicator", () =>
       notice(account.usageError, true),
     );
@@ -396,36 +407,33 @@ function accountControls(account, full) {
     warning.setAttribute("aria-label", account.usageError);
     actions.append(warning);
   }
-  // Every account refreshes on its own; an expired sign-in offers sign-in.
-  const refresh = button(
-    "",
-    reauthenticate ? "plus" : "refresh",
-    "icon-btn card-refresh",
-    reauthenticate
-      ? () => signIn(account.accountId)
-      : () => refreshUsage(account.id),
+  // An expired sign-in replaces refresh and switch with "Sign in again",
+  // which pins the workspace only for a named team, as in the SwiftUI card.
+  if (reauthenticate) {
+    const signInAgain = button(
+      collapsed ? "" : tr("accounts.card.sign_in_again"),
+      "reauthenticate",
+      collapsed ? "icon-btn card-reauth" : "btn quiet card-reauth",
+      () => signIn(view.workspaceTag ? account.accountId : null, "reauthenticate"),
+    );
+    signInAgain.title = tr("accounts.card.sign_in_again");
+    signInAgain.setAttribute("aria-label", `${signInAgain.title} ${full}`);
+    signInAgain.disabled = accountsController.adding || !!accountsController.authorizing;
+    actions.append(signInAgain);
+    return actions;
+  }
+  const refresh = button("", "refresh", "icon-btn card-refresh", () =>
+    refreshUsage(account.id),
   );
-  refresh.title = tr(
-    reauthenticate ? "accounts.card.sign_in_again" : "common.refresh_usage",
-  );
+  refresh.title = tr("common.refresh_usage");
   refresh.setAttribute("aria-label", `${refresh.title} ${full}`);
-  refresh.classList.toggle(
-    "spinning",
-    accountsController.refreshingIds.has(account.id) ||
-      accountsController.remoteRefreshingIds.has(account.id),
-  );
+  refresh.classList.toggle("spinning", refreshing);
   actions.append(refresh);
   if (!account.isCurrent) {
-    const control = button("", "switch", "icon-btn card-switch", async () => {
-      switchingId = account.id;
-      renderAccounts(accountsCache);
-      await action(
-        () => invoke("switch_account", { id: account.id }),
-        extra(`Switched to ${full}`, `已切换到 ${full}`),
-      );
-      switchingId = null;
-      renderAccounts(accountsCache);
-    });
+    const control = button("", "switch", "icon-btn card-switch", () =>
+      switchAccount(account),
+    );
+    control.dataset.id = account.id;
     control.dataset.available = String(account.available);
     control.title = tr("accounts.card.switch_to_this");
     control.setAttribute("aria-label", `${control.title} ${full}`);
@@ -453,6 +461,8 @@ function renderAccounts(accounts) {
     [...accountsController.refreshingIds],
     [...accountsController.remoteRefreshingIds],
     switchingId,
+    accountsController.adding,
+    accountsController.authorizing,
   ];
   if (P.cardsEqual(renderState, renderedAccountsState)) return;
   renderedAccountsState = structuredClone(renderState);
@@ -497,7 +507,7 @@ function renderAccounts(accounts) {
         el("span", "tag plan", view.plan),
         compactUsage(view.compact[0], "5h"),
         compactUsage(view.compact[1], "1w"),
-        accountControls(account, full),
+        accountControls(account, full, view),
       );
       list.append(row);
       continue;
@@ -514,17 +524,25 @@ function renderAccounts(accounts) {
     const title = el("span", "block-title", full);
     title.title = full;
     name.append(title);
+    // A negative reset count is unavailable, as in AccountCardPresentation.
+    // Sub2api cards keep their credits, which their usage reports.
     const credits =
       view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
-    const resets = account.usage?.remainingResetCount;
+    const count = account.usage?.remainingResetCount;
+    const resets = count != null && count >= 0 ? count : null;
     const footer = el("div", "account-footer");
     footer.append(
       el(
         "span",
         "account-footer-text",
-        `${tr("accounts.card.credits_format", credits)} · ${tr(resets != null ? "accounts.card.remaining_resets_format" : "accounts.card.resets_unavailable_format", resets ?? "--")}`,
+        `${tr("accounts.card.credits_format", credits)} · ${tr(
+          resets !== null
+            ? "accounts.card.remaining_resets_format"
+            : "accounts.card.resets_unavailable_format",
+          resets ?? "--",
+        )}`,
       ),
-      accountControls(account, full),
+      accountControls(account, full, view),
     );
     card.append(
       head,
@@ -745,7 +763,11 @@ $("import-open").onclick = () => {
   showMenu($("import-open"), [
     {
       label: tr("accounts.action.import_current_auth"),
-      run: () => action(() => accountsController.importCurrent()),
+      run: () =>
+        importAccounts(
+          () => accountsController.importCurrent(),
+          "accounts.notice.imported_format",
+        ),
     },
     {
       label: tr("accounts.action.import_auth_file"),
@@ -824,6 +846,10 @@ function openAccountProxy(account) {
 $("edit-cancel").onclick = () => $("edit-dialog").close();
 $("edit-form").onsubmit = (event) => {
   event.preventDefault();
+  // Only this dialog waits for its save.
+  const save = event.submitter || $("edit-form").querySelector("[type=submit]");
+  if (save?.disabled) return;
+  if (save) save.disabled = true;
   action(async () => {
     try {
       await accountsController.saveProxy(
@@ -835,6 +861,8 @@ $("edit-form").onsubmit = (event) => {
       $("edit-error").textContent = String(error);
       $("edit-error").hidden = false;
       throw error;
+    } finally {
+      if (save) save.disabled = false;
     }
   });
 };
@@ -844,17 +872,99 @@ $("edit-form").onsubmit = (event) => {
 function refreshUsage(id = null) {
   accountsController
     .refresh(id)
+    .then((done) => {
+      // As Swift: only a manual refresh of every account reports success.
+      if (done && id === null) notice(tr("accounts.notice.usage_refreshed"));
+    })
     .catch((error) => notice(error, true))
     .finally(() => refreshView().catch((error) => notice(error, true)));
 }
-$("refresh-all").onclick = () => {
-  if (!busy) refreshUsage();
+$("refresh-all").onclick = () => refreshUsage();
+/// Swift's buildSwitchNotice: the switch, then what followed it.
+function switchNotice(execution) {
+  let error = false;
+  const segments = [
+    execution.provider
+      ? tr("accounts.notice.provider_switched_format", execution.provider)
+      : tr("accounts.notice.switch_done"),
+  ];
+  if (execution.opencodeSyncError) {
+    error = true;
+    segments.push(
+      tr("accounts.notice.sync_failed_format", execution.opencodeSyncError),
+    );
+  } else if (execution.opencodeSynced)
+    segments.push(tr("accounts.notice.sync_done"));
+  if (execution.editorRestartError) {
+    error = true;
+    segments.push(
+      tr(
+        "accounts.notice.editor_restart_failed_format",
+        execution.editorRestartError,
+      ),
+    );
+  } else if (execution.restartedEditors.length)
+    segments.push(
+      tr(
+        "accounts.notice.editor_restarted_format",
+        execution.restartedEditors.join(" / "),
+      ),
+    );
+  if (execution.launchError) {
+    error = true;
+    segments.push(execution.launchError);
+  }
+  return { text: segments.join(" · "), error };
+}
+/// A switch locks only its own card's switch button and Smart Switch.
+async function switchAccount(account) {
+  if (switchingId !== null) return;
+  switchingId = account.id;
+  renderAccounts(accountsCache);
+  syncButtons();
+  try {
+    const result = switchNotice(
+      await invoke("switch_account", { id: account.id }),
+    );
+    notice(result.text, result.error);
+  } catch (error) {
+    notice(error, true);
+  } finally {
+    switchingId = null;
+    await refreshView().catch((error) => notice(error, true));
+  }
+}
+$("smart-switch").onclick = async () => {
+  if (switchingId !== null) return;
+  switchingId = "";
+  syncButtons();
+  try {
+    const outcome = await invoke("smart_switch");
+    if (outcome.kind === "noTarget")
+      notice(tr("accounts.notice.no_switch_target"));
+    else if (outcome.kind === "alreadyBest")
+      notice(tr("accounts.notice.already_best"));
+    else {
+      const result = switchNotice(outcome.execution);
+      notice(
+        result.error
+          ? result.text
+          : tr(
+              "accounts.notice.smart_switched_prefix_format",
+              outcome.label,
+              result.text,
+            ),
+        result.error,
+      );
+    }
+  } catch (error) {
+    notice(error, true);
+  } finally {
+    switchingId = null;
+    await refreshView().catch((error) => notice(error, true));
+  }
 };
-$("smart-switch").onclick = () =>
-  action(
-    () => invoke("smart_switch"),
-    (label) => extra(`Switched to ${label}`, `已切换到 ${label}`),
-  );
+// The API proxy's controls wait on its loading state only, as in Swift.
 $("proxy-start").onclick = () =>
   action(() => proxyController.startProxy(Number($("proxy-port").value)));
 $("proxy-stop").onclick = () => action(() => proxyController.stopProxy());
@@ -907,7 +1017,7 @@ document.addEventListener(
   { once: true },
 );
 setInterval(() => {
-  if (!busy && !document.hidden && !document.querySelector("dialog[open]"))
+  if (!document.hidden && !document.querySelector("dialog[open]"))
     refreshView().catch((error) => notice(error, true));
 }, 15000);
 
@@ -957,7 +1067,7 @@ window.__TAURI__.event
       showPage("accounts");
     panelHiddenAt = null;
     queueFit();
-    if (!busy && !document.querySelector("dialog[open]"))
+    if (!document.querySelector("dialog[open]"))
       refreshView().catch((error) => notice(error, true));
   })
   .catch((error) => notice(error, true));
@@ -967,7 +1077,7 @@ window.__TAURI__.event
   .listen("copool-changed", () => {
     clearTimeout(changeRefreshTimer);
     changeRefreshTimer = setTimeout(() => {
-      if (!busy) refreshView().catch((error) => notice(error, true));
+      refreshView().catch((error) => notice(error, true));
     }, 50);
   })
   .catch((error) => notice(error, true));

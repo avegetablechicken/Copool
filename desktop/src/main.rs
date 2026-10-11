@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-use copool_core::{AccountSummary, ApiProxyStatus, Application, Paths, Preferences};
+use copool_core::{
+    AccountSummary, ApiProxyStatus, Application, Paths, Preferences, SmartSwitchOutcome,
+    SwitchExecution,
+};
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -63,7 +66,7 @@ async fn delete_account(app: State<'_, App>, id: String) -> Result<(), String> {
     app.delete_account(&id).await
 }
 #[tauri::command]
-async fn switch_account(app: State<'_, App>, id: String) -> Result<(), String> {
+async fn switch_account(app: State<'_, App>, id: String) -> Result<SwitchExecution, String> {
     app.switch_account(&id).await
 }
 #[tauri::command]
@@ -83,7 +86,7 @@ async fn refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), St
     }
 }
 #[tauri::command]
-async fn smart_switch(app: State<'_, App>) -> Result<String, String> {
+async fn smart_switch(app: State<'_, App>) -> Result<SmartSwitchOutcome, String> {
     app.smart_switch().await
 }
 #[tauri::command]
@@ -244,7 +247,7 @@ async fn pick_identity_file(handle: tauri::AppHandle) -> Result<Option<String>, 
 async fn import_account_file(
     handle: tauri::AppHandle,
     app: State<'_, App>,
-) -> Result<usize, String> {
+) -> Result<Option<usize>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     panel::set_modal(&handle, true);
@@ -257,8 +260,9 @@ async fn import_account_file(
         });
     let picked = receiver.await;
     panel::set_modal(&handle, false);
+    // A cancelled picker imports nothing and reports nothing, as in Swift.
     let Some(file) = picked.map_err(|e| e.to_string())? else {
-        return Ok(0);
+        return Ok(None);
     };
     let path = file.into_path().map_err(|e| e.to_string())?;
     if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
@@ -267,7 +271,7 @@ async fn import_account_file(
     let count = app
         .import_json(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)
         .await?;
-    Ok(count)
+    Ok(Some(count))
 }
 #[tauri::command]
 async fn save_remote(

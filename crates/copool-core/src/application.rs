@@ -78,11 +78,34 @@ impl Default for Preferences {
     }
 }
 
+/// What followed a switch, as Swift's SwitchAccountExecutionResult.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchExecution {
+    /// The Codex provider switched to, for an unofficial provider's card.
+    pub provider: Option<String>,
+    pub opencode_synced: bool,
+    pub opencode_sync_error: Option<String>,
+    pub restarted_editors: Vec<String>,
+    pub editor_restart_error: Option<String>,
+    pub launch_error: Option<String>,
+}
+/// Smart Switch: no target, already on the best account, or switched.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SmartSwitchOutcome {
+    NoTarget,
+    AlreadyBest,
+    Switched {
+        label: String,
+        execution: SwitchExecution,
+    },
+}
 type SwitchEffect = Arc<
     dyn Fn(
             Preferences,
             Option<Value>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SwitchExecution>> + Send>>
         + Send
         + Sync,
 >;
@@ -220,12 +243,12 @@ impl Application {
             )
         }));
     }
-    async fn after_switch(&self, auth: Option<&Value>) -> Result<()> {
+    async fn after_switch(&self, auth: Option<&Value>) -> Result<SwitchExecution> {
         let effect = self.switch_effects.read().unwrap().clone();
         if let Some(effect) = effect {
             effect(self.preferences()?, auth.cloned()).await
         } else {
-            Ok(())
+            Ok(SwitchExecution::default())
         }
     }
     pub(crate) fn storage(&self) -> proxy_service::ProxyStorageContext {
@@ -649,7 +672,7 @@ impl Application {
         saved.accounts.retain(|a| a.id != id);
         self.persist_accounts(&saved)
     }
-    pub async fn switch_account(&self, id: &str) -> Result<()> {
+    pub async fn switch_account(&self, id: &str) -> Result<SwitchExecution> {
         if let Some((provider, account)) = self.cached_provider_account(id)? {
             if !account.status.eq_ignore_ascii_case("active") {
                 return Err("Account is deactivated".into());
@@ -658,7 +681,9 @@ impl Application {
             crate::codex_config::switch(&self.codex_config_path(), &provider.provider_id)?;
             self.publish();
             drop(_op);
-            return self.after_switch(None).await;
+            let mut execution = self.after_switch(None).await?;
+            execution.provider = Some(provider.provider_id);
+            return Ok(execution);
         }
         let _op = self.operations.lock().await;
         let _lock = self.state.store_lock.lock().await;
@@ -705,15 +730,30 @@ impl Application {
         drop(_op);
         self.after_switch(Some(&normalized)).await
     }
-    pub async fn smart_switch(&self) -> Result<String> {
+    /// As Swift's AccountsPageModel.smartSwitch: the account with the most
+    /// remaining quota, and no switch when that is already the current one.
+    pub async fn smart_switch(&self) -> Result<SmartSwitchOutcome> {
         let accounts = self.accounts().await?;
+        // Swift's max(by:) keeps the first of equal scores, so a tie with the
+        // current account (listed first) is no reason to switch.
         let best = accounts
             .iter()
-            .filter(|a| eligible(a))
-            .max_by(|a, b| score(a).total_cmp(&score(b)))
-            .ok_or("No account with fresh, available quota; refresh usage first")?;
-        self.switch_account(&best.id).await?;
-        Ok(best.label.clone())
+            .filter(|a| a.available)
+            .fold(None::<&AccountSummary>, |best, a| match best {
+                Some(b) if score(a) <= score(b) => Some(b),
+                _ => Some(a),
+            });
+        let Some(best) = best else {
+            return Ok(SmartSwitchOutcome::NoTarget);
+        };
+        if best.is_current {
+            return Ok(SmartSwitchOutcome::AlreadyBest);
+        }
+        let execution = self.switch_account(&best.id).await?;
+        Ok(SmartSwitchOutcome::Switched {
+            label: best.label.clone(),
+            execution,
+        })
     }
     pub async fn refresh_usage(&self, id: &str) -> Result<()> {
         self.refresh_usage_if_needed(id, true).await
@@ -1042,6 +1082,18 @@ mod tests {
         assert!(!serialized.contains("id_token"));
         app.switch_account(&accounts[1].id).await.unwrap();
         assert!(app.paths.data_dir.join("auth-before-switch.json").exists());
+    }
+    #[tokio::test]
+    async fn smart_switch_reports_no_target_and_keeps_an_equally_good_current_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(&dir);
+        assert_eq!(app.smart_switch().await.unwrap(), SmartSwitchOutcome::NoTarget);
+        app.import_json(&json!([document("alice"), document("bob")]).to_string())
+            .await
+            .unwrap();
+        let accounts = app.accounts().await.unwrap();
+        app.switch_account(&accounts[1].id).await.unwrap();
+        assert_eq!(app.smart_switch().await.unwrap(), SmartSwitchOutcome::AlreadyBest);
     }
     #[tokio::test]
     async fn proxy_status_counts_the_routable_candidates() {

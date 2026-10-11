@@ -127,6 +127,9 @@ function renderProviders() {
   }
 }
 async function openProviderImport() {
+  if (accountsController.importing) return;
+  accountsController.importing = true;
+  syncButtons();
   await action(async () => {
     const settings = await invoke("configuration");
     const providers = settings.sub2APIProvider.providers;
@@ -153,6 +156,8 @@ async function openProviderImport() {
     if (failures.length) throw new Error(failures.join("\n"));
     notice(tr("accounts.notice.sub2api_imported_format", count));
   });
+  accountsController.importing = false;
+  syncButtons();
 }
 async function initializeFeatures() {
   [configurationCache, installedEditors] = await Promise.all([
@@ -195,29 +200,56 @@ $("provider-add").onclick = () => {
   });
   renderProviders();
 };
-async function signIn(workspace = null) {
-  if (busy) return;
-  await action(async () => {
-    try {
-      const count = await accountsController.login(workspace, () =>
-        $("login-dialog").showModal(),
-      );
-      if (count !== false)
-        notice(extra(`Imported ${count} accounts`, `已导入 ${count} 个账号`));
-    } finally {
-      $("login-dialog").close();
-    }
-  });
+/// Adds an account, signs one in again, or authorizes a pending workspace,
+/// waiting for the browser sign-in in a dialog that can cancel it.
+async function signIn(workspace = null, kind = "add", pending = null) {
+  try {
+    const labels = await accountsController.login(
+      workspace,
+      () => $("login-dialog").showModal(),
+      pending?.id,
+    );
+    if (labels === false) return;
+    notice(
+      pending
+        ? tr("accounts.notice.workspace_authorized_format", pending.workspaceName)
+        : tr(
+            kind === "reauthenticate"
+              ? "accounts.notice.imported_format"
+              : "accounts.notice.imported_new_format",
+            labels.join(", "),
+          ),
+    );
+  } catch (error) {
+    notice(error, true);
+  } finally {
+    $("login-dialog").close();
+    await refreshView().catch((error) => notice(error, true));
+  }
 }
-$("add-account").onclick = () => signIn();
-$("login-cancel").onclick = () => accountsController.cancelLogin();
-$("login-dialog").addEventListener("cancel", () =>
-  accountsController.cancelLogin(),
-);
+$("login-cancel").onclick = () => cancelSignIn();
+$("login-dialog").addEventListener("cancel", () => cancelSignIn());
+function cancelSignIn() {
+  accountsController.cancelLogin().catch(() => {});
+  notice(tr("error.oauth.request_cancelled"), true);
+}
+$("add-account").onclick = () =>
+  accountsController.adding ? cancelSignIn() : signIn();
+/// Imports through Swift's isImporting state; a cancelled picker is silent.
+async function importAccounts(task, key) {
+  try {
+    const labels = await task();
+    if (labels?.length) notice(tr(key, labels.join(", ")));
+  } catch (error) {
+    notice(error, true);
+  } finally {
+    await refreshView().catch((error) => notice(error, true));
+  }
+}
 function importAccountFile() {
-  action(
+  importAccounts(
     () => accountsController.importFile(),
-    (count) => extra(`Imported ${count} accounts`, `已导入 ${count} 个账号`),
+    "accounts.notice.imported_new_format",
   );
 }
 const remoteDrafts = new Map();
@@ -710,6 +742,7 @@ function renderPendingWorkspaces() {
     el("p", "setting-description", tr("accounts.pending.subtitle")),
   );
   for (const workspace of visible) {
+    const authorizing = accountsController.authorizing === workspace.id;
     const row = el("div", "row pending-workspace");
     row.append(
       el(
@@ -717,13 +750,23 @@ function renderPendingWorkspaces() {
         "row-label row-name",
         workspace.workspaceName || workspace.workspaceId,
       ),
+      // As the SwiftUI pending card: Authorize, or Cancel while authorizing.
       button(
-        tr("accounts.action.add_account"),
+        tr(authorizing ? "common.cancel" : "accounts.pending.action.authorize"),
         null,
-        "btn quiet prominent",
-        () => signIn(workspace.workspaceId),
+        `btn quiet${authorizing ? "" : " prominent"}`,
+        () =>
+          authorizing
+            ? cancelSignIn()
+            : signIn(workspace.workspaceId, "authorize", workspace),
       ),
     );
+    row.lastChild.disabled =
+      !authorizing &&
+      (accountsController.adding ||
+        accountsController.importing ||
+        accountsController.refreshing ||
+        !!accountsController.authorizing);
     const remove = button("", "trash", "icon-btn destructive", () =>
       action(
         () => accountsController.dismissPending(workspace.id),
@@ -733,6 +776,7 @@ function renderPendingWorkspaces() {
     );
     remove.title = tr("common.remove");
     remove.setAttribute("aria-label", remove.title);
+    remove.disabled = authorizing;
     row.append(remove);
     block.append(row);
   }

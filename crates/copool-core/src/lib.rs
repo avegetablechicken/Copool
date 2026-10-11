@@ -17,7 +17,7 @@ mod store;
 mod usage;
 #[path = "../../../Sources/Copool/Resources/proxyd-src/src/utils.rs"]
 mod utils;
-pub use application::{Application, Paths, Preferences};
+pub use application::{Application, Paths, Preferences, SmartSwitchOutcome, SwitchExecution};
 pub use models::{AccountSummary, ApiProxyStatus, CreditSnapshot, UsageSnapshot, UsageWindow};
 
 #[cfg(test)]

@@ -115,6 +115,8 @@
       this.loginGeneration = 0;
       this.loginId = null;
       this.adding = false;
+      this.authorizing = null;
+      this.importing = false;
       this.notice = null;
       this.error = null;
       this.pendingError = null;
@@ -263,12 +265,33 @@
         throw error;
       }
     }
-    async importCurrent() {
-      const count = await this.invoke("import_current");
-      await this.load();
-      this.onMutation();
-      this.discovery = this.refreshPending();
-      return count;
+    /// Labels of the accounts an import added or updated, for Swift's
+    /// "Account imported: …" notices; the commands only report a count.
+    importedLabels(before) {
+      const previous = new Map(before.map((a) => [a.id, a.updatedAt]));
+      return this.accounts
+        .filter((a) => !previous.has(a.id) || previous.get(a.id) !== a.updatedAt)
+        .map((a) => a.label);
+    }
+    /// As Swift's isImporting: only the import controls wait for an import.
+    async runImport(task) {
+      if (this.importing) return null;
+      this.importing = true;
+      this.onUpdate();
+      try {
+        const before = this.accounts;
+        if ((await task()) === null) return null;
+        await this.load();
+        this.onMutation();
+        this.discovery = this.refreshPending();
+        return this.importedLabels(before);
+      } finally {
+        this.importing = false;
+        this.onUpdate();
+      }
+    }
+    importCurrent() {
+      return this.runImport(() => this.invoke("import_current"));
     }
     async removeAccount(id) {
       await this.invoke("delete_account", { id });
@@ -280,23 +303,22 @@
       await this.load();
       this.onMutation();
     }
-    async importDocument(content) {
-      const count = await this.invoke("import_json", { content });
-      await this.load();
-      this.onMutation();
-      this.discovery = this.refreshPending();
-      return count;
+    importDocument(content) {
+      return this.runImport(() => this.invoke("import_json", { content }));
     }
-    async importFile() {
-      const count = await this.invoke("import_account_file");
-      await this.load();
-      this.onMutation();
-      this.discovery = this.refreshPending();
-      return count;
+    /// Null when the file picker was cancelled.
+    importFile() {
+      return this.runImport(() => this.invoke("import_account_file"));
     }
-    async login(workspace = null, started = () => {}) {
-      if (this.adding) return false;
-      this.adding = true;
+    /// Adds or reauthenticates an account (Swift's isAdding), or authorizes a
+    /// pending workspace (its authorizingWorkspaceID); one sign-in at a time.
+    /// Resolves to the imported account labels, or false when superseded.
+    async login(workspace = null, started = () => {}, pendingId = null) {
+      if (this.adding || this.authorizing) return false;
+      if (pendingId) this.authorizing = pendingId;
+      else this.adding = true;
+      this.onUpdate();
+      const before = this.accounts;
       const generation = ++this.loginGeneration;
       try {
         const id = await this.invoke("begin_login", { workspace });
@@ -306,12 +328,12 @@
         }
         this.loginId = id;
         started();
-        const count = await this.invoke("finish_login", { id });
+        await this.invoke("finish_login", { id });
         if (generation !== this.loginGeneration) return false;
         await this.load();
         this.onMutation();
         this.discovery = this.refreshPending();
-        return count;
+        return this.importedLabels(before);
       } catch (error) {
         if (generation === this.loginGeneration) {
           this.notice = error?.message || error?.code || messageOf(error);
@@ -334,6 +356,7 @@
         if (generation === this.loginGeneration) {
           this.loginId = null;
           this.adding = false;
+          this.authorizing = null;
         }
         this.onUpdate();
       }
@@ -342,6 +365,8 @@
       this.loginGeneration++;
       this.loginId = null;
       this.adding = false;
+      this.authorizing = null;
+      this.onUpdate();
       return this.invoke("cancel_login");
     }
   }

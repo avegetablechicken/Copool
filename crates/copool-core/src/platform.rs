@@ -1,5 +1,7 @@
 //! Explicit desktop integrations. Never run by core tests or during account reads.
-use crate::{auth, persistence::write_json, process, utils::now_unix_seconds, Preferences};
+use crate::{
+    auth, persistence::write_json, process, utils::now_unix_seconds, Preferences, SwitchExecution,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -192,17 +194,24 @@ pub fn editors() -> Vec<Editor> {
     })
     .collect()
 }
-pub async fn after_switch(p: &Preferences, auth: Option<&Value>) -> Result<(), String> {
-    let mut errors = vec![];
+/// Side effects of a switch, reported as Swift's SwitchAccountExecutionResult:
+/// the switch itself has succeeded whatever fails here.
+pub async fn after_switch(
+    p: &Preferences,
+    auth: Option<&Value>,
+) -> Result<SwitchExecution, String> {
+    let mut result = SwitchExecution::default();
     if p.sync_opencode_openai_auth {
         if let Some(auth) = auth {
-            if let Err(e) = sync_opencode(auth, &opencode_paths()) {
-                errors.push(e);
+            match sync_opencode(auth, &opencode_paths()) {
+                Ok(()) => result.opencode_synced = true,
+                Err(e) => result.opencode_sync_error = Some(e),
             }
         }
     }
     if p.restart_editors_on_switch {
         let installed = editors();
+        let mut errors = vec![];
         for id in &p.restart_editor_targets {
             let Some(editor) = installed.iter().find(|e| &e.id == id) else {
                 errors.push(format!("Editor not installed: {id}"));
@@ -218,7 +227,7 @@ pub async fn after_switch(p: &Preferences, auth: Option<&Value>) -> Result<(), S
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
             #[cfg(target_os = "macos")]
-            let result = checked(
+            let restarted = checked(
                 "/usr/bin/open",
                 &["-na", &editor.path.to_string_lossy()],
                 15,
@@ -226,25 +235,23 @@ pub async fn after_switch(p: &Preferences, auth: Option<&Value>) -> Result<(), S
             .await
             .map(|_| ());
             #[cfg(not(target_os = "macos"))]
-            let result = std::process::Command::new(&editor.path)
+            let restarted = std::process::Command::new(&editor.path)
                 .spawn()
                 .map(|_| ())
                 .map_err(|e| e.to_string());
-            if let Err(e) = result {
-                errors.push(e);
+            match restarted {
+                Ok(()) => result.restarted_editors.push(editor.label.clone()),
+                Err(e) => errors.push(e),
             }
+        }
+        if !errors.is_empty() {
+            result.editor_restart_error = Some(errors.join(" | "));
         }
     }
     if p.launch_codex_after_switch {
-        if let Err(error) = launch_codex().await {
-            errors.push(error);
-        }
+        result.launch_error = launch_codex().await.err();
     }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("Account switched; {}", errors.join(" | ")))
-    }
+    Ok(result)
 }
 async fn launch_codex() -> Result<(), String> {
     #[cfg(target_os = "macos")]

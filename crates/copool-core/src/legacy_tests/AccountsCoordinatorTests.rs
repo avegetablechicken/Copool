@@ -952,7 +952,7 @@ async fn testTrayMenuModelAutoSmartSwitchWritesAuthAndLaunchesCodex() {
                     .unwrap()
                     .account_id,
             ));
-            Ok(())
+            Ok(Default::default())
         })
     }));
     assert_eq!(

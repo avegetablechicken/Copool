@@ -1092,6 +1092,12 @@ textarea::placeholder {
 }
 
 /* Row controls appear on hover; a switch in progress stays revealed. */
+/* "Sign in again" stays visible: it is the card's only action. */
+.btn.card-reauth,
+.icon-btn.card-reauth {
+  color: var(--orange);
+}
+
 .account-row .card-refresh:not(.spinning),
 .account-row .card-switch {
   visibility: hidden;
