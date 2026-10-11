@@ -456,13 +456,12 @@
 "error.claude.login_not_found" = "Geen Claude Code-aanmelding gevonden. Meld je eerst aan in Claude Code.";
 "accounts.notice.claude_switch_done" = "Claude-account gewisseld; herstart Claude Code om het te gebruiken";
 "accounts.notice.claude_settings_override_format" = "settings.json stelt %@ in, dus Claude Code blijft dat gebruiken in plaats van dit account";
-"settings.section.sub2api_claude" = "Onofficiële provider · Claude";
-"settings.sub2api.claude_help" = "De Claude-accounts ervan komen in de Claude-pool. Overschakelen laat Claude Code deze Sub2api gebruiken via ANTHROPIC_BASE_URL en ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json; terug naar een Claude-account verwijdert ze.";
+"settings.sub2api.claude_help" = "Bij overschakelen naar de accounts gebruikt Claude Code deze Sub2api via ~/.claude/settings.json.";
 "settings.sub2api.claude_name" = "Naam";
 "settings.sub2api.claude_name_placeholder" = "Bijvoorbeeld team-sub2api";
 "settings.sub2api.claude_base_url" = "Sub2api-URL";
 "settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
-"settings.sub2api.claude_api_key" = "API-sleutel voor Claude Code";
+"settings.sub2api.claude_api_key" = "API-sleutel";
 "settings.sub2api.claude_api_key_placeholder" = "Een Sub2api-API-sleutel (sk-…)";
 "settings.sub2api.claude_api_key_keep" = "Leeg laten om de opgeslagen sleutel te behouden";
 "accounts.notice.claude_provider_switched_format" = "Claude Code gebruikt nu Sub2api %@; herstart Claude Code om het te gebruiken";

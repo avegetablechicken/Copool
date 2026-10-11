@@ -1223,6 +1223,23 @@ html:not(.macos) .select-menu {
   color: var(--secondary);
 }
 
+.provider-toggle .provider-brand,
+.select-menu .provider-brand {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.select-menu .provider-brand {
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+
+/* The Claude providers continue the Codex list in the same block. */
+#provider-forms:not(:empty) + #claude-provider-forms > .provider-form:first-child {
+  border-top: 0.5px solid var(--separator);
+}
+
 .provider-chevron.collapsed {
   transform: rotate(-90deg);
 }

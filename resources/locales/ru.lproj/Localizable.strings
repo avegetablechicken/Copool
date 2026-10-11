@@ -456,13 +456,12 @@
 "error.claude.login_not_found" = "Вход Claude Code не найден. Сначала войдите в Claude Code.";
 "accounts.notice.claude_switch_done" = "Аккаунт Claude переключён; перезапустите Claude Code, чтобы использовать его";
 "accounts.notice.claude_settings_override_format" = "В settings.json задано %@, поэтому Claude Code продолжает использовать это вместо аккаунта";
-"settings.section.sub2api_claude" = "Неофициальный провайдер · Claude";
-"settings.sub2api.claude_help" = "Его аккаунты Claude добавляются в пул Claude. При переключении на них Claude Code использует этот Sub2api через ANTHROPIC_BASE_URL и ANTHROPIC_AUTH_TOKEN в ~/.claude/settings.json; при возврате к аккаунту Claude они удаляются.";
+"settings.sub2api.claude_help" = "При переключении на его аккаунты Claude Code использует этот Sub2api через ~/.claude/settings.json.";
 "settings.sub2api.claude_name" = "Название";
 "settings.sub2api.claude_name_placeholder" = "Например, team-sub2api";
 "settings.sub2api.claude_base_url" = "Адрес Sub2api";
 "settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
-"settings.sub2api.claude_api_key" = "API-ключ для Claude Code";
+"settings.sub2api.claude_api_key" = "API-ключ";
 "settings.sub2api.claude_api_key_placeholder" = "API-ключ Sub2api (sk-…)";
 "settings.sub2api.claude_api_key_keep" = "Оставьте пустым, чтобы сохранить ключ";
 "accounts.notice.claude_provider_switched_format" = "Claude Code теперь использует Sub2api %@; перезапустите Claude Code";

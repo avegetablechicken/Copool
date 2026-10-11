@@ -67,7 +67,7 @@ const expandedProviders = new Set();
 function renderProviders() {
   const root = $("provider-forms");
   root.replaceChildren();
-  $("provider-count").textContent = String(providerDrafts.size);
+  renderProviderCount();
   for (const [id, provider] of providerDrafts) {
     const form = el("form", "provider-form");
     const header = el("div", "row provider-header");
@@ -81,7 +81,11 @@ function renderProviders() {
     const chevron = icon("chevron-down");
     chevron.classList.add("provider-chevron");
     if (!expandedProviders.has(id)) chevron.classList.add("collapsed");
-    toggle.append(chevron, el("span", "", provider.providerID || "Sub2api"));
+    toggle.append(
+      chevron,
+      brandIcon("codex"),
+      el("span", "", provider.providerID || "Sub2api"),
+    );
     const remove = button("", "trash", "icon-btn", () => {
       const saved = providerController.persisted.some((p) => p.id === id);
       action(
@@ -202,7 +206,42 @@ async function initializeFeatures() {
         : [],
     });
 }
+/// The pool's colored icon from the header, for provider rows and menus.
+/// Each copy keeps its own gradient: one inside the header, which is hidden
+/// on subpages, would not paint.
+let brandIcons = 0;
+function brandIcon(target) {
+  const icon = document
+    .querySelector(`.pool-btn[data-pool="${target}"] svg`)
+    .cloneNode(true);
+  for (const gradient of icon.querySelectorAll("[id]")) {
+    const id = `${gradient.id}-${++brandIcons}`;
+    for (const node of icon.querySelectorAll(`[fill="url(#${gradient.id})"]`))
+      node.setAttribute("fill", `url(#${id})`);
+    gradient.id = id;
+  }
+  icon.classList.add("provider-brand");
+  return icon;
+}
+/// Both pools' providers share one count, as they share one block.
+function renderProviderCount() {
+  $("provider-count").textContent = String(
+    providerDrafts.size +
+      (typeof claudeProviderDrafts === "undefined" ? 0 : claudeProviderDrafts.size),
+  );
+}
+/// One button adds a provider to either pool.
 $("provider-add").onclick = () => {
+  if (openMenu?.trigger === $("provider-add")) {
+    closeMenu(true);
+    return;
+  }
+  showMenu($("provider-add"), [
+    { label: tr("pool.codex"), icon: brandIcon("codex"), run: addCodexProvider },
+    { label: tr("pool.claude"), icon: brandIcon("claude"), run: addClaudeProvider },
+  ]);
+};
+function addCodexProvider() {
   const id = crypto.randomUUID();
   providerDrafts.set(id, {
     id,
@@ -217,7 +256,7 @@ $("provider-add").onclick = () => {
     allowInsecureTLS: false,
   });
   renderProviders();
-};
+}
 /// Adds an account, signs one in again, or authorizes a pending workspace,
 /// waiting for the browser sign-in in a dialog that can cancel it.
 async function signIn(workspace = null, kind = "add", pending = null) {
@@ -936,7 +975,7 @@ async function loadClaudeProviders() {
 function renderClaudeProviders() {
   const root = $("claude-provider-forms");
   root.replaceChildren();
-  $("claude-provider-count").textContent = String(claudeProviderDrafts.size);
+  renderProviderCount();
   for (const [id, provider] of claudeProviderDrafts) {
     const saved = claudeProvidersSaved.find((p) => p.id === id);
     const form = el("form", "provider-form");
@@ -951,7 +990,11 @@ function renderClaudeProviders() {
     const chevron = icon("chevron-down");
     chevron.classList.add("provider-chevron");
     if (!expandedClaudeProviders.has(id)) chevron.classList.add("collapsed");
-    toggle.append(chevron, el("span", "", provider.name || "Sub2api"));
+    toggle.append(
+      chevron,
+      brandIcon("claude"),
+      el("span", "", provider.name || "Sub2api"),
+    );
     const remove = button("", "trash", "icon-btn", () =>
       action(
         async () => {
@@ -970,6 +1013,9 @@ function renderClaudeProviders() {
     form.append(header);
     if (expandedClaudeProviders.has(id)) {
       const body = el("div", "provider-body");
+      body.append(
+        el("p", "setting-description", tr("settings.sub2api.claude_help")),
+      );
       for (const [key, label, type] of [
         ["name", "claude_name"],
         ["baseURL", "claude_base_url"],
@@ -1019,7 +1065,7 @@ function renderClaudeProviders() {
     root.append(form);
   }
 }
-$("claude-provider-add").onclick = () => {
+function addClaudeProvider() {
   const id = crypto.randomUUID();
   claudeProviderDrafts.set(id, {
     id,
@@ -1032,7 +1078,7 @@ $("claude-provider-add").onclick = () => {
   });
   expandedClaudeProviders.add(id);
   renderClaudeProviders();
-};
+}
 /// Imports the Claude accounts of every Claude Sub2api provider.
 async function syncClaudeSub2api() {
   if (accountsController.importing) return;

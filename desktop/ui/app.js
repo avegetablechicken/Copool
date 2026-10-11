@@ -822,6 +822,7 @@ function showMenu(trigger, items) {
   menu.setAttribute("role", "menu");
   for (const item of items) {
     const option = el("button", "", item.label);
+    if (item.icon) option.prepend(item.icon);
     option.type = "button";
     option.setAttribute("role", "menuitem");
     option.onclick = () => {

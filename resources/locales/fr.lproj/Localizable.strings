@@ -456,13 +456,12 @@
 "error.claude.login_not_found" = "Connexion Claude Code introuvable. Connectez-vous d’abord dans Claude Code.";
 "accounts.notice.claude_switch_done" = "Compte Claude changé ; redémarrez Claude Code pour l’utiliser";
 "accounts.notice.claude_settings_override_format" = "settings.json définit %@ : Claude Code continue de l’utiliser au lieu de ce compte";
-"settings.section.sub2api_claude" = "Fournisseur non officiel · Claude";
-"settings.sub2api.claude_help" = "Ses comptes Claude rejoignent le pool Claude. Y basculer fait utiliser ce Sub2api à Claude Code via ANTHROPIC_BASE_URL et ANTHROPIC_AUTH_TOKEN dans ~/.claude/settings.json ; revenir à un compte Claude les retire.";
+"settings.sub2api.claude_help" = "Basculer vers ses comptes fait passer Claude Code par ce Sub2api via ~/.claude/settings.json.";
 "settings.sub2api.claude_name" = "Nom";
 "settings.sub2api.claude_name_placeholder" = "Par exemple team-sub2api";
 "settings.sub2api.claude_base_url" = "URL de Sub2api";
 "settings.sub2api.claude_base_url_placeholder" = "https://hote:6060";
-"settings.sub2api.claude_api_key" = "Clé API pour Claude Code";
+"settings.sub2api.claude_api_key" = "Clé API";
 "settings.sub2api.claude_api_key_placeholder" = "Une clé API Sub2api (sk-…)";
 "settings.sub2api.claude_api_key_keep" = "Laisser vide pour conserver la clé enregistrée";
 "accounts.notice.claude_provider_switched_format" = "Claude Code utilise maintenant Sub2api %@ ; redémarrez Claude Code pour l’utiliser";

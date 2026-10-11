@@ -484,13 +484,12 @@
 "error.claude.login_not_found" = "Claude Code login not found. Sign in with Claude Code first.";
 "accounts.notice.claude_switch_done" = "Switched Claude account; restart Claude Code to use it";
 "accounts.notice.claude_settings_override_format" = "settings.json sets %@, so Claude Code keeps using it instead of this account";
-"settings.section.sub2api_claude" = "Unofficial Provider · Claude";
-"settings.sub2api.claude_help" = "Its Claude accounts join the Claude pool. Switching to one points Claude Code at this Sub2api with ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json; switching back to a Claude account removes them.";
+"settings.sub2api.claude_help" = "Switching to its accounts points Claude Code at this Sub2api through ~/.claude/settings.json.";
 "settings.sub2api.claude_name" = "Name";
 "settings.sub2api.claude_name_placeholder" = "For example, team-sub2api";
 "settings.sub2api.claude_base_url" = "Sub2api URL";
 "settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
-"settings.sub2api.claude_api_key" = "API key for Claude Code";
+"settings.sub2api.claude_api_key" = "API key";
 "settings.sub2api.claude_api_key_placeholder" = "A Sub2api API key (sk-…)";
 "settings.sub2api.claude_api_key_keep" = "Leave blank to keep the saved key";
 "accounts.notice.claude_provider_switched_format" = "Claude Code now uses Sub2api %@; restart Claude Code to use it";
