@@ -18,6 +18,7 @@ RETIRED = {
     'LayoutRulesTests': f'{PANEL}: fixed 542 pt grid and iOS column counts',
     'LiquidProgressMetricsTests.testCompactRingUsesDotThresholdAboveOnePercent': f'{PANEL}: no usage rings',
     'LiquidProgressMetricsTests.testDarkGroovePaletteKeepsRingTrackVisibleOnBlackBackground': f'{PANEL}: no glass groove palette',
+    'AccountsActionPresentationTests.testLeadingToolbarButtonsIncludeUsageToggleIcon': f'{PANEL}: usage display is set in Settings only',
 }
 
 def inventory():

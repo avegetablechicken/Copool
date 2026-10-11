@@ -27,7 +27,6 @@ pub fn load() -> Result<NativeIcons, String> {
         ("chevron-up", "chevron.up"),
         ("chevron-down", "chevron.down"),
         ("chevron-left", "chevron.left"),
-        ("switch-2", "switch.2"),
         ("trash", "trash"),
         ("switch", "arrow.left.arrow.right.circle.fill"),
         ("copy", "doc.on.doc"),

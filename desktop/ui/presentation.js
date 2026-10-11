@@ -242,18 +242,6 @@
       },
     ];
   }
-  function leadingActions(options = {}) {
-    const all = actions(options);
-    return [
-      {
-        intent: "toggleUsageProgressDisplay",
-        symbol: "switch.2",
-        label: "accounts.action.toggle_usage_progress_display",
-      },
-      { ...all[0], label: "accounts.action.import_account" },
-      all[1],
-    ];
-  }
   function publicCallout(running) {
     return running
       ? null
@@ -488,7 +476,6 @@
     collapsedInteraction,
     progressMetrics,
     trailingActions,
-    leadingActions,
     publicModes,
     publicStatus,
     remoteDetails,

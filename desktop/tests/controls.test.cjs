@@ -68,21 +68,6 @@ legacy(
   },
 );
 legacy(
-  "AccountsActionPresentationTests",
-  "testLeadingToolbarButtonsIncludeUsageToggleIcon",
-  () => {
-    const p = P.leadingActions();
-    assert.deepEqual(
-      p.map((a) => a.intent),
-      ["toggleUsageProgressDisplay", "importCurrentAuth", "addAccount"],
-    );
-    assert.equal(p[0].symbol, "switch.2");
-    assert.equal(p[0].label, "accounts.action.toggle_usage_progress_display");
-    assert.equal(p[1].label, "accounts.action.import_account");
-    assert.deepEqual(p[1].menu, ["importCurrentAuth", "importAuthFile"]);
-  },
-);
-legacy(
   "PublicAccessSectionPresentationTests",
   "testModeCardsReflectSelectedModeAndEditability",
   () => {

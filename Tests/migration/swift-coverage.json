@@ -1,7 +1,7 @@
 {
   "total": 350,
-  "ported": 338,
-  "retired": 12,
+  "ported": 337,
+  "retired": 13,
   "pending": 0,
   "cases": {
     "AccountCardInteractionPresentationTests.testMacOSHoverControlsCollapsedOverlayVisibility": {
@@ -131,8 +131,9 @@
     },
     "AccountsActionPresentationTests.testLeadingToolbarButtonsIncludeUsageToggleIcon": {
       "source": "Tests/CopoolTests/AccountsActionPresentationTests.swift",
-      "status": "ported",
-      "target": "desktop/tests/controls.test.cjs"
+      "status": "retired",
+      "target": null,
+      "reason": "The Coport-style panel replaced this SwiftUI layout: usage display is set in Settings only"
     },
     "AccountsCoordinatorTests.testTrayRefreshPreservesAndPublishesProxySavedAfterItsSettingsSnapshot": {
       "source": "Tests/CopoolTests/AccountsCoordinatorTests.swift",

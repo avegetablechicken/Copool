@@ -32,8 +32,6 @@ const ICONS = {
   eye: '<path d="M1 11s4-7 10-7 10 7 10 7-4 7-10 7S1 11 1 11Z"/><circle cx="11" cy="11" r="3"/>',
   close: '<path d="m5 5 12 12M5 17 17 5"/>',
   "chevron-left": '<path d="m14 5-6 6 6 6"/>',
-  "switch-2":
-    '<rect x="2" y="3" width="18" height="7" rx="3.5"/><circle cx="6.5" cy="6.5" r="1.6"/><rect x="2" y="12" width="18" height="7" rx="3.5"/><circle cx="15.5" cy="15.5" r="1.6"/>',
   server:
     '<rect x="2" y="3" width="18" height="6" rx="2"/><rect x="2" y="13" width="18" height="6" rx="2"/><path d="M5 6h1M5 16h1M10 6h7M10 16h7"/>',
   warning: '<path d="m11 2 10 18H1Z"/><path d="M11 8v5M11 16v1"/>',
@@ -85,7 +83,6 @@ function mountIcons(root = document) {
 const SYMBOL_ICONS = {
   "chevron.down": "chevron-down",
   "chevron.up": "chevron-up",
-  "switch.2": "switch-2",
 };
 function setIcon(button, glyph) {
   if (button.querySelector(`[data-glyph="${glyph}"]`)) return;
@@ -161,17 +158,14 @@ function renderToolbar() {
     spinning: accountsController.spinner,
     collapsed,
   };
-  const [usageToggle, importAccount, addAccount] = P.leadingActions(options);
-  const smartSwitch = P.actions(options)[2];
+  const [importAccount, addAccount, smartSwitch] = P.actions(options);
   const [refresh, collapse] = P.trailingActions(options);
   const label = (button, key) => {
     button.title = tr(key);
     button.setAttribute("aria-label", button.title);
   };
-  setIcon($("usage-toggle"), SYMBOL_ICONS[usageToggle.symbol]);
-  label($("usage-toggle"), usageToggle.label);
-  $("import-open").textContent = tr(importAccount.label);
-  $("import-open").title = withShortcut(tr(importAccount.label), "i");
+  $("import-open").textContent = tr(importAccount.title);
+  $("import-open").title = withShortcut(tr(importAccount.title), "i");
   $("import-open").disabled = !importAccount.enabled;
   $("add-account").textContent = tr(addAccount.title);
   $("add-account").title = withShortcut(tr(addAccount.title), "n");
@@ -660,10 +654,6 @@ $("collapse-all").onclick = () => {
   renderAccounts(accountsCache);
   syncButtons();
 };
-$("usage-toggle").onclick = () =>
-  savePreference({
-    usageDisplay: usageMode() === "remaining" ? "used" : "remaining",
-  });
 // In-panel menus, as Coport's: they keep focus in the panel window, which a
 // native menu would take away.
 let openMenu = null;
