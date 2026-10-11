@@ -2,9 +2,9 @@
 set -eu
 
 ROOT="${SRCROOT:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}"
-MANIFEST="$ROOT/Sources/Copool/Resources/proxyd-src/proxyd/Cargo.toml"
-PREBUILT_DIR="$ROOT/Sources/Copool/Resources/proxyd-prebuilt"
-ARCHIVE_DIR="$ROOT/Sources/Copool/Resources/proxyd-prebuilt-archives"
+MANIFEST="$ROOT/resources/proxyd-src/proxyd/Cargo.toml"
+PREBUILT_DIR="$ROOT/resources/proxyd-prebuilt"
+ARCHIVE_DIR="$ROOT/resources/proxyd-prebuilt-archives"
 TARGET_DIR="${CODEX_TOOLS_PROXY_TARGET_DIR:-$HOME/Library/Caches/Copool/proxyd-target}"
 PATH="$HOME/.cargo/bin:$PATH"
 CARGO_BIN=""
@@ -75,7 +75,7 @@ fi
 mkdir -p "$PREBUILT_DIR" "$ARCHIVE_DIR" "$TARGET_DIR"
 
 SOURCE_STAMP="$(mktemp)"
-find "$ROOT/Sources/Copool/Resources/proxyd-src" -type f \
+find "$ROOT/resources/proxyd-src" -type f \
   \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) \
   -print0 | xargs -0 stat -f '%m %N' | sort > "$SOURCE_STAMP"
 

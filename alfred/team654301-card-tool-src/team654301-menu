@@ -1,8 +1,0 @@
-#!/bin/zsh
-set -euo pipefail
-
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-exec python3 "${SCRIPT_DIR}/team654301-menu.py" "${1:-}"

@@ -26,6 +26,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Original behavior parity gate
-        run: python scripts/test_rust.py --require-parity
+      - name: Tests
+        run: python scripts/test_rust.py
       - run: cargo build -p copool-desktop --locked

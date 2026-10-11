@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const legacy = (suite, name, fn) => test(`${suite}.${name}`, fn);
 const root = path.resolve(__dirname, "../.."),
-  resource = path.join(root, "Sources/Copool/Resources");
+  resource = path.join(root, "resources/locales");
 const strings = (locale) =>
   Object.fromEntries(
     [

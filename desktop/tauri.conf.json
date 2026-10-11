@@ -50,7 +50,7 @@
       "icons/icon.icns"
     ],
     "resources": {
-      "../Sources/Copool/Resources/proxyd-prebuilt-archives": "proxyd-prebuilt-archives"
+      "../resources/proxyd-prebuilt-archives": "proxyd-prebuilt-archives"
     }
   }
 }

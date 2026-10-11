@@ -1,5 +1,5 @@
 [workspace]
 members = ["crates/copool-core", "desktop"]
 default-members = ["crates/copool-core"]
-exclude = ["Sources/Copool/Resources/proxyd-src/proxyd"]
+exclude = ["resources/proxyd-src/proxyd"]
 resolver = "2"

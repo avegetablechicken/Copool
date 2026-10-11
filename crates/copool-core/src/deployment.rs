@@ -4,7 +4,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-const CURRENT: &str = "Sources/Copool/Resources/proxyd-src/proxyd/Cargo.toml";
+const CURRENT: &str = "resources/proxyd-src/proxyd/Cargo.toml";
 pub fn manifest(root: &Path) -> Option<PathBuf> {
     [CURRENT, "src-tauri/proxyd/Cargo.toml"]
         .iter()
@@ -69,7 +69,7 @@ pub fn prebuilt(
     }
     if let Some(repo) = repo {
         let path = repo
-            .join("Sources/Copool/Resources/proxyd-prebuilt")
+            .join("resources/proxyd-prebuilt")
             .join(target)
             .join("codex-tools-proxyd");
         if path.is_file() {

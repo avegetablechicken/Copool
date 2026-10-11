@@ -4,89 +4,64 @@
   <img src="./Copool.png" alt="Copool Icon" width="160" />
 </p>
 
-Copool is a SwiftUI app for macOS that manages Codex/ChatGPT auth accounts, usage-based smart switching, and local/remote API proxy workflows.
+Copool is a cross-platform desktop app (macOS, Windows, Linux) that manages Codex/ChatGPT auth accounts, usage-based smart switching, and local/remote API proxy workflows. It is built with a Rust core and a Tauri 2 shell.
 
-Copool 是一个面向 macOS 和 iOS 的 SwiftUI 应用，用于管理 Codex/ChatGPT 授权账号、按用量智能切换，以及本地/远程 API 代理工作流。
-
-## Rust 跨平台开发版本
-
-`develop/rust-cross-platform` 提供 Rust 核心 + Tauri 2 桌面客户端，面向 macOS、Windows 和 Linux。已接入账号管理、用量刷新、智能切换与本地 API 代理；完整迁移范围和限制见 [Rust 跨平台开发文档](docs/rust-cross-platform.md)。原 Swift 版本仍然保留。
-
-```sh
-cargo test -p copool-core --locked
-cargo run -p copool-desktop --locked
-```
-
-## Screenshots / 截图
-
-<img src="./account.png" alt="Accounts Overview" width="560" />
-<img src="./account_2.png" alt="Accounts Detail" width="560" />
-<img src="./proxy.png" alt="Proxy" width="560" />
-<img src="./setting.png" alt="Settings" width="560" />
+Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管理 Codex/ChatGPT 授权账号、按用量智能切换，以及本地/远程 API 代理工作流。采用 Rust 核心与 Tauri 2 外壳。
 
 ## Features / 功能
 
-- Native SwiftUI architecture with layered design (`App`, `Features`, `UI`, `Behavior`, `Infrastructure`, `Domain`, `Layout`)
-- 纯 SwiftUI 分层架构（`App`、`Features`、`UI`、`Behavior`、`Infrastructure`、`Domain`、`Layout`）
 - Account import/switch/delete and usage refresh (5h / 1week)
 - 账号导入/切换/删除与用量刷新（5h / 1week）
-- Import and refresh Sub2api OpenAI/Codex upstream accounts when it is the configured default model provider
-- 当 Sub2api 为已配置的默认模型 Provider 时，导入并刷新其 OpenAI/Codex 上游账号
-- Smart switch based on remaining quota score
-- 基于剩余额度评分的智能切换
-- Local API proxy runtime (Swift native server) with model compatibility mapping
-- 本地 API 代理运行时（Swift 原生服务）与模型兼容映射
+- Import and refresh Sub2api OpenAI/Codex upstream accounts
+- 导入并刷新 Sub2api 的 OpenAI/Codex 上游账号
+- Smart switch based on remaining quota score, manual or automatic
+- 基于剩余额度评分的智能切换，可手动或自动
+- Local OpenAI-compatible API proxy with model compatibility mapping
+- 本地 OpenAI 兼容 API 代理与模型兼容映射
 - Cloudflared public tunnel management
 - Cloudflared 公网隧道管理
 - Remote Linux deployment/start/stop/logs for proxy nodes over SSH
 - 远程 Linux 代理节点 SSH 部署/启停/日志
-- ChatGPT OAuth import plus editor restart / launch integration on account switch
-- ChatGPT OAuth 导入，以及切换账号时的编辑器重启 / 拉起集成
-- Menu bar integration (MenuBarExtra)
-- 菜单栏集成（MenuBarExtra）
+- ChatGPT OAuth sign-in, plus editor restart / Codex launch / OpenCode sync on account switch
+- ChatGPT OAuth 登录，以及切换账号时的编辑器重启 / 拉起 Codex / 同步 OpenCode
+- Status bar panel, and a WidgetKit widget on macOS
+- 状态栏面板，macOS 上另有 WidgetKit 小组件
 
 ## Requirements / 环境要求
 
-- macOS 14+
-- Xcode 17+
-- Swift 6 toolchain
+- Rust 1.89+ (current stable recommended)
+- macOS 14+ with Xcode (for the WidgetKit extension)
+- Windows: Visual Studio C++ Build Tools, Windows SDK, WebView2 Runtime
+- Ubuntu 24.04: `build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf`
 
 ## Build & Run / 构建与运行
 
 ```bash
-cd Copool
-xcodebuild test -project Copool.xcodeproj -scheme Copool -destination 'platform=macOS'
-xcodebuild -project Copool.xcodeproj -scheme Copool -configuration Debug -destination 'platform=macOS' build
+cargo run -p copool-desktop --locked        # run / 运行
+python3 scripts/test_rust.py                # tests / 测试
+python3 scripts/build_rust_desktop.py       # macOS: ad-hoc-signed Copool.app; elsewhere the executable
 ```
 
-Open `Copool.xcodeproj` in Xcode and run `Copool`.
+See [docs/rust-cross-platform.md](docs/rust-cross-platform.md) for details, data locations and validation status.
 
-使用 Xcode 打开 `Copool.xcodeproj`，运行 `Copool` scheme。
-
-## Release Channels / 发布渠道
-
-- macOS release artifacts are published through GitHub Releases.
-- macOS 发布产物通过 GitHub Releases 分发。
-- See [`docs/release-macos.md`](docs/release-macos.md) for the Developer ID signing and notarization flow.
-- macOS 的 Developer ID 签名与公证流程见 `docs/release-macos.md`。
+详细说明、数据目录与验证情况见 [docs/rust-cross-platform.md](docs/rust-cross-platform.md)。
 
 ## Project Structure / 项目结构
 
-- `Sources/Copool/App`: scene composition and app bootstrap
-- `Sources/Copool/Features`: page-level composition and bindings
-- `Sources/Copool/UI`: reusable visual primitives
-- `Sources/Copool/Behavior`: coordinators and behavior modules
-- `Sources/Copool/Infrastructure`: IO/network/process integrations
-- `Sources/Copool/Domain`: models and protocols (single source of truth)
-- `Sources/Copool/Layout`: centralized layout rules
+- `crates/copool-core`: accounts, usage, switching, proxy, tunnel, remote servers and settings
+- `desktop`: Tauri shell (`src`), web UI (`ui`), UI tests (`tests`), macOS widget (`widget`)
+- `resources/proxyd-src`: proxy engine shared by the core and the standalone remote daemon
+- `resources/proxyd-prebuilt*`: prebuilt Linux daemons for remote deployment
+- `resources/locales`: localized strings (11 languages)
+- `scripts`: build, test and localization tooling
 
 ## Reference Project / 参考项目
 
 - [170-carry/codex-tools](https://github.com/170-carry/codex-tools)
 
-This project is a Swift-native migration and redesign inspired by the original Tauri-based implementation.
+Copool began as a Swift-native migration and redesign of the original Tauri-based implementation, and has since moved to a cross-platform Rust/Tauri app that keeps the SwiftUI app's interface and behavior.
 
-本项目是对原 Tauri 版本的 Swift 原生迁移与重构。
+Copool 最初是对原 Tauri 版本的 Swift 原生迁移与重构，现已迁移为保留 SwiftUI 版界面与交互的跨平台 Rust/Tauri 应用。
 
 ## Acknowledgements / 致谢
 

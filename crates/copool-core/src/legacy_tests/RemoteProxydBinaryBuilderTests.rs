@@ -77,7 +77,7 @@ fn testPrebuiltBinaryPrefersRepoRootArtifactForTarget() {
     let target = "x86_64-unknown-linux-musl";
     let path = root
         .path()
-        .join("Sources/Copool/Resources/proxyd-prebuilt")
+        .join("resources/proxyd-prebuilt")
         .join(target)
         .join("codex-tools-proxyd");
     executable_stub(&path);

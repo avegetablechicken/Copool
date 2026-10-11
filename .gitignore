@@ -1,11 +1,10 @@
 .DS_Store
 .build/
-Sources/Copool/Resources/proxyd-src/proxyd/target/
+resources/proxyd-src/proxyd/target/
 build/
 dist/
 DerivedData/
 DerivedData-*/
-*.xcarchive/
 *.app/
 *.dSYM/
 ModuleCache.noindex/
@@ -14,12 +13,9 @@ SDKStatCaches.noindex/
 *.sha256
 *.xcuserstate
 xcuserdata/
-Copool.xcodeproj/project.xcworkspace/xcuserdata/
 .codex-artifacts/
 artifacts/
 scripts/__pycache__/
-alfred/__pycache__/
-alfred/team654301-card-tool-src/__pycache__/
 .worktrees/
 
 /target/

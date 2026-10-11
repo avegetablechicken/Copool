@@ -1,16 +1,16 @@
 # Rust 跨平台版本
 
-开发分支：`develop/rust-cross-platform`。
-
 Rust 桌面版本的应用名为 `Copool`，Bundle ID / 应用标识为 `io.github.copool.rust`。
 
-这是可以独立构建和运行的 Rust + Tauri 2 桌面版本，目标为 macOS、Windows 和 Linux。Swift/Xcode 版本仍保留；当前 Rust 版本尚未达到原版全部功能对等，不能直接替换现有发布版本。
+Copool 是 Rust + Tauri 2 桌面应用，目标为 macOS、Windows 和 Linux。原 SwiftUI 版本已从仓库移除，界面与交互仍以它为准，源码可在提交 `cae2fce` 中查阅（如 `git show cae2fce:Sources/Copool/Features/Accounts/AccountsPageModel.swift`）。
 
 ## 架构
 
 - `crates/copool-core`：账号导入、身份隔离、持久化、额度刷新、自动/手动切换及代理生命周期。不依赖 Tauri，可独立测试。
 - `desktop`：Tauri 命令边界、单实例、系统托盘、原生窗口与本地 HTML/CSS/JavaScript 界面。前端不直接访问文件系统、启动 shell 或持有账号 OAuth token。
-- `Sources/Copool/Resources/proxyd-src/src`：与已有远程 daemon 共用的 Rust 代理引擎及模型，使用 `#[path]` 引用同一份源码，避免复制后分叉。原 daemon 仍可单独构建。
+- `desktop/widget`：macOS WidgetKit 小组件（SwiftUI），由只含小组件 target 的 `CopoolWidgets.xcodeproj` 构建并打包进 `Copool.app`。
+- `resources/proxyd-src/src`：与远程 daemon 共用的 Rust 代理引擎及模型，使用 `#[path]` 引用同一份源码，避免复制后分叉。daemon 可单独构建；`resources/proxyd-prebuilt*` 为远程部署用的 Linux 预编译版本。
+- `resources/locales`：11 种语言的 `Localizable.strings`，由 `scripts/sync_rust_locales.py` 生成 `desktop/ui/locales.js`。
 - `.github/workflows/rust.yml`：macOS、Windows、Linux 的核心测试、桌面构建及独立 daemon 检查。配置已加入仓库，本机验证不等于三平台 CI 已运行。
 
 架构参考本地 `../OpenQuota` 的 Tauri/Rust 分层和 `../coding-agent-proxy` 的 Rust workspace、轻量静态前端与托盘应用组织。没有对参考仓库的路径依赖。
@@ -19,7 +19,7 @@ Rust 桌面版本的应用名为 `Copool`，Bundle ID / 应用标识为 `io.gith
 
 需要 Rust 1.89+（推荐当前 stable）及各平台原生构建工具。
 
-- macOS：Xcode Command Line Tools。
+- macOS：Xcode（构建 WidgetKit 小组件）。
 - Windows：Visual Studio C++ Build Tools、Windows SDK、WebView2 Runtime。
 - Ubuntu 24.04：`build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf`。
 
@@ -31,12 +31,12 @@ cargo run -p copool-desktop --locked
 cargo build -p copool-desktop --release --locked
 ```
 
-`target/release/copool-desktop`（Windows 为 `.exe`）是可执行文件。该工作流不依赖根目录遗留 Electron `package.json`，也不需要 Node 来构建 UI。检查前端语法可使用 `node --check desktop/ui/app.js`。
+`target/release/copool-desktop`（Windows 为 `.exe`）是可执行文件。构建 UI 不需要 Node。检查前端语法可使用 `node --check desktop/ui/app.js`。
 
 独立远程 daemon：
 
 ```sh
-cargo check --manifest-path Sources/Copool/Resources/proxyd-src/proxyd/Cargo.toml --locked
+cargo check --manifest-path resources/proxyd-src/proxyd/Cargo.toml --locked
 ```
 
 构建脚本（在仓库根目录运行）：
@@ -52,7 +52,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 
 产物为 `target/<release|debug>/bundle/macos/Copool.app`（指定 `--target` 时位于 `target/<triple>/…`，路径相对仓库根目录）。此包使用正常数据目录，不含烟测账号或测试环境覆盖；最低 macOS 版本为 14.0。2026-10-10 本机以该脚本生成 arm64 release 包并通过 `codesign --verify --deep --strict`；未经公证，不是分发版本。
 
-尚未启用发布签名、公证、自动更新或发布。macOS 原 Swift 正式发布继续遵循 `release-macos.md`。
+尚未启用发布签名、公证、自动更新或发布。
 
 ## 已实现
 
@@ -85,23 +85,20 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 
 “切换账号”是唯一正常账号操作中会替换当前 Codex 登录文件的操作；上一份登录保存为 `auth-before-switch.json`。删除账号不删除当前 Codex 登录。损坏的账号文件会报错并保留原内容，不会自动重置为空。临时文件与目标文件位于同一目录，使用跨平台原子替换。
 
-## 尚未迁移的功能
+## 已知差异与限制
 
-- 内置浏览器 OAuth 登录、工作区发现与切换邀请流程；当前可通过 Codex CLI 登录后导入，或导入 auth.json 文件。
-- SSH 远程节点部署、启停和日志页面；已有独立 Rust daemon 保留。
-- Cloudflared 快速/命名隧道、Cloudflare DNS 管理。
-- Sub2api provider、远程账号同步和缓存。
+- 浏览器 OAuth 登录与工作区授权、SSH 远程节点、Cloudflared 隧道、Sub2api、编辑器重启、OpenCode 同步和登录时自启动均已实现，但未用真实账号、服务器或 Cloudflare 帐户验证。
 - 远程服务器“探测”使用已保存的配置，而原版使用卡片中未保存的草稿；先保存再探测。
 - 非 macOS 托盘右键菜单（Open/Quit Copool）尚未本地化；原版 macOS 只有 MenuBarExtra 面板，没有此菜单。
-- 编辑器重启、OpenCode 同步、系统登录时自启动。新增的迁移提示目前只提供中英文，原版文案已复用全部语言。
-- Apple WidgetKit 小组件和 iOS 客户端；本版本跨平台范围为桌面。
+- 少量新增提示（如复制成功、Sub2api 未配置）只提供中英文，其余文案复用全部 11 种语言。
+- 不包含原版的 iOS 客户端；范围为桌面。
 
 ## 验证范围
 
-`python3 scripts/audit_rust_test_migration.py --require-complete` 盘点原版 Swift 测试：337 项已移植，13 项随 Coport 风格面板退役（542 点网格与 iOS 列数、用量圆环的圆点阈值、玻璃凹槽配色、工具栏用量显示切换——只在设置页切换），每项原因记录在脚本中，不计为已移植。工具栏、细进度条、折叠行悬停、公网访问模式与状态、远程服务器详情与日志由同一组展示模型渲染并通过对应的原版测试。用量窗口按 OpenQuota 的规则按时长识别：只显示 5h（18000 秒）与周额度（604800 秒），无时长的窗口按位置兜底，其他时长（如免费计划的 30 天）不显示；只有每周限额的账号 5h 显示“无数据 / 重置时间不可用”，不再借用每周或 Codex Spark 的窗口；排序时把没有 5h 限额视为 5h 无约束。用量回归测试 `crates/copool-core/src/usage_regression_tests.rs` 覆盖原版请求头、`/api/codex/usage` 的重置次数路径、默认官方地址及回环 `chatgpt_base_url`。
+原版 Swift 测试在移除前已全部盘点：337 项以原测试名（`Suite.testName`）移植到 `crates/copool-core` 与 `desktop/tests`，13 项随 Coport 风格面板退役（542 点网格与 iOS 列数、用量圆环的圆点阈值、玻璃凹槽配色、工具栏用量显示切换——只在设置页切换）。工具栏、细进度条、折叠行悬停、公网访问模式与状态、远程服务器详情与日志由同一组展示模型渲染并通过对应的原版测试。用量窗口按 OpenQuota 的规则按时长识别：只显示 5h（18000 秒）与周额度（604800 秒），无时长的窗口按位置兜底，其他时长（如免费计划的 30 天）不显示；只有每周限额的账号 5h 显示“无数据 / 重置时间不可用”，不再借用每周或 Codex Spark 的窗口；排序时把没有 5h 限额视为 5h 无约束。用量回归测试 `crates/copool-core/src/usage_regression_tests.rs` 覆盖原版请求头、`/api/codex/usage` 的重置次数路径、默认官方地址及回环 `chatgpt_base_url`。
 
 核心测试使用临时目录和合成凭据，覆盖同工作区多主体、重复导入、批量失败回滚、损坏文件保护、Swift 附加字段、账号选择、文件替换与权限、代理鉴权/密钥轮换/停止以及原代理引擎的请求转换和 SSE 回归测试。
 
 本机验证 macOS 编译、45 项核心测试及回环代理行为，并使用临时目录和合成账号检查原生窗口、展开/折叠卡片、代理页、设置页和 Retina 图标。Windows/Linux 原生构建需通过三平台 CI 或对应机器验证。未使用真实账号验证在线 OAuth、额度接口或上游付费请求，也未发布此版本。
 
-2026-10-09 补跑原版 Swift 套件：332 项 XCTest 与 5 项 Swift Testing 全部通过。首次在 Documents 内运行时有本地化资源访问权限和英文断言的语言环境问题；将原样源码复制到临时目录并指定 `-testLanguage en -testRegion US` 后通过，未修改测试源码。这是 Swift 基线验证，不代表 Rust 已通过原版所有行为的等价测试。
+移除前（2026-10-09）原版 Swift 套件 332 项 XCTest 与 5 项 Swift Testing 全部通过；这是原版基线，不代表 Rust 已通过原版所有行为的等价测试。
