@@ -233,7 +233,10 @@ impl Login {
             if self.flow == Flow::Claude {
                 return self.exchange_claude(&code).await;
             }
-            let response = reqwest::Client::new()
+            // A new account has no proxy of its own yet: the system's.
+            let response = crate::utils::with_account_proxy(reqwest::Client::builder(), "")?
+                .build()
+                .map_err(|e| e.to_string())?
                 .post("https://auth.openai.com/oauth/token")
                 .timeout(Duration::from_secs(30))
                 .form(&[
@@ -269,7 +272,9 @@ impl Login {
     async fn exchange_claude(&self, code: &str) -> Result<Value, String> {
         // claude.ai may append the state to the code it shows for manual entry.
         let code = code.split('#').next().unwrap_or(code);
-        let response = reqwest::Client::new()
+        let response = crate::utils::with_account_proxy(reqwest::Client::builder(), "")?
+            .build()
+            .map_err(|e| e.to_string())?
             .post(CLAUDE_TOKEN_URL)
             .timeout(Duration::from_secs(30))
             .json(&json!({

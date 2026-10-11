@@ -17,30 +17,41 @@ impl Application {
         }
         let identity = auth::account_identity(&document)?;
         let store = repository::load_accounts(&self.paths.store())?;
-        let proxy = store
+        let existing = store
             .accounts
             .iter()
-            .find(|a| auth::account_identity(&a.auth_json).ok().as_ref() == Some(&identity))
-            .map(|a| a.proxy_url.clone())
-            .unwrap_or_default();
-        let (usage, usage_error) = match account_network::fetch(
-            self.network.as_ref(),
-            &document,
-            &proxy,
-            now_unix_seconds(),
-        )
-        .await
-        {
-            Ok((refreshed, usage)) => {
-                document = refreshed;
-                extracted = auth::extract_auth(&document)?;
-                (Some(usage), None)
-            }
-            Err(error) if account_network::deactivated(&error) => {
-                self.mark_pending_deactivated(&extracted.account_id)?;
-                return Err("error.accounts.workspace_deactivated".into());
-            }
-            Err(error) => (None, Some(error)),
+            .find(|a| auth::account_identity(&a.auth_json).ok().as_ref() == Some(&identity));
+        let proxy = existing.map(|a| a.proxy_url.clone()).unwrap_or_default();
+        // A new account waits for a manual refresh unless the user opted in.
+        let contact = existing.is_some_and(|a| !a.awaiting_first_request())
+            || (existing.is_none() && self.preferences()?.request_new_accounts);
+        let fetched = if contact {
+            Some(
+                account_network::fetch(
+                    self.network.as_ref(),
+                    &document,
+                    &proxy,
+                    now_unix_seconds(),
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+        let (usage, usage_error) = match fetched {
+            None => (None, None),
+            Some(result) => match result {
+                Ok((refreshed, usage)) => {
+                    document = refreshed;
+                    extracted = auth::extract_auth(&document)?;
+                    (Some(usage), None)
+                }
+                Err(error) if account_network::deactivated(&error) => {
+                    self.mark_pending_deactivated(&extracted.account_id)?;
+                    return Err("error.accounts.workspace_deactivated".into());
+                }
+                Err(error) => (None, Some(error)),
+            },
         };
         let mut name = workspace
             .and_then(|id| {
@@ -53,7 +64,8 @@ impl Application {
                     .map(str::to_owned)
             })
             .or(extracted.team_name.clone());
-        if workspace.is_none()
+        if contact
+            && workspace.is_none()
             && ["team", "business", "enterprise"].contains(
                 &extracted
                     .plan_type

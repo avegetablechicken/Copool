@@ -468,3 +468,8 @@
 "accounts.notice.claude_provider_switched_format" = "Claude Code ahora usa Sub2api %@; reinicia Claude Code para usarlo";
 "error.claude.sub2api_not_configured" = "Añade primero un proveedor Sub2api para Claude en Ajustes.";
 "error.claude.sub2api_api_key_missing" = "Indica primero la clave API para Claude Code en este proveedor Sub2api.";
+"settings.request_new_accounts" = "Contactar con el upstream justo después de importar una cuenta nueva";
+"settings.request_new_accounts.description" = "Si está desactivado, Copool no envía nada al upstream para una cuenta recién importada (uso, espacios de trabajo, perfil, enrutamiento del proxy) hasta que actualices su tarjeta o todas, para que puedas configurar antes su proxy. El inicio de sesión y el intercambio de tokens siguen ocurriendo al importar.";
+"accounts.card.awaiting_first_request" = "Aún sin actualizar";
+"accounts.card.awaiting_first_request.help" = "Copool aún no ha contactado con el upstream para esta cuenta. Configura su proxy si hace falta y luego actualiza esta tarjeta.";
+"error.claude.account_unnamed" = "Este inicio de sesión de Claude Code no indica su cuenta. Añade la cuenta iniciando sesión en el navegador, o activa «Contactar con el upstream justo después de importar una cuenta nueva» para consultarla.";

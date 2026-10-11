@@ -468,3 +468,8 @@
 "accounts.notice.claude_provider_switched_format" = "Claude Code utilise maintenant Sub2api %@ ; redémarrez Claude Code pour l’utiliser";
 "error.claude.sub2api_not_configured" = "Ajoutez d’abord un fournisseur Sub2api pour Claude dans les réglages.";
 "error.claude.sub2api_api_key_missing" = "Renseignez d’abord la clé API pour Claude Code de ce fournisseur Sub2api.";
+"settings.request_new_accounts" = "Contacter l’amont juste après l’import d’un nouveau compte";
+"settings.request_new_accounts.description" = "Désactivé, Copool n’envoie rien en amont pour un compte nouvellement importé (usage, espaces de travail, profil, routage du proxy) tant que vous n’actualisez pas sa carte ou tout, pour que vous puissiez d’abord définir son proxy. La connexion et l’échange de jetons ont toujours lieu à l’import.";
+"accounts.card.awaiting_first_request" = "Pas encore actualisé";
+"accounts.card.awaiting_first_request.help" = "Copool n’a pas encore contacté l’amont pour ce compte. Définissez son proxy si besoin, puis actualisez cette carte.";
+"error.claude.account_unnamed" = "Cette connexion Claude Code n’indique pas son compte. Ajoutez le compte par une connexion dans le navigateur, ou activez « Contacter l’amont juste après l’import d’un nouveau compte » pour le rechercher.";

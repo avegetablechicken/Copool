@@ -58,6 +58,9 @@ pub struct Preferences {
     pub host_api_only: bool,
     pub restart_editors_on_switch: bool,
     pub restart_editor_targets: Vec<String>,
+    /// Contact upstream as soon as a new account is imported; otherwise it
+    /// waits for a manual refresh, so that its proxy can be set first.
+    pub request_new_accounts: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -74,6 +77,7 @@ impl Default for Preferences {
             host_api_only: false,
             restart_editors_on_switch: false,
             restart_editor_targets: vec![],
+            request_new_accounts: false,
         }
     }
 }
@@ -135,6 +139,11 @@ impl Preferences {
             host_api_only: settings.local_proxy_host_api_only,
             restart_editors_on_switch: settings.restart_editors_on_switch,
             restart_editor_targets: settings.restart_editor_targets,
+            request_new_accounts: settings
+                .extra
+                .get("requestNewAccounts")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         };
         validate_preferences(&p)?;
         Ok(p)
@@ -349,6 +358,8 @@ impl Application {
         s.restart_editors_on_switch = p.restart_editors_on_switch;
         s.restart_editor_targets = p.restart_editor_targets.clone();
         s.extra
+            .insert("requestNewAccounts".into(), p.request_new_accounts.into());
+        s.extra
             .insert("refreshSeconds".into(), p.refresh_seconds.into());
         s.extra
             .insert("rustPreferencesMigrated".into(), true.into());
@@ -471,10 +482,12 @@ impl Application {
     }
     /// Import a refresh token without modifying the current Codex login.
     pub async fn import_refresh_token(&self, token: &str) -> Result<usize> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| e.to_string())?;
+        let client = crate::utils::with_account_proxy(
+            reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)),
+            "",
+        )?
+        .build()
+        .map_err(|e| e.to_string())?;
         let document = auth::exchange_refresh_token_at(
             &client,
             "https://auth.openai.com/oauth/token",
@@ -571,6 +584,7 @@ impl Application {
             validate_proxy(&account.proxy_url)?;
             incoming.push(account);
         }
+        let defer = !self.preferences()?.request_new_accounts;
         let _op = self.operations.lock().await;
         let _lock = self.state.store_lock.lock().await;
         let mut saved = store::load_store_from_path(&self.paths.store())?;
@@ -602,6 +616,11 @@ impl Application {
             } else {
                 // External IDs may collide with another principal's local ID.
                 account.id = uuid::Uuid::new_v4().to_string();
+                if defer {
+                    account
+                        .extra
+                        .insert(crate::models::FIRST_REQUEST_PENDING.into(), true.into());
+                }
                 saved.accounts.push(account);
             }
         }
@@ -795,6 +814,9 @@ impl Application {
                 .find(|a| a.id == id)
                 .ok_or("Account not found")?
         };
+        if account.awaiting_first_request() {
+            return Ok(());
+        }
         if !force
             && account
                 .usage
@@ -873,6 +895,27 @@ impl Application {
             self.persist_accounts(&saved)?;
         }
         result.map(|_| ())
+    }
+    /// A manual refresh lets new accounts contact upstream: one account, or
+    /// all of them without an id.
+    pub async fn release_new_accounts(&self, id: Option<&str>) -> Result<()> {
+        let _lock = self.state.store_lock.lock().await;
+        let mut saved = store::load_store_from_path(&self.paths.store())?;
+        let mut changed = false;
+        for account in saved
+            .accounts
+            .iter_mut()
+            .filter(|a| id.is_none_or(|id| a.id == id))
+        {
+            changed |= account
+                .extra
+                .remove(crate::models::FIRST_REQUEST_PENDING)
+                .is_some();
+        }
+        if changed {
+            self.persist_accounts(&saved)?;
+        }
+        Ok(())
     }
     pub async fn refresh_accounts(&self, ids: Option<&[String]>, force: bool) -> Result<()> {
         let accounts = self.accounts().await?;
@@ -1089,12 +1132,52 @@ mod tests {
         );
         json!({"tokens": {"account_id": "shared-team", "access_token": "test-only", "id_token": format!("x.{claims}.x")}})
     }
+    /// An isolated pool that contacts upstream right after an import.
     fn app(dir: &tempfile::TempDir) -> Application {
-        Application::open(Paths {
+        let app = Application::open(Paths {
             data_dir: dir.path().join("data"),
             codex_auth: dir.path().join("codex/auth.json"),
         })
-        .unwrap()
+        .unwrap();
+        let mut settings = app.configuration().unwrap();
+        settings
+            .extra
+            .insert("requestNewAccounts".into(), true.into());
+        app.persist_configuration(&settings).unwrap();
+        app
+    }
+    #[tokio::test]
+    async fn a_new_account_contacts_upstream_only_after_a_manual_refresh() {
+        let (_dir, app, network) = crate::legacy_tests::network_fixture::waiting_fixture();
+        assert!(!app.preferences().unwrap().request_new_accounts);
+        app.import_authorized(document("alice"), None, &[])
+            .await
+            .unwrap();
+        app.import_json(&document("bob").to_string()).await.unwrap();
+        let accounts = app.accounts().await.unwrap();
+        assert!(accounts.iter().all(|a| a.awaiting_first_request));
+        // No import, background or workspace refresh, nor the proxy, uses them.
+        app.refresh_recurring(0).await.unwrap();
+        app.sync_workspace_directory().await.unwrap();
+        assert_eq!(app.proxy_status().await.unwrap().available_accounts, 0);
+        assert!(network.calls.lock().unwrap().is_empty());
+        // A manual refresh releases one account.
+        let alice = accounts
+            .iter()
+            .find(|a| a.email.as_deref() == Some("alice@example.com"))
+            .unwrap();
+        app.release_new_accounts(Some(&alice.id)).await.unwrap();
+        app.refresh_usage(&alice.id).await.unwrap();
+        assert_eq!(network.calls.lock().unwrap().len(), 1);
+        assert_eq!(app.proxy_status().await.unwrap().available_accounts, 1);
+        let accounts = app.accounts().await.unwrap();
+        let alice = accounts.iter().find(|a| a.id == alice.id).unwrap();
+        assert!(!alice.awaiting_first_request && alice.usage.is_some());
+        // Signing in again to an account still waiting does not contact upstream.
+        app.import_authorized(document("bob"), None, &[])
+            .await
+            .unwrap();
+        assert_eq!(network.calls.lock().unwrap().len(), 1);
     }
     #[tokio::test]
     async fn shared_workspace_keeps_principals_distinct_and_switch_is_exact() {

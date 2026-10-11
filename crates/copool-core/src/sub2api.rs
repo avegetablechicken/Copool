@@ -68,6 +68,7 @@ impl Account {
             usage: self.usage.clone().map(UsageSnapshot::with_matching_windows),
             usage_error: self.usage_error.clone(),
             is_current: false,
+            awaiting_first_request: false,
             available: self.status.eq_ignore_ascii_case("active"),
             proxy_url: self.proxy_url.clone().unwrap_or_default(),
         }

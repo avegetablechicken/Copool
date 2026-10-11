@@ -74,6 +74,21 @@ pub fn fixture() -> (
     crate::Application,
     std::sync::Arc<Network>,
 ) {
+    let (dir, app, network) = waiting_fixture();
+    // As the Swift app: new accounts are looked up as they are imported.
+    let mut settings = app.configuration().unwrap();
+    settings
+        .extra
+        .insert("requestNewAccounts".into(), true.into());
+    app.persist_configuration(&settings).unwrap();
+    (dir, app, network)
+}
+/// The default: new accounts wait for a manual refresh.
+pub fn waiting_fixture() -> (
+    tempfile::TempDir,
+    crate::Application,
+    std::sync::Arc<Network>,
+) {
     let (dir, mut app) = super::fixture();
     let network = std::sync::Arc::new(Network::default());
     app.network = network.clone();

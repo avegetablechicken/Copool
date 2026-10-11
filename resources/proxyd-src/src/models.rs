@@ -2,6 +2,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+/// `StoredAccount.extra` key of `awaiting_first_request`.
+pub(crate) const FIRST_REQUEST_PENDING: &str = "firstRequestPending";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AccountsStore {
     #[serde(flatten)]
@@ -86,6 +89,9 @@ pub struct AccountSummary {
     pub usage: Option<UsageSnapshot>,
     pub usage_error: Option<String>,
     pub is_current: bool,
+    /// A newly imported account Copool has not contacted upstream yet.
+    #[serde(default)]
+    pub awaiting_first_request: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -396,6 +402,14 @@ pub(crate) struct AppSettingsPatch {
 }
 
 impl StoredAccount {
+    /// Newly imported and not yet released by a manual refresh: no request
+    /// goes upstream for it until then.
+    pub(crate) fn awaiting_first_request(&self) -> bool {
+        self.extra
+            .get(FIRST_REQUEST_PENDING)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
     pub(crate) fn is_available(&self) -> bool {
         self.extra.get("workspaceStatus").and_then(Value::as_str) != Some("deactivated")
             && self
@@ -437,6 +451,7 @@ impl StoredAccount {
             updated_at: self.updated_at,
             usage: self.usage.clone().map(UsageSnapshot::with_matching_windows),
             usage_error: self.usage_error.clone(),
+            awaiting_first_request: self.awaiting_first_request(),
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),

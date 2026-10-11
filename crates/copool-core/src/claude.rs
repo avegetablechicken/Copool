@@ -268,6 +268,9 @@ struct Stored {
     usage: Option<UsageSnapshot>,
     #[serde(default)]
     usage_error: Option<String>,
+    /// Newly imported; nothing goes upstream for it until a manual refresh.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    first_request_pending: bool,
 }
 impl Stored {
     fn summary(&self, current: bool) -> AccountSummary {
@@ -289,6 +292,7 @@ impl Stored {
             usage: self.usage.clone(),
             usage_error: self.usage_error.clone(),
             is_current: current,
+            awaiting_first_request: self.first_request_pending,
         }
     }
 }
@@ -794,13 +798,15 @@ impl Application {
         crate::ranking::sort_for_display(&mut summaries);
         Ok(summaries)
     }
-    /// Adds or updates an account; returns its id and label.
+    /// Adds or updates an account; a new one waits for a manual refresh when
+    /// `defer`. Returns its id, label and whether it waits.
     async fn claude_upsert(
         &self,
         oauth: Value,
         account: Value,
         current: bool,
-    ) -> Result<(String, String)> {
+        defer: bool,
+    ) -> Result<(String, String, bool)> {
         let key = identity(&account).ok_or("Claude did not report the account")?;
         let now = now_unix_seconds();
         let _lock = self.claude.lock.lock().await;
@@ -808,7 +814,7 @@ impl Application {
         let label = text(&account["emailAddress"])
             .or_else(|| text(&account["displayName"]))
             .unwrap_or_else(|| key.clone());
-        let id = match store
+        let (id, awaiting) = match store
             .accounts
             .iter_mut()
             .find(|a| identity(&a.account).as_ref() == Some(&key))
@@ -818,7 +824,7 @@ impl Application {
                 existing.account = account;
                 existing.updated_at = now;
                 existing.usage_error = None;
-                existing.id.clone()
+                (existing.id.clone(), existing.first_request_pending)
             }
             None => {
                 let id = uuid::Uuid::new_v4().to_string();
@@ -832,19 +838,32 @@ impl Application {
                     updated_at: now,
                     usage: None,
                     usage_error: None,
+                    first_request_pending: defer,
                 });
-                id
+                (id, defer)
             }
         };
         if current {
             store.current_account_id = Some(id.clone());
         }
         self.claude_save(&store)?;
-        Ok((id, label))
+        Ok((id, label, awaiting))
     }
     /// Resolve an existing account before requesting its profile. New accounts
     /// have no saved proxy yet; never borrow the currently selected account's.
     fn claude_profile_proxy(&self, oauth: &Value, account: Option<&Value>) -> Result<String> {
+        Ok(self
+            .claude_known(oauth, account)?
+            .map(|(proxy, _)| proxy)
+            .unwrap_or_default())
+    }
+    /// The proxy of the pool's account for this login, and whether it still
+    /// waits for its first manual refresh; none for a new account.
+    fn claude_known(
+        &self,
+        oauth: &Value,
+        account: Option<&Value>,
+    ) -> Result<Option<(String, bool)>> {
         let account_identity = account.and_then(identity);
         let store = self.claude_load()?;
         let mut matches = store.accounts.iter().filter(|stored| {
@@ -856,12 +875,20 @@ impl Application {
             })
         });
         let Some(first) = matches.next() else {
-            return Ok(String::new());
+            return Ok(None);
         };
         if matches.any(|other| other.proxy_url != first.proxy_url) {
             return Err("Cannot determine the Claude account proxy unambiguously".into());
         }
-        Ok(first.proxy_url.clone())
+        Ok(Some((first.proxy_url.clone(), first.first_request_pending)))
+    }
+    /// Whether this login may contact upstream now: a known account that no
+    /// longer waits, or a new one when the user opted in.
+    fn claude_may_contact(&self, known: Option<&(String, bool)>) -> Result<bool> {
+        Ok(match known {
+            Some((_, waiting)) => !waiting,
+            None => self.preferences()?.request_new_accounts,
+        })
     }
     /// Imports the login Claude Code uses; returns the account label.
     pub async fn claude_import_current(&self) -> Result<String> {
@@ -872,16 +899,24 @@ impl Application {
         let oauth = live.oauth().ok_or("error.claude.login_not_found")?.clone();
         let account = match live.account.clone() {
             Some(account) => account,
+            // Only the profile names a login without oauthAccount.
             None => {
+                let known = self.claude_known(&oauth, None)?;
+                if !self.claude_may_contact(known.as_ref())? {
+                    return Err("error.claude.account_unnamed".into());
+                }
                 let token = text(&oauth["accessToken"]).unwrap_or_default();
-                let proxy = self.claude_profile_proxy(&oauth, None)?;
+                let proxy = known.map(|(proxy, _)| proxy).unwrap_or_default();
                 let profile = self.claude_network().profile(&token, &proxy).await?;
                 profile_account(Some(&profile), &Value::Null).0
             }
         };
-        let (id, label) = self.claude_upsert(oauth, account, true).await?;
+        let defer = !self.preferences()?.request_new_accounts;
+        let (id, label, waiting) = self.claude_upsert(oauth, account, true, defer).await?;
         drop(_op);
-        let _ = self.claude_refresh_usage(&id).await;
+        if !waiting {
+            let _ = self.claude_refresh_usage(&id).await;
+        }
         Ok(label)
     }
     /// Stores a browser sign-in without changing Claude Code's login.
@@ -890,8 +925,15 @@ impl Application {
         apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
         let token = text(&oauth["accessToken"]).unwrap_or_default();
         let account = profile_account(None, &tokens).0;
-        let proxy = self.claude_profile_proxy(&oauth, Some(&account))?;
-        let profile = self.claude_network().profile(&token, &proxy).await.ok();
+        let known = self.claude_known(&oauth, Some(&account))?;
+        // The token response names the account; the profile adds its plan,
+        // later on the first refresh for an account that waits.
+        let profile = if self.claude_may_contact(known.as_ref())? {
+            let proxy = known.map(|(proxy, _)| proxy).unwrap_or_default();
+            self.claude_network().profile(&token, &proxy).await.ok()
+        } else {
+            None
+        };
         let (account, subscription, tier) = profile_account(profile.as_ref(), &tokens);
         if let Some(subscription) = subscription {
             oauth["subscriptionType"] = subscription.into();
@@ -899,10 +941,13 @@ impl Application {
         if let Some(tier) = tier {
             oauth["rateLimitTier"] = tier.into();
         }
+        let defer = !self.preferences()?.request_new_accounts;
         let _op = self.claude.operations.lock().await;
-        let (id, label) = self.claude_upsert(oauth, account, false).await?;
+        let (id, label, waiting) = self.claude_upsert(oauth, account, false, defer).await?;
         drop(_op);
-        let _ = self.claude_refresh_usage(&id).await;
+        if !waiting {
+            let _ = self.claude_refresh_usage(&id).await;
+        }
         Ok(label)
     }
     pub async fn claude_delete_account(&self, id: &str) -> Result<()> {
@@ -1048,11 +1093,15 @@ impl Application {
                 .find(|a| a.id == id)
                 .ok_or("Account not found")?
         };
+        if account.first_request_pending {
+            return Ok(());
+        }
         let network = self.claude_network();
         let proxy = account.proxy_url.as_str();
         // A refresh rotates the refresh token, so its result is kept even
         // when the usage request then fails.
         let mut oauth = account.oauth.clone();
+        let mut profiled = None;
         let result = async {
             let refresh = |oauth: &Value| {
                 let network = network.clone();
@@ -1073,6 +1122,22 @@ impl Application {
                 apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                 let token = text(&oauth["accessToken"]).unwrap_or_default();
                 (status, body) = network.usage(&token, proxy).await?;
+            }
+            // An account added without its profile learns its plan here,
+            // through its own proxy.
+            if (200..=299).contains(&status) && text(&oauth["subscriptionType"]).is_none() {
+                if let Ok(found) = network.profile(&token, proxy).await {
+                    let (named, subscription, tier) = profile_account(Some(&found), &Value::Null);
+                    if identity(&named) == identity(&account.account) {
+                        if let Some(subscription) = subscription {
+                            oauth["subscriptionType"] = subscription.into();
+                        }
+                        if let Some(tier) = tier {
+                            oauth["rateLimitTier"] = tier.into();
+                        }
+                        profiled = Some(named);
+                    }
+                }
             }
             match status {
                 200..=299 => usage_snapshot(&body, plan(&oauth), now_unix_seconds()),
@@ -1116,9 +1181,32 @@ impl Application {
             if let Some(oauth) = refreshed {
                 target.oauth = oauth;
             }
+            if let (Some(named), Some(stored)) = (profiled, target.account.as_object_mut()) {
+                for (key, value) in named.as_object().into_iter().flatten() {
+                    stored.insert(key.clone(), value.clone());
+                }
+            }
             self.claude_save(&store)?;
         }
         result.map(|_| ())
+    }
+    /// A manual refresh lets new accounts contact upstream: one account, or
+    /// all of them without an id.
+    pub async fn claude_release_new_accounts(&self, id: Option<&str>) -> Result<()> {
+        let _lock = self.claude.lock.lock().await;
+        let mut store = self.claude_load()?;
+        let mut changed = false;
+        for account in store
+            .accounts
+            .iter_mut()
+            .filter(|a| id.is_none_or(|id| a.id == id))
+        {
+            changed |= std::mem::take(&mut account.first_request_pending);
+        }
+        if changed {
+            self.claude_save(&store)?;
+        }
+        Ok(())
     }
     /// Every account, or only the current one between full refreshes.
     pub async fn claude_refresh(&self, ids: Option<Vec<String>>) -> Result<()> {
@@ -1186,6 +1274,7 @@ impl Application {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Preferences;
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -1241,7 +1330,18 @@ mod tests {
         .unwrap();
         write_account(location, &account).unwrap();
     }
-    fn app(dir: &tempfile::TempDir) -> (Application, Location, Arc<Fake>) {
+    /// An isolated pool that contacts upstream right after an import.
+    async fn app(dir: &tempfile::TempDir) -> (Application, Location, Arc<Fake>) {
+        let (app, location, fake) = waiting_app(dir);
+        let preferences = Preferences {
+            request_new_accounts: true,
+            ..app.preferences().unwrap()
+        };
+        app.save_preferences(preferences).await.unwrap();
+        (app, location, fake)
+    }
+    /// An isolated pool with the default: new accounts wait for a refresh.
+    fn waiting_app(dir: &tempfile::TempDir) -> (Application, Location, Arc<Fake>) {
         let app = Application::open(crate::Paths {
             data_dir: dir.path().join("data"),
             codex_auth: dir.path().join("codex/auth.json"),
@@ -1266,7 +1366,7 @@ mod tests {
     #[tokio::test]
     async fn imports_switches_and_follows_the_claude_code_login() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, location, _) = app(&dir);
+        let (app, location, _) = app(&dir).await;
         fs::create_dir_all(&location.config_dir).unwrap();
         fs::write(
             &location.global_config,
@@ -1329,7 +1429,7 @@ mod tests {
     #[tokio::test]
     async fn an_expired_token_is_refreshed_and_handed_to_claude_code() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, location, fake) = app(&dir);
+        let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", 1);
         app.claude_import_current().await.unwrap();
         assert_eq!(*fake.refreshed.lock().unwrap(), vec!["alice-refresh"]);
@@ -1355,7 +1455,7 @@ mod tests {
     #[tokio::test]
     async fn a_card_refresh_uses_the_tokens_claude_code_rotated() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, location, fake) = app(&dir);
+        let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let (mut oauth, _) = login("alice", LATER + 1);
@@ -1374,7 +1474,7 @@ mod tests {
     #[tokio::test]
     async fn a_browser_sign_in_is_stored_without_changing_claude_code() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, location, _) = app(&dir);
+        let (app, location, _) = app(&dir).await;
         sign_in(&location, "alice", LATER);
         let label = app
             .claude_import_login(json!({"access_token":"new-access","refresh_token":"new-refresh","expires_in":28800,"scope":"user:inference user:profile"}))
@@ -1400,7 +1500,7 @@ mod tests {
     #[tokio::test]
     async fn browser_profile_uses_the_existing_account_proxy_with_rotated_tokens() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, location, fake) = app(&dir);
+        let (app, location, fake) = app(&dir).await;
         // The currently selected account must not supply the new login's proxy.
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
@@ -1409,7 +1509,10 @@ mod tests {
             .await
             .unwrap();
         let (oauth, account) = login("new", LATER);
-        let (id, _) = app.claude_upsert(oauth, account, false).await.unwrap();
+        let (id, _, _) = app
+            .claude_upsert(oauth, account, false, false)
+            .await
+            .unwrap();
         app.claude_save_account_proxy(&id, "socks5://127.0.0.1:8002")
             .await
             .unwrap();
@@ -1431,7 +1534,7 @@ mod tests {
     async fn importing_without_local_identity_resolves_profile_proxy_from_credentials() {
         for retained in ["accessToken", "refreshToken"] {
             let dir = tempfile::tempdir().unwrap();
-            let (app, location, fake) = app(&dir);
+            let (app, location, fake) = app(&dir).await;
             sign_in(&location, "new", LATER);
             app.claude_import_current().await.unwrap();
             let id = app.claude_load().unwrap().accounts[0].id.clone();
@@ -1463,7 +1566,7 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_profile_does_not_use_another_accounts_proxy() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, location, fake) = app(&dir);
+        let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
@@ -1476,6 +1579,57 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(*fake.profile_proxies.lock().unwrap(), vec![""]);
+    }
+
+    #[tokio::test]
+    async fn a_new_account_contacts_upstream_only_after_a_manual_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", 1);
+        app.claude_import_current().await.unwrap();
+        app.claude_import_login(json!({
+            "access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600,
+            "account": {"uuid": "acct-new", "email_address": "new@example.com"},
+            "organization": {"uuid": "org-new"}
+        }))
+        .await
+        .unwrap();
+        // Neither import, nor the background refresh, reached upstream.
+        app.claude_refresh_recurring(0).await.unwrap();
+        let accounts = app.claude_accounts().await.unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert!(accounts
+            .iter()
+            .all(|a| a.awaiting_first_request && a.usage.is_none()));
+        assert!(fake.refreshed.lock().unwrap().is_empty());
+        assert!(fake.profile_proxies.lock().unwrap().is_empty());
+
+        // A manual refresh releases one account, through its own proxy, and
+        // learns the plan its profile was not asked for at sign-in.
+        let new = accounts
+            .iter()
+            .find(|a| a.label == "new@example.com")
+            .unwrap();
+        app.claude_save_account_proxy(&new.id, "socks5://127.0.0.1:8002")
+            .await
+            .unwrap();
+        app.claude_release_new_accounts(Some(&new.id))
+            .await
+            .unwrap();
+        app.claude_refresh_usage(&new.id).await.unwrap();
+        assert_eq!(
+            *fake.profile_proxies.lock().unwrap(),
+            vec!["socks5://127.0.0.1:8002"]
+        );
+        let accounts = app.claude_accounts().await.unwrap();
+        let new = accounts.iter().find(|a| a.id == new.id).unwrap();
+        assert!(!new.awaiting_first_request);
+        assert!(new.usage.is_some());
+        assert_eq!(new.plan_type.as_deref(), Some("max 5x"));
+        assert!(accounts
+            .iter()
+            .any(|a| a.id != new.id && a.awaiting_first_request));
+        assert!(fake.refreshed.lock().unwrap().is_empty());
     }
 
     #[test]

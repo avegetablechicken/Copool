@@ -468,3 +468,8 @@
 "accounts.notice.claude_provider_switched_format" = "Claude Code 已改用 Sub2api %@，重新啟動 Claude Code 後生效";
 "error.claude.sub2api_not_configured" = "請先在設定中新增 Claude 的 Sub2api Provider。";
 "error.claude.sub2api_api_key_missing" = "請先在此 Sub2api Provider 中填寫 Claude Code 使用的 API Key。";
+"settings.request_new_accounts" = "匯入新帳號後立即請求上游";
+"settings.request_new_accounts.description" = "關閉時，新匯入的帳號在你重新整理該卡片或全部之前，Copool 不會為它向上游發出任何請求（額度、工作區、帳號資料、代理轉送），以便先為它設定代理。登入與換取權杖仍在匯入時進行。";
+"accounts.card.awaiting_first_request" = "待首次重新整理";
+"accounts.card.awaiting_first_request.help" = "Copool 尚未為此帳號向上游發出請求。如需代理請先設定，再重新整理此卡片。";
+"error.claude.account_unnamed" = "此 Claude Code 登入未標明所屬帳號。請透過瀏覽器登入新增帳號，或開啟「匯入新帳號後立即請求上游」以查詢帳號資料。";

@@ -496,3 +496,8 @@
 "accounts.notice.claude_provider_switched_format" = "Claude Code now uses Sub2api %@; restart Claude Code to use it";
 "error.claude.sub2api_not_configured" = "Add a Claude Sub2api provider in Settings first.";
 "error.claude.sub2api_api_key_missing" = "Set the API key for Claude Code in this Sub2api provider first.";
+"settings.request_new_accounts" = "Contact upstream right after importing a new account";
+"settings.request_new_accounts.description" = "When off, Copool sends nothing upstream for a newly imported account (usage, workspaces, profile, proxy routing) until you refresh its card or refresh all, so that you can set its proxy first. Signing in and exchanging tokens still happen during the import.";
+"accounts.card.awaiting_first_request" = "Not yet refreshed";
+"accounts.card.awaiting_first_request.help" = "Copool has not contacted upstream for this account. Set its proxy if needed, then refresh this card.";
+"error.claude.account_unnamed" = "This Claude Code login does not name its account. Add the account with a browser sign-in, or turn on “Contact upstream right after importing a new account” to look it up.";

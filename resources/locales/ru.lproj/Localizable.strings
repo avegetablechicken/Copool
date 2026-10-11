@@ -468,3 +468,8 @@
 "accounts.notice.claude_provider_switched_format" = "Claude Code теперь использует Sub2api %@; перезапустите Claude Code";
 "error.claude.sub2api_not_configured" = "Сначала добавьте провайдера Sub2api для Claude в настройках.";
 "error.claude.sub2api_api_key_missing" = "Сначала укажите API-ключ для Claude Code в этом провайдере Sub2api.";
+"settings.request_new_accounts" = "Обращаться к upstream сразу после импорта нового аккаунта";
+"settings.request_new_accounts.description" = "Если выключено, Copool ничего не отправляет upstream для только что импортированного аккаунта (использование, рабочие пространства, профиль, маршрутизация прокси), пока вы не обновите его карточку или все, чтобы сначала задать прокси. Вход и обмен токенов по-прежнему выполняются при импорте.";
+"accounts.card.awaiting_first_request" = "Ещё не обновлён";
+"accounts.card.awaiting_first_request.help" = "Copool ещё не обращался к upstream для этого аккаунта. При необходимости задайте прокси, затем обновите карточку.";
+"error.claude.account_unnamed" = "Этот вход Claude Code не указывает аккаунт. Добавьте аккаунт через вход в браузере или включите «Обращаться к upstream сразу после импорта нового аккаунта», чтобы его определить.";

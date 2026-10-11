@@ -475,13 +475,26 @@ function accountControls(account, full, view) {
   }
   return actions;
 }
+/// The plan tag. Codex treats an unknown plan as Team; Claude shows none
+/// until its plan is known.
+function planTag(account, view) {
+  const known = P.clean(account.usage?.planType) || P.clean(account.planType);
+  return pool === "claude" && !known ? "" : el("span", "tag plan", view.plan);
+}
 function accountTags(account, view) {
   const tags = el("span", "account-tags");
-  tags.append(el("span", "tag plan", view.plan));
+  tags.append(planTag(account, view));
   if (view.workspaceTag)
     tags.append(el("span", "tag muted", view.workspaceTag));
   if (account.isCurrent)
     tags.append(el("span", "tag good", tr("accounts.card.current")));
+  // Imported but not yet requested upstream: refreshing the card sends the
+  // first request, after its proxy is set.
+  if (account.awaitingFirstRequest) {
+    const waiting = el("span", "tag muted", tr("accounts.card.awaiting_first_request"));
+    waiting.title = tr("accounts.card.awaiting_first_request.help");
+    tags.append(waiting);
+  }
   if (view.status === "deactivated")
     tags.append(el("span", "tag bad", tr("accounts.card.status.deactivated")));
   return tags;
@@ -547,7 +560,7 @@ function renderAccounts(accounts) {
       row.append(
         el("span", "dot"),
         name,
-        el("span", "tag plan", view.plan),
+        planTag(account, view) || el("span", "tag plan placeholder"),
         compactUsage(view.compact[0], "5h"),
         compactUsage(view.compact[1], "1w"),
         accountControls(account, full, view),

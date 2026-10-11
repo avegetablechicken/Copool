@@ -951,6 +951,11 @@ html:not(.macos) .select-menu {
   --tag: var(--pink);
 }
 
+/* Keeps a collapsed row's columns when a Claude plan is not yet known. */
+.tag.plan.placeholder {
+  visibility: hidden;
+}
+
 [data-plan^="MAX"] .tag.plan {
   --tag: #d97757;
 }

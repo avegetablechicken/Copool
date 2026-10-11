@@ -36,7 +36,7 @@ impl Application {
     pub(crate) async fn reconcile_workspace_names(&self, force: bool) -> Result<(), String> {
         let snapshot = repository::load_accounts(&self.paths.store())?;
         for account in snapshot.accounts {
-            if !account.is_available() {
+            if !account.is_available() || account.awaiting_first_request() {
                 continue;
             }
             if !force
@@ -120,7 +120,7 @@ impl Application {
         let mut discoveries = BTreeMap::new();
         let mut did_fetch = false;
         for account in &snapshot.accounts {
-            if !account.is_available() {
+            if !account.is_available() || account.awaiting_first_request() {
                 continue;
             }
             let Ok(extracted) = auth::extract_auth(&account.auth_json) else {

@@ -1782,7 +1782,7 @@ async fn load_proxy_candidates(
 }
 
 fn account_to_proxy_candidate(account: StoredAccount) -> Option<ProxyCandidate> {
-    if !account.is_available() {
+    if !account.is_available() || account.awaiting_first_request() {
         return None;
     }
     let extracted = if let Some(provider) = account.auth_json.get("copoolProvider") {

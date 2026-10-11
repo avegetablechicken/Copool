@@ -80,6 +80,8 @@ async fn update_account(
 }
 #[tauri::command]
 async fn refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), String> {
+    // A manual refresh is what lets a new account contact upstream.
+    app.release_new_accounts(id.as_deref()).await?;
     match id {
         Some(id) => app.refresh_usage(&id).await,
         None => app.refresh_all().await,
@@ -255,6 +257,7 @@ async fn claude_smart_switch(app: State<'_, App>) -> Result<SmartSwitchOutcome, 
 }
 #[tauri::command]
 async fn claude_refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), String> {
+    app.claude_release_new_accounts(id.as_deref()).await?;
     match id {
         Some(id) => app.claude_refresh_usage(&id).await,
         None => app.claude_refresh(None).await,
