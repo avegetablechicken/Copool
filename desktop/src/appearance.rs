@@ -3,12 +3,13 @@
 use tauri::{App, Manager};
 
 pub fn configure(app: &mut App) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window("main") {
+    // Non-macOS release builds do not need any window appearance overrides.
+    if let Some(_window) = app.get_webview_window("main") {
         #[cfg(target_os = "macos")]
         {
             use tauri::window::{Effect, EffectState, EffectsBuilder};
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-            window.set_effects(
+            _window.set_effects(
                 EffectsBuilder::new()
                     .effect(Effect::Popover)
                     .state(EffectState::Active)
@@ -20,8 +21,8 @@ pub fn configure(app: &mut App) -> tauri::Result<()> {
         // Release builds always follow the OS, like the SwiftUI application.
         #[cfg(debug_assertions)]
         match std::env::var("COPOOL_PREVIEW_APPEARANCE").as_deref() {
-            Ok("dark") => window.set_theme(Some(tauri::Theme::Dark))?,
-            Ok("light") => window.set_theme(Some(tauri::Theme::Light))?,
+            Ok("dark") => _window.set_theme(Some(tauri::Theme::Dark))?,
+            Ok("light") => _window.set_theme(Some(tauri::Theme::Light))?,
             _ => {}
         }
     }
