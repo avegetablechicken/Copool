@@ -508,10 +508,9 @@ async fn dismiss_workspace(app: State<'_, App>, id: String) -> Result<(), String
 }
 #[tauri::command]
 async fn quit_app(app: tauri::AppHandle, tunnel: State<'_, TunnelState>) -> Result<(), String> {
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        tunnel.0.lock().await.stop(),
-    )
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tunnel.0.lock().await.stop().await
+    })
     .await;
     app.exit(0);
     Ok(())
@@ -591,7 +590,11 @@ fn main() {
                     "quit" => {
                         let handle = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = handle.state::<TunnelState>().0.lock().await.stop().await;
+                            let _ =
+                                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                                    handle.state::<TunnelState>().0.lock().await.stop().await
+                                })
+                                .await;
                             handle.exit(0);
                         });
                     }
@@ -694,10 +697,9 @@ fn main() {
                 {
                     task.abort();
                 }
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    handle.state::<TunnelState>().0.lock().await.stop(),
-                )
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    handle.state::<TunnelState>().0.lock().await.stop().await
+                })
                 .await;
                 handle.exit(0);
             });
