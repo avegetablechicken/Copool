@@ -12,9 +12,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, path::PathBuf, sync::Arc};
-// Only the macOS Keychain commands are timed.
-#[cfg(target_os = "macos")]
-use std::time::Duration;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -633,90 +630,28 @@ fn set_member(document: &str, key: &str, value: &Value) -> Result<String> {
     ))
 }
 
-#[cfg(target_os = "macos")]
-fn keychain_user() -> String {
-    std::env::var("USER").unwrap_or_default()
+/// Background synchronization must never open a Keychain authorization dialog.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeychainAccess {
+    Background,
+    Interactive,
 }
 #[cfg(target_os = "macos")]
-async fn keychain_read(service: &str) -> Result<Option<Value>> {
-    let user = keychain_user();
-    // Claude Code files the entry under the login name; any account otherwise.
-    for account in [Some(user.as_str()), None] {
-        let mut args = vec!["find-generic-password", "-s", service, "-w"];
-        if let Some(account) = account.filter(|a| !a.is_empty()) {
-            args.extend(["-a", account]);
-        }
-        let output = crate::process::run("/usr/bin/security", &args, Duration::from_secs(15))
-            .await
-            .map_err(|e| e.to_string())?;
-        if output.status.success() {
-            return parse_credentials(&output.stdout)
-                .map(Some)
-                .ok_or_else(|| "Invalid Claude Code Keychain credentials".into());
-        }
-    }
-    Ok(None)
-}
-#[cfg(not(target_os = "macos"))]
-async fn keychain_read(_: &str) -> Result<Option<Value>> {
-    Ok(None)
-}
-/// As Claude Code: `security -i` on standard input, so the token never
-/// appears in a process listing.
-#[cfg(target_os = "macos")]
-async fn keychain_write(service: &str, document: &Value) -> Result<()> {
-    use tokio::io::AsyncWriteExt;
-    let user = keychain_user();
-    if [&user, service]
-        .iter()
-        .any(|v| v.contains(['"', '\\', '\n']))
-    {
-        return Err("Unsupported Keychain account name".into());
-    }
-    let payload = hex(&serde_json::to_vec(document).map_err(|e| e.to_string())?);
-    let mut child = tokio::process::Command::new("/usr/bin/security")
-        .arg("-i")
-        .kill_on_drop(true)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let mut stdin = child.stdin.take().ok_or("Keychain input unavailable")?;
-    stdin
-        .write_all(
-            format!("add-generic-password -U -a \"{user}\" -s \"{service}\" -X \"{payload}\"\n")
-                .as_bytes(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    drop(stdin);
-    let output = tokio::time::timeout(Duration::from_secs(15), child.wait_with_output())
-        .await
-        .map_err(|_| "The Keychain did not respond")?
-        .map_err(|e| e.to_string())?;
-    // `security -i` reports a failed command on stderr, not in its status.
-    let written = keychain_read(service).await?;
-    if !output.status.success()
-        || written.as_ref().map(|d| &d["claudeAiOauth"]) != Some(&document["claudeAiOauth"])
-    {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "Could not write the Claude Code Keychain entry {}",
-            detail.trim()
-        ));
-    }
-    Ok(())
-}
-#[cfg(not(target_os = "macos"))]
-async fn keychain_write(_: &str, _: &Value) -> Result<()> {
-    Err("The Keychain is only available on macOS".into())
-}
+mod keychain;
 
 async fn read_live(location: &Location) -> Result<Option<Live>> {
+    read_live_with_access(location, KeychainAccess::Background).await
+}
+async fn read_live_with_access(
+    location: &Location,
+    access: KeychainAccess,
+) -> Result<Option<Live>> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = access;
     let mut document = None;
+    #[cfg(target_os = "macos")]
     if let Some(service) = &location.keychain {
-        document = keychain_read(service).await?;
+        document = keychain::read(service, access).await?;
     }
     if document.is_none() {
         document = match fs::read(location.credentials_file()) {
@@ -737,13 +672,27 @@ async fn read_live(location: &Location) -> Result<Option<Live>> {
     };
     Ok(Some(Live { document, account }))
 }
-async fn write_credentials(location: &Location, document: &Value) -> Result<()> {
+async fn write_credentials(
+    location: &Location,
+    document: &Value,
+    access: KeychainAccess,
+) -> Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = access;
     let file = location.credentials_file();
     if let Some(service) = &location.keychain {
-        keychain_write(service, document).await?;
-        // A file Claude Code falls back to must not keep the old login.
-        if !file.exists() {
-            return Ok(());
+        #[cfg(target_os = "macos")]
+        {
+            keychain::write(service, document, access).await?;
+            // A file Claude Code falls back to must not keep the old login.
+            if !file.exists() {
+                return Ok(());
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = service;
+            return Err("The Keychain is only available on macOS".into());
         }
     }
     write_json(&file, document)
@@ -964,7 +913,7 @@ impl Application {
     /// Imports the login Claude Code uses; returns the account label.
     pub async fn claude_import_current(&self) -> Result<String> {
         let _op = self.claude.operations.lock().await;
-        let live = read_live(&self.claude_location())
+        let live = read_live_with_access(&self.claude_location(), KeychainAccess::Interactive)
             .await?
             .ok_or("error.claude.login_not_found")?;
         let (id, label, waiting) = self.claude_import_live(live, true).await?;
@@ -1102,6 +1051,14 @@ impl Application {
     /// Gives Claude Code this account's login and identity. Its previous login
     /// is kept in `claude-before-switch.json`; a failed step is rolled back.
     pub async fn claude_switch_account(&self, id: &str) -> Result<SwitchExecution> {
+        self.claude_switch_with_access(id, KeychainAccess::Interactive)
+            .await
+    }
+    async fn claude_switch_with_access(
+        &self,
+        id: &str,
+        access: KeychainAccess,
+    ) -> Result<SwitchExecution> {
         let _op = self.claude.operations.lock().await;
         if sub2api::is_card(id) {
             return self.claude_switch_sub2api(id).await;
@@ -1111,13 +1068,16 @@ impl Application {
         let location = self.claude_location();
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
+        let live = read_live_with_access(&location, access).await?;
+        if follow_live(&mut store, live.as_ref()) {
+            self.claude_save(&store)?;
+        }
         let target = store
             .accounts
             .iter()
             .find(|a| a.id == id)
             .ok_or("Account not found")?
             .clone();
-        let live = read_live(&location).await?;
         let previous_document = live.as_ref().map(|l| l.document.clone());
         let previous_account = live.as_ref().and_then(|l| l.account.clone());
         if live.is_some() {
@@ -1128,10 +1088,10 @@ impl Application {
         }
         let mut document = previous_document.clone().unwrap_or_else(|| json!({}));
         document["claudeAiOauth"] = target.oauth.clone();
-        write_credentials(&location, &document).await?;
+        write_credentials(&location, &document, access).await?;
         let rollback = |error: String| async {
             let restored = match &previous_document {
-                Some(previous) => write_credentials(&location, previous).await,
+                Some(previous) => write_credentials(&location, previous, access).await,
                 None => Ok(()),
             };
             restored
@@ -1187,15 +1147,18 @@ impl Application {
             execution,
         })
     }
-    /// Usage of one account, refreshing its token when it expired or was
-    /// rejected. The current account's new token is handed to Claude Code.
+    /// Renew the pool copy only, including the selected account. Usage reads
+    /// never write Claude Code credentials or require Keychain authorization.
     pub async fn claude_refresh_usage(&self, id: &str) -> Result<()> {
         if sub2api::is_card(id) {
             return self.claude_refresh_sub2api_card(id).await;
         }
         let _activity = self.begin_refresh(id);
+        // Serialize renewal with imports/switches and other pool refreshes.
+        let _op = self.claude.operations.lock().await;
         let location = self.claude_location();
-        // Tokens Claude Code rotated must be used, never its stale refresh token.
+        // Adopt newer external credentials when accessible, but the pool remains
+        // usable even when the live login is locked, missing or unreadable.
         let live = read_live(&location).await.ok().flatten();
         let account = {
             let _lock = self.claude.lock.lock().await;
@@ -1308,22 +1271,6 @@ impl Application {
         }
         .await;
         let refreshed = Some(oauth).filter(|oauth| *oauth != account.oauth);
-        // Only the login Claude Code still uses for this account is replaced.
-        if let Some(oauth) = &refreshed {
-            if let Ok(Some(live)) = read_live(&location).await {
-                let named = identity(&account.account);
-                let same = (named.is_some() && live.account.as_ref().and_then(identity) == named)
-                    || live.oauth().is_some_and(|o| {
-                        text(&o["refreshToken"]).is_some()
-                            && text(&o["refreshToken"]) == text(&account.oauth["refreshToken"])
-                    });
-                if same {
-                    let mut document = live.document;
-                    document["claudeAiOauth"] = oauth.clone();
-                    write_credentials(&location, &document).await?;
-                }
-            }
-        }
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         if let Some(target) = store.accounts.iter_mut().find(|a| a.id == id) {
@@ -1428,7 +1375,8 @@ impl Application {
             .filter(|a| a.is_current || crate::application::eligible(a))
             .collect();
         if let Some(target) = crate::ranking::auto_switch_target(&candidates) {
-            self.claude_switch_account(&target.id).await?;
+            self.claude_switch_with_access(&target.id, KeychainAccess::Background)
+                .await?;
             return Ok(Some(target.id.clone()));
         }
         Ok(None)
@@ -1765,33 +1713,93 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_expired_token_is_refreshed_and_handed_to_claude_code() {
+    async fn a_live_login_renews_only_the_pool_copy() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, location, fake) = app(&dir).await;
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", 1);
+        let before = fs::read(location.credentials_file()).unwrap();
+        let config_before = fs::read(location.account_file()).unwrap();
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        let (a, b) = tokio::join!(app.claude_refresh_usage(&id), app.claude_refresh_usage(&id));
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(*fake.refreshed.lock().unwrap(), vec!["alice-refresh"]);
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["accessToken"],
+            "fresh-access"
+        );
+        // Re-reading the old live login must not replace the newer pool copy.
+        app.claude_accounts().await.unwrap();
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
+            "fresh-refresh"
+        );
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(
+            *fake.refreshed.lock().unwrap(),
+            vec!["alice-refresh", "fresh-refresh"]
+        );
+        assert_eq!(fs::read(location.credentials_file()).unwrap(), before);
+        assert_eq!(fs::read(location.account_file()).unwrap(), config_before);
+    }
+
+    #[tokio::test]
+    async fn an_inactive_login_renews_once_without_writing_live_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
         sign_in(&location, "alice", 1);
         app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        sign_in(&location, "bob", LATER);
+        let before = fs::read(location.credentials_file()).unwrap();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        let (a, b) = tokio::join!(app.claude_refresh_usage(&id), app.claude_refresh_usage(&id));
+        a.unwrap();
+        b.unwrap();
         assert_eq!(*fake.refreshed.lock().unwrap(), vec!["alice-refresh"]);
-        assert_eq!(live_access(&location), "fresh-access");
-        let stored = app.claude_load().unwrap();
-        assert_eq!(stored.accounts[0].oauth["refreshToken"], "fresh-refresh");
-        assert_eq!(stored.accounts[0].oauth["subscriptionType"], "max");
-
-        // A rejected token is refreshed once; a second rejection asks to sign in.
+        assert_eq!(fs::read(location.credentials_file()).unwrap(), before);
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
+            "fresh-refresh"
+        );
         fake.usage
             .lock()
             .unwrap()
             .extend([(401, Value::Null), (401, Value::Null)]);
-        let id = stored.accounts[0].id.clone();
         assert_eq!(
             app.claude_refresh_usage(&id).await.unwrap_err(),
             SIGN_IN_EXPIRED
         );
-        let accounts = app.claude_accounts().await.unwrap();
-        assert_eq!(accounts[0].usage_error.as_deref(), Some(SIGN_IN_EXPIRED));
     }
 
     #[tokio::test]
-    async fn a_card_refresh_uses_the_tokens_claude_code_rotated() {
+    async fn unreadable_live_credentials_do_not_block_pool_renewal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        fs::write(location.credentials_file(), "invalid").unwrap();
+        app.claude_refresh_usage(&id).await.unwrap();
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(*fake.refreshed.lock().unwrap(), vec!["alice-refresh"]);
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
+            "fresh-refresh"
+        );
+        assert_eq!(
+            fs::read_to_string(location.credentials_file()).unwrap(),
+            "invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_card_refresh_follows_rotated_tokens_without_renewing_them() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", LATER);
@@ -1803,10 +1811,10 @@ mod tests {
             &json!({"claudeAiOauth": oauth}),
         )
         .unwrap();
-        fake.usage.lock().unwrap().push((401, Value::Null));
         let id = app.claude_load().unwrap().accounts[0].id.clone();
         app.claude_refresh_usage(&id).await.unwrap();
-        assert_eq!(*fake.refreshed.lock().unwrap(), vec!["rotated-refresh"]);
+        assert_eq!(app.claude_load().unwrap().accounts[0].oauth, oauth);
+        assert!(fake.refreshed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

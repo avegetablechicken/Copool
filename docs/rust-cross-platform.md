@@ -72,8 +72,8 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 - macOS 图标由本机 AppKit 按准确逻辑尺寸生成 SF Symbols 的 1×/2×/3×资源；菜单栏使用原版 figure.pool.swim 模板符号。其他平台保留矢量图标与原应用图标资源。
 - 原版 11 种语言文案由 scripts/sync_rust_locales.py 同步，不另建翻译副本。
 - 系统托盘入口、单实例、独立数据目录。
-- 设置“导入新账号后立即请求上游”（默认关闭）：关闭时，池中原本没有的新账号（Codex 与 Claude 的导入当前登录、浏览器登录、文件或 Refresh Token 导入）标记为“待首次刷新”（Codex 存于账号的 `firstRequestPending`，Claude 为 `firstRequestPending` 字段）。在手动刷新该卡片或“刷新全部”之前，导入时的额度、工作区名称、Claude 账号资料查询，后台定时刷新，待授权工作区目录刷新，以及本地 API 代理的路由与候选额度刷新都跳过它，以便先设置账号代理；后台刷新不会放行。重新导入或重新登录仍在等待的账号同样不联网；已放行的账号沿用其代理。登录换令牌与 Refresh Token 兑换属于导入本身，改为经系统代理。Claude 浏览器添加时如未查询资料，首次刷新时经账号代理补查套餐；套餐未知的 Claude 卡片不显示套餐标签。Claude Code 登录缺少 `oauthAccount` 时，先按令牌匹配池中账号；匹配不到则（选项关闭时，或打开但查询失败时）以“Claude Code”为名加入池中，首次手动刷新时先经账号代理查询 profile 识别账号（令牌过期则先刷新），识别为池中已有账号时合并为一张卡片并转移当前选择；切换到尚未识别的账号时 `.claude.json` 的 `oauthAccount` 写为 null，由 Claude Code 自行补全。刷新后写回 Claude Code 的令牌只在身份确实相同或 refresh token 相同时写入。
-- Claude Code 账号池（`crates/copool-core/src/claude.rs`）：账号页顶栏 Copool 旁的 Codex / Claude 有色图标切换显示两个池（⌘1 / ⌘2，选择保存在界面本地存储）。Claude 池支持导入当前 Claude Code 登录、浏览器 OAuth 添加账号（claude.ai，Claude Code 的公开客户端，回环端口随机）、`/api/oauth/usage` 的 5 小时与每周额度、令牌过期或被拒时刷新、账号代理、删除、切换、智能切换，以及沿用“自动智能切换”设置的定时自动切换。卡片沿用 Codex 卡片布局，不显示 credits/重置次数；Max 套餐显示倍数（如 MAX 20X）。
+- 设置“导入新账号后立即请求上游”（默认关闭）：关闭时，池中原本没有的新账号（Codex 与 Claude 的导入当前登录、浏览器登录、文件或 Refresh Token 导入）标记为“待首次刷新”（Codex 存于账号的 `firstRequestPending`，Claude 为 `firstRequestPending` 字段）。在手动刷新该卡片或“刷新全部”之前，导入时的额度、工作区名称、Claude 账号资料查询，后台定时刷新，待授权工作区目录刷新，以及本地 API 代理的路由与候选额度刷新都跳过它，以便先设置账号代理；后台刷新不会放行。重新导入或重新登录仍在等待的账号同样不联网；已放行的账号沿用其代理。登录换令牌与 Refresh Token 兑换属于导入本身，改为经系统代理。Claude 浏览器添加时如未查询资料，首次刷新时经账号代理补查套餐；套餐未知的 Claude 卡片不显示套餐标签。Claude Code 登录缺少 `oauthAccount` 时，先按令牌匹配池中账号；匹配不到则（选项关闭时，或打开但查询失败时）以“Claude Code”为名加入池中，首次手动刷新时先经账号代理查询 profile 识别账号（令牌过期时由 Copool 在池内续期），识别为池中已有账号时合并为一张卡片并转移当前选择；切换到尚未识别的账号时 `.claude.json` 的 `oauthAccount` 写为 null，由 Claude Code 自行补全。额度刷新不回写 Claude Code 凭据，当前及非当前账号续期均只更新池内副本。
+- Claude Code 账号池（`crates/copool-core/src/claude.rs`）：账号页顶栏 Copool 旁的 Codex / Claude 有色图标切换显示两个池（⌘1 / ⌘2，选择保存在界面本地存储）。Claude 池支持导入当前 Claude Code 登录、浏览器 OAuth 添加账号（claude.ai，Claude Code 的公开客户端，回环端口随机）、`/api/oauth/usage` 的 5 小时与每周额度、令牌过期或被拒时在池内续期、账号代理、删除、切换、智能切换，以及沿用“自动智能切换”设置的定时自动切换。卡片沿用 Codex 卡片布局，不显示 credits/重置次数；Max 套餐显示倍数（如 MAX 20X）。
 
 ## 数据与迁移
 
@@ -81,7 +81,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 
 Claude 池的“导入 → 导入 JSON 文件”使用系统文件选择器，支持任意位置的 Claude Code 凭据 JSON（`claudeAiOauth` 包装或直接的令牌对象，可携带 `oauthAccount`），包括从 macOS 钥匙串导出的 JSON。macOS、Windows、Linux 共用导入逻辑；导入不自动切换账号，重复凭据更新已有记录，无身份信息时遵循新账号延迟请求设置，首次刷新补全身份。原有“导入当前 Claude Code 登录”仍从钥匙串或默认凭据 JSON 文件读取。文件入口、JSON 校验与切换使用合成凭据验证；Windows/Linux 原生文件选择器和真实钥匙串导出仍待对应平台验证。
 
-Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时的 OAuth profile 查询先按账号/组织身份或已有 access/refresh token 匹配池中账号，复用其账号代理；无法识别的账号使用系统/环境代理，不借用当前账号的代理。此路径已用隔离目录和模拟网络测试，未用真实账号验证。Claude Code 的当前登录：macOS 为钥匙串 `Claude Code-credentials`（设置 `CLAUDE_CONFIG_DIR` 时为按目录哈希的条目，经 `/usr/bin/security` 读写，写入走标准输入），其他平台为 `~/.claude/.credentials.json`（或 `$CLAUDE_CONFIG_DIR/.credentials.json`）；账号身份为 `~/.claude.json`（或 `$CLAUDE_CONFIG_DIR/.claude.json`）中的 `oauthAccount`。当前账号跟随 Claude Code 的登录，并采用它刷新后的令牌；Copool 为当前账号刷新的令牌会写回 Claude Code。切换只替换凭据中的 `claudeAiOauth`（保留 MCP 等其他条目）和 `.claude.json` 的 `oauthAccount` 成员（其余内容逐字节保留），切换前的登录保存为 `claude-before-switch.json`，失败时回滚。这与 cc-account-switcher 的做法一致（钥匙串 `-a $USER` 或 0600 的凭据文件，加 `oauthAccount`）；`oauthAccount` 只在 `.claude.json` 中没有、而配置目录内的 `.claude.json` 有时改写后者。切换提示要求重启 Claude Code；若 `~/.claude/settings.json` 中有 `apiKeyHelper` 或 `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `CLAUDE_CODE_OAUTH_TOKEN` / `CLAUDE_CODE_USE_BEDROCK|VERTEX|FOUNDRY`（cc-switch 切换第三方供应商时写入的键），Claude Code 不会使用账号登录，切换提示会以错误样式列出这些键，Copool 不修改这些由其他工具写入的键。
+Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时的 OAuth profile 查询先按账号/组织身份或已有 access/refresh token 匹配池中账号，复用其账号代理；无法识别的账号使用系统/环境代理，不借用当前账号的代理。此路径已用隔离目录和模拟网络测试，未用真实账号验证。Claude Code 的当前登录：macOS 为钥匙串 `Claude Code-credentials`（设置 `CLAUDE_CONFIG_DIR` 时为按目录哈希的条目，读取和已有条目的更新使用原生 SecItem 接口；首次创建仅在手动切换时经 `/usr/bin/security -i` 标准输入执行），其他平台为 `~/.claude/.credentials.json`（或 `$CLAUDE_CONFIG_DIR/.credentials.json`）；账号身份为 `~/.claude.json`（或 `$CLAUDE_CONFIG_DIR/.claude.json`）中的 `oauthAccount`。当前账号跟随 Claude Code 的登录，并采用它刷新后的令牌；Copool 为当前与非当前账号续期时均只保存池内副本，不在额度刷新时回写本机凭据；无法读取本机凭据时仍可用池内凭据查询额度或续期。切换只替换凭据中的 `claudeAiOauth`（保留 MCP 等其他条目）和 `.claude.json` 的 `oauthAccount` 成员（其余内容逐字节保留），切换前的登录保存为 `claude-before-switch.json`，失败时回滚。这与 cc-account-switcher 的做法一致（钥匙串 `-a $USER` 或 0600 的凭据文件，加 `oauthAccount`）；`oauthAccount` 只在 `.claude.json` 中没有、而配置目录内的 `.claude.json` 有时改写后者。切换提示要求重启 Claude Code；若 `~/.claude/settings.json` 中有 `apiKeyHelper` 或 `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `CLAUDE_CODE_OAUTH_TOKEN` / `CLAUDE_CODE_USE_BEDROCK|VERTEX|FOUNDRY`（cc-switch 切换第三方供应商时写入的键），Claude Code 不会使用账号登录，切换提示会以错误样式列出这些键，Copool 不修改这些由其他工具写入的键。
 - Claude 池的 Sub2api（`crates/copool-core/src/claude/sub2api.rs`）：设置页“非官方 Provider”中，经“添加 Sub2api Provider”菜单选 Claude 后与 Codex 一样填写名称、可选管理 API 地址、管理员账号与密码及 TLS 开关；保存时从 Claude Code `settings.json` 读取网关及匹配网关的 API Key，管理地址留空则从网关推导，已有 Provider 的网关和钥匙串 Key 保持兼容（两类 Provider 同在一个区块，行首以 Codex / Claude 有色图标区分；密码与 Key 存系统钥匙串，Provider 列表存 `claude-accounts.json`）。导入菜单“同步非官方 Provider”以管理员接口列出 `platform=anthropic`、`type=oauth`、`status=active` 的账号（与 OpenQuota 相同），额度取 `/api/v1/admin/accounts/{id}/usage` 的 `five_hour` / `seven_day`，套餐取 `subscription_tier`；Sub2api 对空闲 5 小时窗口返回的 0% 且无重置时间视为无数据。切换到 Sub2api 卡片与 cc-switch 切第三方供应商相同：在 `~/.claude/settings.json` 的 `env` 写入 `ANTHROPIC_BASE_URL`（网关）与 `ANTHROPIC_AUTH_TOKEN`（Key），并移除会与之冲突的 `ANTHROPIC_API_KEY`，只改写 `env` 成员、其余内容逐字节保留，切换前的 `env` 存入 `claude-before-switch.json`。同一 Provider 的卡片共用网关，其网关生效时这些卡片都为当前、官方账号不为当前（与 Codex 池的 Sub2api 一致）。切回官方账号时只移除网关属于已配置 Provider 的这两个键。测试时可用 `COPOOL_CLAUDE_CONFIG_DIR` 指定独立目录（只用其中的文件，不访问钥匙串）。
 
 可使用 `COPOOL_DATA_DIR` 指定独立账号库。Codex 认证文件遵循 `CODEX_HOME/auth.json` 或 `~/.codex/auth.json`；测试时可通过 `COPOOL_CODEX_AUTH_FILE` 指定独立认证文件，不必修改开发工具自身的环境目录。
@@ -94,6 +94,8 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 
 ## 已知差异与限制
 
+- Claude 当前状态反映本机用户级 `settings.json` 与登录凭据，不代表每个终端进程的最终配置；命令行 `--settings`、项目配置、托管配置和终端环境覆盖尚未纳入识别。对已认证 Provider 的退出仍未实现持久化的配置接管归属及接管前配置自动恢复。
+
 - 浏览器 OAuth 登录与工作区授权、SSH 远程节点、Cloudflared 隧道、Sub2api、编辑器重启、OpenCode 同步和登录时自启动均已实现，但未用真实账号、服务器或 Cloudflare 帐户验证。
 - 远程服务器“探测”使用已保存的配置，而原版使用卡片中未保存的草稿；先保存再探测。
 - 非 macOS 托盘右键菜单（Open/Quit Copool）尚未本地化；原版 macOS 只有 MenuBarExtra 面板，没有此菜单。
@@ -102,6 +104,8 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 - Claude 池只管理账号与 Claude Code 登录，本地 API 代理、远程服务器同步和小组件仍只服务 Codex 池；切换后正在运行的 Claude Code 会话可能需要重启才使用新账号。Claude 的 OAuth 登录、额度与令牌刷新接口来自 Claude Code / OpenQuota 的公开实现，仅用合成数据测试，未用真实账号验证。
 
 ## 验证范围
+
+2026-10-12（Claude 当前认证识别）：本机 macOS 完整测试通过（332 项核心、120 项前端、Rust 格式、JavaScript 语法、独立 daemon 检查），桌面 `cargo check` 通过。新增回归覆盖应用重建后的同址代理订阅登录、真实网关认证、外部 Key 变更、API Key 认证、双重认证、同址多 Provider 及协议覆盖；使用临时目录和合成凭据，未修改真实账号配置，Windows/Linux 原生验证待运行。
 
 2026-10-12（Sub2api 安全存储）：macOS 的 Provider 密码和 Key 改用 Security Framework 的 SecItem 接口按 service/account 查询，避免旧 keyring 后端先解析默认钥匙串文件的路径依赖；保持原 service/account，继续使用系统钥匙串。只有条目不存在才返回空值，存储不可用、锁定和授权失败仍报错，空账号标识在访问前拒绝。Windows/Linux 后端不变。本机 `python3 scripts/test_rust.py --offline` 通过（328 项核心测试、120 项前端测试、格式和独立 daemon 检查），桌面 `cargo check -p copool-desktop --locked --offline` 通过；未访问真实 Provider 凭据，真实钥匙串兼容性及刷新恢复仍待应用运行验证。
 
@@ -124,3 +128,15 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 2026-10-12（尊重 Codex 配置协议）：移除回环 HTTPS 地址自动改写为 HTTP 的兼容处理。额度、工作区与代理上游请求均保留 `chatgpt_base_url` 的协议，HTTPS 使用正常证书校验；本地地址不走账号代理的规则保留。回归测试覆盖 HTTP/HTTPS 与 IPv4、localhost、IPv6，以及共享配置的 HTTPS 地址保持一致。macOS 的 328 项核心测试、Rust 格式检查与独立 daemon 编译检查通过；删除的两项测试只覆盖已移除的协议改写函数。Windows/Linux 未实机验证。
 
 2026-10-12（Sub2api 设置表单对齐）：Claude 与 Codex 均使用名称、可选管理 API 地址、管理员账号、密码和 TLS 开关。Claude 在保存时读取当前 `settings.json` 的网关与匹配的 Key，分别保存管理地址和网关；配置多个 Claude Provider 时需先在 Claude Code 配好对应网关，已有 Provider 不会复制其他网关的 Key。旧配置及钥匙串凭据兼容。macOS 上 329 项核心测试、120 项前端测试、Rust 格式、UI 语法及独立 daemon 检查通过；核心网络测试因本机端口限制在沙盒外重跑通过。使用临时目录及合成凭据，未用真实 Provider、Windows/Linux 或图形界面验证。
+
+2026-10-12（Claude 钥匙串重复授权）：账号列表、额度刷新及自动切换的原生 SecItem 查询使用 `kSecUseAuthenticationUIFail`，需要授权时返回失败而不弹窗；只有主动导入当前登录、手动切换（含手动智能切换）允许授权 UI。仅条目不存在时回退到不限定 account 的查询，授权拒绝、取消及锁定不重试，也不读取可能过期的文件凭据。额度刷新完全不回写本机凭据。当前登录与非当前账号均使用池内副本续期，只保存到 Copool 的 `claude-accounts.json`；本机凭据不可读不阻止池内续期。可读取时仍跟随外部更新的令牌，旧本机凭据不会覆盖到期时间更晚的池内副本；池内刷新与导入、切换串行化，防止 Copool 自身并发重复续期。
+
+切换已有钥匙串条目时仅通过 `SecItemUpdate` 更新 `kSecValueData`，不传入访问控制属性。首次创建仅允许手动操作，走 `/usr/bin/security -i` 标准输入，不带 `-U`，不将令牌放入进程参数，不在用户授权过程中用 15 秒超时杀掉进程；超出交互命令长度限制时明确报错。自动切换只允许无弹窗更新已有条目，不能后台启动 `security` 创建条目。该修复不会自动修复 Claude Code 上游重写导致的分区授权丢失；原生后台读取被拒后需主动导入授权。其他进程持有旧凭据、外部程序在读取后立即切换登录等跨进程竞争无法由 Copool 的进程内锁完全协调。
+
+验证：macOS 上 `python3 scripts/test_rust.py --offline` 通过（339 项核心测试、120 项前端测试、格式、UI 语法及独立 daemon 检查），桌面 `cargo check -p copool-desktop --locked --offline` 通过。新增/更新回归覆盖后台无 UI 参数、拒绝后不重试、更新属性不含 ACL、后台不得创建、命令输入边界、当前账号过期/401 在池内续期且不写回、跟随外部续期、当前与非当前账号并发只续期一次，以及本机凭据不可读时池内仍可续期。测试使用临时目录和合成凭据，未访问真实钥匙串；实际系统授权窗口、新条目的 Claude Code 互操作及 Windows/Linux 原生行为待运行验证。未打包或替换已安装应用。
+
+池内副本不等于独立 OAuth 授权：外部程序持有相同 refreshToken 时仍可能发生服务端轮换竞争；此模式不自动同步 Coport 的本地凭据来源，也不改变其刷新请求的路由策略。
+
+2026-10-12（池内独立续期）：上述池内续期调整经 `cargo fmt --all -- --check` 与 `cargo test -p copool-core --locked --offline` 验证，339 项核心测试通过。核心测试因本机监听限制在沙箱外运行，仍使用临时目录及合成凭据；本次未打包、安装或用真实账号测试续期，Windows/Linux 未运行验证。
+
+提交隔离验证：不包含工作区剩余的 Sub2api 识别修复时，暂存快照的 336 项核心测试通过；包含该修复的完整工作区此前为 339 项。
