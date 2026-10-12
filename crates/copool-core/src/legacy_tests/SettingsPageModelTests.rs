@@ -576,3 +576,80 @@ async fn sub2api_refresh_failure_marks_only_affected_cards_and_recovers() {
         .iter()
         .all(|a| a.usage_error.is_none()));
 }
+
+#[tokio::test]
+async fn global_sub2api_refresh_batches_by_route_and_isolates_failures() {
+    let unavailable = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    let (_dir, app, _) = fixture();
+    let calls = Arc::new(Mutex::new(vec![]));
+    let server = upstream(Arc::new(Mutex::new(vec![42, 43])), calls.clone()).await;
+    config(&app, &[("my", "http://sub2api.invalid/v1")], "openai");
+    let mut p = provider("my");
+    p.proxy_url = server.base.clone();
+    app.save_provider(p).await.unwrap();
+    app.refresh_provider("my", true).await.unwrap();
+    app.save_account_proxy("sub2api-my-42", &server.base)
+        .await
+        .unwrap();
+    app.save_account_proxy("sub2api-my-43", &server.base)
+        .await
+        .unwrap();
+    let mut settings = app.configuration().unwrap();
+    settings.sub2_api_provider.providers[0].proxy_url = unavailable.clone();
+    app.persist_configuration(&settings).unwrap();
+    let mut preferences = app.preferences().unwrap();
+    preferences.account_proxy_url = unavailable.clone();
+    app.save_preferences(preferences).await.unwrap();
+    calls.lock().unwrap().clear();
+    app.refresh_all().await.unwrap();
+    let requests = calls.lock().unwrap().clone();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|p| p.ends_with("/auth/login"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|p| p.ends_with("/admin/accounts"))
+            .count(),
+        1
+    );
+    assert!(requests.iter().any(|p| p.ends_with("/42/quota")));
+    assert!(requests.iter().any(|p| p.ends_with("/43/quota")));
+    assert!(app
+        .accounts()
+        .await
+        .unwrap()
+        .iter()
+        .all(|a| a.usage_error.is_none()));
+    // A broken card route must not prevent another card from refreshing.
+    app.save_account_proxy("sub2api-my-43", &unavailable)
+        .await
+        .unwrap();
+    calls.lock().unwrap().clear();
+    assert!(app.refresh_all().await.is_err());
+    assert!(calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|p| p.ends_with("/42/quota")));
+    let cards = app.accounts().await.unwrap();
+    assert!(cards
+        .iter()
+        .find(|a| a.id == "sub2api-my-42")
+        .unwrap()
+        .usage_error
+        .is_none());
+    assert!(cards
+        .iter()
+        .find(|a| a.id == "sub2api-my-43")
+        .unwrap()
+        .usage_error
+        .is_some());
+}

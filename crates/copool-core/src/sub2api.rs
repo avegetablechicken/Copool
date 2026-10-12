@@ -94,6 +94,10 @@ pub struct Connection {
     pub definition: Definition,
     pub admin_base: String,
 }
+pub struct Refresh {
+    pub accounts: Vec<Account>,
+    pub errors: Vec<String>,
+}
 /// The admin API root (`…/api/v1`) of a Sub2api base or admin URL.
 pub fn admin_base(raw: &str) -> Result<String, String> {
     let raw = raw.trim().trim_end_matches('/');
@@ -197,7 +201,79 @@ impl Connection {
             .filter(|v| v.len() == 1)
             .map(|v| self.configuration.proxy_for(v[0]))
             .unwrap_or_else(|| self.configuration.proxy_url.clone());
-        let client = self.client(&list_proxy)?;
+        Ok(self
+            .fetch_platform_accounts_via(platform, ids, now, &list_proxy)
+            .await?
+            .into_iter()
+            .filter(|a| ids.is_none_or(|ids| ids.contains(&a.id)))
+            .collect())
+    }
+    /// Batch login and listing once per effective egress route within a provider.
+    pub async fn refresh_platform_accounts(
+        &self,
+        platform: Platform,
+        ids: Option<&[i64]>,
+        now: i64,
+    ) -> Result<Refresh, String> {
+        let wanted = ids.unwrap_or(&self.configuration.imported_account_ids);
+        let mut groups = std::collections::BTreeMap::<String, Vec<i64>>::new();
+        for id in wanted {
+            let proxy = self.configuration.proxy_for(*id);
+            let proxy = if proxy.trim().is_empty() {
+                self.account_request_proxy.trim()
+            } else {
+                proxy.trim()
+            };
+            groups.entry(proxy.to_owned()).or_default().push(*id);
+        }
+        let requests = groups.iter().map(|(proxy, group)| async move {
+            (
+                group,
+                self.fetch_platform_accounts_via(platform, Some(group), now, proxy)
+                    .await,
+            )
+        });
+        let mut accounts = std::collections::BTreeMap::new();
+        let mut errors = vec![];
+        for (group, result) in futures_util::future::join_all(requests).await {
+            match result {
+                Ok(fetched) => {
+                    for account in fetched {
+                        // Keep newly discovered IDs for the membership-change warning,
+                        // without issuing quota requests for unimported accounts.
+                        if group.contains(&account.id)
+                            || (ids.is_none() && !wanted.contains(&account.id))
+                        {
+                            accounts.insert(account.id, account);
+                        }
+                    }
+                }
+                Err(error) => {
+                    for raw in &self.configuration.cached_accounts {
+                        if let Ok(mut account) = serde_json::from_value::<Account>(raw.clone()) {
+                            if group.contains(&account.id) {
+                                account.usage_error = Some(error.clone());
+                                accounts.insert(account.id, account);
+                            }
+                        }
+                    }
+                    errors.push(error);
+                }
+            }
+        }
+        Ok(Refresh {
+            accounts: accounts.into_values().collect(),
+            errors,
+        })
+    }
+    async fn fetch_platform_accounts_via(
+        &self,
+        platform: Platform,
+        ids: Option<&[i64]>,
+        now: i64,
+        list_proxy: &str,
+    ) -> Result<Vec<Account>, String> {
+        let client = self.client(list_proxy)?;
         let login=payload(client.post(format!("{}/auth/login",self.admin_base)).json(&json!({"email":self.configuration.username,"password":self.configuration.password})).send().await.map_err(|e|e.to_string())?).await?;
         let token = login
             .get("access_token")
@@ -255,7 +331,6 @@ impl Connection {
                             .as_str()
                             .is_some_and(|s| s.eq_ignore_ascii_case(value))
                     })
-                || ids.is_some_and(|ids| !ids.contains(&id))
             {
                 continue;
             }
@@ -279,6 +354,10 @@ impl Connection {
                     .get(&id.to_string())
                     .cloned(),
             };
+            if ids.is_some_and(|ids| !ids.contains(&id)) {
+                accounts.push(account);
+                continue;
+            }
             let proxy = self.configuration.proxy_for(id);
             let quota_client = self.client(&proxy)?;
             let quota_url = match platform {

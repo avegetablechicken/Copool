@@ -218,7 +218,16 @@ impl Application {
             if !sync_membership {
                 connection.account_request_proxy = self.preferences()?.account_proxy_url;
             }
-            connection.fetch_accounts(None, now_unix_seconds()).await
+            if sync_membership {
+                Ok(sub2api::Refresh {
+                    accounts: connection.fetch_accounts(None, now_unix_seconds()).await?,
+                    errors: vec![],
+                })
+            } else {
+                connection
+                    .refresh_platform_accounts(sub2api::Platform::OpenAi, None, now_unix_seconds())
+                    .await
+            }
         }
         .await;
         let fetched = match fetched {
@@ -229,8 +238,14 @@ impl Application {
                 return Err(error);
             }
         };
-        self.apply_provider_refresh(provider_id, fetched, sync_membership)
-            .await
+        let count = self
+            .apply_provider_refresh(provider_id, fetched.accounts, sync_membership)
+            .await?;
+        if fetched.errors.is_empty() {
+            Ok(count)
+        } else {
+            Err(fetched.errors.join("\n"))
+        }
     }
     pub(crate) async fn apply_provider_refresh(
         &self,

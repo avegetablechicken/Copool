@@ -229,6 +229,13 @@ impl Application {
                 allow_insecure_tls: p.allow_insecure_tls,
                 proxy_url: p.proxy_url.clone(),
                 account_proxy_urls: p.account_proxy_urls.clone(),
+                imported_account_ids: p.imported_account_ids.clone(),
+                cached_accounts: p
+                    .cached_accounts
+                    .iter()
+                    .map(serde_json::to_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?,
                 ..Default::default()
             },
             definition: Definition {
@@ -250,18 +257,27 @@ impl Application {
         p: &Provider,
         ids: Option<&[i64]>,
         refresh: bool,
-    ) -> Result<Vec<Account>> {
+    ) -> Result<sub2api::Refresh> {
         let mut connection = self.claude_sub2api_connection(p)?;
         if refresh {
             connection.account_request_proxy = self.preferences()?.account_proxy_url;
         }
-        let mut accounts = connection
-            .fetch_platform_accounts(Platform::Anthropic, ids, now_unix_seconds())
-            .await?;
-        for a in &mut accounts {
+        let mut fetched = if refresh {
+            connection
+                .refresh_platform_accounts(Platform::Anthropic, ids, now_unix_seconds())
+                .await?
+        } else {
+            sub2api::Refresh {
+                accounts: connection
+                    .fetch_platform_accounts(Platform::Anthropic, ids, now_unix_seconds())
+                    .await?,
+                errors: vec![],
+            }
+        };
+        for a in &mut fetched.accounts {
             a.provider_id = Some(p.name.clone());
         }
-        Ok(accounts)
+        Ok(fetched)
     }
     /// Imports every active Claude OAuth account of each provider; returns how many.
     pub async fn claude_sync_sub2api(&self) -> Result<usize> {
@@ -274,6 +290,7 @@ impl Application {
         for p in providers {
             match self.claude_fetch_sub2api(&p, None, false).await {
                 Ok(fetched) => {
+                    let fetched = fetched.accounts;
                     count += fetched.len();
                     let _lock = self.claude.lock.lock().await;
                     let mut store = self.claude_load()?;
@@ -332,7 +349,7 @@ impl Application {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
-            for account in fetched {
+            for account in fetched.accounts {
                 if !saved.imported_account_ids.contains(&account.id) {
                     continue;
                 }
@@ -347,7 +364,11 @@ impl Application {
             }
             self.claude_save(&store)?;
         }
-        Ok(())
+        if fetched.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(fetched.errors.join("\n"))
+        }
     }
     pub(super) async fn claude_refresh_sub2api_card(&self, id: &str) -> Result<()> {
         let store = self.claude_load()?;
@@ -504,7 +525,7 @@ mod tests {
         let router = Router::new().fallback(any(move |request: Request| {
             let requests = requests.clone();
             async move {
-                let uri = request.uri().to_string();
+                let uri = request.uri().path_and_query().unwrap().to_string();
                 requests.lock().unwrap().push(uri.clone());
                 if !uri.starts_with("/api/v1/auth/login") {
                     assert_eq!(request.headers().get("authorization").unwrap(), "Bearer admin");
@@ -602,6 +623,56 @@ mod tests {
             .unwrap()
             .id;
         (app, location, base, path, saved.card_id(7), alice)
+    }
+
+    #[tokio::test]
+    async fn global_sub2api_refresh_batches_by_route_and_isolates_failures() {
+        let unavailable = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", listener.local_addr().unwrap())
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, base, path, card, _) = pool(dir.path()).await;
+        source_file(dir.path(), "http://sub2api.invalid", AUTH_TOKEN, "sk-team");
+        assert!(path.exists());
+        app.claude_save_account_proxy(&card, &base).await.unwrap();
+        let mut store = app.claude_load().unwrap();
+        let provider = &mut store.providers[0];
+        provider.proxy_url = unavailable.clone();
+        provider.cached_accounts[0].usage_error = Some("previous failure".into());
+        let mut broken = provider.cached_accounts[0].clone();
+        broken.id = 9;
+        provider.imported_account_ids.push(9);
+        provider.cached_accounts.push(broken);
+        app.claude_save(&store).unwrap();
+        let mut preferences = app.preferences().unwrap();
+        preferences.account_proxy_url = unavailable.clone();
+        app.save_preferences(preferences).await.unwrap();
+        assert!(app.claude_refresh(None).await.is_err());
+        let store = app.claude_load().unwrap();
+        assert!(store.providers[0].cached_accounts[0].usage_error.is_none());
+        assert!(store.providers[0].cached_accounts[1].usage_error.is_some());
+        // The single-card and global paths both honor explicit direct mode.
+        source_file(dir.path(), &base, AUTH_TOKEN, "sk-team");
+        app.claude_save_account_proxy(&card, "direct://")
+            .await
+            .unwrap();
+        let mut store = app.claude_load().unwrap();
+        store.providers[0].cached_accounts.retain(|a| a.id != 9);
+        store.providers[0]
+            .imported_account_ids
+            .retain(|id| *id != 9);
+        app.claude_save(&store).unwrap();
+        app.claude_refresh(None).await.unwrap();
+        assert!(app
+            .claude_accounts()
+            .await
+            .unwrap()
+            .iter()
+            .find(|a| a.id == card)
+            .unwrap()
+            .usage_error
+            .is_none());
     }
 
     #[tokio::test]
