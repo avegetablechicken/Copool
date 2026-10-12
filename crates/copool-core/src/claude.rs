@@ -858,6 +858,18 @@ fn follow_live(store: &mut Store, live: Option<&Live>) -> bool {
                 && token(o, "refreshToken") == token(&a.oauth, "refreshToken")
         }),
     });
+    // A read taken mid-switch pairs the target's tokens with the account being
+    // left; tokens that belong to another pool account are not adopted.
+    if let (Some(i), Some(oauth)) = (matched, oauth) {
+        if store
+            .accounts
+            .iter()
+            .enumerate()
+            .any(|(j, a)| j != i && same_tokens(&a.oauth, oauth))
+        {
+            return false;
+        }
+    }
     let mut changed = false;
     let current = matched.map(|i| store.accounts[i].id.clone());
     if store.current_account_id != current {
