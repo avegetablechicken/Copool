@@ -47,7 +47,7 @@ impl Application {
                     (Some(usage), None)
                 }
                 Err(error) if account_network::deactivated(&error) => {
-                    self.mark_pending_deactivated(&extracted.account_id)?;
+                    self.mark_pending_deactivated(&extracted.account_id).await?;
                     return Err("error.accounts.workspace_deactivated".into());
                 }
                 Err(error) => (None, Some(error)),
@@ -96,7 +96,7 @@ impl Application {
             .await?;
         if !consent.is_empty() {
             let _op = self.operations.lock().await;
-            repository::mutate_accounts(&self.paths.store(), |store| {
+            self.mutate_accounts(|store| {
                 let authorized: Vec<_> = store
                     .accounts
                     .iter()
@@ -135,13 +135,14 @@ impl Application {
                     }
                 }
                 Ok(())
-            })?;
+            })
+            .await?;
         }
         self.publish();
         Ok(count)
     }
-    fn mark_pending_deactivated(&self, id: &str) -> Result<(), String> {
-        repository::mutate_accounts(&self.paths.store(), |store| {
+    async fn mark_pending_deactivated(&self, id: &str) -> Result<(), String> {
+        self.mutate_accounts(|store| {
             if let Some(rows) = store
                 .extra
                 .get_mut("workspaceDirectory")
@@ -154,6 +155,7 @@ impl Application {
             }
             Ok(())
         })
+        .await
         .map(|_| ())
     }
 }

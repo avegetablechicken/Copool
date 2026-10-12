@@ -80,12 +80,13 @@ impl Application {
             else {
                 continue;
             };
-            repository::mutate_accounts(&self.paths.store(), |store| {
+            self.mutate_accounts(|store| {
                 if let Some(current) = store.accounts.iter_mut().find(|a| a.id == account.id) {
                     current.extra.insert("teamName".into(), name.trim().into());
                 }
                 Ok(())
-            })?;
+            })
+            .await?;
             self.publish();
         }
         Ok(())
@@ -101,7 +102,7 @@ impl Application {
     }
     pub async fn dismiss_workspace(&self, id: &str) -> Result<(), String> {
         let _op = self.operations.lock().await;
-        repository::mutate_accounts(&self.paths.store(), |store| {
+        self.mutate_accounts(|store| {
             if let Some(rows) = store
                 .extra
                 .get_mut("workspaceDirectory")
@@ -116,6 +117,7 @@ impl Application {
             }
             Ok(())
         })
+        .await
         .map(|_| ())
     }
     pub async fn sync_workspace_directory(&self) -> Result<Vec<Value>, String> {
@@ -159,7 +161,7 @@ impl Application {
             return self.workspace_directory().await;
         }
         let _op = self.operations.lock().await;
-        let store = repository::mutate_accounts(&self.paths.store(), |store| {
+        let store = self.mutate_accounts(|store| {
             let authorized: BTreeSet<_> = store
                 .accounts
                 .iter()
@@ -198,7 +200,8 @@ impl Application {
             });
             store.extra.insert("workspaceDirectory".into(), rows.into());
             Ok(())
-        })?;
+        })
+.await?;
         Ok(store.extra["workspaceDirectory"]
             .as_array()
             .cloned()

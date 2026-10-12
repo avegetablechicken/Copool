@@ -258,6 +258,15 @@ impl Application {
             callback();
         }
     }
+    /// Edits the account store under the lock its other writers, the proxy
+    /// included, hold across their load and save.
+    pub(crate) async fn mutate_accounts(
+        &self,
+        edit: impl FnOnce(&mut AccountsStore) -> Result<()>,
+    ) -> Result<AccountsStore> {
+        let _lock = self.state.store_lock.lock().await;
+        crate::repository::mutate_accounts(&self.paths.store(), edit)
+    }
     fn persist_accounts(&self, accounts: &AccountsStore) -> Result<()> {
         store::save_store_to_path(&self.paths.store(), accounts)?;
         self.publish();
@@ -310,12 +319,18 @@ impl Application {
         let paths = self.paths.clone();
         let changes = self.changes.clone();
         let effects = self.switch_effects.clone();
+        let store_lock = self.state.store_lock.clone();
         storage.on_selected = Some(Arc::new(move |id, auth| {
             let paths = paths.clone();
             let changes = changes.clone();
             let effects = effects.clone();
+            let store_lock = store_lock.clone();
             Box::pin(async move {
-                if crate::proxy_integration::select(&paths, &id, &auth)? {
+                let selected = {
+                    let _lock = store_lock.lock().await;
+                    crate::proxy_integration::select(&paths, &id, &auth)?
+                };
+                if selected {
                     if let Some(callback) = changes.read().unwrap().as_ref() {
                         callback();
                     }
