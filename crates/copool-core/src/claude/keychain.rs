@@ -76,11 +76,14 @@ pub(super) async fn read(service: &str, access: KeychainAccess) -> Result<Option
 }
 
 // Update only value data: never replace the existing access/partition settings.
+// Do not use set_generic_password here: its add-before-update path can disturb
+// the ACL of a shared Claude Code item even when adding reports a duplicate.
 #[allow(deprecated)]
 fn update(service: &str, user: &str, bytes: &[u8], access: KeychainAccess) -> Result<bool> {
     let query = options(service, Some(user), access);
     let query = CFDictionary::from_CFType_pairs(&query.query);
     let attributes = value_attributes(bytes);
+    // SAFETY: Both owned dictionaries remain alive for the Security call.
     let status = unsafe {
         SecItemUpdate(
             query.as_concrete_TypeRef(),
