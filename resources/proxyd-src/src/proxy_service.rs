@@ -2010,7 +2010,12 @@ async fn refresh_proxy_candidate_usage(
         .as_deref()
         .map(|configured| chatgpt_base_origin(Some(configured)))
         .unwrap_or_else(resolve_chatgpt_base_origin);
-    for candidate in candidates {
+    // Sub2api providers carry their API key as the token; it is never sent to
+    // the ChatGPT usage endpoints.
+    for candidate in candidates
+        .into_iter()
+        .filter(|c| c.auth_json.get("copoolProvider").is_none())
+    {
         let result = fetch_usage_snapshot_from(
             &origin,
             &candidate.access_token,
