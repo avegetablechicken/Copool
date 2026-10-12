@@ -208,16 +208,27 @@ impl Application {
             .iter()
             .map(|id| self.begin_refresh(id))
             .collect();
-        let mut connection = sub2api::connection(
-            &self.codex_config_path(),
-            &snapshot.sub2_api_provider,
-            Some(provider_id),
-            self.secrets.as_ref(),
-        )?;
-        if !sync_membership {
-            connection.account_request_proxy = self.preferences()?.account_proxy_url;
+        let fetched = async {
+            let mut connection = sub2api::connection(
+                &self.codex_config_path(),
+                &snapshot.sub2_api_provider,
+                Some(provider_id),
+                self.secrets.as_ref(),
+            )?;
+            if !sync_membership {
+                connection.account_request_proxy = self.preferences()?.account_proxy_url;
+            }
+            connection.fetch_accounts(None, now_unix_seconds()).await
         }
-        let fetched = connection.fetch_accounts(None, now_unix_seconds()).await?;
+        .await;
+        let fetched = match fetched {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                self.record_provider_refresh_error(provider_id, None, &error)
+                    .await?;
+                return Err(error);
+            }
+        };
         self.apply_provider_refresh(provider_id, fetched, sync_membership)
             .await
     }
@@ -254,22 +265,56 @@ impl Application {
         self.persist_configuration(&latest)?;
         Ok(count)
     }
+    async fn record_provider_refresh_error(
+        &self,
+        provider_id: &str,
+        id: Option<i64>,
+        error: &str,
+    ) -> Result<(), String> {
+        let _op = self.operations.lock().await;
+        let mut latest = self.configuration()?;
+        if let Some(provider) = latest
+            .sub2_api_provider
+            .providers
+            .iter_mut()
+            .find(|p| p.provider_id.eq_ignore_ascii_case(provider_id))
+        {
+            for account in &mut provider.cached_accounts {
+                if id.is_none_or(|id| account["id"].as_i64() == Some(id)) {
+                    account["usageError"] = error.into();
+                }
+            }
+            self.persist_configuration(&latest)?;
+        }
+        Ok(())
+    }
     pub(crate) async fn refresh_provider_card(
         &self,
         provider: &Provider,
         id: i64,
     ) -> Result<(), String> {
-        let settings = self.configuration()?;
-        let mut connection = sub2api::connection(
-            &self.codex_config_path(),
-            &settings.sub2_api_provider,
-            Some(&provider.provider_id),
-            self.secrets.as_ref(),
-        )?;
-        connection.account_request_proxy = self.preferences()?.account_proxy_url;
-        let accounts = connection
-            .fetch_accounts(Some(&[id]), now_unix_seconds())
-            .await?;
+        let accounts = async {
+            let settings = self.configuration()?;
+            let mut connection = sub2api::connection(
+                &self.codex_config_path(),
+                &settings.sub2_api_provider,
+                Some(&provider.provider_id),
+                self.secrets.as_ref(),
+            )?;
+            connection.account_request_proxy = self.preferences()?.account_proxy_url;
+            connection
+                .fetch_accounts(Some(&[id]), now_unix_seconds())
+                .await
+        }
+        .await;
+        let accounts = match accounts {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                self.record_provider_refresh_error(&provider.provider_id, Some(id), &error)
+                    .await?;
+                return Err(error);
+            }
+        };
         let _op = self.operations.lock().await;
         let mut latest = self.configuration()?;
         if let Some(p) = latest

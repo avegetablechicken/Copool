@@ -518,3 +518,61 @@ async fn testSmartSwitchIncludesSub2APIProviderCandidate() {
         "sub2api-my-42"
     );
 }
+
+#[tokio::test]
+async fn sub2api_refresh_failure_marks_only_affected_cards_and_recovers() {
+    let (_dir, app, secrets) = fixture();
+    let server = upstream(Arc::new(Mutex::new(vec![42, 43])), Default::default()).await;
+    config(&app, &[("my", &server.base)], "openai");
+    app.save_provider(provider("my")).await.unwrap();
+    app.refresh_provider("my", true).await.unwrap();
+    let previous = app.accounts().await.unwrap()[0].usage.clone();
+    secrets
+        .deny_reads
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = app.refresh_usage("sub2api-my-42").await.unwrap_err();
+    let cards = app.accounts().await.unwrap();
+    let failed = cards.iter().find(|a| a.id == "sub2api-my-42").unwrap();
+    assert_eq!(failed.usage_error.as_deref(), Some(error.as_str()));
+    assert_eq!(
+        serde_json::to_value(&failed.usage).unwrap(),
+        serde_json::to_value(&previous).unwrap()
+    );
+    assert!(cards
+        .iter()
+        .find(|a| a.id == "sub2api-my-43")
+        .unwrap()
+        .usage_error
+        .is_none());
+    let error = app.refresh_provider("my", false).await.unwrap_err();
+    assert!(app
+        .accounts()
+        .await
+        .unwrap()
+        .iter()
+        .all(|a| a.usage_error.as_deref() == Some(error.as_str())));
+    secrets
+        .deny_reads
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    app.refresh_usage("sub2api-my-42").await.unwrap();
+    let cards = app.accounts().await.unwrap();
+    assert!(cards
+        .iter()
+        .find(|a| a.id == "sub2api-my-42")
+        .unwrap()
+        .usage_error
+        .is_none());
+    assert!(cards
+        .iter()
+        .find(|a| a.id == "sub2api-my-43")
+        .unwrap()
+        .usage_error
+        .is_some());
+    app.refresh_provider("my", false).await.unwrap();
+    assert!(app
+        .accounts()
+        .await
+        .unwrap()
+        .iter()
+        .all(|a| a.usage_error.is_none()));
+}

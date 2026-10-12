@@ -313,7 +313,22 @@ impl Application {
             .map(|a| p.card_id(a.id))
             .collect();
         let _activity: Vec<_> = cards.iter().map(|id| self.begin_refresh(id)).collect();
-        let fetched = self.claude_fetch_sub2api(&p, ids.as_deref(), true).await?;
+        let fetched = match self.claude_fetch_sub2api(&p, ids.as_deref(), true).await {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                let _lock = self.claude.lock.lock().await;
+                let mut store = self.claude_load()?;
+                if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
+                    for account in &mut saved.cached_accounts {
+                        if ids.as_ref().is_none_or(|ids| ids.contains(&account.id)) {
+                            account.usage_error = Some(error.clone());
+                        }
+                    }
+                    self.claude_save(&store)?;
+                }
+                return Err(error);
+            }
+        };
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
@@ -587,6 +602,50 @@ mod tests {
             .unwrap()
             .id;
         (app, location, base, path, saved.card_id(7), alice)
+    }
+
+    #[tokio::test]
+    async fn sub2api_refresh_failure_marks_only_affected_cards_and_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, path, card, _) = pool(dir.path()).await;
+        let mut store = app.claude_load().unwrap();
+        let provider = &mut store.providers[0];
+        let provider_id = provider.id.clone();
+        let mut other = provider.cached_accounts[0].clone();
+        other.id = 9;
+        provider.imported_account_ids.push(9);
+        provider.cached_accounts.push(other);
+        app.claude_save(&store).unwrap();
+        let original = fs::read(&path).unwrap();
+        fs::write(&path, "invalid JSON").unwrap();
+        let error = app.claude_refresh_usage(&card).await.unwrap_err();
+        let store = app.claude_load().unwrap();
+        assert_eq!(
+            store.providers[0].cached_accounts[0].usage_error.as_deref(),
+            Some(error.as_str())
+        );
+        assert!(store.providers[0].cached_accounts[0].usage.is_some());
+        assert!(store.providers[0].cached_accounts[1].usage_error.is_none());
+        let error = app
+            .claude_refresh_sub2api(&provider_id, None)
+            .await
+            .unwrap_err();
+        assert!(app.claude_load().unwrap().providers[0]
+            .cached_accounts
+            .iter()
+            .all(|a| a.usage_error.as_deref() == Some(error.as_str())));
+        fs::write(&path, original).unwrap();
+        app.claude_refresh_usage(&card).await.unwrap();
+        let cards = app.claude_accounts().await.unwrap();
+        assert!(cards
+            .iter()
+            .find(|a| a.id == card)
+            .unwrap()
+            .usage_error
+            .is_none());
+        assert!(app.claude_load().unwrap().providers[0].cached_accounts[1]
+            .usage_error
+            .is_some());
     }
 
     #[tokio::test]
