@@ -21,20 +21,50 @@ pub(crate) fn for_url(url: &Url) -> Option<Url> {
     if let Some(found) = from_env(url) {
         return found;
     }
-    static CACHE: LazyLock<Mutex<HashMap<String, (Instant, Option<Url>)>>> =
-        LazyLock::new(Default::default);
-    let key = format!("{}://{host}:{}", url.scheme(), url.port_or_known_default()?);
-    if let Some((at, found)) = CACHE.lock().ok()?.get(&key) {
-        if at.elapsed() < TTL {
-            return found.clone();
-        }
+    // Resolving can fetch a PAC file or run a subprocess, and this is called
+    // from reqwest's connector on the async runtime: an expired entry answers
+    // while a thread renews it, and only a host's first lookup waits.
+    struct Entry {
+        at: Instant,
+        found: Option<Url>,
+        renewing: bool,
     }
-    let found = platform::resolve(url);
-    CACHE
-        .lock()
-        .ok()?
-        .insert(key, (Instant::now(), found.clone()));
+    static CACHE: LazyLock<Mutex<HashMap<String, Entry>>> = LazyLock::new(Default::default);
+    let key = format!("{}://{host}:{}", url.scheme(), url.port_or_known_default()?);
+    let store = |key: String, found: Option<Url>| {
+        if let Ok(mut cache) = CACHE.lock() {
+            cache.insert(
+                key,
+                Entry {
+                    at: Instant::now(),
+                    found,
+                    renewing: false,
+                },
+            );
+        }
+    };
+    if let Some(entry) = CACHE.lock().ok()?.get_mut(&key) {
+        if entry.at.elapsed() >= TTL && !entry.renewing {
+            entry.renewing = true;
+            let (key, url) = (key.clone(), url.clone());
+            std::thread::spawn(move || store(key, platform::resolve(&url)));
+        }
+        return entry.found.clone();
+    }
+    let found = off_runtime(|| platform::resolve(url));
+    store(key, found.clone());
     found
+}
+
+/// Runs blocking work without stalling the other tasks of a multi-threaded
+/// runtime's worker.
+fn off_runtime<T>(work: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(work)
+        }
+        _ => work(),
+    }
 }
 
 fn loopback(host: &str) -> bool {
