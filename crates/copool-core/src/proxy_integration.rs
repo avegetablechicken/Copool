@@ -66,7 +66,11 @@ fn login_shell_key(shell: &str, name: &str, timeout: std::time::Duration) -> Opt
     use std::io::Read;
     let output = tempfile::NamedTempFile::new().ok()?;
     let mut child = std::process::Command::new(shell)
-        .args(["-lc", &format!("printenv {name}")])
+        // Profiles may print banners; only the marked value is the key.
+        .args([
+            "-lc",
+            &format!("printf '__COPOOL_ENV__%s__COPOOL_END__' \"${name}\""),
+        ])
         .stdin(std::process::Stdio::null())
         .stdout(output.reopen().ok()?)
         .stderr(std::process::Stdio::null())
@@ -102,7 +106,12 @@ fn login_shell_key(shell: &str, name: &str, timeout: std::time::Duration) -> Opt
         .take(65536)
         .read_to_string(&mut value)
         .ok()?;
-    let value = value.trim();
+    let value = value
+        .rsplit_once("__COPOOL_ENV__")?
+        .1
+        .split_once("__COPOOL_END__")?
+        .0
+        .trim();
     (!value.is_empty() && value.len() < 65536).then(|| value.to_owned())
 }
 
