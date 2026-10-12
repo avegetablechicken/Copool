@@ -833,6 +833,8 @@ fn write_account(location: &Location, account: &Value) -> Result<()> {
 }
 fn write_text(path: &std::path::Path, text: &str) -> Result<()> {
     use std::io::Write;
+    // Replace a symlink's target (a dotfiles checkout, say), not the link.
+    let path = &fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let parent = path.parent().ok_or("Invalid file path")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;

@@ -4,6 +4,8 @@ use std::{fs, io::Write, path::Path};
 /// Same-directory, restrictive temporary file followed by atomic replacement,
 /// including Windows (NamedTempFile::persist uses the platform replace primitive).
 pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    // Replace a symlink's target, not the link.
+    let path = &fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let parent = path.parent().ok_or("Invalid file path")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
