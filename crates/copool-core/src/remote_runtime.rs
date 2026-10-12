@@ -253,6 +253,15 @@ impl Application {
                 status(&server, &unit).await
             }
             "deploy" | "sync" => {
+                let restart = if action == "sync" {
+                    let current = status(&server, &unit).await?;
+                    if current["installed"] != true && current["serviceInstalled"] != true {
+                        return Ok(current);
+                    }
+                    current["running"] == true
+                } else {
+                    false
+                };
                 let stage = format!("/tmp/copool-stage-{}", uuid::Uuid::new_v4());
                 ssh(
                     &server,
@@ -318,7 +327,7 @@ impl Application {
                                 &server.remote_dir,
                                 &unit,
                                 &stage,
-                                false,
+                                restart,
                             )),
                             None,
                             60,
