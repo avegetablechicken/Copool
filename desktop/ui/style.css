@@ -471,6 +471,10 @@ main > section {
   color: var(--label);
 }
 
+.settings-page .row:has(> input:not(.switch)) > .row-label {
+  flex: 0 0 auto;
+}
+
 .row-name {
   color: var(--label);
 }
@@ -733,6 +737,11 @@ input.field,
   font-size: 11px;
   -webkit-user-select: text;
   user-select: text;
+}
+
+.settings-page .row > input:not(.switch) {
+  flex: 1;
+  width: 0;
 }
 
 input.field:focus,
