@@ -862,8 +862,8 @@ mod tests {
             "env": {AUTH_TOKEN: "outside", "DISABLE_TELEMETRY": "1"}});
         write_main(&location, &outside);
         assert!(current(&app.claude_accounts().await.unwrap()).is_empty());
-        // Without a record, only what replaces the login goes.
-        fs::remove_file(app.claude_official_path()).unwrap();
+        // The record went with its restore, so only what replaces the login goes.
+        assert!(!app.claude_official_path().exists());
         app.claude_switch_account(&alice).await.unwrap();
         assert_eq!(
             main_settings(&location),

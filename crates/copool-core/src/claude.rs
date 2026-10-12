@@ -1281,9 +1281,11 @@ impl Application {
         // recorded when leaving them, or else lose only what replaces it.
         let settings = read_settings(&location)?;
         let current = parse_settings(settings.as_deref())?;
+        let mut restoring_record = false;
         let official = if provider_config::overrides(&current).is_empty() {
             None
         } else if let Some(recorded) = self.claude_official_settings()? {
+            restoring_record = true;
             Some(recorded)
         } else {
             let mut stripped = current;
@@ -1332,6 +1334,11 @@ impl Application {
             }
             restore_account();
             return rollback(error).await;
+        }
+        // Once restored, the record would only go stale as the official
+        // settings change; leaving them again records them anew.
+        if restoring_record {
+            let _ = fs::remove_file(self.claude_official_path());
         }
         Ok(SwitchExecution {
             login_overrides: login_overrides(&location),
