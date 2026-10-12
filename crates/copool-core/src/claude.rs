@@ -1038,7 +1038,11 @@ impl Application {
             None => same_tokens(&a.oauth, &oauth),
         }) {
             Some(existing) => {
-                existing.oauth = oauth;
+                // An older login (an earlier export, say) holds a refresh token
+                // the pool has since rotated.
+                if expires_at(&oauth) >= expires_at(&existing.oauth) {
+                    existing.oauth = oauth;
+                }
                 if key.is_some() {
                     existing.account = account;
                 }
