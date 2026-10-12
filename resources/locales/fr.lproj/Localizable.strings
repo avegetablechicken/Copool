@@ -471,3 +471,5 @@
 "settings.request_new_accounts.description" = "Désactivé, Copool n’envoie rien en amont pour un compte nouvellement importé (usage, espaces de travail, profil, routage du proxy) tant que vous n’actualisez pas sa carte ou tout, pour que vous puissiez d’abord définir son proxy. La connexion et l’échange de jetons ont toujours lieu à l’import.";
 "accounts.card.awaiting_first_request" = "Pas encore actualisé";
 "accounts.card.awaiting_first_request.help" = "Copool n’a pas encore contacté l’amont pour ce compte. Définissez son proxy si besoin, puis actualisez cette carte.";
+
+"settings.account_proxy" = "Proxy commun aux comptes";

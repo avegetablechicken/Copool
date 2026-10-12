@@ -135,6 +135,7 @@ pub(crate) struct ProxyStorageContext {
     pub(crate) upstream_base_url: Option<String>,
     pub(crate) on_auth_refreshed:
         Option<Arc<dyn Fn(&str, &Value) -> Result<(), String> + Send + Sync>>,
+    pub(crate) account_proxy: Option<Arc<dyn Fn() -> Result<String, String> + Send + Sync>>,
     pub(crate) provider_candidates:
         Option<Arc<dyn Fn() -> Result<Vec<StoredAccount>, String> + Send + Sync>>,
     pub(crate) on_selected: Option<
@@ -291,6 +292,7 @@ pub(crate) fn new_proxy_storage_context(
         active_auth_path: None,
         upstream_base_url: None,
         on_auth_refreshed: None,
+        account_proxy: None,
         provider_candidates: None,
         on_selected: None,
     }
@@ -1765,10 +1767,19 @@ async fn load_proxy_candidates(
     if let Some(load) = &storage.provider_candidates {
         accounts.extend(load()?);
     }
+    let account_proxy = storage
+        .account_proxy
+        .as_ref()
+        .map(|load| load())
+        .transpose()?
+        .unwrap_or_default();
     let mut candidates = accounts
         .into_iter()
         .filter_map(account_to_proxy_candidate)
         .map(|mut candidate| {
+            if candidate.proxy_url.trim().is_empty() && !account_proxy.trim().is_empty() {
+                candidate.proxy_url = account_proxy.clone();
+            }
             candidate.is_preferred_current = candidate
                 .auth_json
                 .pointer("/copoolProvider/preferred")
@@ -3328,6 +3339,49 @@ mod tests {
     };
     use serde_json::json;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn account_proxy_is_fallback_for_forwarding_candidates_without_persisting() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut storage = super::new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        let path = super::account_store_path_from_data_dir(dir.path());
+        let mut store = super::load_store_from_path(&path).unwrap();
+        store.accounts.push(
+            serde_json::from_value(json!({
+                "id":"alice", "label":"Alice", "accountId":"alice", "addedAt":1,"updatedAt":1,
+                "authJson":{"tokens":{"access_token":"synthetic-access","id_token":"synthetic-id","account_id":"alice"}},
+                "proxyURL":"http://127.0.0.1:7891"
+            }))
+            .unwrap(),
+        );
+        super::save_store_to_path(&path, &store).unwrap();
+        storage.account_proxy = Some(std::sync::Arc::new(|| Ok("http://127.0.0.1:7890".into())));
+        let candidates = super::load_proxy_candidates(&storage).await.unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].proxy_url, "http://127.0.0.1:7891");
+        assert_eq!(
+            super::load_store_from_path(&path).unwrap().accounts[0].proxy_url,
+            "http://127.0.0.1:7891"
+        );
+        store.accounts[0].proxy_url.clear();
+        super::save_store_to_path(&path, &store).unwrap();
+        assert_eq!(
+            super::load_proxy_candidates(&storage).await.unwrap()[0].proxy_url,
+            "http://127.0.0.1:7890"
+        );
+        assert!(super::load_store_from_path(&path).unwrap().accounts[0]
+            .proxy_url
+            .is_empty());
+        storage.account_proxy = Some(std::sync::Arc::new(|| Ok(String::new())));
+        assert_eq!(
+            super::load_proxy_candidates(&storage).await.unwrap()[0].proxy_url,
+            ""
+        );
+    }
 
     #[test]
     fn parses_codex_version_only_from_recognized_user_agent_products() {

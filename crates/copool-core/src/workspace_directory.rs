@@ -63,7 +63,10 @@ impl Application {
             }
             let Ok(metadata) = self
                 .network
-                .workspaces(&extracted.access_token, &account.proxy_url)
+                .workspaces(
+                    &extracted.access_token,
+                    &self.account_proxy(&account.proxy_url)?,
+                )
                 .await
             else {
                 continue;
@@ -138,7 +141,10 @@ impl Application {
             }
             let metadata = self
                 .network
-                .workspaces(&extracted.access_token, &account.proxy_url)
+                .workspaces(
+                    &extracted.access_token,
+                    &self.account_proxy(&account.proxy_url)?,
+                )
                 .await?;
             did_fetch = true;
             for row in metadata {

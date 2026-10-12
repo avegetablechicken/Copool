@@ -233,7 +233,6 @@ impl Login {
             if self.flow == Flow::Claude {
                 return self.exchange_claude(&code).await;
             }
-            // A new account has no proxy of its own yet: the system's.
             let response = crate::utils::with_account_proxy(reqwest::Client::builder(), "")?
                 .build()
                 .map_err(|e| e.to_string())?

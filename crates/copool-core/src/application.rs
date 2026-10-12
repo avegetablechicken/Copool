@@ -61,6 +61,9 @@ pub struct Preferences {
     /// Contact upstream as soon as a new account is imported; otherwise it
     /// waits for a manual refresh, so that its proxy can be set first.
     pub request_new_accounts: bool,
+    /// Default proxy for stored accounts without their own proxy; never for login/import.
+    #[serde(alias = "importProxyUrl")]
+    pub account_proxy_url: String,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -78,6 +81,7 @@ impl Default for Preferences {
             restart_editors_on_switch: false,
             restart_editor_targets: vec![],
             request_new_accounts: false,
+            account_proxy_url: String::new(),
         }
     }
 }
@@ -139,6 +143,13 @@ impl Preferences {
             host_api_only: settings.local_proxy_host_api_only,
             restart_editors_on_switch: settings.restart_editors_on_switch,
             restart_editor_targets: settings.restart_editor_targets,
+            account_proxy_url: settings
+                .extra
+                .get("accountProxyUrl")
+                .or_else(|| settings.extra.get("importProxyUrl"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into(),
             request_new_accounts: settings
                 .extra
                 .get("requestNewAccounts")
@@ -276,6 +287,11 @@ impl Application {
             self.state.store_lock.clone(),
             false,
         );
+        let paths = self.paths.clone();
+        storage.account_proxy = Some(Arc::new(move || {
+            let settings = crate::repository::load_settings(&paths.data_dir.join("settings.json"))?;
+            Ok(Preferences::from_settings(settings)?.account_proxy_url)
+        }));
         storage.prefer_local_selection = true;
         storage.active_auth_path = Some(self.paths.codex_auth.clone());
         // Always resolved here: the engine's own fallback reads ~/.codex, not
@@ -346,6 +362,9 @@ impl Application {
     }
 
     fn project_preferences(s: &mut crate::settings::Settings, p: &Preferences) {
+        s.extra.remove("importProxyUrl");
+        s.extra
+            .insert("accountProxyUrl".into(), p.account_proxy_url.trim().into());
         s.auto_smart_switch = p.auto_switch;
         s.auto_start_api_proxy = p.auto_start_proxy;
         s.locale = p.locale.clone();
@@ -370,6 +389,13 @@ impl Application {
         let mut settings = self.configuration()?;
         Self::project_preferences(&mut settings, &value);
         self.persist_configuration(&settings)
+    }
+    /// An explicit account proxy wins over the shared account default.
+    pub(crate) fn account_proxy(&self, account_proxy: &str) -> Result<String> {
+        if !account_proxy.trim().is_empty() {
+            return Ok(account_proxy.trim().to_owned());
+        }
+        Ok(self.preferences()?.account_proxy_url.trim().to_owned())
     }
     fn current_auth(&self) -> Result<Option<Value>> {
         match fs::read(&self.paths.codex_auth) {
@@ -828,7 +854,7 @@ impl Application {
         let result = crate::account_network::fetch(
             self.network.as_ref(),
             &account.auth_json,
-            &account.proxy_url,
+            &self.account_proxy(&account.proxy_url)?,
             now_unix_seconds(),
         )
         .await;
@@ -1076,6 +1102,7 @@ impl Application {
     }
 }
 fn validate_preferences(p: &Preferences) -> Result<()> {
+    validate_proxy(&p.account_proxy_url).map_err(|_| "Invalid account proxy URL".to_string())?;
     if !["used", "remaining"].contains(&p.usage_display.as_str()) {
         return Err("Invalid usage display mode".into());
     }
@@ -1146,6 +1173,105 @@ mod tests {
         app.persist_configuration(&settings).unwrap();
         app
     }
+    #[tokio::test]
+    async fn account_proxy_migrates_the_previous_setting_name() {
+        let (_dir, app, _) = crate::legacy_tests::network_fixture::fixture();
+        let mut settings = app.configuration().unwrap();
+        settings
+            .extra
+            .insert("importProxyUrl".into(), "http://127.0.0.1:7890".into());
+        app.persist_configuration(&settings).unwrap();
+        let mut preferences = app.preferences().unwrap();
+        assert_eq!(preferences.account_proxy_url, "http://127.0.0.1:7890");
+        preferences.account_proxy_url.clear();
+        app.save_preferences(preferences).await.unwrap();
+        assert!(app.preferences().unwrap().account_proxy_url.is_empty());
+        assert!(!app
+            .configuration()
+            .unwrap()
+            .extra
+            .contains_key("importProxyUrl"));
+    }
+
+    #[tokio::test]
+    async fn account_proxy_is_default_for_existing_accounts_but_not_imports() {
+        let (_dir, app, network) = crate::legacy_tests::network_fixture::fixture();
+        app.import_authorized(document("alice"), None, &[])
+            .await
+            .unwrap();
+        let account = app.accounts().await.unwrap().remove(0);
+        app.update_account(&account.id, &account.label, "socks5://127.0.0.1:7891")
+            .await
+            .unwrap();
+        let mut preferences = app.preferences().unwrap();
+        assert!(preferences.account_proxy_url.is_empty());
+        preferences.account_proxy_url = "  http://127.0.0.1:7890  ".into();
+        app.save_preferences(preferences.clone()).await.unwrap();
+        assert_eq!(
+            app.preferences().unwrap().account_proxy_url,
+            "http://127.0.0.1:7890"
+        );
+        preferences.account_proxy_url = "ftp://127.0.0.1:7890".into();
+        assert!(app.save_preferences(preferences).await.is_err());
+        network.calls.lock().unwrap().clear();
+        app.refresh_usage(&account.id).await.unwrap();
+        assert_eq!(
+            network.calls.lock().unwrap()[0].2,
+            "socks5://127.0.0.1:7891"
+        );
+        network.calls.lock().unwrap().clear();
+        app.import_authorized(document("alice"), None, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            network.calls.lock().unwrap()[0].2,
+            "socks5://127.0.0.1:7891"
+        );
+        network.calls.lock().unwrap().clear();
+        app.import_authorized(document("bob"), None, &[])
+            .await
+            .unwrap();
+        assert_eq!(network.calls.lock().unwrap()[0].2, "");
+        assert_eq!(
+            app.accounts()
+                .await
+                .unwrap()
+                .iter()
+                .find(|a| a.id == account.id)
+                .unwrap()
+                .proxy_url,
+            "socks5://127.0.0.1:7891"
+        );
+        let bob = app
+            .accounts()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|a| a.id != account.id)
+            .unwrap();
+        network.calls.lock().unwrap().clear();
+        app.refresh_usage(&bob.id).await.unwrap();
+        assert_eq!(network.calls.lock().unwrap()[0].2, "http://127.0.0.1:7890");
+        let storage = app.storage();
+        assert_eq!(
+            storage.account_proxy.as_ref().unwrap()().unwrap(),
+            "http://127.0.0.1:7890"
+        );
+        let mut preferences = app.preferences().unwrap();
+        preferences.account_proxy_url.clear();
+        app.save_preferences(preferences).await.unwrap();
+        assert_eq!(storage.account_proxy.as_ref().unwrap()().unwrap(), "");
+        network.calls.lock().unwrap().clear();
+        app.refresh_usage(&bob.id).await.unwrap();
+        assert_eq!(network.calls.lock().unwrap()[0].2, "");
+        network.calls.lock().unwrap().clear();
+        app.refresh_usage(&account.id).await.unwrap();
+        assert_eq!(
+            network.calls.lock().unwrap()[0].2,
+            "socks5://127.0.0.1:7891"
+        );
+    }
+
     #[tokio::test]
     async fn a_new_account_contacts_upstream_only_after_a_manual_refresh() {
         let (_dir, app, network) = crate::legacy_tests::network_fixture::waiting_fixture();

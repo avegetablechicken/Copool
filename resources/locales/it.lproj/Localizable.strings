@@ -471,3 +471,5 @@
 "settings.request_new_accounts.description" = "Se disattivato, Copool non invia nulla all’upstream per un account appena importato (utilizzo, workspace, profilo, inoltro del proxy) finché non aggiorni la sua scheda o tutte, così puoi prima impostarne il proxy. Accesso e scambio dei token avvengono comunque durante l’importazione.";
 "accounts.card.awaiting_first_request" = "Non ancora aggiornato";
 "accounts.card.awaiting_first_request.help" = "Copool non ha ancora contattato l’upstream per questo account. Imposta il proxy se serve, poi aggiorna questa scheda.";
+
+"settings.account_proxy" = "Proxy condiviso degli account";

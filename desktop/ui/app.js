@@ -692,6 +692,8 @@ function renderPreferences() {
       (input) =>
         (input.checked = Boolean(preferences[input.dataset.preference])),
     );
+  if (document.activeElement !== $("account-proxy"))
+    $("account-proxy").value = preferences.accountProxyUrl || "";
   const controls = P.settingsControls(preferences, installedEditors);
   $("usage-display").value = controls.usagePicker.selectedValue;
   $("restart-target").disabled = !controls.restartPicker.isEnabled;
@@ -1152,6 +1154,8 @@ document
       (input.onchange = () =>
         savePreference({ [input.dataset.preference]: input.checked })),
   );
+$("account-proxy").onchange = () =>
+  savePreference({ accountProxyUrl: $("account-proxy").value.trim() });
 $("usage-display").onchange = () =>
   savePreference({ usageDisplay: $("usage-display").value });
 $("language").onchange = () => savePreference({ locale: $("language").value });

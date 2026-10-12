@@ -89,6 +89,7 @@ impl Platform {
     }
 }
 pub struct Connection {
+    pub account_request_proxy: String,
     pub configuration: Provider,
     pub definition: Definition,
     pub admin_base: String,
@@ -137,6 +138,7 @@ pub fn connection(
     };
     let admin_base = admin_base(raw)?;
     Ok(Connection {
+        account_request_proxy: String::new(),
         configuration,
         definition,
         admin_base,
@@ -165,7 +167,11 @@ async fn payload(response: reqwest::Response) -> Result<Value, String> {
 impl Connection {
     fn client(&self, proxy: &str) -> Result<reqwest::Client, String> {
         proxy_session::client(
-            proxy,
+            if proxy.trim().is_empty() {
+                &self.account_request_proxy
+            } else {
+                proxy
+            },
             proxy_session::Options {
                 insecure: self.configuration.allow_insecure_tls,
                 ..Default::default()
@@ -273,7 +279,8 @@ impl Connection {
                     .get(&id.to_string())
                     .cloned(),
             };
-            let quota_client = self.client(&self.configuration.proxy_for(id))?;
+            let proxy = self.configuration.proxy_for(id);
+            let quota_client = self.client(&proxy)?;
             let quota_url = match platform {
                 Platform::OpenAi => format!("{}/admin/openai/accounts/{id}/quota", self.admin_base),
                 Platform::Anthropic => format!("{}/admin/accounts/{id}/usage", self.admin_base),

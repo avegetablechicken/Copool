@@ -281,6 +281,7 @@ impl Application {
             .get(&password_secret(&p.id))?
             .ok_or("error.sub2api.configuration_incomplete")?;
         Ok(sub2api::Connection {
+            account_request_proxy: String::new(),
             configuration: crate::settings::Provider {
                 id: p.id.clone(),
                 provider_id: p.name.clone(),
@@ -309,9 +310,13 @@ impl Application {
         &self,
         p: &Provider,
         ids: Option<&[i64]>,
+        refresh: bool,
     ) -> Result<Vec<Account>> {
-        let mut accounts = self
-            .claude_sub2api_connection(p)?
+        let mut connection = self.claude_sub2api_connection(p)?;
+        if refresh {
+            connection.account_request_proxy = self.preferences()?.account_proxy_url;
+        }
+        let mut accounts = connection
             .fetch_platform_accounts(Platform::Anthropic, ids, now_unix_seconds())
             .await?;
         for a in &mut accounts {
@@ -328,7 +333,7 @@ impl Application {
         let mut count = 0;
         let mut errors = vec![];
         for p in providers {
-            match self.claude_fetch_sub2api(&p, None).await {
+            match self.claude_fetch_sub2api(&p, None, false).await {
                 Ok(fetched) => {
                     count += fetched.len();
                     let _lock = self.claude.lock.lock().await;
@@ -369,7 +374,7 @@ impl Application {
             .map(|a| p.card_id(a.id))
             .collect();
         let _activity: Vec<_> = cards.iter().map(|id| self.begin_refresh(id)).collect();
-        let fetched = self.claude_fetch_sub2api(&p, ids.as_deref()).await?;
+        let fetched = self.claude_fetch_sub2api(&p, ids.as_deref(), true).await?;
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {

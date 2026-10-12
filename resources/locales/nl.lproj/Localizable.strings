@@ -471,3 +471,5 @@
 "settings.request_new_accounts.description" = "Wanneer uit, stuurt Copool niets naar upstream voor een nieuw geïmporteerd account (gebruik, werkruimten, profiel, proxyroutering) tot je de kaart of alles vernieuwt, zodat je eerst de proxy kunt instellen. Aanmelden en tokens uitwisselen gebeuren nog steeds bij het importeren.";
 "accounts.card.awaiting_first_request" = "Nog niet vernieuwd";
 "accounts.card.awaiting_first_request.help" = "Copool heeft voor dit account nog geen upstream benaderd. Stel zo nodig de proxy in en vernieuw daarna deze kaart.";
+
+"settings.account_proxy" = "Gedeelde accountproxy";

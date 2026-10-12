@@ -966,7 +966,7 @@ impl Application {
         let (id, label, waiting) = self.claude_import_live(live, true).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage(&id).await;
+            let _ = self.claude_refresh_usage_scoped(&id, false).await;
         }
         Ok(label)
     }
@@ -1001,7 +1001,7 @@ impl Application {
         let (id, _, waiting) = self.claude_import_live(live, false).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage(&id).await;
+            let _ = self.claude_refresh_usage_scoped(&id, false).await;
         }
         Ok(1)
     }
@@ -1058,7 +1058,7 @@ impl Application {
         let (id, label, waiting) = self.claude_upsert(oauth, account, false, defer).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage(&id).await;
+            let _ = self.claude_refresh_usage_scoped(&id, false).await;
         }
         Ok(label)
     }
@@ -1197,6 +1197,9 @@ impl Application {
     /// Renew pool credentials and sync an unchanged live login without showing
     /// authorization UI. External rotations take precedence over our response.
     pub async fn claude_refresh_usage(&self, id: &str) -> Result<()> {
+        self.claude_refresh_usage_scoped(id, true).await
+    }
+    async fn claude_refresh_usage_scoped(&self, id: &str, use_account_proxy: bool) -> Result<()> {
         if sub2api::is_card(id) {
             return self.claude_refresh_sub2api_card(id).await;
         }
@@ -1231,7 +1234,12 @@ impl Application {
             }));
         }
         let network = self.claude_network();
-        let proxy = account.proxy_url.as_str();
+        let request_proxy = if use_account_proxy {
+            self.account_proxy(&account.proxy_url)?
+        } else {
+            account.proxy_url.clone()
+        };
+        let proxy = request_proxy.as_str();
         // A refresh rotates the refresh token, so its result is kept even
         // when the usage request then fails.
         let mut oauth = account.oauth.clone();
@@ -1567,14 +1575,16 @@ mod tests {
         refreshed: Mutex<Vec<String>>,
         profile_proxies: Mutex<Vec<String>>,
         usage_tokens: Mutex<Vec<String>>,
+        usage_proxies: Mutex<Vec<String>>,
         usage_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_error: Mutex<Option<String>>,
     }
     impl Network for Fake {
-        fn usage<'a>(&'a self, token: &'a str, _: &'a str) -> Response<'a, (u16, Value)> {
+        fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
             Box::pin(async move {
                 self.usage_tokens.lock().unwrap().push(token.into());
+                self.usage_proxies.lock().unwrap().push(proxy.into());
                 let mut hooks = self.usage_hooks.lock().unwrap();
                 if !hooks.is_empty() {
                     hooks.remove(0)();
@@ -2120,6 +2130,47 @@ mod tests {
             }
         );
         assert_eq!(live_access(&location), "new-access");
+    }
+
+    #[tokio::test]
+    async fn account_proxy_routes_refresh_but_not_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _location, fake) = app(&dir).await;
+        let mut preferences = app.preferences().unwrap();
+        preferences.account_proxy_url = "http://127.0.0.1:7890".into();
+        app.save_preferences(preferences).await.unwrap();
+        app.claude_import_login(json!({
+            "access_token": "new-access", "refresh_token": "new-refresh",
+            "expires_in": 3600,
+            "account": {"uuid": "acct-new"}, "organization": {"uuid": "org-new"}
+        }))
+        .await
+        .unwrap();
+        assert_eq!(*fake.profile_proxies.lock().unwrap(), vec![""]);
+        assert_eq!(*fake.usage_proxies.lock().unwrap(), vec![""]);
+        let account = app.claude_load().unwrap().accounts.remove(0);
+        assert!(account.proxy_url.is_empty());
+        app.claude_refresh_usage(&account.id).await.unwrap();
+        assert_eq!(
+            fake.usage_proxies.lock().unwrap().last().unwrap(),
+            "http://127.0.0.1:7890"
+        );
+        app.claude_save_account_proxy(&account.id, "socks5://127.0.0.1:7891")
+            .await
+            .unwrap();
+        app.claude_refresh_usage(&account.id).await.unwrap();
+        assert_eq!(
+            fake.usage_proxies.lock().unwrap().last().unwrap(),
+            "socks5://127.0.0.1:7891"
+        );
+        let mut preferences = app.preferences().unwrap();
+        preferences.account_proxy_url.clear();
+        app.save_preferences(preferences).await.unwrap();
+        app.claude_refresh_usage(&account.id).await.unwrap();
+        assert_eq!(
+            fake.usage_proxies.lock().unwrap().last().unwrap(),
+            "socks5://127.0.0.1:7891"
+        );
     }
 
     #[tokio::test]

@@ -208,12 +208,15 @@ impl Application {
             .iter()
             .map(|id| self.begin_refresh(id))
             .collect();
-        let connection = sub2api::connection(
+        let mut connection = sub2api::connection(
             &self.codex_config_path(),
             &snapshot.sub2_api_provider,
             Some(provider_id),
             self.secrets.as_ref(),
         )?;
+        if !sync_membership {
+            connection.account_request_proxy = self.preferences()?.account_proxy_url;
+        }
         let fetched = connection.fetch_accounts(None, now_unix_seconds()).await?;
         self.apply_provider_refresh(provider_id, fetched, sync_membership)
             .await
@@ -257,12 +260,13 @@ impl Application {
         id: i64,
     ) -> Result<(), String> {
         let settings = self.configuration()?;
-        let connection = sub2api::connection(
+        let mut connection = sub2api::connection(
             &self.codex_config_path(),
             &settings.sub2_api_provider,
             Some(&provider.provider_id),
             self.secrets.as_ref(),
         )?;
+        connection.account_request_proxy = self.preferences()?.account_proxy_url;
         let accounts = connection
             .fetch_accounts(Some(&[id]), now_unix_seconds())
             .await?;

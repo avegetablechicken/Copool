@@ -471,3 +471,5 @@
 "settings.request_new_accounts.description" = "關閉後，新帳號暫停上游請求，手動重新整理後啟用，可先設定代理。匯入時的登入與權杖交換不受影響。";
 "accounts.card.awaiting_first_request" = "待首次重新整理";
 "accounts.card.awaiting_first_request.help" = "Copool 尚未為此帳號向上游發出請求。如需代理請先設定，再重新整理此卡片。";
+
+"settings.account_proxy" = "帳號統一代理";
