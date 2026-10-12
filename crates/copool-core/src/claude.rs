@@ -31,6 +31,7 @@ const USER_AGENT: &str = "claude-code/2.1.69";
 // This is the earliest version that receives them.
 const USAGE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
 const SIGN_IN_EXPIRED: &str = "error.accounts.sign_in_expired";
+const TOKEN_REFRESH_RATE_LIMITED: &str = "Claude token refresh failed: HTTP 429";
 
 /// Where Claude Code keeps its login.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -232,6 +233,9 @@ impl Network for Http {
             if matches!(status.as_u16(), 400 | 401) && code == Some("invalid_grant") {
                 return Err(SIGN_IN_EXPIRED.into());
             }
+            if status.as_u16() == 429 {
+                return Err(TOKEN_REFRESH_RATE_LIMITED.into());
+            }
             Err(format!(
                 "Claude token refresh failed: HTTP {}",
                 status.as_u16()
@@ -331,7 +335,7 @@ struct Stored {
     usage: Option<UsageSnapshot>,
     #[serde(default)]
     usage_error: Option<String>,
-    /// A local backoff after the usage endpoint returns HTTP 429.
+    /// A local backoff after the usage or token endpoint returns HTTP 429.
     #[serde(default)]
     usage_retry_at: Option<i64>,
     /// Newly imported; nothing goes upstream for it until a manual refresh.
@@ -1501,6 +1505,12 @@ impl Application {
                 }
             }
             .await;
+            // Renewal can fail before usage is requested, including after a
+            // 401 retry. Apply the same persisted cooldown to all renewal paths.
+            rate_limited |= result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error == TOKEN_REFRESH_RATE_LIMITED);
             // Check on success AND failure: another app may win a rotation
             // while our refresh is in flight. Never overwrite that generation
             // with our response. Retry the read with the adopted credentials once.
@@ -1833,6 +1843,76 @@ mod tests {
         assert!(stored.accounts[0].usage_retry_at.is_none());
         assert!(stored.accounts[0].usage_error.is_none());
         assert!(fake.usage.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn token_rate_limits_pause_all_refreshes_and_recover_after_backoff() {
+        for expires in [1, LATER] {
+            let dir = tempfile::tempdir().unwrap();
+            let (app, location, fake) = waiting_app(&dir);
+            sign_in(&location, "alice", expires);
+            app.claude_import_current().await.unwrap();
+            let id = app.claude_load().unwrap().accounts[0].id.clone();
+            app.claude_release_new_accounts(Some(&id)).await.unwrap();
+            let credentials = fs::read(location.credentials_file()).unwrap();
+            if expires == LATER {
+                fake.usage.lock().unwrap().push((401, Value::Null));
+            }
+            *fake.refresh_error.lock().unwrap() = Some(TOKEN_REFRESH_RATE_LIMITED.into());
+            let before = now_unix_seconds();
+            assert_eq!(
+                app.claude_refresh_usage(&id).await.unwrap_err(),
+                TOKEN_REFRESH_RATE_LIMITED
+            );
+            let stored = app.claude_load().unwrap();
+            let retry_at = stored.accounts[0].usage_retry_at.unwrap();
+            assert!((before + 300..=now_unix_seconds() + 300).contains(&retry_at));
+            assert_eq!(stored.accounts[0].oauth["refreshToken"], "alice-refresh");
+            assert_eq!(fs::read(location.credentials_file()).unwrap(), credentials);
+            let usage_calls = fake.usage_tokens.lock().unwrap().len();
+            assert_eq!(fake.refreshed.lock().unwrap().len(), 1);
+            // A persisted cooldown survives reopening the application.
+            drop(app);
+            let (app, _, _) = waiting_app(&dir);
+            app.set_claude_network(fake.clone());
+            assert_eq!(
+                app.claude_refresh_usage(&id).await.unwrap_err(),
+                TOKEN_REFRESH_RATE_LIMITED
+            );
+            assert!(app.claude_refresh(None).await.is_err());
+            assert!(app.claude_refresh_recurring(0).await.is_err());
+            assert_eq!(fake.refreshed.lock().unwrap().len(), 1);
+            assert_eq!(fake.usage_tokens.lock().unwrap().len(), usage_calls);
+            let mut store = app.claude_load().unwrap();
+            store.accounts[0].usage_retry_at = Some(now_unix_seconds() - 1);
+            app.claude_save(&store).unwrap();
+            if expires == LATER {
+                fake.usage.lock().unwrap().push((401, Value::Null));
+            }
+            app.claude_refresh_usage(&id).await.unwrap();
+            assert_eq!(fake.refreshed.lock().unwrap().len(), 2);
+            let stored = app.claude_load().unwrap();
+            assert!(stored.accounts[0].usage_retry_at.is_none());
+            assert!(stored.accounts[0].usage_error.is_none());
+            assert_eq!(stored.accounts[0].oauth["refreshToken"], "fresh-refresh");
+        }
+    }
+
+    #[tokio::test]
+    async fn other_token_failures_are_not_classified_as_rate_limits() {
+        for error in [SIGN_IN_EXPIRED, "Claude token refresh failed: HTTP 500"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (app, location, fake) = waiting_app(&dir);
+            sign_in(&location, "alice", 1);
+            app.claude_import_current().await.unwrap();
+            let id = app.claude_load().unwrap().accounts[0].id.clone();
+            app.claude_release_new_accounts(Some(&id)).await.unwrap();
+            *fake.refresh_error.lock().unwrap() = Some(error.into());
+            assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), error);
+            assert!(app.claude_load().unwrap().accounts[0]
+                .usage_retry_at
+                .is_none());
+        }
     }
 
     #[tokio::test]
