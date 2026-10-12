@@ -113,7 +113,8 @@
   }
   function card(account, collapsed = false, mode = "used", formatDate) {
     const plan = normalizedPlan(account),
-      name = (account.email ?? account.accountId ?? "").trim(),
+      name =
+        clean(account.email) || clean(account.accountId) || clean(account.label) || "",
       credits = account.usage?.credits;
     return {
       plan,

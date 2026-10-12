@@ -982,7 +982,8 @@ document.addEventListener("keydown", (event) => {
 });
 function openAccountProxy(account) {
   editingAccount = account;
-  $("edit-name").textContent = account.email || account.accountId;
+  $("edit-name").textContent =
+    account.email || account.accountId || account.label;
   const direct = account.proxyUrl === "direct://";
   $("edit-proxy-enabled").checked = !direct;
   $("edit-proxy").disabled = direct;
