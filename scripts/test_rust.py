@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--offline',action='store_true')
 args=parser.parse_args()
-commands=[['cargo','fmt','--all','--','--check'],['cargo','test','-p','copool-core','--locked']+(['--offline'] if args.offline else []),['node','--test',*map(str,sorted((ROOT/'desktop/tests').glob('*.test.cjs')))],['cargo','check','--manifest-path','resources/proxyd-src/proxyd/Cargo.toml','--locked']+(['--offline'] if args.offline else [])]
+commands=[['cargo','fmt','--all','--','--check'],['cargo','test','-p','copool-core','--locked']+(['--offline'] if args.offline else []),['cargo','test','-p','copool-desktop','--locked']+(['--offline'] if args.offline else []),['node','--test',*map(str,sorted((ROOT/'desktop/tests').glob('*.test.cjs')))],['cargo','check','--manifest-path','resources/proxyd-src/proxyd/Cargo.toml','--locked']+(['--offline'] if args.offline else [])]
 commands[2:2]=[['node','--check',str(path)] for path in sorted((ROOT/'desktop/ui').glob('*.js'))]
 status=0
 for command in commands:
