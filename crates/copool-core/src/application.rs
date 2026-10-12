@@ -1127,7 +1127,7 @@ fn identity(document: &Value) -> Result<(String, String)> {
 }
 
 /// Whether `live` is a later login of the same account than `stored`: other
-/// tokens, refreshed no earlier. A login without a refresh time is older.
+/// tokens, refreshed later. A login without a refresh time is older.
 fn newer_login(live: &Value, stored: &Value) -> bool {
     let refreshed = |document: &Value| {
         document["last_refresh"]
@@ -1138,7 +1138,7 @@ fn newer_login(live: &Value, stored: &Value) -> bool {
         && identity(live).ok() == identity(stored).ok()
         && live["tokens"] != stored["tokens"]
         && match (refreshed(live), refreshed(stored)) {
-            (Some(live), Some(stored)) => live >= stored,
+            (Some(live), Some(stored)) => live > stored,
             (live, stored) => live.is_some() || stored.is_none(),
         }
 }

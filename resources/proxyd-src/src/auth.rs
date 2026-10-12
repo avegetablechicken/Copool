@@ -418,6 +418,11 @@ pub(crate) async fn refresh_chatgpt_auth_tokens(
     if let Some(refresh_token) = refreshed.refresh_token {
         tokens.insert("refresh_token".to_string(), Value::String(refresh_token));
     }
+    // As Codex does, so the rotated login reads as newer than its previous copy.
+    root.insert(
+        "last_refresh".to_string(),
+        Value::String(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+    );
 
     Ok(updated)
 }
