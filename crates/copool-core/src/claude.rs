@@ -23,6 +23,7 @@ pub use sub2api::Provider as Sub2ApiProvider;
 // `cedar_ember=1` adds the banked usage-limit resets to the usage response.
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+const ORGANIZATIONS_URL: &str = "https://api.anthropic.com/api/oauth/organizations";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const USER_AGENT: &str = "claude-code/2.1.69";
 // The banked resets are returned only to Claude Code 2.1.280 or later, by its
@@ -151,6 +152,8 @@ pub(crate) trait Network: Send + Sync {
     /// A token response for a refresh token.
     fn refresh<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Value>;
     fn profile<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Value>;
+    /// The organization's prepaid balance, which pays for extra usage.
+    fn prepaid<'a>(&'a self, token: &'a str, org: &'a str, proxy: &'a str) -> Response<'a, Value>;
 }
 struct Http;
 fn client(proxy: &str) -> Result<reqwest::Client> {
@@ -239,6 +242,27 @@ impl Network for Http {
             if !response.status().is_success() {
                 return Err(format!(
                     "Claude profile request failed: HTTP {}",
+                    response.status().as_u16()
+                ));
+            }
+            response.json().await.map_err(request_error)
+        })
+    }
+    fn prepaid<'a>(&'a self, token: &'a str, org: &'a str, proxy: &'a str) -> Response<'a, Value> {
+        Box::pin(async move {
+            let response = client(proxy)?
+                .get(format!("{ORGANIZATIONS_URL}/{org}/prepaid/credits"))
+                .bearer_auth(token.trim())
+                .header("Accept", "application/json")
+                .header("x-organization-uuid", org)
+                .header("anthropic-beta", "oauth-2025-04-20")
+                .header("anthropic-version", "2023-06-01")
+                .send()
+                .await
+                .map_err(request_error)?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Claude prepaid credits request failed: HTTP {}",
                     response.status().as_u16()
                 ));
             }
@@ -475,30 +499,55 @@ fn usage_snapshot(body: &Value, plan: Option<String>, now: i64) -> Result<UsageS
         plan_type: plan,
         five_hour: window("five_hour", 5 * 60 * 60),
         one_week: window("seven_day", 7 * 24 * 60 * 60),
-        credits: extra_usage(&body["extra_usage"]),
+        credits: None,
     })
 }
-/// The extra usage credits spent this month against the monthly limit, as
-/// `$12.85 / $40.00`. The amounts are in minor units of the currency.
-fn extra_usage(block: &Value) -> Option<CreditSnapshot> {
-    let places = number(&block["decimal_places"]).map_or(2, |p| p.clamp(0.0, 4.0) as usize);
-    let currency = text(&block["currency"]).unwrap_or_else(|| "USD".into());
-    let money = |value: &Value| {
-        let amount = number(value)? / 10f64.powi(places as i32);
-        Some(match currency.as_str() {
+/// What extra usage has left, as Claude Code counts it: the smaller of the
+/// monthly limit's remainder and the prepaid balance. A missing limit, or a
+/// balance auto-reload tops up, is unbounded; both unbounded is unlimited.
+/// Amounts are in minor units; without a balance nothing is known.
+fn extra_usage_credits(extra: &Value, prepaid: &Value) -> Option<CreditSnapshot> {
+    if !extra.is_object() || !prepaid.is_object() {
+        return None;
+    }
+    let minor = |amount: &Value, exponent: &Value| {
+        Some(number(amount)? / 10f64.powf(number(exponent).unwrap_or(2.0)))
+    };
+    let places = number(&extra["decimal_places"]).unwrap_or(2.0);
+    let limit = number(&extra["monthly_limit"])
+        .map(|limit| (limit - number(&extra["used_credits"]).unwrap_or(0.0)) / 10f64.powf(places));
+    let balance = if prepaid["auto_reload_settings"]["enabled"].as_bool() == Some(true) {
+        None
+    } else {
+        // `amount` is -1 when the balance is held as credits rather than money.
+        let held = &prepaid["balance"];
+        let balance = ["money", "credits"]
+            .iter()
+            .find_map(|kind| minor(&held[*kind]["amount_minor"], &held[*kind]["exponent"]))
+            .or_else(|| {
+                number(&prepaid["amount"])
+                    .filter(|a| *a >= 0.0)
+                    .map(|a| a / 10f64.powf(places))
+            })?;
+        Some(balance)
+    };
+    let left = match (limit, balance) {
+        (Some(limit), Some(balance)) => Some(limit.min(balance)),
+        (limit, balance) => limit.or(balance),
+    }
+    .map(|left| left.max(0.0));
+    let currency = text(&extra["currency"])
+        .or_else(|| text(&prepaid["currency"]))
+        .unwrap_or_else(|| "USD".into());
+    let places = places.clamp(0.0, 4.0) as usize;
+    Some(CreditSnapshot {
+        has_credits: left.is_none_or(|left| left > 0.0),
+        unlimited: left.is_none(),
+        balance: left.map(|amount| match currency.as_str() {
             "USD" => format!("${amount:.places$}"),
             "EUR" => format!("€{amount:.places$}"),
             "GBP" => format!("£{amount:.places$}"),
             code => format!("{code} {amount:.places$}"),
-        })
-    };
-    let used = money(&block["used_credits"])?;
-    Some(CreditSnapshot {
-        has_credits: block["is_enabled"].as_bool() == Some(true),
-        unlimited: false,
-        balance: Some(match money(&block["monthly_limit"]) {
-            Some(limit) => format!("{used} / {limit}"),
-            None => used,
         }),
     })
 }
@@ -1374,7 +1423,21 @@ impl Application {
                 }
                 rate_limited = status == 429;
                 match status {
-                    200..=299 => usage_snapshot(&body, plan(&oauth), now_unix_seconds()),
+                    200..=299 => {
+                        let mut usage = usage_snapshot(&body, plan(&oauth), now_unix_seconds())?;
+                        // Extra usage is paid from the organization's prepaid
+                        // balance, asked for through the same proxy.
+                        let org = text(
+                            &profiled.as_ref().unwrap_or(&account.account)["organizationUuid"],
+                        );
+                        if let (true, Some(org)) = (body["extra_usage"].is_object(), org) {
+                            let token = text(&oauth["accessToken"]).unwrap_or_default();
+                            if let Ok(prepaid) = network.prepaid(&token, &org, proxy).await {
+                                usage.credits = extra_usage_credits(&body["extra_usage"], &prepaid);
+                            }
+                        }
+                        Ok(usage)
+                    }
                     401 => Err(SIGN_IN_EXPIRED.to_string()),
                     _ => {
                         let message = body["error"]["message"].as_str().unwrap_or_default();
@@ -1575,9 +1638,6 @@ mod tests {
         assert_eq!(live.remaining_reset_count, Some(1));
         assert_eq!(live.five_hour.as_ref().unwrap().used_percent, 5.0);
         assert_eq!(live.one_week.as_ref().unwrap().used_percent, 24.0);
-        let credits = live.credits.as_ref().unwrap();
-        assert_eq!(credits.balance.as_deref(), Some("$12.85 / $40.00"));
-        assert!(!credits.has_credits && !credits.unlimited);
         // Spent, expired and absent grants are a real zero.
         for grants in [
             vec![grant(0, "2026-10-22T16:00:00+00:00")],
@@ -1604,27 +1664,90 @@ mod tests {
     }
 
     #[test]
-    fn extra_usage_credits_show_the_month_spent_against_its_limit() {
-        let credits = |block: Value| {
-            usage_snapshot(&json!({ "extra_usage": block }), None, 0)
-                .unwrap()
-                .credits
-                .and_then(|c| c.balance)
+    fn extra_usage_credits_are_the_smaller_of_the_limit_remainder_and_the_balance() {
+        // As /api/oauth/usage and /prepaid/credits returned them for a Max account.
+        let extra = json!({"is_enabled":false,"monthly_limit":4000,"used_credits":1285.0,
+            "currency":"USD","decimal_places":2,"disabled_reason":"out_of_credits"});
+        let credits = |extra: &Value, prepaid: Value| {
+            extra_usage_credits(extra, &prepaid).map(|c| (c.balance, c.unlimited, c.has_credits))
+        };
+        let held = |minor: i64| {
+            json!({"amount":-1,"currency":"USD","balance":{"money":null,
+                "credits":{"amount_minor":minor,"exponent":2}},"auto_reload_settings":null})
         };
         assert_eq!(
-            credits(
-                json!({"is_enabled":true,"used_credits":"0","currency":"EUR","decimal_places":2})
-            ),
-            Some("€0.00".into())
+            credits(&extra, held(0)),
+            Some((Some("$0.00".into()), false, false))
         );
         assert_eq!(
-            credits(
-                json!({"used_credits":150,"monthly_limit":10000,"currency":"JPY","decimal_places":0})
-            ),
-            Some("JPY 150 / JPY 10000".into())
+            credits(&extra, held(9000)),
+            Some((Some("$27.15".into()), false, true))
         );
-        assert_eq!(credits(json!({"is_enabled":false})), None);
-        assert_eq!(credits(Value::Null), None);
+        assert_eq!(
+            credits(&extra, held(1000)),
+            Some((Some("$10.00".into()), false, true))
+        );
+        let money = json!({"amount":9000,"currency":"USD","balance":{"money":
+            {"amount_minor":9000,"currency":"USD","exponent":2},"credits":null}});
+        let uncapped = json!({"is_enabled":true,"used_credits":1285,"currency":"EUR"});
+        assert_eq!(
+            credits(&uncapped, money),
+            Some((Some("€90.00".into()), false, true))
+        );
+        // Auto-reload leaves only the limit, and with neither it is unlimited.
+        let reloaded = json!({"amount":200,"auto_reload_settings":{"enabled":true}});
+        assert_eq!(
+            credits(&extra, reloaded.clone()),
+            Some((Some("$27.15".into()), false, true))
+        );
+        assert_eq!(credits(&uncapped, reloaded), Some((None, true, true)));
+        // A bare amount is minor units; without a balance nothing is known.
+        assert_eq!(
+            credits(&extra, json!({"amount":500})),
+            Some((Some("$5.00".into()), false, true))
+        );
+        assert_eq!(credits(&extra, json!({"amount":-1})), None);
+        assert_eq!(credits(&extra, Value::Null), None);
+        assert_eq!(credits(&Value::Null, held(9000)), None);
+    }
+
+    #[tokio::test]
+    async fn extra_usage_credits_ask_for_the_balance_through_the_account_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_accounts().await.unwrap()[0].id.clone();
+        let usage = json!({"five_hour":{"utilization":5},"extra_usage":{"is_enabled":true,
+            "monthly_limit":4000,"used_credits":1285,"currency":"USD","decimal_places":2}});
+        *fake.prepaid.lock().unwrap() = Some(json!({"amount":-1,"balance":{"money":null,
+            "credits":{"amount_minor":1500,"exponent":2}}}));
+        fake.usage.lock().unwrap().push((200, usage.clone()));
+        app.claude_refresh_usage(&id).await.unwrap();
+        let credits = |app: &Application| {
+            app.claude_load().unwrap().accounts[0]
+                .usage
+                .as_ref()
+                .unwrap()
+                .credits
+                .as_ref()
+                .and_then(|c| c.balance.clone())
+        };
+        assert_eq!(credits(&app), Some("$15.00".into()));
+        let requests = fake.prepaid_requests.lock().unwrap().clone();
+        let proxy = fake.usage_proxies.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(requests, vec![("org-alice".to_string(), proxy)]);
+        // A failed balance is unknown, and without extra usage it is not asked for.
+        *fake.prepaid.lock().unwrap() = None;
+        fake.usage.lock().unwrap().push((200, usage));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(credits(&app), None);
+        fake.usage
+            .lock()
+            .unwrap()
+            .push((200, json!({"five_hour":{"utilization":5}})));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(fake.prepaid_requests.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -1706,6 +1829,8 @@ mod tests {
         usage_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_error: Mutex<Option<String>>,
+        prepaid: Mutex<Option<Value>>,
+        prepaid_requests: Mutex<Vec<(String, String)>>,
     }
     impl Network for Fake {
         fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
@@ -1750,6 +1875,19 @@ mod tests {
                 Ok(
                     json!({"account":{"uuid":"acct-new","email":"new@example.com"},"organization":{"uuid":"org-new","name":"New","organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}),
                 )
+            })
+        }
+        fn prepaid<'a>(&'a self, _: &'a str, org: &'a str, proxy: &'a str) -> Response<'a, Value> {
+            Box::pin(async move {
+                self.prepaid_requests
+                    .lock()
+                    .unwrap()
+                    .push((org.into(), proxy.into()));
+                self.prepaid
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .ok_or_else(|| "HTTP 403".to_string())
             })
         }
     }
