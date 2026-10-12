@@ -15,6 +15,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 
 type Result<T> = std::result::Result<T, String>;
 
+mod provider_config;
 mod sub2api;
 pub use sub2api::Provider as Sub2ApiProvider;
 
@@ -851,12 +852,15 @@ impl Application {
         }
         // A Sub2api gateway in settings.json takes Claude Code off its login.
         let gateway = sub2api::active(&store, &location);
+        let pool_login = provider_config::uses_pool_login(&location);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
             .map(|a| {
                 a.summary(
-                    gateway.is_none() && store.current_account_id.as_deref() == Some(a.id.as_str()),
+                    gateway.is_none()
+                        && pool_login
+                        && store.current_account_id.as_deref() == Some(a.id.as_str()),
                 )
             })
             .chain(sub2api::summaries(&store, gateway))

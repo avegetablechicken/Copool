@@ -1,7 +1,7 @@
 //! Sub2api in the Claude pool: its Claude (anthropic) OAuth accounts as cards,
 //! and Claude Code pointed at its gateway through `env` in `settings.json`, as
 //! cc-switch does for third-party providers.
-use super::{login_overrides, set_member, write_text, Location, Result, Store};
+use super::{login_overrides, provider_config, set_member, write_text, Location, Result, Store};
 use crate::{
     application::{Application, SwitchExecution},
     codex_config::Definition,
@@ -16,7 +16,7 @@ use std::{collections::BTreeMap, fs, path::PathBuf};
 
 const CARD_PREFIX: &str = "claude-sub2api-";
 const BASE_URL: &str = "ANTHROPIC_BASE_URL";
-const AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
+const API_KEY: &str = "ANTHROPIC_API_KEY";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -95,6 +95,9 @@ fn settings_env(location: &Location) -> Map<String, Value> {
 }
 /// The provider whose gateway Claude Code uses, if any.
 pub(super) fn active(store: &Store, location: &Location) -> Option<usize> {
+    if !provider_config::uses_gateway(location) {
+        return None;
+    }
     let used = settings_env(location)
         .get(BASE_URL)
         .and_then(Value::as_str)
@@ -164,25 +167,23 @@ pub(super) fn restore_settings(location: &Location, previous: Option<String>) ->
         None => Ok(()),
     }
 }
-/// Removes the gateway a Claude Sub2api provider set, so that Claude Code
-/// uses the account login again. Keys Copool did not set are left alone.
+/// Select the pool login using native settings, leaving a known gateway first.
 pub(super) fn leave(store: &Store, location: &Location) -> Result<Option<String>> {
-    edit_env(location, |env| {
-        let ours = env
-            .get(BASE_URL)
-            .and_then(Value::as_str)
-            .map(gateway)
-            .is_some_and(|g| {
-                store
-                    .providers
-                    .iter()
-                    .any(|p| p.gateway().eq_ignore_ascii_case(&g))
-            });
-        if ours {
-            env.remove(BASE_URL);
-            env.remove(AUTH_TOKEN);
-        }
-    })
+    let env = settings_env(location);
+    let ours = env
+        .get(BASE_URL)
+        .and_then(Value::as_str)
+        .is_some_and(|url| {
+            store
+                .providers
+                .iter()
+                .any(|p| p.gateway().eq_ignore_ascii_case(&gateway(url)))
+        });
+    provider_config::select(
+        location,
+        None,
+        ours && provider_config::uses_gateway(location),
+    )
 }
 
 impl Application {
@@ -214,7 +215,7 @@ impl Application {
             && !configured_base.trim().is_empty()
             && gateway(configured_base).eq_ignore_ascii_case(&draft.gateway())
         {
-            draft.api_key = [AUTH_TOKEN, "ANTHROPIC_API_KEY"]
+            draft.api_key = [API_KEY, "ANTHROPIC_AUTH_TOKEN"]
                 .iter()
                 .filter_map(|key| env.get(*key).and_then(Value::as_str))
                 .find(|key| !key.trim().is_empty())
@@ -487,18 +488,13 @@ impl Application {
             &json!({"settingsEnv": settings_env(&location)}),
         )?;
         let gateway = p.gateway();
-        edit_env(&location, |env| {
-            env.insert(BASE_URL.into(), gateway.into());
-            env.insert(AUTH_TOKEN.into(), key.into());
-            // Both keys set make Claude Code warn; the gateway takes the token.
-            env.remove("ANTHROPIC_API_KEY");
-        })?;
+        provider_config::select(&location, Some((&gateway, &key)), false)?;
         self.publish();
         Ok(SwitchExecution {
             provider: Some(p.name.clone()),
             login_overrides: login_overrides(&location)
                 .into_iter()
-                .filter(|k| k != BASE_URL && k != AUTH_TOKEN)
+                .filter(|k| k != BASE_URL && k != API_KEY)
                 .collect(),
             ..Default::default()
         })
@@ -569,7 +565,8 @@ mod tests {
         app.set_claude_location(location.clone());
         edit_env(&location, |env| {
             env.insert(BASE_URL.into(), "https://gateway.example".into());
-            env.insert(AUTH_TOKEN.into(), "sk-from-claude".into());
+            env.insert(API_KEY.into(), "sk-from-claude".into());
+            env.insert("ANTHROPIC_AUTH_TOKEN".into(), "stale-bearer".into());
         })
         .unwrap();
         let mut saved = app
@@ -604,7 +601,7 @@ mod tests {
         // A credential for another gateway must never be copied to this provider.
         edit_env(&location, |env| {
             env.insert(BASE_URL.into(), "https://other.example".into());
-            env.insert(AUTH_TOKEN.into(), "sk-other".into());
+            env.insert(API_KEY.into(), "sk-other".into());
         })
         .unwrap();
         saved = app.claude_save_sub2api_provider(saved).await.unwrap();
@@ -701,7 +698,8 @@ mod tests {
         );
         edit_env(&location, |env| {
             env.insert(BASE_URL.into(), base.clone().into());
-            env.insert("ANTHROPIC_API_KEY".into(), "sk-team".into());
+            env.insert(API_KEY.into(), "sk-team".into());
+            env.insert("ANTHROPIC_AUTH_TOKEN".into(), "stale-bearer".into());
         })
         .unwrap();
         app.claude_save_sub2api_provider(saved.clone())
@@ -709,12 +707,13 @@ mod tests {
             .unwrap();
         let execution = app.claude_switch_account(&card.id).await.unwrap();
         assert_eq!(execution.provider.as_deref(), Some("team"));
+        assert!(execution.login_overrides.is_empty());
         let text = fs::read_to_string(settings_path(&location)).unwrap();
         assert!(text.starts_with("{\n  \"model\": \"opus\",\n  \"env\": {"));
         let env = settings_env(&location);
         assert_eq!(env[BASE_URL], base.as_str());
-        assert_eq!(env[AUTH_TOKEN], "sk-team");
-        assert!(env.get("ANTHROPIC_API_KEY").is_none());
+        assert_eq!(env[API_KEY], "sk-team");
+        assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "");
         assert_eq!(env["DISABLE_TELEMETRY"], "1");
         let accounts = app.claude_accounts().await.unwrap();
         assert!(
@@ -735,9 +734,42 @@ mod tests {
             .find(|a| a.source_tag.is_none())
             .unwrap();
         assert!(!alice.is_current);
+        // The same URL can be a first-party relay: identity is the native
+        // routing/auth combination, not the saved gateway URL alone.
+        edit_env(&location, |env| {
+            env.insert(API_KEY.into(), "".into());
+            env.insert(
+                "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL".into(),
+                "1".into(),
+            );
+        })
+        .unwrap();
+        let accounts = app.claude_accounts().await.unwrap();
+        assert!(
+            accounts
+                .iter()
+                .find(|a| a.id == alice.id)
+                .unwrap()
+                .is_current
+        );
+        assert!(
+            !accounts
+                .iter()
+                .find(|a| a.id == card.id)
+                .unwrap()
+                .is_current
+        );
+        app.claude_switch_account(&alice.id).await.unwrap();
+        assert_eq!(settings_env(&location)[BASE_URL], base.as_str());
+        app.claude_switch_account(&card.id).await.unwrap();
+        assert_eq!(
+            settings_env(&location)["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"],
+            ""
+        );
         app.claude_switch_account(&alice.id).await.unwrap();
         let env = settings_env(&location);
-        assert!(env.get(BASE_URL).is_none() && env.get(AUTH_TOKEN).is_none());
+        assert_eq!(env[BASE_URL], "https://api.anthropic.com");
+        assert_eq!(env[API_KEY], "");
         assert_eq!(env["DISABLE_TELEMETRY"], "1");
         let accounts = app.claude_accounts().await.unwrap();
         assert!(
