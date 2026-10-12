@@ -141,8 +141,10 @@ function renderProviders() {
   }
 }
 async function openProviderImport() {
-  if (accountsController.importing) return;
-  accountsController.importing = true;
+  // The pool can change while the import runs; release the controller that started it.
+  const controller = accountsController;
+  if (controller.importing) return;
+  controller.importing = true;
   syncButtons();
   await action(async () => {
     const settings = await invoke("configuration");
@@ -170,7 +172,7 @@ async function openProviderImport() {
     if (failures.length) throw new Error(failures.join("\n"));
     notice(tr("accounts.notice.sub2api_imported_format", count));
   });
-  accountsController.importing = false;
+  controller.importing = false;
   syncButtons();
 }
 async function initializeFeatures() {
@@ -1089,14 +1091,16 @@ function addClaudeProvider() {
 }
 /// Imports the Claude accounts of every Claude Sub2api provider.
 async function syncClaudeSub2api() {
-  if (accountsController.importing) return;
-  accountsController.importing = true;
+  // The pool can change while the import runs; release the controller that started it.
+  const controller = accountsController;
+  if (controller.importing) return;
+  controller.importing = true;
   syncButtons();
   await action(async () => {
     const count = await invoke("claude_sync_sub2api");
     notice(tr("accounts.notice.sub2api_imported_format", count));
   });
-  accountsController.importing = false;
+  controller.importing = false;
   syncButtons();
 }
 const initializeClaudeFeatures = initializeFeatures;
