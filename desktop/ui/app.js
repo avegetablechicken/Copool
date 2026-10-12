@@ -687,15 +687,19 @@ function renderProxy() {
   $("proxy-error").textContent = proxy.lastError || tr("common.none");
 }
 async function refreshView() {
+  const controller = accountsController;
   const [accounts, proxy] = await Promise.all([
-    accountsController.load(),
+    controller.load(),
     invoke("proxy_status"),
     refreshFeatureState(),
   ]);
-  accountsCache = accounts;
   proxyCache = proxy;
-  renderAccounts(accounts);
-  await renderPendingWorkspaces();
+  // A pool switched during the load renders through its own refresh.
+  if (controller === accountsController) {
+    accountsCache = accounts;
+    renderAccounts(accounts);
+    await renderPendingWorkspaces();
+  }
   proxyController.applyLocal(
     proxy,
     configurationCache.proxyConfiguration,
