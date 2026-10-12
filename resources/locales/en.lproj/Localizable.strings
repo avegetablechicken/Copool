@@ -504,3 +504,5 @@
 "error.claude.credentials_json_invalid" = "Invalid Claude credentials JSON. Expected claudeAiOauth with a non-empty accessToken.";
 
 "settings.account_proxy" = "Shared account proxy";
+
+"accounts.proxy.enabled" = "Enable proxy";

@@ -123,3 +123,24 @@ async fn testRequestsActuallyReachTheirSelectedHTTPProxy() {
     assert!(a.load(Ordering::SeqCst) > 0);
     assert!(b.load(Ordering::SeqCst) > 0);
 }
+
+#[test]
+fn testDirectOverrideSurvivesRoundTripAndDoesNotReuseProxySession() {
+    let p = Provider {
+        proxy_url: "http://127.0.0.1:9".into(),
+        account_proxy_urls: [("42".into(), "direct://".into())].into(),
+        ..Default::default()
+    };
+    let decoded: Provider = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+    assert_eq!(decoded.proxy_for(42), "direct://");
+    assert_eq!(decoded.proxy_for(43), p.proxy_url);
+    let fallback = Session::new(Options::default(), Some(p.proxy_url)).unwrap();
+    let pool = Sessions::default();
+    let direct = pool.session(&decoded.proxy_for(42), &fallback).unwrap();
+    assert!(!Arc::ptr_eq(&direct, &fallback));
+    assert_eq!(direct.proxy_url.as_deref(), Some("direct://"));
+    assert!(Arc::ptr_eq(
+        &direct,
+        &pool.session("direct://", &fallback).unwrap()
+    ));
+}

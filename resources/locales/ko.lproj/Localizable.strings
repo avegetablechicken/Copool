@@ -494,3 +494,5 @@
 "error.claude.credentials_json_invalid" = "Claude 자격 증명 JSON이 올바르지 않습니다. 유효한 accessToken이 포함된 claudeAiOauth 객체가 필요합니다。";
 
 "settings.account_proxy" = "계정 공통 프록시";
+
+"accounts.proxy.enabled" = "프록시 활성화";

@@ -494,7 +494,16 @@
     </dialog>
     <dialog id="edit-dialog">
       <form id="edit-form">
-        <h2 data-l10n="accounts.proxy.title"></h2>
+        <div class="proxy-dialog-header">
+          <h2 data-l10n="accounts.proxy.title"></h2>
+          <input
+            id="edit-proxy-enabled"
+            type="checkbox"
+            class="switch"
+            data-title="accounts.proxy.enabled"
+            checked
+          />
+        </div>
         <p id="edit-name" class="secondary"></p>
         <input
           id="edit-proxy"

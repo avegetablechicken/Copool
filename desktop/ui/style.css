@@ -1568,6 +1568,17 @@ dialog form {
   gap: 8px;
 }
 
+.proxy-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.proxy-dialog-header .switch {
+  flex-shrink: 0;
+}
+
 dialog h2 {
   font-size: 12px;
   font-weight: 700;

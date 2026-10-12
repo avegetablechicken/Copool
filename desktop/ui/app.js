@@ -958,7 +958,10 @@ document.addEventListener("keydown", (event) => {
 function openAccountProxy(account) {
   editingAccount = account;
   $("edit-name").textContent = account.email || account.accountId;
-  $("edit-proxy").value = account.proxyUrl || "";
+  const direct = account.proxyUrl === "direct://";
+  $("edit-proxy-enabled").checked = !direct;
+  $("edit-proxy").disabled = direct;
+  $("edit-proxy").value = direct ? "" : account.proxyUrl || "";
   $("edit-proxy-help").textContent = tr(
     account.sourceTag === "SUB2API"
       ? "accounts.proxy.provider_help"
@@ -966,8 +969,11 @@ function openAccountProxy(account) {
   );
   $("edit-error").hidden = true;
   $("edit-dialog").showModal();
-  $("edit-proxy").focus();
+  $(direct ? "edit-proxy-enabled" : "edit-proxy").focus();
 }
+$("edit-proxy-enabled").onchange = () => {
+  $("edit-proxy").disabled = !$("edit-proxy-enabled").checked;
+};
 $("edit-cancel").onclick = () => $("edit-dialog").close();
 $("edit-form").onsubmit = (event) => {
   event.preventDefault();
@@ -979,7 +985,7 @@ $("edit-form").onsubmit = (event) => {
     try {
       await accountsController.saveProxy(
         editingAccount.id,
-        $("edit-proxy").value,
+        $("edit-proxy-enabled").checked ? $("edit-proxy").value : "direct://",
       );
       $("edit-dialog").close();
     } catch (error) {

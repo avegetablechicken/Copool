@@ -474,3 +474,5 @@
 "accounts.card.awaiting_first_request.help" = "Copool 尚未為此帳號向上游發出請求。如需代理請先設定，再重新整理此卡片。";
 
 "settings.account_proxy" = "帳號統一代理";
+
+"accounts.proxy.enabled" = "啟用代理";

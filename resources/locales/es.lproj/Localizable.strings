@@ -474,3 +474,5 @@
 "accounts.card.awaiting_first_request.help" = "Copool aún no ha contactado con el upstream para esta cuenta. Configura su proxy si hace falta y luego actualiza esta tarjeta.";
 
 "settings.account_proxy" = "Proxy compartido de cuentas";
+
+"accounts.proxy.enabled" = "Activar proxy";

@@ -474,3 +474,5 @@
 "accounts.card.awaiting_first_request.help" = "Copool ещё не обращался к upstream для этого аккаунта. При необходимости задайте прокси, затем обновите карточку.";
 
 "settings.account_proxy" = "Общий прокси аккаунтов";
+
+"accounts.proxy.enabled" = "Включить прокси";

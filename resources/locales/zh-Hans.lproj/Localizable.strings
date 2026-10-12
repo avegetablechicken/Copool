@@ -504,3 +504,5 @@
 "error.claude.credentials_json_invalid" = "Claude 凭据 JSON 无效，需要包含有效 accessToken 的 claudeAiOauth 对象。";
 
 "settings.account_proxy" = "账号统一代理";
+
+"accounts.proxy.enabled" = "启用代理";

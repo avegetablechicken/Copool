@@ -177,6 +177,11 @@ pub(crate) fn validate_account_proxy(value: &str) -> Result<Option<reqwest::Url>
     if value.is_empty() {
         return Ok(None);
     }
+    // Persist an explicit direct connection in the existing per-account field.
+    // It must remain nonempty so provider/global fallback cannot replace it.
+    if value == "direct://" {
+        return Ok(Some(reqwest::Url::parse(value).unwrap()));
+    }
     let url = reqwest::Url::parse(value).map_err(|_| "Invalid account proxy URL".to_string())?;
     let authority = value
         .split_once("://")
@@ -220,6 +225,9 @@ pub(crate) fn with_account_proxy(
     // trust evaluation. Select explicitly because both TLS features are enabled.
     #[cfg(target_os = "macos")]
     let builder = builder.use_native_tls();
+    if value.trim() == "direct://" {
+        return Ok(builder.no_proxy());
+    }
     let Some(mut url) = validate_account_proxy(value)? else {
         return Ok(match SYSTEM_PROXY.get() {
             Some(resolve) => builder.proxy(reqwest::Proxy::custom(move |url| resolve(url))),
@@ -263,6 +271,36 @@ mod account_proxy_tests {
             .unwrap();
         let response = client
             .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 204);
+    }
+
+    #[tokio::test]
+    async fn direct_connection_bypasses_existing_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request).await;
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let builder = reqwest::Client::builder()
+            .resolve("direct-test.invalid", address)
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
+            .timeout(std::time::Duration::from_secs(3));
+        let client = with_account_proxy(builder, "direct://")
+            .unwrap()
+            .build()
+            .unwrap();
+        let response = client
+            .get(format!("http://direct-test.invalid:{}/", address.port()))
             .send()
             .await
             .unwrap();

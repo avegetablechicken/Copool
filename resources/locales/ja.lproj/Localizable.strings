@@ -494,3 +494,5 @@
 "error.claude.credentials_json_invalid" = "Claude 認証情報の JSON が無効です。有効な accessToken を含む claudeAiOauth オブジェクトが必要です。";
 
 "settings.account_proxy" = "アカウント共通プロキシ";
+
+"accounts.proxy.enabled" = "プロキシを有効にする";
