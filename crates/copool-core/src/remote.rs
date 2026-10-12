@@ -189,7 +189,13 @@ pub(crate) fn ssh_arguments(server: &RemoteServerConfig, command: &str) -> Vec<S
         "-p".into(),
         server.ssh_port.to_string(),
         "-o".into(),
+        "StrictHostKeyChecking=accept-new".into(),
+        "-o".into(),
         "ConnectTimeout=12".into(),
+        "-o".into(),
+        "ServerAliveInterval=10".into(),
+        "-o".into(),
+        "ServerAliveCountMax=2".into(),
         "-o".into(),
         "BatchMode=yes".into(),
     ];
