@@ -1777,7 +1777,10 @@ async fn load_proxy_candidates(
         .into_iter()
         .filter_map(account_to_proxy_candidate)
         .map(|mut candidate| {
-            if candidate.proxy_url.trim().is_empty() && !account_proxy.trim().is_empty() {
+            if candidate.auth_json.get("copoolProvider").is_none()
+                && candidate.proxy_url.trim().is_empty()
+                && !account_proxy.trim().is_empty()
+            {
                 candidate.proxy_url = account_proxy.clone();
             }
             candidate.is_preferred_current = candidate
@@ -3374,6 +3377,25 @@ mod tests {
             "http://127.0.0.1:7890"
         );
         assert!(super::load_store_from_path(&path).unwrap().accounts[0]
+            .proxy_url
+            .is_empty());
+        let mut provider = store.accounts[0].clone();
+        provider.id = "provider".into();
+        provider.auth_json["copoolProvider"] = json!({"apiKey":"synthetic-provider-key"});
+        storage.provider_candidates = Some(Arc::new(move || Ok(vec![provider.clone()])));
+        let candidates = super::load_proxy_candidates(&storage).await.unwrap();
+        assert_eq!(
+            candidates
+                .iter()
+                .find(|c| c.id == "alice")
+                .unwrap()
+                .proxy_url,
+            "http://127.0.0.1:7890"
+        );
+        assert!(candidates
+            .iter()
+            .find(|c| c.id == "provider")
+            .unwrap()
             .proxy_url
             .is_empty());
         storage.account_proxy = Some(std::sync::Arc::new(|| Ok(String::new())));

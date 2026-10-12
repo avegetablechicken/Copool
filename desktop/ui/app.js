@@ -400,7 +400,8 @@ function accountUsesExplicitProxy(account) {
     );
     proxy = (provider?.proxyURL || "").trim();
   }
-  proxy ||= (preferences?.accountProxyUrl || "").trim();
+  if (account.sourceTag !== "SUB2API")
+    proxy ||= (preferences?.accountProxyUrl || "").trim();
   return !!proxy && proxy !== "direct://";
 }
 /// Proxy and removal, in the card's top row as in the SwiftUI card.

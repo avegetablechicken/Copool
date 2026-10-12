@@ -165,7 +165,7 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 
 ## 账号统一代理
 
-设置页的“账号统一代理”作为已导入账号在 Copool 内日常请求的默认代理，包括 Codex / Claude 的额度与资料查询、凭据续期、工作区查询，以及本地 API 转发（含 Codex Provider 候选）。单账号独立代理优先，账号未配置时使用设置页代理，两者均为空时沿用系统代理规则，不修改账号保存的代理地址。登录、OAuth 换令牌、导入及 Sub2api 账号同步不使用该统一配置。不会设置系统代理或修改外部 Codex / Claude Code 进程的网络配置，也不改变远程 daemon 的代理。旧 importProxyUrl 配置读取时兼容，保存时迁移到 accountProxyUrl。支持带显式端口的 HTTP、HTTPS、SOCKS5、SOCKS5H，不支持代理认证；本机上游仍直连。验证使用隔离账号与模拟网络，未进行真实账号授权或 Windows/Linux 图形界面验证。
+设置页的“账号统一代理”仅作为已导入订阅账号在 Copool 内日常请求的默认代理，包括 Codex / Claude 的额度与资料查询、凭据续期、工作区查询，以及订阅账号的本地 API 转发。单账号独立代理优先，账号未配置时使用设置页代理，两者均为空时沿用系统代理规则，不修改账号保存的代理地址。登录、OAuth 换令牌和导入不使用该统一配置。Sub2api 卡片的导入、刷新及 API 转发均不受此设置影响，仅沿用独立账号、Provider 与系统代理规则。不会设置系统代理或修改外部 Codex / Claude Code 进程的网络配置，也不改变远程 daemon 的代理。旧 importProxyUrl 配置读取时兼容，保存时迁移到 accountProxyUrl。支持带显式端口的 HTTP、HTTPS、SOCKS5、SOCKS5H，不支持代理认证；本机上游仍直连。验证使用隔离账号与模拟网络，未进行真实账号授权或 Windows/Linux 图形界面验证。
 
 2026-10-12（Claude banked 重置次数）：usage 请求加 `?cedar_ember=1`，仅该请求使用 `claude-cli/2.1.280 (external, cli)` 的 User-Agent，即最早获得该块的版本（用户用真实账号实测：2.1.280 为 `eligible: true`，2.1.279 为 `ineligible_reason: "cli_version"`）；profile 与令牌续期保持原 User-Agent。`cedar_ember.grants` 中未过期授予的 `resets_left` 之和写入 `remaining_reset_count`，卡片底部显示“重置：N 次”；不合格或缺失时显示为未知（“重置：--”），不读取或保存可用于消耗重置的 grant id，也不提供消耗重置的操作。接口未公开，字段及版本门槛可能变化。用户用真实 Max 账号在 macOS 终端对比：新旧请求的 `five_hour`、`seven_day` 一致，新请求返回合格的 `cedar_ember`；不带 `skip_spend=1` 时 `extra_usage` 与 `spend` 仍返回（带该参数时两者为 null）。Copool 本身尚未用真实账号刷新验证；Sub2api 返回不含该块，次数保持未知。
 

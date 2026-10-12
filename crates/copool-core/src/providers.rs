@@ -209,15 +209,12 @@ impl Application {
             .map(|id| self.begin_refresh(id))
             .collect();
         let fetched = async {
-            let mut connection = sub2api::connection(
+            let connection = sub2api::connection(
                 &self.codex_config_path(),
                 &snapshot.sub2_api_provider,
                 Some(provider_id),
                 self.secrets.as_ref(),
             )?;
-            if !sync_membership {
-                connection.account_request_proxy = self.preferences()?.account_proxy_url;
-            }
             if sync_membership {
                 Ok(sub2api::Refresh {
                     accounts: connection.fetch_accounts(None, now_unix_seconds()).await?,
@@ -310,13 +307,12 @@ impl Application {
     ) -> Result<(), String> {
         let accounts = async {
             let settings = self.configuration()?;
-            let mut connection = sub2api::connection(
+            let connection = sub2api::connection(
                 &self.codex_config_path(),
                 &settings.sub2_api_provider,
                 Some(&provider.provider_id),
                 self.secrets.as_ref(),
             )?;
-            connection.account_request_proxy = self.preferences()?.account_proxy_url;
             connection
                 .fetch_accounts(Some(&[id]), now_unix_seconds())
                 .await

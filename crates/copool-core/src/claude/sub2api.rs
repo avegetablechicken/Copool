@@ -220,7 +220,6 @@ impl Application {
             .get(&password_secret(&p.id))?
             .ok_or("error.sub2api.configuration_incomplete")?;
         Ok(sub2api::Connection {
-            account_request_proxy: String::new(),
             configuration: crate::settings::Provider {
                 id: p.id.clone(),
                 provider_id: p.name.clone(),
@@ -258,10 +257,7 @@ impl Application {
         ids: Option<&[i64]>,
         refresh: bool,
     ) -> Result<sub2api::Refresh> {
-        let mut connection = self.claude_sub2api_connection(p)?;
-        if refresh {
-            connection.account_request_proxy = self.preferences()?.account_proxy_url;
-        }
+        let connection = self.claude_sub2api_connection(p)?;
         let mut fetched = if refresh {
             connection
                 .refresh_platform_accounts(Platform::Anthropic, ids, now_unix_seconds())

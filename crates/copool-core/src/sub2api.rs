@@ -89,7 +89,6 @@ impl Platform {
     }
 }
 pub struct Connection {
-    pub account_request_proxy: String,
     pub configuration: Provider,
     pub definition: Definition,
     pub admin_base: String,
@@ -142,7 +141,6 @@ pub fn connection(
     };
     let admin_base = admin_base(raw)?;
     Ok(Connection {
-        account_request_proxy: String::new(),
         configuration,
         definition,
         admin_base,
@@ -171,11 +169,7 @@ async fn payload(response: reqwest::Response) -> Result<Value, String> {
 impl Connection {
     fn client(&self, proxy: &str) -> Result<reqwest::Client, String> {
         proxy_session::client(
-            if proxy.trim().is_empty() {
-                &self.account_request_proxy
-            } else {
-                proxy
-            },
+            proxy,
             proxy_session::Options {
                 insecure: self.configuration.allow_insecure_tls,
                 ..Default::default()
@@ -219,11 +213,7 @@ impl Connection {
         let mut groups = std::collections::BTreeMap::<String, Vec<i64>>::new();
         for id in wanted {
             let proxy = self.configuration.proxy_for(*id);
-            let proxy = if proxy.trim().is_empty() {
-                self.account_request_proxy.trim()
-            } else {
-                proxy.trim()
-            };
+            let proxy = proxy.trim();
             groups.entry(proxy.to_owned()).or_default().push(*id);
         }
         let requests = groups.iter().map(|(proxy, group)| async move {
