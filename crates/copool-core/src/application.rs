@@ -860,7 +860,11 @@ impl Application {
                 Ok((auth, value)) => {
                     target.usage = Some(value.clone());
                     target.usage_error = None;
-                    target.auth_json = auth.clone();
+                    // Tokens the proxy rotated during the request are newer than
+                    // the snapshot; only a refresh or adoption made here is written.
+                    if auth != &account.auth_json {
+                        target.auth_json = auth.clone();
+                    }
                     let extracted = crate::auth::extract_auth(auth)?;
                     if let Some(name) = extracted.team_name {
                         target.extra.insert("teamName".into(), name.into());
