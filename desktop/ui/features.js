@@ -111,14 +111,6 @@ function renderProviders() {
         ["password", "password", "password"],
       ]) {
         providerField(body, provider, key, `settings.sub2api.${label}`, type);
-        if (key === "adminBaseURL")
-          body.append(
-            el(
-              "p",
-              "setting-description",
-              tr("settings.sub2api.admin_base_url_help"),
-            ),
-          );
       }
       const row = el("label", "row");
       row.append(
@@ -1027,10 +1019,6 @@ function renderClaudeProviders() {
           type,
           !!saved,
         );
-        if (key === "adminBaseURL")
-          body.append(
-            el("p", "setting-description", tr("settings.sub2api.claude_help")),
-          );
       }
       const row = el("label", "row");
       row.append(
