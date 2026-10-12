@@ -1654,15 +1654,15 @@ async fn forward_codex_request_with_candidate(
     let client = if candidate.proxy_url.trim().is_empty() && !insecure {
         context.client.clone()
     } else {
-        crate::utils::with_account_proxy(
-            reqwest::Client::builder()
-                .danger_accept_invalid_certs(insecure)
-                .user_agent("codex-tools-proxy/0.1")
-                .timeout(std::time::Duration::from_secs(180)),
+        // Cached per proxy, so a shared account proxy keeps its connections.
+        crate::proxy_session::client(
             &candidate.proxy_url,
+            crate::proxy_session::Options {
+                timeout: std::time::Duration::from_secs(180),
+                user_agent: "codex-tools-proxy/0.1".into(),
+                insecure,
+            },
         )?
-        .build()
-        .map_err(|_| "Failed to create account proxy client".to_string())?
     };
     let mut request = client
         .post(&upstream_url)
