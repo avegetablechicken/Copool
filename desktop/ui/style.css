@@ -628,6 +628,27 @@ main > section {
   color: var(--label);
 }
 
+/* Keep the slot and keyboard access while hiding the idle proxy control. */
+.account .card-proxy {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.account:hover .card-proxy,
+.account:focus-within .card-proxy {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.icon-btn.card-proxy.proxy-muted {
+  color: var(--secondary);
+}
+
+/* Dim the glyph itself, including native SF Symbol masks, even on hover. */
+.card-proxy.proxy-muted .icon {
+  opacity: 0.35;
+}
+
 .icon-btn[aria-expanded="true"]:not(#collapse-all) {
   color: var(--label);
 }

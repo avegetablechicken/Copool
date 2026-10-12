@@ -385,12 +385,31 @@ document.addEventListener("contextmenu", (event) => {
     event.preventDefault();
 });
 let renderedAccountsState;
+function accountUsesExplicitProxy(account) {
+  let proxy = (account.proxyUrl || "").trim();
+  if (!proxy && account.sourceTag === "SUB2API") {
+    const providers = pool === "claude"
+      ? claudeProvidersSaved
+      : providerController.persisted;
+    const provider = providers.find((provider) =>
+      (provider.cachedAccounts || []).some((cached) =>
+        account.id === (pool === "claude"
+          ? `claude-sub2api-${provider.id}-${cached.id}`
+          : `sub2api-${provider.providerID}-${cached.id}`),
+      ),
+    );
+    proxy = (provider?.proxyURL || "").trim();
+  }
+  proxy ||= (preferences?.accountProxyUrl || "").trim();
+  return !!proxy && proxy !== "direct://";
+}
 /// Proxy and removal, in the card's top row as in the SwiftUI card.
 function accountManagement(account) {
   const actions = el("span", "block-aside");
-  const proxyButton = button("", "network", "icon-btn", () =>
+  const proxyButton = button("", "network", "icon-btn card-proxy", () =>
     openAccountProxy(account),
   );
+  proxyButton.classList.toggle("proxy-muted", !accountUsesExplicitProxy(account));
   proxyButton.title = tr("accounts.proxy.title");
   proxyButton.setAttribute(
     "aria-label",
@@ -506,6 +525,7 @@ function renderAccounts(accounts) {
     collapsed,
     locale,
     preferences?.usageDisplay,
+    accounts.map(accountUsesExplicitProxy),
     [...accountsController.refreshingIds],
     [...accountsController.remoteRefreshingIds],
     switchingId,
