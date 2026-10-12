@@ -456,7 +456,7 @@
 "error.claude.login_not_found" = "Geen Claude Code-aanmelding gevonden. Meld je eerst aan in Claude Code.";
 "accounts.notice.claude_switch_done" = "Claude-account gewisseld; herstart Claude Code om het te gebruiken";
 "accounts.notice.claude_settings_override_format" = "settings.json stelt %@ in, dus Claude Code blijft dat gebruiken in plaats van dit account";
-"settings.sub2api.claude_help" = "Optionele beheer-API-URL; indien leeg afgeleid uit Claude Code settings.json. Gateway en API Key worden bij het opslaan uit die configuratie gelezen.";
+"settings.sub2api.claude_help" = "Zoekt op naam recursief naar de bron-JSON in de Claude-configuratiemap, met voorrang voor settings-bestanden. Wisselen kopieert de bron naar de hoofd-settings.json. Een lege beheer-URL wordt uit de bron afgeleid.";
 "settings.sub2api.claude_name" = "Naam";
 "settings.sub2api.claude_name_placeholder" = "Bijvoorbeeld team-sub2api";
 "settings.sub2api.claude_base_url" = "Sub2api-URL";

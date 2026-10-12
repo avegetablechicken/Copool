@@ -484,7 +484,7 @@
 "error.claude.login_not_found" = "Claude Code login not found. Sign in with Claude Code first.";
 "accounts.notice.claude_switch_done" = "Switched Claude account; restart Claude Code to use it";
 "accounts.notice.claude_settings_override_format" = "settings.json sets %@, so Claude Code keeps using it instead of this account";
-"settings.sub2api.claude_help" = "Optional admin API URL; leave blank to derive it from Claude Code settings.json. The gateway and API Key are read from that configuration when saving.";
+"settings.sub2api.claude_help" = "Uses the name to find a source JSON recursively in the Claude config directory (settings files first). Switching copies the source settings to the main settings.json. Leave the admin URL blank to derive it from the source.";
 "settings.sub2api.claude_name" = "Name";
 "settings.sub2api.claude_name_placeholder" = "For example, team-sub2api";
 "settings.sub2api.claude_base_url" = "Sub2api URL";

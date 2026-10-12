@@ -456,7 +456,7 @@
 "error.claude.login_not_found" = "Вход Claude Code не найден. Сначала войдите в Claude Code.";
 "accounts.notice.claude_switch_done" = "Аккаунт Claude переключён; перезапустите Claude Code, чтобы использовать его";
 "accounts.notice.claude_settings_override_format" = "В settings.json задано %@, поэтому Claude Code продолжает использовать это вместо аккаунта";
-"settings.sub2api.claude_help" = "Необязательный адрес API администратора; если пусто, определяется из Claude Code settings.json. Шлюз и ключ API считываются при сохранении.";
+"settings.sub2api.claude_help" = "Ищет исходный JSON по имени в каталоге Claude и его подкаталогах, предпочитая файлы settings. При переключении копирует исходные настройки в основной settings.json. Пустой адрес API управления определяется по исходному файлу.";
 "settings.sub2api.claude_name" = "Название";
 "settings.sub2api.claude_name_placeholder" = "Например, team-sub2api";
 "settings.sub2api.claude_base_url" = "Адрес Sub2api";

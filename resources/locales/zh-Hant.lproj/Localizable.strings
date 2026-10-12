@@ -456,7 +456,7 @@
 "error.claude.login_not_found" = "找不到 Claude Code 登入，請先在 Claude Code 中登入";
 "accounts.notice.claude_switch_done" = "已切換 Claude 帳號，重新啟動 Claude Code 後生效";
 "accounts.notice.claude_settings_override_format" = "settings.json 設定了 %@，Claude Code 會繼續使用它而非此帳號";
-"settings.sub2api.claude_help" = "管理 API 位址選填，留空從 Claude Code settings.json 推導。儲存時從該設定讀取閘道與 API Key，無需重複填寫。";
+"settings.sub2api.claude_help" = "依名稱在 Claude 設定目錄內遞迴尋找來源 JSON，優先比對 settings 檔案。切換時將來源設定同步至主 settings.json。管理位址留空則由來源設定推導。";
 "settings.sub2api.claude_name" = "名稱";
 "settings.sub2api.claude_name_placeholder" = "例如 team-sub2api";
 "settings.sub2api.claude_base_url" = "Sub2api 位址";

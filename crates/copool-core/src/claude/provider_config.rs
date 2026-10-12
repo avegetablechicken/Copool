@@ -84,11 +84,7 @@ pub(super) fn uses_gateway(location: &Location) -> bool {
 }
 
 /// A single settings write; the caller retains the returned document for rollback.
-pub(super) fn select(
-    location: &Location,
-    gateway: Option<(&str, &str)>,
-    leaving_known_gateway: bool,
-) -> Result<Option<String>> {
+pub(super) fn select(location: &Location, leaving_known_gateway: bool) -> Result<Option<String>> {
     let path = location.config_dir.join("settings.json");
     let previous = match fs::read_to_string(&path) {
         Ok(raw) => Some(raw),
@@ -117,16 +113,10 @@ pub(super) fn select(
     }
     env.insert("ANTHROPIC_CUSTOM_HEADERS".into(), json!(""));
     env.remove("ANTHROPIC_UNIX_SOCKET");
-    if let Some((url, key)) = gateway {
-        env.insert(BASE.into(), json!(url));
-        env.insert("ANTHROPIC_API_KEY".into(), json!(key));
-        env.insert(FIRST_PARTY.into(), json!(""));
-    } else {
-        if !keep_relay || !env.get(BASE).is_some_and(nonempty) {
-            env.insert(BASE.into(), json!("https://api.anthropic.com"));
-        }
-        env.insert(FIRST_PARTY.into(), json!("1"));
+    if !keep_relay || !env.get(BASE).is_some_and(nonempty) {
+        env.insert(BASE.into(), json!("https://api.anthropic.com"));
     }
+    env.insert(FIRST_PARTY.into(), json!("1"));
     let mut updated = set_member(raw, "env", &Value::Object(env))?;
     if settings.get("apiKeyHelper").is_some() {
         updated = set_member(&updated, "apiKeyHelper", &json!(""))?;
@@ -176,21 +166,13 @@ mod tests {
             "env":{BASE:"https://relay.invalid", "DISABLE_TELEMETRY":"1"}})
         .to_string();
         fs::write(&path, &original).unwrap();
-        assert_eq!(select(&location, None, false).unwrap(), Some(original));
+        assert_eq!(select(&location, false).unwrap(), Some(original));
         assert!(uses_pool_login(&location));
         let settings: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(settings["env"][BASE], "https://relay.invalid");
-        select(
-            &location,
-            Some(("https://gateway.invalid", "fake-key")),
-            false,
-        )
-        .unwrap();
+        fs::write(&path, json!({"model":"opus", "env":{BASE:"https://gateway.invalid", "ANTHROPIC_API_KEY":"fake-key", "DISABLE_TELEMETRY":"1"}}).to_string()).unwrap();
         assert!(!uses_pool_login(&location));
-        let settings: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(settings["env"]["ANTHROPIC_API_KEY"], "fake-key");
-        assert_eq!(settings["env"]["ANTHROPIC_AUTH_TOKEN"], "");
-        select(&location, None, true).unwrap();
+        select(&location, true).unwrap();
         assert!(uses_pool_login(&location));
         let settings: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(settings["env"][BASE], "https://api.anthropic.com");
@@ -200,7 +182,7 @@ mod tests {
         assert_eq!(settings["env"]["DISABLE_TELEMETRY"], "1");
         fs::write(&path, "broken").unwrap();
         assert!(!uses_pool_login(&location));
-        assert!(select(&location, None, false).is_err());
+        assert!(select(&location, false).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "broken");
     }
     #[test]
@@ -217,7 +199,7 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        select(&location, None, false).unwrap();
+        select(&location, false).unwrap();
         assert!(uses_pool_login(&location));
         let settings: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(settings["env"][BASE], "https://api.anthropic.com");

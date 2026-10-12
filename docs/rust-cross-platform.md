@@ -82,7 +82,8 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 Claude 池的“导入 → 导入 JSON 文件”使用系统文件选择器，支持任意位置的 Claude Code 凭据 JSON（`claudeAiOauth` 包装或直接的令牌对象，可携带 `oauthAccount`），包括从 macOS 钥匙串导出的 JSON。macOS、Windows、Linux 共用导入逻辑；导入不自动切换账号，重复凭据更新已有记录，无身份信息时遵循新账号延迟请求设置，首次刷新补全身份。原有“导入当前 Claude Code 登录”仍从钥匙串或默认凭据 JSON 文件读取。文件入口、JSON 校验与切换使用合成凭据验证；Windows/Linux 原生文件选择器和真实钥匙串导出仍待对应平台验证。
 
 Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时的 OAuth profile 查询先按账号/组织身份或已有 access/refresh token 匹配池中账号，复用其账号代理；无法识别的账号使用系统/环境代理，不借用当前账号的代理。此路径已用隔离目录和模拟网络测试，未用真实账号验证。Claude Code 的当前登录：macOS 为钥匙串 `Claude Code-credentials`（设置 `CLAUDE_CONFIG_DIR` 时为按目录哈希的条目，读取和已有条目的更新使用原生 SecItem 接口；首次创建仅在手动切换时经 `/usr/bin/security -i` 标准输入执行），其他平台为 `~/.claude/.credentials.json`（或 `$CLAUDE_CONFIG_DIR/.credentials.json`）；账号身份为 `~/.claude.json`（或 `$CLAUDE_CONFIG_DIR/.claude.json`）中的 `oauthAccount`。当前账号跟随 Claude Code 的登录，并采用它刷新后的令牌；Copool 为账号续期后保存池内副本，当前本机登录的身份及凭据版本未变化时同时无交互写回；无法读取本机凭据时仍可用池内凭据查询额度或续期，但不会盲目写回。切换只替换凭据中的 `claudeAiOauth`（保留 MCP 等其他条目）和 `.claude.json` 的 `oauthAccount` 成员（其余内容逐字节保留），切换前的登录保存为 `claude-before-switch.json`，失败时回滚。这与 cc-account-switcher 的做法一致（钥匙串 `-a $USER` 或 0600 的凭据文件，加 `oauthAccount`）；`oauthAccount` 只在 `.claude.json` 中没有、而配置目录内的 `.claude.json` 有时改写后者。切换提示要求重启 Claude Code；用户级认证和提供商配置按下述原生提供商切换规则处理。单独设置 `ANTHROPIC_BASE_URL` 仅改变请求路由，当前官方账号的显示还需结合第一方标记和认证覆盖判断。
-- Claude 池的 Sub2api（`crates/copool-core/src/claude/sub2api.rs`）：设置页“非官方 Provider”中，经“添加 Sub2api Provider”菜单选 Claude 后与 Codex 一样填写名称、可选管理 API 地址、管理员账号与密码及 TLS 开关；保存时从 Claude Code `settings.json` 读取网关及匹配网关的 API Key，管理地址留空则从网关推导，已有 Provider 的网关和钥匙串 Key 保持兼容（两类 Provider 同在一个区块，行首以 Codex / Claude 有色图标区分；密码与 Key 存系统钥匙串，Provider 列表存 `claude-accounts.json`）。导入菜单“同步非官方 Provider”以管理员接口列出 `platform=anthropic`、`type=oauth`、`status=active` 的账号（与 OpenQuota 相同），额度取 `/api/v1/admin/accounts/{id}/usage` 的 `five_hour` / `seven_day`，套餐取 `subscription_tier`；Sub2api 对空闲 5 小时窗口返回的 0% 且无重置时间视为无数据。切换到 Sub2api 卡片与 cc-switch 切第三方供应商相同：在 `~/.claude/settings.json` 的 `env` 写入 `ANTHROPIC_BASE_URL`（网关）与 `ANTHROPIC_API_KEY`（Key），并按下述规则屏蔽冲突的认证与提供商选择变量，保留无关设置；切换前的 `env` 存入 `claude-before-switch.json`。同一 Provider 的卡片共用网关，其网关生效时这些卡片都为当前、官方账号不为当前（与 Codex 池的 Sub2api 一致）。切回官方账号时按下述原生提供商切换规则处理。测试时可用 `COPOOL_CLAUDE_CONFIG_DIR` 指定独立目录（只用其中的文件，不访问钥匙串）。
+- Claude 池的 Sub2api（`crates/copool-core/src/claude/sub2api.rs`）：Provider 名称作为源配置 JSON 的文件选择条件，管理 API 地址可选，管理员密码保存在钥匙串。按 Coport `src/claude_settings.rs` 的规则，在 Claude 配置目录内递归搜索：优先选择文件名同时包含 `settings` 和 Provider 名称的 JSON，没有时匹配完整文件名或去掉 `.json` 的名称；不跟随符号链接，不搜索 `.git`，不把主 `settings.json` 当作源文件。多个匹配、源文件丢失或配置无效均报错，不从主配置或缓存密钥回退。默认目录为 `~/.claude`，遵循 `CLAUDE_CONFIG_DIR`；测试使用 `COPOOL_CLAUDE_CONFIG_DIR` 隔离目录。
+- 保存 Provider、同步账号和切换时重新读取源文件，管理地址留空则从源文件的 `ANTHROPIC_BASE_URL` 推导。导入通过管理接口列出 Anthropic OAuth 账号，管理接口使用管理员登录得到的 Bearer Token。模型密钥保留在源 JSON，不复制管理员 Token，也不再缓存模型密钥。切换时将完整源设置文档同步到主 `settings.json`；源文件含哪些认证变量、模型和其他设置就同步哪些，不强制转换 `ANTHROPIC_AUTH_TOKEN` 与 `ANTHROPIC_API_KEY`。支持 Coport 的顶层环境字段格式，写入主配置时规范化到 `env`，原有 `env` 字段优先。切换前完整主文档备份到 `claude-before-switch.json`，源文件保持不变。主配置独有的设置会随完整同步被替换，需要保留的设置应写在源文件内。源文件更改认证变量、密钥、模型或地址后，下次切换立即生效，无需重新导入。
 
 可使用 `COPOOL_DATA_DIR` 指定独立账号库。Codex 认证文件遵循 `CODEX_HOME/auth.json` 或 `~/.codex/auth.json`；测试时可通过 `COPOOL_CODEX_AUTH_FILE` 指定独立认证文件，不必修改开发工具自身的环境目录。
 
@@ -94,9 +95,11 @@ Claude 池保存在数据目录的 `claude-accounts.json`。 登录及导入时�
 
 ### Claude 原生提供商切换
 
-Claude 官方账号与 Sub2api 切换不新增 Copool 提供商标记或配置格式。切到官方账号时使用原生 `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1`，保留无认证覆盖或已标为第一方的自定义地址；离开已识别的第三方网关时恢复 `https://api.anthropic.com`。切到 Sub2api 时写入网关地址和 `ANTHROPIC_API_KEY`，将 `ANTHROPIC_AUTH_TOKEN` 和第一方覆盖标记置空。读取现有网关凭据时优先使用 `ANTHROPIC_API_KEY`，仅在其为空时兼容旧版写入的 `ANTHROPIC_AUTH_TOKEN`。两种切换都会屏蔽相冲突的用户级认证、Profile/联邦认证、云平台选择变量，清理自定义请求头和用户级登录方式限制，保留模型、权限等无关设置。仅修改本机用户设置，不修改项目或组织托管策略。
+认证依据：[Sub2api 客户端配置生成器](https://github.com/Wei-Shaw/sub2api/blob/main/frontend/src/components/keys/UseKeyModal.vue) 将模型 API Key 写入 `ANTHROPIC_AUTH_TOKEN`；[模型 API 认证中间件](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/server/middleware/api_key_auth.go) 优先读取 Bearer，并兼容 `x-api-key`。管理员登录 Token 仅用于管理接口，不能写入模型调用配置。
 
-当前账号判定同时检查地址/第一方标记及认证覆盖，不能只用网关 URL，或 `claude auth status` 的 `firstParty` / `oauth_token` 字段。官方账号和第三方 Token 在 Claude Code 2.1.285 中都可能报告这两个值。第一方标记是 Claude 内部开关，不保证所有功能采用第一方行为。2026-10-12 在 macOS 上用临时配置与假凭据验证 CLI 状态，并通过核心回归测试；没有向真实账号或上游发送请求。切换后应重启 Claude 会话。
+Claude 官方账号与 Sub2api 切换不新增 Claude 自定义字段，也不新增 Provider 路径或认证方式字段；沿用 Provider 名称查找现存源 JSON。Sub2api 切换按上述完整源文档同步，不重写认证变量名。切到官方账号时使用原生 `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1`，保留无认证覆盖或已标为第一方的自定义地址；离开第三方认证时清理冲突的用户级认证、Profile/联邦认证、云平台选择变量、自定义请求头和用户级登录方式限制，并按路由状态恢复官方地址。仅修改本机主设置，不修改源文件、项目或组织托管策略。
+
+官方账号判定同时检查地址/第一方标记及认证覆盖；Sub2api 当前状态比较主配置与源文件，不能只用网关 URL，或 `claude auth status` 的 `firstParty` / `oauth_token` 字段。官方账号和第三方 Token 在 Claude Code 2.1.285 中都可能报告这两个值。第一方标记是 Claude 内部开关，不保证所有功能采用第一方行为。2026-10-12 在 macOS 上用临时配置与假凭据验证 CLI 状态，并通过核心回归测试；没有向真实账号或上游发送请求。切换后应重启 Claude 会话。
 
 ## 已知差异与限制
 
@@ -155,4 +158,4 @@ Claude 官方账号与 Sub2api 切换不新增 Copool 提供商标记或配置�
 
 恢复写回验证：342 项核心测试及格式检查通过，覆盖活跃账号续期后同步并保留其他字段、用量失败仍保存轮换令牌、非活跃账号不写回、外部更新优先及外部切号不覆盖。使用临时文件与合成凭据，真实钥匙串写回与跨应用授权尚未运行验证；未打包或安装。
 
-2026-10-12（跨应用钥匙串权限）：核对 Coport 的 OAuth 转发路径只读本机凭据，不写回刷新结果。Copool 继续使用直接 `SecItemUpdate`、只传 `kSecValueData` 的已有条目更新方式；OpenQuota 的 Claude 续期同步采用此方式，移除先 `SecItemAdd` 后更新的共享凭据路径，并禁止写入时弹出授权 UI。验证 Copool 的 5 项钥匙串测试、OpenQuota 的 58 项 Claude 回归和新增写入属性测试均通过。临时钥匙串与合成条目的 native smoke test 验证数据改变、磁盘上的 3 项 ACL 与可信应用列表不变；该临时钥匙串没有生成真实 login 钥匙串的 partition_id 条目，不能替代多应用分区权限实测。未改动真实凭据，未修复历史权限，也未打包安装。
+2026-10-12（Claude 源配置发现与同步）：补齐 Coport 式递归搜索，源文件实时读取及完整主设置同步。测试覆盖命名优先级、歧义、缺失/损坏文件、符号链接和 `.git` 排除、顶层环境字段规范化、主配置保护、源文件不变、模型/认证变量更新，以及管理 Token 与模型密钥分离。351 项核心测试、120 项前端测试、核心编译和格式检查通过。测试使用隔离目录和本机模拟服务，未读取真实源配置密钥或执行真实模型请求。

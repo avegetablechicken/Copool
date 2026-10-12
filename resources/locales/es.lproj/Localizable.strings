@@ -456,7 +456,7 @@
 "error.claude.login_not_found" = "No se encontró el inicio de sesión de Claude Code. Inicia sesión primero en Claude Code.";
 "accounts.notice.claude_switch_done" = "Cuenta de Claude cambiada; reinicia Claude Code para usarla";
 "accounts.notice.claude_settings_override_format" = "settings.json define %@, así que Claude Code sigue usándolo en lugar de esta cuenta";
-"settings.sub2api.claude_help" = "URL de API de administración opcional; si está vacía, se obtiene de Claude Code settings.json. La puerta de enlace y la clave API se leen al guardar.";
+"settings.sub2api.claude_help" = "Busca el JSON de origen por nombre en el directorio de Claude y sus subdirectorios, priorizando archivos settings. Al cambiar, copia la configuración a settings.json principal. La URL de administración vacía se deduce del origen.";
 "settings.sub2api.claude_name" = "Nombre";
 "settings.sub2api.claude_name_placeholder" = "Por ejemplo, team-sub2api";
 "settings.sub2api.claude_base_url" = "URL de Sub2api";

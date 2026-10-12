@@ -456,7 +456,7 @@
 "error.claude.login_not_found" = "Connexion Claude Code introuvable. Connectez-vous d’abord dans Claude Code.";
 "accounts.notice.claude_switch_done" = "Compte Claude changé ; redémarrez Claude Code pour l’utiliser";
 "accounts.notice.claude_settings_override_format" = "settings.json définit %@ : Claude Code continue de l’utiliser au lieu de ce compte";
-"settings.sub2api.claude_help" = "URL API admin facultative, déduite de Claude Code settings.json si vide. La passerelle et la clé API sont lues dans ce fichier lors de l’enregistrement.";
+"settings.sub2api.claude_help" = "Recherche le JSON source par nom dans le dossier Claude et ses sous-dossiers, en privilégiant les fichiers settings. Le changement copie la source vers le settings.json principal. Une URL admin vide est déduite de la source.";
 "settings.sub2api.claude_name" = "Nom";
 "settings.sub2api.claude_name_placeholder" = "Par exemple team-sub2api";
 "settings.sub2api.claude_base_url" = "URL de Sub2api";

@@ -16,6 +16,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 type Result<T> = std::result::Result<T, String>;
 
 mod provider_config;
+mod settings_source;
 mod sub2api;
 pub use sub2api::Provider as Sub2ApiProvider;
 
