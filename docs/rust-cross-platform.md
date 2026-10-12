@@ -66,13 +66,13 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 - 代理页“可用账号”取代理自身的可路由候选数（`ApiProxyStatus.availableAccounts`，冷却中的账号不计），与原版 `currentCandidates().count` 一致，而非界面卡片数。
 - 本地 OpenAI 兼容代理：`/v1/models`、`/v1/responses`、`/v1/chat/completions`、SSE、模型映射、失败重试与代理请求中的 OAuth 刷新。
 - 代理密钥生成/轮换、回环监听、启动/停止、打开应用时自动启动代理的设置。
-- 界面采用 Coport（`../coding-agent-proxy/gui/ui`）风格：360 点宽的状态栏菜单式面板（启动时隐藏；点击状态栏图标在图标下方弹出，再次点击、失去焦点或 Esc 收起；高度随内容，最多屏幕高度的 85%；定位逻辑与 Coport 共用 `desktop/src/placement.rs`），顶部为应用名与文字链接（代理 · 设置 · 退出），子页面以“‹ 账号”返回（macOS ⌘[）；内容为带标题的浅色块、11 点系统字体、小号按钮/开关/下拉框和单色细进度条。展开时每个账号一个块，折叠时为对齐的单行列表；账号代理通过卡片上的地球按钮编辑，卡片没有右键菜单。导入菜单为 Coport 式面板内菜单（原生 Liquid Glass 材质）；此前已无入口的粘贴 auth.json / Refresh Token 导入对话框已移除。此分支不再追求与 SwiftUI 布局逐项一致。
+- 界面采用 Coport（`../coding-agent-proxy/gui/ui`）风格：360 点宽的状态栏菜单式面板（启动时隐藏；点击状态栏图标在图标下方弹出，再次点击、失去焦点或 Esc 收起；高度随内容，最多屏幕高度的 85%；定位逻辑与 Coport 共用 `desktop/src/placement.rs`），顶部为应用名与文字链接（代理 · 设置 · 退出），子页面以“‹ 账号”返回（macOS ⌘[）；内容为带标题的浅色块、11 点系统字体、小号按钮/开关/下拉框和单色细进度条。展开时每个账号一个块，折叠时为对齐的单行列表；账号代理通过卡片上的地球按钮编辑，卡片没有右键菜单。导入菜单为 Coport 式面板内菜单（原生 Liquid Glass 材质）；此前已无入口的粘贴 auth.json / Refresh Token 导入对话框已移除，Refresh Token 导入的后端命令随后也已删除。此分支不再追求与 SwiftUI 布局逐项一致。
 - macOS 使用原生 Popover 材质（圆角 12 点）、透明 WebView 和系统语义色；Windows/Linux 使用对应的静态主题后备。
 - macOS 字体保留 WebKit 系统字体的自动光学字号，不强制写入 `opsz` 数值。
 - macOS 图标由本机 AppKit 按准确逻辑尺寸生成 SF Symbols 的 1×/2×/3×资源；菜单栏使用原版 figure.pool.swim 模板符号。其他平台保留矢量图标与原应用图标资源。
 - 原版 11 种语言文案由 scripts/sync_rust_locales.py 同步，不另建翻译副本。
 - 系统托盘入口、单实例、独立数据目录。
-- 设置“导入新账号后立即请求上游”（默认关闭）：关闭时，池中原本没有的新账号（Codex 与 Claude 的导入当前登录、浏览器登录、文件或 Refresh Token 导入）标记为“待首次刷新”（Codex 存于账号的 `firstRequestPending`，Claude 为 `firstRequestPending` 字段）。在手动刷新该卡片或“刷新全部”之前，导入时的额度、工作区名称、Claude 账号资料查询，后台定时刷新，待授权工作区目录刷新，以及本地 API 代理的路由与候选额度刷新都跳过它，以便先设置账号代理；后台刷新不会放行。重新导入或重新登录仍在等待的账号同样不联网；已放行的账号沿用其代理。登录换令牌与 Refresh Token 兑换属于导入本身，改为经系统代理。Claude 浏览器添加时如未查询资料，首次刷新时经账号代理补查套餐；套餐未知的 Claude 卡片不显示套餐标签。Claude Code 登录缺少 `oauthAccount` 时，先按令牌匹配池中账号；匹配不到则（选项关闭时，或打开但查询失败时）以“Claude Code”为名加入池中，首次手动刷新时先经账号代理查询 profile 识别账号（令牌过期时由 Copool 在池内续期），识别为池中已有账号时合并为一张卡片并转移当前选择；切换到尚未识别的账号时 `.claude.json` 的 `oauthAccount` 写为 null，由 Claude Code 自行补全。续期更新池内凭据；当前本机登录仍匹配且未被外部改动时无交互写回，非当前账号只更新池内副本。
+- 设置“导入新账号后立即请求上游”（默认关闭）：关闭时，池中原本没有的新账号（Codex 与 Claude 的导入当前登录、浏览器登录或文件导入）标记为“待首次刷新”（Codex 存于账号的 `firstRequestPending`，Claude 为 `firstRequestPending` 字段）。在手动刷新该卡片或“刷新全部”之前，导入时的额度、工作区名称、Claude 账号资料查询，后台定时刷新，待授权工作区目录刷新，以及本地 API 代理的路由与候选额度刷新都跳过它，以便先设置账号代理；后台刷新不会放行。重新导入或重新登录仍在等待的账号同样不联网；已放行的账号沿用其代理。登录换令牌属于导入本身，改为经系统代理。Claude 浏览器添加时如未查询资料，首次刷新时经账号代理补查套餐；套餐未知的 Claude 卡片不显示套餐标签。Claude Code 登录缺少 `oauthAccount` 时，先按令牌匹配池中账号；匹配不到则（选项关闭时，或打开但查询失败时）以“Claude Code”为名加入池中，首次手动刷新时先经账号代理查询 profile 识别账号（令牌过期时由 Copool 在池内续期），识别为池中已有账号时合并为一张卡片并转移当前选择；切换到尚未识别的账号时 `.claude.json` 的 `oauthAccount` 写为 null，由 Claude Code 自行补全。续期更新池内凭据；当前本机登录仍匹配且未被外部改动时无交互写回，非当前账号只更新池内副本。
 - Claude Code 账号池（`crates/copool-core/src/claude.rs`）：账号页顶栏 Copool 旁的 Codex / Claude 有色图标切换显示两个池（⌘1 / ⌘2，选择保存在界面本地存储）。Claude 池支持导入当前 Claude Code 登录、浏览器 OAuth 添加账号（claude.ai，Claude Code 的公开客户端，回环端口随机）、`/api/oauth/usage` 的 5 小时与每周额度、令牌过期或被拒时在池内续期、账号代理、删除、切换、智能切换，以及沿用“自动智能切换”设置的定时自动切换。卡片沿用 Codex 卡片布局，底部显示 extra usage 额度与 banked 重置次数（见下文）；Max 套餐显示倍数（如 MAX 20X）。
 
 ## 数据与迁移
@@ -167,3 +167,9 @@ Claude 官方账号与 Sub2api 切换不新增 Claude 自定义字段，也不�
 2026-10-12（Claude banked 重置次数）：usage 请求加 `?cedar_ember=1`，仅该请求使用 `claude-cli/2.1.280 (external, cli)` 的 User-Agent，即最早获得该块的版本（用户用真实账号实测：2.1.280 为 `eligible: true`，2.1.279 为 `ineligible_reason: "cli_version"`）；profile 与令牌续期保持原 User-Agent。`cedar_ember.grants` 中未过期授予的 `resets_left` 之和写入 `remaining_reset_count`，卡片底部显示“重置：N 次”；不合格或缺失时显示为未知（“重置：--”），不读取或保存可用于消耗重置的 grant id，也不提供消耗重置的操作。接口未公开，字段及版本门槛可能变化。用户用真实 Max 账号在 macOS 终端对比：新旧请求的 `five_hour`、`seven_day` 一致，新请求返回合格的 `cedar_ember`；不带 `skip_spend=1` 时 `extra_usage` 与 `spend` 仍返回（带该参数时两者为 null）。Copool 本身尚未用真实账号刷新验证；Sub2api 返回不含该块，次数保持未知。
 
 Claude 卡片同时显示 extra usage 额度：由 `extra_usage` 的 `used_credits` 与 `monthly_limit`（按 `decimal_places` 换算的最小货币单位）显示为“额度：$12.85 / $40.00”，无月上限时只显示已用金额，缺失时为“--”。显示的是本月已用与上限，不计算剩余：实测账号 `disabled_reason` 为 `out_of_credits` 时仍有名义剩余，余额语义未确认。`is_enabled` 记入 `has_credits`，目前未用于显示。353 项核心测试、120 项前端测试、格式、UI 语法及独立 daemon 检查通过。
+
+2026-10-12（Codex 令牌轮换与 Refresh Token 导入清理）：
+- Codex：刷新用量前，若 `auth.json` 是同一账号、令牌不同且 `last_refresh` 不早于池内副本（池内副本无刷新时间时也采用），改用该登录请求并保存到池内；请求失败也保留。修复 Codex CLI 轮换 refresh token 后，池内旧令牌被 Coport（按已配置 auth.json 匹配刷新路由）以 403 拒绝、或被上游视为已用令牌的问题。不会采用其他账号的登录。实际排查：池内副本 10-02 签发、10-12 18:29 过期，Codex CLI 于 18:30 轮换；修复后当前账号刷新恢复。
+- 非当前账号的刷新令牌只存于账号池，经 Coport 刷新时无法按 refresh token 匹配账号；需由 Coport 的 `account_fallback` 等配置处理，Copool 不对上游做假定。
+- 删除界面早已没有入口的 Codex Refresh Token 导入：Tauri 命令 `import_refresh_token`、核心导入函数、共享源码中的 `exchange_refresh_token_at` 及其移植测试。原版 Swift 的 `exchangeAuth(email:refreshToken:)` 同样没有调用方。
+- 验证：新增回归覆盖较旧/较新/其他账号的 auth.json 与失败时保留轮换；353 项核心测试、120 项前端测试、格式、UI 语法、独立 daemon 及桌面编译检查通过。诊断时只读比对了本机真实凭据的指纹与非敏感字段，未修改真实凭据。

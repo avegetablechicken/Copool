@@ -506,24 +506,6 @@ impl Application {
         crate::ranking::sort_for_display(&mut summaries);
         Ok(summaries)
     }
-    /// Import a refresh token without modifying the current Codex login.
-    pub async fn import_refresh_token(&self, token: &str) -> Result<usize> {
-        let client = crate::utils::with_account_proxy(
-            reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)),
-            "",
-        )?
-        .build()
-        .map_err(|e| e.to_string())?;
-        let document = auth::exchange_refresh_token_at(
-            &client,
-            "https://auth.openai.com/oauth/token",
-            token,
-            None,
-        )
-        .await?;
-        self.import_json(&document.to_string()).await
-    }
-
     pub async fn import_current(&self) -> Result<usize> {
         self.import_current_as(None).await
     }
@@ -851,9 +833,17 @@ impl Application {
         {
             return Ok(());
         }
+        // Codex rotates the refresh token of the login it uses in auth.json;
+        // the stored copy of that account is spent once the live one is newer.
+        let live = self
+            .current_auth()
+            .ok()
+            .flatten()
+            .filter(|live| newer_login(live, &account.auth_json));
+        let auth_json = live.as_ref().unwrap_or(&account.auth_json);
         let result = crate::account_network::fetch(
             self.network.as_ref(),
-            &account.auth_json,
+            auth_json,
             &self.account_proxy(&account.proxy_url)?,
             now_unix_seconds(),
         )
@@ -888,7 +878,7 @@ impl Application {
                     // Only refresh the login Codex is still using; never revert a switch
                     // made outside Copool to the stored selection.
                     if current
-                        && auth != &account.auth_json
+                        && auth != auth_json
                         && self.current_auth()?.as_ref().and_then(|v| identity(v).ok())
                             == identity(auth).ok()
                     {
@@ -899,6 +889,9 @@ impl Application {
                     }
                 }
                 Err(error) => {
+                    if let Some(live) = &live {
+                        target.auth_json = live.clone();
+                    }
                     target.usage_error = Some(if crate::account_network::expired_error(error) {
                         "error.accounts.sign_in_expired".into()
                     } else {
@@ -1129,6 +1122,23 @@ fn identity(document: &Value) -> Result<(String, String)> {
     auth::account_identity(document)
 }
 
+/// Whether `live` is a later login of the same account than `stored`: other
+/// tokens, refreshed no earlier. A login without a refresh time is older.
+fn newer_login(live: &Value, stored: &Value) -> bool {
+    let refreshed = |document: &Value| {
+        document["last_refresh"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t.trim()).ok())
+    };
+    identity(live).is_ok()
+        && identity(live).ok() == identity(stored).ok()
+        && live["tokens"] != stored["tokens"]
+        && match (refreshed(live), refreshed(stored)) {
+            (Some(live), Some(stored)) => live >= stored,
+            (live, stored) => live.is_some() || stored.is_none(),
+        }
+}
+
 fn score(a: &AccountSummary) -> f64 {
     crate::ranking::remaining_score(a)
 }
@@ -1270,6 +1280,47 @@ mod tests {
             network.calls.lock().unwrap()[0].2,
             "socks5://127.0.0.1:7891"
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_uses_the_newer_login_codex_rotated_into_auth_json() {
+        let (_dir, app, network) = crate::legacy_tests::network_fixture::fixture();
+        let mut login = document("alice");
+        login["tokens"]["refresh_token"] = "stored-test-only".into();
+        login["last_refresh"] = "2026-10-02T10:29:58.182Z".into();
+        app.import_json(&login.to_string()).await.unwrap();
+        let id = app.accounts().await.unwrap()[0].id.clone();
+        app.switch_account(&id).await.unwrap();
+        let stored_token = || {
+            let store = store::load_store_from_path(&app.paths.store()).unwrap();
+            store.accounts[0].auth_json["tokens"]["refresh_token"].clone()
+        };
+        let live = |token: &str, refreshed: &str| {
+            let mut live = login.clone();
+            live["tokens"]["refresh_token"] = token.into();
+            live["last_refresh"] = refreshed.into();
+            write_json(&app.paths.codex_auth, &live).unwrap();
+        };
+        // An older login in auth.json does not replace the stored one.
+        live("older-test-only", "2000-01-01T00:00:00Z");
+        app.refresh_usage(&id).await.unwrap();
+        assert_eq!(stored_token(), "stored-test-only");
+        // A rotation is adopted, and kept even when the request fails.
+        live("rotated-test-only", "2099-01-01T00:00:00.5+00:00");
+        *network.usage_error.lock().unwrap() = Some("offline".into());
+        assert!(app.refresh_usage(&id).await.is_err());
+        assert_eq!(stored_token(), "rotated-test-only");
+        *network.usage_error.lock().unwrap() = None;
+        live("next-test-only", "2099-01-02T00:00:00Z");
+        app.refresh_usage(&id).await.unwrap();
+        assert_eq!(stored_token(), "next-test-only");
+        // Another account's login is never taken.
+        let mut other = document("bob");
+        other["tokens"]["refresh_token"] = "bob-test-only".into();
+        other["last_refresh"] = "2099-01-03T00:00:00Z".into();
+        write_json(&app.paths.codex_auth, &other).unwrap();
+        app.refresh_usage(&id).await.unwrap();
+        assert_eq!(stored_token(), "next-test-only");
     }
 
     #[tokio::test]

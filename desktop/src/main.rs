@@ -52,11 +52,6 @@ async fn import_json(app: State<'_, App>, content: String) -> Result<usize, Stri
     Ok(result)
 }
 #[tauri::command]
-async fn import_refresh_token(app: State<'_, App>, token: String) -> Result<usize, String> {
-    let result = app.import_refresh_token(&token).await?;
-    Ok(result)
-}
-#[tauri::command]
 async fn import_current(app: State<'_, App>) -> Result<usize, String> {
     let result = app.import_current().await?;
     Ok(result)
@@ -583,7 +578,6 @@ fn main() {
             sync_remote_accounts,
             import_json,
             import_current,
-            import_refresh_token,
             delete_account,
             switch_account,
             update_account,

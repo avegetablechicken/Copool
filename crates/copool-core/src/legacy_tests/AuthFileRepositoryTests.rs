@@ -84,30 +84,3 @@ fn testMakeChatGPTAuthBuildsCodexCompatibleShape() {
     assert_eq!(written["OPENAI_API_KEY"], "sk-proj-test");
     assert!(written["last_refresh"].is_string());
 }
-
-#[tokio::test]
-async fn testExchangeAuthFromRefreshTokenBuildsCodexCompatibleShape() {
-    let id_token = jwt(
-        json!({"https://api.openai.com/auth":{"chatgpt_account_id":"acct_refresh_123","chatgpt_plan_type":"plus"}}),
-    );
-    let response_token = id_token.clone();
-    let server=super::http_fixture::serve(move|r|{
-        assert_eq!(r.path,"/oauth/token");assert_eq!(r.method,"POST");let body=String::from_utf8(r.body).unwrap();assert!(body.contains("grant_type=refresh_token"));assert!(body.contains("refresh_token=rt_source_123"));
-        (axum::http::StatusCode::OK,json!({"access_token":"access-refresh-123","id_token":response_token,"refresh_token":"rt_rotated_456"}).to_string())
-    }).await;
-    let auth = exchange_refresh_token_at(
-        &reqwest::Client::new(),
-        &format!("{}/oauth/token", server.base),
-        "rt_source_123",
-        Some("refresh@example.com"),
-    )
-    .await
-    .unwrap();
-    assert_eq!(auth["auth_mode"], "chatgpt");
-    assert_eq!(auth["email"], "refresh@example.com");
-    assert_eq!(auth["tokens"]["access_token"], "access-refresh-123");
-    assert_eq!(auth["tokens"]["id_token"], id_token);
-    assert_eq!(auth["tokens"]["refresh_token"], "rt_rotated_456");
-    assert_eq!(auth["tokens"]["account_id"], "acct_refresh_123");
-    assert!(auth["last_refresh"].is_string());
-}
