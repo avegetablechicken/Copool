@@ -1189,8 +1189,8 @@ impl Application {
             execution,
         })
     }
-    /// Renew the pool copy only, including the selected account. Usage reads
-    /// never write Claude Code credentials or require Keychain authorization.
+    /// Renew pool credentials and sync an unchanged live login without showing
+    /// authorization UI. External rotations take precedence over our response.
     pub async fn claude_refresh_usage(&self, id: &str) -> Result<()> {
         if sub2api::is_card(id) {
             return self.claude_refresh_sub2api_card(id).await;
@@ -1233,6 +1233,7 @@ impl Application {
         let mut profiled = None;
         let mut rate_limited = false;
         let mut reloads = 0;
+        let mut live_sync = Ok(());
         let result = loop {
             let result = async {
                 let refresh = |oauth: &Value| {
@@ -1340,6 +1341,31 @@ impl Application {
                 }
                 break Err(CREDENTIALS_CHANGED.to_owned());
             }
+            // Only write back when the same live login is still at the
+            // generation we read before the request. Never replace a switch or
+            // an external rotation. Keep all unrelated credential members.
+            if let (Some(before), Some(latest)) = (live.as_ref(), latest.as_ref()) {
+                if let (Some(old), Some(current)) = (before.oauth(), latest.oauth()) {
+                    let same_account = match latest.account.as_ref().and_then(identity) {
+                        Some(named) => Some(named) == identity(&account.account),
+                        None => ["accessToken", "refreshToken"].iter().any(|key| {
+                            text(&current[*key]).is_some()
+                                && text(&current[*key]) == text(&account.oauth[*key])
+                        }),
+                    };
+                    if same_account
+                        && same_oauth_generation(old, current)
+                        && !same_oauth_generation(&oauth, &account.oauth)
+                        && !same_oauth_generation(&oauth, current)
+                    {
+                        let mut document = latest.document.clone();
+                        document["claudeAiOauth"] = oauth.clone();
+                        live_sync =
+                            write_credentials(&location, &document, KeychainAccess::Background)
+                                .await;
+                    }
+                }
+            }
             break result;
         };
         let refreshed = Some(oauth).filter(|oauth| *oauth != account.oauth);
@@ -1351,7 +1377,7 @@ impl Application {
             match &result {
                 Ok(usage) => {
                     target.usage = Some(usage.clone());
-                    target.usage_error = None;
+                    target.usage_error = live_sync.as_ref().err().cloned();
                 }
                 Err(error) => target.usage_error = Some(error.clone()),
             }
@@ -1371,7 +1397,7 @@ impl Application {
             merge_identified(&mut store, id);
             self.claude_save(&store)?;
         }
-        result.map(|_| ())
+        result.map(|_| ()).and(live_sync)
     }
     /// A manual refresh lets new accounts contact upstream: one account, or
     /// all of them without an id.
@@ -1803,11 +1829,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_live_login_renews_only_the_pool_copy() {
+    async fn a_live_login_renews_and_syncs_without_changing_other_fields() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = waiting_app(&dir);
         sign_in(&location, "alice", 1);
-        let before = fs::read(location.credentials_file()).unwrap();
+        let before: Value =
+            serde_json::from_slice(&fs::read(location.credentials_file()).unwrap()).unwrap();
         let config_before = fs::read(location.account_file()).unwrap();
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
@@ -1820,7 +1847,7 @@ mod tests {
             app.claude_load().unwrap().accounts[0].oauth["accessToken"],
             "fresh-access"
         );
-        // Re-reading the old live login must not replace the newer pool copy.
+        // The active login and pool share the refreshed generation.
         app.claude_accounts().await.unwrap();
         assert_eq!(
             app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
@@ -1832,8 +1859,35 @@ mod tests {
             *fake.refreshed.lock().unwrap(),
             vec!["alice-refresh", "fresh-refresh"]
         );
-        assert_eq!(fs::read(location.credentials_file()).unwrap(), before);
+        let after: Value =
+            serde_json::from_slice(&fs::read(location.credentials_file()).unwrap()).unwrap();
+        assert_eq!(
+            after["claudeAiOauth"],
+            app.claude_load().unwrap().accounts[0].oauth
+        );
+        assert_eq!(after["mcpOAuth"], before["mcpOAuth"]);
         assert_eq!(fs::read(location.account_file()).unwrap(), config_before);
+    }
+
+    #[tokio::test]
+    async fn live_rotation_is_preserved_even_when_usage_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", 1);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        fake.usage.lock().unwrap().push((500, Value::Null));
+        assert!(app
+            .claude_refresh_usage(&id)
+            .await
+            .unwrap_err()
+            .contains("HTTP 500"));
+        assert_eq!(live_access(&location), "fresh-access");
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
+            "fresh-refresh"
+        );
     }
 
     #[tokio::test]
