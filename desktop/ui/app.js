@@ -588,19 +588,16 @@ function renderAccounts(accounts) {
     const count = account.usage?.remainingResetCount;
     const resets = count != null && count >= 0 ? count : null;
     const footer = el("div", "account-footer");
-    // Claude reports neither credits nor resets.
     footer.append(
       el(
         "span",
         "account-footer-text",
-        pool === "claude"
-          ? ""
-          : `${tr("accounts.card.credits_format", credits)} · ${tr(
-              resets !== null
-                ? "accounts.card.remaining_resets_format"
-                : "accounts.card.resets_unavailable_format",
-              resets ?? "--",
-            )}`,
+        `${tr("accounts.card.credits_format", credits)} · ${tr(
+          resets !== null
+            ? "accounts.card.remaining_resets_format"
+            : "accounts.card.resets_unavailable_format",
+          resets ?? "--",
+        )}`,
       ),
       accountControls(account, full, view),
     );

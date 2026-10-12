@@ -4,7 +4,7 @@
 use crate::{
     account_network::Response,
     application::{Application, SmartSwitchOutcome, SwitchExecution},
-    models::{AccountSummary, UsageSnapshot, UsageWindow},
+    models::{AccountSummary, CreditSnapshot, UsageSnapshot, UsageWindow},
     persistence::write_json,
     utils::now_unix_seconds,
 };
@@ -20,10 +20,15 @@ mod settings_source;
 mod sub2api;
 pub use sub2api::Provider as Sub2ApiProvider;
 
-const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+// `cedar_ember=1` adds the banked usage-limit resets to the usage response.
+const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const USER_AGENT: &str = "claude-code/2.1.69";
+// The banked resets are returned only to Claude Code 2.1.280 or later, by its
+// User-Agent; others read `eligible: false` with the rest of the usage intact.
+// This is the earliest version that receives them.
+const USAGE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
 const SIGN_IN_EXPIRED: &str = "error.accounts.sign_in_expired";
 
 /// Where Claude Code keeps its login.
@@ -177,6 +182,7 @@ impl Network for Http {
         Box::pin(async move {
             let response = client(proxy)?
                 .get(USAGE_URL)
+                .header(reqwest::header::USER_AGENT, USAGE_USER_AGENT)
                 .bearer_auth(token.trim())
                 .header("Accept", "application/json")
                 .header("anthropic-beta", "oauth-2025-04-20")
@@ -464,13 +470,55 @@ fn usage_snapshot(body: &Value, plan: Option<String>, now: i64) -> Result<UsageS
             })
     };
     Ok(UsageSnapshot {
-        remaining_reset_count: None,
+        remaining_reset_count: banked_resets(&body["cedar_ember"], now),
         fetched_at: now,
         plan_type: plan,
         five_hour: window("five_hour", 5 * 60 * 60),
         one_week: window("seven_day", 7 * 24 * 60 * 60),
-        credits: None,
+        credits: extra_usage(&body["extra_usage"]),
     })
+}
+/// The extra usage credits spent this month against the monthly limit, as
+/// `$12.85 / $40.00`. The amounts are in minor units of the currency.
+fn extra_usage(block: &Value) -> Option<CreditSnapshot> {
+    let places = number(&block["decimal_places"]).map_or(2, |p| p.clamp(0.0, 4.0) as usize);
+    let currency = text(&block["currency"]).unwrap_or_else(|| "USD".into());
+    let money = |value: &Value| {
+        let amount = number(value)? / 10f64.powi(places as i32);
+        Some(match currency.as_str() {
+            "USD" => format!("${amount:.places$}"),
+            "EUR" => format!("€{amount:.places$}"),
+            "GBP" => format!("£{amount:.places$}"),
+            code => format!("{code} {amount:.places$}"),
+        })
+    };
+    let used = money(&block["used_credits"])?;
+    Some(CreditSnapshot {
+        has_credits: block["is_enabled"].as_bool() == Some(true),
+        unlimited: false,
+        balance: Some(match money(&block["monthly_limit"]) {
+            Some(limit) => format!("{used} / {limit}"),
+            None => used,
+        }),
+    })
+}
+/// The usage-limit resets the account has banked: what its unexpired grants
+/// have left, as claude.ai shows them. An ineligible block says nothing about
+/// the account, so it is unknown rather than zero. Grant ids, which spend a
+/// reset, are never read.
+fn banked_resets(block: &Value, now: i64) -> Option<i64> {
+    if block["eligible"].as_bool() != Some(true) {
+        return None;
+    }
+    let grants = block["grants"].as_array()?;
+    Some(
+        grants
+            .iter()
+            .filter(|g| reset_at(&g["ends_at"]).is_none_or(|end| end > now))
+            .filter_map(|g| number(&g["resets_left"]))
+            .map(|left| left.max(0.0) as i64)
+            .sum(),
+    )
 }
 /// Usage of a Claude account as Sub2api reports it. Sub2api reports an idle
 /// five-hour window as zero without a reset, which is no window at all.
@@ -1499,6 +1547,85 @@ mod tests {
     use super::*;
     use crate::Preferences;
     use std::sync::Mutex;
+
+    #[test]
+    fn banked_resets_count_what_unexpired_grants_have_left() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-12T14:30:00Z")
+            .unwrap()
+            .timestamp();
+        // A grant as /api/oauth/usage?cedar_ember=1 returned it to a Max account.
+        let grant = |left: i64, ends: &str| {
+            json!({"id":"grant-id","label":"Claude Opus 5.5 launch: one usage-limit reset for Pro and Max",
+                "resets_total":1,"resets_left":left,"starts_at":"2026-09-22T16:00:00+00:00","ends_at":ends,
+                "clears":["five_hour","seven_day","seven_day_overage_included"],"paused":false,"usable_now":left > 0})
+        };
+        let usage = |block: Value| {
+            usage_snapshot(
+                &json!({"five_hour":{"utilization":5.0,"resets_at":"2026-10-12T17:39:59.634467+00:00"},
+                    "seven_day":{"utilization":24.0,"resets_at":"2026-10-17T06:00:00.634492+00:00"},
+                    "cedar_ember":block,"extra_usage":{"is_enabled":false,"monthly_limit":4000,"used_credits":1285.0,
+                        "utilization":32.125,"currency":"USD","decimal_places":2,"disabled_reason":"out_of_credits"}}),
+                None,
+                now,
+            )
+            .unwrap()
+        };
+        let eligible = |grants: Vec<Value>| json!({"eligible":true,"ineligible_reason":null,"grants":grants,"next_grant_id":"next"});
+        let live = usage(eligible(vec![grant(1, "2026-10-22T16:00:00+00:00")]));
+        assert_eq!(live.remaining_reset_count, Some(1));
+        assert_eq!(live.five_hour.as_ref().unwrap().used_percent, 5.0);
+        assert_eq!(live.one_week.as_ref().unwrap().used_percent, 24.0);
+        let credits = live.credits.as_ref().unwrap();
+        assert_eq!(credits.balance.as_deref(), Some("$12.85 / $40.00"));
+        assert!(!credits.has_credits && !credits.unlimited);
+        // Spent, expired and absent grants are a real zero.
+        for grants in [
+            vec![grant(0, "2026-10-22T16:00:00+00:00")],
+            vec![grant(1, "2026-10-01T00:00:00+00:00")],
+            vec![],
+        ] {
+            assert_eq!(usage(eligible(grants)).remaining_reset_count, Some(0));
+        }
+        let several = vec![
+            grant(1, "2026-10-22T16:00:00+00:00"),
+            grant(2, "2026-11-01T00:00:00+00:00"),
+            grant(-3, "2026-11-01T00:00:00+00:00"),
+        ];
+        assert_eq!(usage(eligible(several)).remaining_reset_count, Some(3));
+        // An ineligible caller, or a response without the block, is unknown.
+        for block in [
+            json!({"eligible":false,"ineligible_reason":"surface"}),
+            json!({"eligible":false,"ineligible_reason":"cli_version","grants":[]}),
+            json!({"eligible":true}),
+            Value::Null,
+        ] {
+            assert_eq!(usage(block).remaining_reset_count, None);
+        }
+    }
+
+    #[test]
+    fn extra_usage_credits_show_the_month_spent_against_its_limit() {
+        let credits = |block: Value| {
+            usage_snapshot(&json!({ "extra_usage": block }), None, 0)
+                .unwrap()
+                .credits
+                .and_then(|c| c.balance)
+        };
+        assert_eq!(
+            credits(
+                json!({"is_enabled":true,"used_credits":"0","currency":"EUR","decimal_places":2})
+            ),
+            Some("€0.00".into())
+        );
+        assert_eq!(
+            credits(
+                json!({"used_credits":150,"monthly_limit":10000,"currency":"JPY","decimal_places":0})
+            ),
+            Some("JPY 150 / JPY 10000".into())
+        );
+        assert_eq!(credits(json!({"is_enabled":false})), None);
+        assert_eq!(credits(Value::Null), None);
+    }
 
     #[tokio::test]
     async fn usage_rate_limits_pause_manual_and_background_refresh_until_backoff_expires() {
