@@ -313,6 +313,34 @@ async fn pick_identity_file(handle: tauri::AppHandle) -> Result<Option<String>, 
         })
         .transpose()
 }
+/// A provider settings file, chosen from the Claude configuration directory.
+#[tauri::command]
+async fn pick_settings_file(
+    handle: tauri::AppHandle,
+    app: State<'_, App>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    panel::set_modal(&handle, true);
+    handle
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .set_directory(app.claude_location().config_dir)
+        .pick_file(move |file| {
+            let _ = tx.send(file);
+        });
+    let picked = rx.await;
+    panel::set_modal(&handle, false);
+    picked
+        .map_err(|e| e.to_string())?
+        .map(|file| {
+            file.into_path()
+                .map(|p| p.to_string_lossy().into_owned())
+                .map_err(|e| e.to_string())
+        })
+        .transpose()
+}
 #[tauri::command]
 async fn import_account_file(
     handle: tauri::AppHandle,
@@ -629,6 +657,7 @@ fn main() {
             claude_sub2api_providers,
             claude_save_sub2api_provider,
             claude_remove_sub2api_provider,
+            pick_settings_file,
             claude_sync_sub2api
         ])
         .build(tauri::generate_context!())

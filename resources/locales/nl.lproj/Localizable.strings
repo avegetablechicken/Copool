@@ -457,8 +457,9 @@
 "accounts.notice.claude_switch_done" = "Claude-account gewisseld; herstart Claude Code om het te gebruiken";
 "accounts.notice.claude_settings_override_format" = "settings.json stelt %@ in, dus Claude Code blijft dat gebruiken in plaats van dit account";
 "settings.sub2api.claude_help" = "Zoekt op naam recursief naar de bron-JSON in de Claude-configuratiemap, met voorrang voor settings-bestanden. Wisselen kopieert de bron naar de hoofd-settings.json. Een lege beheer-URL wordt uit de bron afgeleid.";
-"settings.sub2api.claude_name" = "Naam";
-"settings.sub2api.claude_name_placeholder" = "Bijvoorbeeld team-sub2api";
+"settings.sub2api.claude_settings" = "Instellingen";
+"settings.sub2api.claude_settings_placeholder" = "Naam of pad, bijv. myServer of ~/.claude/profiles/myServer.json";
+"settings.sub2api.choose_settings_file" = "Instellingenbestand kiezen";
 "settings.sub2api.claude_base_url" = "Sub2api-URL";
 "settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
 "settings.sub2api.claude_api_key" = "API-sleutel";

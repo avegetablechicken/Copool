@@ -1006,7 +1006,7 @@ function renderClaudeProviders() {
     if (expandedClaudeProviders.has(id)) {
       const body = el("div", "provider-body");
       for (const [key, label, type] of [
-        ["name", "claude_name"],
+        ["settings", "claude_settings"],
         ["adminBaseURL", "admin_base_url"],
         ["username", "username"],
         ["password", "password", "password"],
@@ -1019,6 +1019,27 @@ function renderClaudeProviders() {
           type,
           !!saved,
         );
+        // Settings name a file to search for, or its path, typed or chosen
+        // with a button inside the field.
+        if (key === "settings") {
+          const field = body.lastElementChild;
+          const choose = button("", "folder", "icon-btn", async () => {
+            try {
+              const path = await invoke("pick_settings_file");
+              if (path) {
+                provider.settings = path;
+                renderClaudeProviders();
+              }
+            } catch (error) {
+              notice(error, true);
+            }
+          });
+          choose.type = "button";
+          choose.title = tr("settings.sub2api.choose_settings_file");
+          choose.setAttribute("aria-label", choose.title);
+          field.classList.add("with-button");
+          field.append(choose);
+        }
       }
       const row = el("label", "row");
       row.append(
@@ -1056,6 +1077,7 @@ function addClaudeProvider() {
   claudeProviderDrafts.set(id, {
     id,
     name: "",
+    settings: "",
     adminBaseURL: "",
     username: "",
     password: "",

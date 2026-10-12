@@ -475,8 +475,9 @@
 "accounts.notice.claude_switch_done" = "Claude アカウントを切り替えました。Claude Code を再起動すると反映されます";
 "accounts.notice.claude_settings_override_format" = "settings.json で %@ が設定されているため、Claude Code はこのアカウントではなくそちらを使い続けます";
 "settings.sub2api.claude_help" = "名前で Claude 設定ディレクトリ内の JSON を再帰検索し、settings ファイルを優先します。切り替え時に元の設定をメインの settings.json に同期します。管理 URL が空の場合は元の設定から取得します。";
-"settings.sub2api.claude_name" = "名前";
-"settings.sub2api.claude_name_placeholder" = "例：team-sub2api";
+"settings.sub2api.claude_settings" = "設定";
+"settings.sub2api.claude_settings_placeholder" = "名前またはパス（例: myServer、~/.claude/profiles/myServer.json）";
+"settings.sub2api.choose_settings_file" = "設定ファイルを選択";
 "settings.sub2api.claude_base_url" = "Sub2api の URL";
 "settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
 "settings.sub2api.claude_api_key" = "API キー";

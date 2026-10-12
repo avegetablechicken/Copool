@@ -475,8 +475,9 @@
 "accounts.notice.claude_switch_done" = "Claude 계정을 전환했습니다. Claude Code를 다시 시작하면 적용됩니다";
 "accounts.notice.claude_settings_override_format" = "settings.json에 %@이(가) 설정되어 있어 Claude Code가 이 계정 대신 계속 사용합니다";
 "settings.sub2api.claude_help" = "이름으로 Claude 설정 디렉터리의 JSON을 재귀 검색하며 settings 파일을 우선합니다. 전환 시 원본 설정을 기본 settings.json에 복사합니다. 관리 URL을 비우면 원본에서 가져옵니다.";
-"settings.sub2api.claude_name" = "이름";
-"settings.sub2api.claude_name_placeholder" = "예: team-sub2api";
+"settings.sub2api.claude_settings" = "설정";
+"settings.sub2api.claude_settings_placeholder" = "이름 또는 경로(예: myServer, ~/.claude/profiles/myServer.json)";
+"settings.sub2api.choose_settings_file" = "설정 파일 선택";
 "settings.sub2api.claude_base_url" = "Sub2api 주소";
 "settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
 "settings.sub2api.claude_api_key" = "API 키";

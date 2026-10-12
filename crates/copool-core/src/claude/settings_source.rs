@@ -1,6 +1,9 @@
-//! Named settings discovery follows Coport's selector rules. The source remains
-//! authoritative and is read again on every switch; no credential-type flag is stored.
-use super::{write_text, Location, Result};
+//! A provider's settings file: named by its path, or by a name searched for
+//! in the Claude configuration directory with Coport's selector rules. It is
+//! read (and searched for) again on every use; a found path is not stored,
+//! nor is any credential-type flag. The file is a Claude Code settings file,
+//! as for `claude --settings`.
+use super::{Location, Result};
 use serde_json::Value;
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
@@ -10,16 +13,66 @@ pub(super) struct Source {
     pub auth_key: &'static str,
 }
 
-pub(super) fn load(location: &Location, name: &str) -> Result<Source> {
-    if name.is_empty()
-        || name.trim() != name
-        || name.contains(['/', '\\', ':'])
-        || name.chars().any(char::is_control)
-    {
+/// The name a settings file is found by, the inverse of the search: the
+/// stem without `settings` and one separator joining it to the rest.
+fn name_of(file: &str) -> String {
+    let stem = file.strip_suffix(".json").unwrap_or(file);
+    let joins = |c: char| matches!(c, '-' | '_' | '.');
+    let Some(at) = stem.find("settings") else {
+        return stem.into();
+    };
+    let (before, after) = (&stem[..at], &stem[at + "settings".len()..]);
+    let name = match before.strip_suffix(joins) {
+        Some(before) => format!("{before}{after}"),
+        None => format!("{before}{}", after.strip_prefix(joins).unwrap_or(after)),
+    };
+    match name.trim_matches(joins) {
+        "" => stem.into(),
+        name => name.into(),
+    }
+}
+
+/// The name and settings path of the Settings input: a path (with a path
+/// separator or `~`) names its file, the name being the one the search would
+/// find it by; anything else is a name to search for, with no path.
+pub(super) fn parse(input: &str) -> Result<(String, String)> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("error.sub2api.configuration_incomplete".into());
+    }
+    if input.starts_with('~') || input.contains(['/', '\\']) {
+        let file = input.rsplit(['/', '\\']).next().unwrap_or_default();
+        if file.is_empty() || file == "~" {
+            return Err("The Claude provider settings path must name a file".into());
+        }
+        return Ok((name_of(file), input.into()));
+    }
+    if input.contains(':') || input.chars().any(char::is_control) {
         return Err(
-            "Claude provider name must be a settings filename or selector, not a path".into(),
+            "Claude provider settings must be a settings filename, selector or path".into(),
         );
     }
+    Ok((input.into(), String::new()))
+}
+
+/// The absolute path of a settings file; `~/` names the home directory.
+fn resolve(path: &str) -> Result<PathBuf> {
+    let resolved = match path.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir()
+            .ok_or("Cannot determine home directory")?
+            .join(rest),
+        None => PathBuf::from(path),
+    };
+    if !resolved.is_absolute() {
+        return Err("The Claude provider settings path must be absolute".into());
+    }
+    Ok(resolved)
+}
+
+/// The one file `name` selects: files whose names contain both `settings`
+/// and the name take precedence over the exact file name or stem. Symlinks,
+/// `.git` and the main settings are skipped.
+fn find(location: &Location, name: &str) -> Result<PathBuf> {
     let mut preferred = BTreeSet::new();
     let mut exact = BTreeSet::new();
     let mut pending = vec![location.config_dir.clone()];
@@ -71,40 +124,32 @@ pub(super) fn load(location: &Location, name: &str) -> Result<Source> {
                 .into(),
         );
     }
-    let path = matches
+    matches
         .into_iter()
         .next()
-        .ok_or("Claude provider settings file not found")?;
-    let raw = fs::read_to_string(path).map_err(|_| "Cannot read Claude provider settings file")?;
-    let mut document: Value =
+        .ok_or_else(|| "Claude provider settings file not found".into())
+}
+
+/// A provider's settings: they route to its gateway with its own credential.
+/// Without a path, the file is searched for by `name`.
+pub(super) fn load(location: &Location, name: &str, path: &str) -> Result<Source> {
+    let path = if path.trim().is_empty() {
+        parse(name)?;
+        find(location, name.trim())?
+    } else {
+        resolve(path.trim())?
+    };
+    let raw =
+        fs::read_to_string(path).map_err(|_| "Cannot read the Claude provider settings file")?;
+    let document: Value =
         serde_json::from_str(&raw).map_err(|_| "Invalid Claude provider settings JSON")?;
-    let object = document
-        .as_object_mut()
-        .ok_or("Claude provider settings must be an object")?;
-    if object.get("env").is_some_and(|v| !v.is_object()) {
+    if !document.is_object() {
+        return Err("Claude provider settings must be an object".into());
+    }
+    if document.get("env").is_some_and(|v| !v.is_object()) {
         return Err("Claude provider settings env must be an object".into());
     }
-    // Coport also accepts root-level environment fields. Normalize these into
-    // Claude's native env block, with an existing env entry taking precedence.
-    let mut env = object
-        .remove("env")
-        .unwrap_or_else(|| serde_json::json!({}));
-    let keys: Vec<_> = object
-        .keys()
-        .filter(|k| {
-            k.starts_with("ANTHROPIC_")
-                || k.starts_with("CLAUDE_CODE_")
-                || k.starts_with("_CLAUDE_CODE_")
-        })
-        .cloned()
-        .collect();
-    for key in keys {
-        let value = object.remove(&key).unwrap();
-        env.as_object_mut().unwrap().entry(key).or_insert(value);
-    }
-    if env.as_object().unwrap().values().any(|v| !v.is_string()) {
-        return Err("Claude provider environment values must be strings".into());
-    }
+    let env = &document["env"];
     let base_url = env["ANTHROPIC_BASE_URL"]
         .as_str()
         .filter(|s| !s.trim().is_empty())
@@ -125,7 +170,6 @@ pub(super) fn load(location: &Location, name: &str) -> Result<Source> {
         .into_iter()
         .find(|key| env[*key].as_str().is_some_and(|s| !s.trim().is_empty()))
         .ok_or("Claude provider settings require ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY")?;
-    object.insert("env".into(), env);
     Ok(Source {
         document,
         base_url,
@@ -133,131 +177,152 @@ pub(super) fn load(location: &Location, name: &str) -> Result<Source> {
     })
 }
 
-impl Source {
-    pub fn matches(&self, main: &Value) -> bool {
-        self.document
-            .as_object()
-            .unwrap()
-            .iter()
-            .all(|(key, value)| main.get(key) == Some(value))
-    }
-
-    /// Replace the main settings document with the selected native settings.
-    /// Validate both before writing and retain the prior document for rollback.
-    pub fn sync(&self, location: &Location) -> Result<Option<String>> {
-        let path: PathBuf = location.config_dir.join("settings.json");
-        let previous = match fs::read_to_string(&path) {
-            Ok(raw) => {
-                let value: Value =
-                    serde_json::from_str(&raw).map_err(|_| "Invalid main Claude settings JSON")?;
-                if !value.is_object() {
-                    return Err("Main Claude settings must be an object".into());
-                }
-                Some(raw)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(_) => return Err("Cannot read main Claude settings".into()),
-        };
-        let raw = serde_json::to_string_pretty(&self.document).map_err(|e| e.to_string())?;
-        write_text(&path, &raw)?;
-        Ok(previous)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    fn write(location: &Location, file: &str, key: &str) {
-        let path = location.config_dir.join(file);
+
+    fn write(dir: &std::path::Path, file: &str, key: &str) -> PathBuf {
+        let path = dir.join(file);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, json!({"env":{"ANTHROPIC_BASE_URL":"https://relay.invalid", key:"fake"},"model":"source-model"}).to_string()).unwrap();
+        fs::write(
+            &path,
+            json!({"env": {"ANTHROPIC_BASE_URL": "https://relay.invalid",
+            key: "fake"}, "model": "source-model"})
+            .to_string(),
+        )
+        .unwrap();
+        path
     }
+
+    #[test]
+    fn the_settings_input_is_a_path_or_a_name() {
+        assert_eq!(
+            parse(" ~/.claude/profiles/team.json ").unwrap(),
+            ("team".into(), "~/.claude/profiles/team.json".into())
+        );
+        assert_eq!(
+            parse("/etc/claude/team-settings").unwrap(),
+            ("team".into(), "/etc/claude/team-settings".into())
+        );
+        assert_eq!(
+            parse(r"C:\Users\me\team.json").unwrap(),
+            ("team".into(), r"C:\Users\me\team.json".into())
+        );
+        assert_eq!(parse("team").unwrap(), ("team".into(), String::new()));
+        // The name is the one the search would find the file by.
+        for (file, name) in [
+            ("settings-team.json", "team"),
+            ("team-settings.json", "team"),
+            ("team.settings.json", "team"),
+            ("team_settings", "team"),
+            ("my-settings-team.json", "my-team"),
+            ("teamsettings.json", "team"),
+            ("settings.json", "settings"),
+            ("myServer.json", "myServer"),
+        ] {
+            assert_eq!(
+                parse(&format!("~/.claude/{file}")).unwrap().0,
+                name,
+                "{file}"
+            );
+        }
+        assert_eq!(
+            parse("settings-team.json").unwrap(),
+            ("settings-team.json".into(), String::new())
+        );
+        assert_eq!(
+            parse("  ").unwrap_err(),
+            "error.sub2api.configuration_incomplete"
+        );
+        assert!(parse("/claude/").is_err());
+        assert!(parse("a:b").is_err());
+    }
+
     #[test]
     fn discovery_matches_coport_priority_and_ambiguity() {
         let dir = tempfile::tempdir().unwrap();
         let location = Location::files(dir.path().into());
-        write(&location, "profiles/team.json", "ANTHROPIC_API_KEY");
-        assert_eq!(
-            load(&location, "team").unwrap().auth_key,
-            "ANTHROPIC_API_KEY"
-        );
-        write(&location, "settings-team.json", "ANTHROPIC_AUTH_TOKEN");
-        assert_eq!(
-            load(&location, "team").unwrap().auth_key,
-            "ANTHROPIC_AUTH_TOKEN"
-        );
+        let load = |name: &str| load(&location, name, "");
+        write(dir.path(), "profiles/team.json", "ANTHROPIC_API_KEY");
+        assert_eq!(load("team").unwrap().auth_key, "ANTHROPIC_API_KEY");
+        write(dir.path(), "settings-team.json", "ANTHROPIC_AUTH_TOKEN");
+        assert_eq!(load("team").unwrap().auth_key, "ANTHROPIC_AUTH_TOKEN");
         write(
-            &location,
+            dir.path(),
             "profiles/team-settings.json",
             "ANTHROPIC_API_KEY",
         );
-        assert!(load(&location, "team").is_err());
-        assert!(load(&location, "settings-team.json").is_ok());
-        assert!(load(&location, "../team").is_err());
-        write(&location, ".git/settings-hidden.json", "ANTHROPIC_API_KEY");
-        assert!(load(&location, "hidden").is_err());
+        assert!(load("team").is_err());
+        assert!(load("settings-team.json").is_ok());
+        assert!(load("a:b").is_err());
+        write(dir.path(), ".git/settings-hidden.json", "ANTHROPIC_API_KEY");
+        assert!(load("hidden").is_err());
         let main_only = tempfile::tempdir().unwrap();
-        let main_location = Location::files(main_only.path().into());
-        write(&main_location, "settings.json", "ANTHROPIC_API_KEY");
-        assert!(load(&main_location, "settings.json").is_err());
+        write(main_only.path(), "settings.json", "ANTHROPIC_API_KEY");
+        assert!(super::load(
+            &Location::files(main_only.path().into()),
+            "settings.json",
+            ""
+        )
+        .is_err());
     }
+
     #[test]
-    fn sync_rereads_source_and_removes_old_main_settings_without_changing_source() {
+    fn a_path_names_its_file_and_every_load_reads_it_again() {
         let dir = tempfile::tempdir().unwrap();
-        let location = Location::files(dir.path().into());
-        write(&location, "team.settings.json", "ANTHROPIC_AUTH_TOKEN");
-        let source_path = dir.path().join("team.settings.json");
-        let original = fs::read(&source_path).unwrap();
-        fs::write(dir.path().join("settings.json"), json!({"env":{"ANTHROPIC_API_KEY":"stale","_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL":"1"},"model":"old"}).to_string()).unwrap();
-        load(&location, "team").unwrap().sync(&location).unwrap();
-        assert_eq!(fs::read(&source_path).unwrap(), original);
-        let main: Value =
-            serde_json::from_slice(&fs::read(dir.path().join("settings.json")).unwrap()).unwrap();
-        assert_eq!(main["model"], "source-model");
-        assert!(main["env"].get("ANTHROPIC_API_KEY").is_none());
-        assert!(main["env"]
-            .get("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL")
-            .is_none());
-        write(&location, "team.settings.json", "ANTHROPIC_API_KEY");
-        let source = load(&location, "team").unwrap();
-        assert_eq!(source.auth_key, "ANTHROPIC_API_KEY");
-        source.sync(&location).unwrap();
-        let before = fs::read(dir.path().join("settings.json")).unwrap();
-        fs::write(&source_path, "broken").unwrap();
-        assert!(load(&location, "team").is_err());
-        assert_eq!(fs::read(dir.path().join("settings.json")).unwrap(), before);
-        fs::remove_file(source_path).unwrap();
-        assert!(load(&location, "team").is_err());
-    }
-    #[test]
-    fn root_fields_are_normalized_and_broken_main_is_preserved() {
-        let dir = tempfile::tempdir().unwrap();
-        let location = Location::files(dir.path().into());
-        fs::write(dir.path().join("team.json"), json!({"ANTHROPIC_BASE_URL":"https://root.invalid", "ANTHROPIC_API_KEY":"root-key", "env":{"ANTHROPIC_BASE_URL":"https://env.invalid"}, "permissions":{"allow":["Read"]}}).to_string()).unwrap();
-        let source = load(&location, "team").unwrap();
-        assert_eq!(source.base_url, "https://env.invalid");
-        assert_eq!(source.document["env"]["ANTHROPIC_API_KEY"], "root-key");
-        assert!(source.document.get("ANTHROPIC_API_KEY").is_none());
-        fs::write(dir.path().join("settings.json"), "broken").unwrap();
-        assert!(source.sync(&location).is_err());
+        let location = Location::files(dir.path().join("claude"));
+        let path = write(dir.path(), "providers/team.json", "ANTHROPIC_AUTH_TOKEN");
+        let name = path.to_str().unwrap();
+        // The path is used as given, even outside the configuration directory.
         assert_eq!(
-            fs::read_to_string(dir.path().join("settings.json")).unwrap(),
-            "broken"
+            load(&location, "team", name).unwrap().auth_key,
+            "ANTHROPIC_AUTH_TOKEN"
         );
+        write(dir.path(), "providers/team.json", "ANTHROPIC_API_KEY");
+        let source = load(&location, "team", name).unwrap();
+        assert_eq!(source.auth_key, "ANTHROPIC_API_KEY");
+        assert_eq!(source.base_url, "https://relay.invalid");
+        assert_eq!(source.document["model"], "source-model");
+        assert!(load(&location, "team", "").is_err());
+        fs::write(&path, "broken").unwrap();
+        assert!(load(&location, "team", name).is_err());
+        fs::remove_file(&path).unwrap();
+        assert!(load(&location, "team", name).is_err());
+        assert!(load(&location, "team", "team.json")
+            .err()
+            .unwrap()
+            .contains("absolute"));
     }
+
+    #[test]
+    fn settings_need_a_gateway_and_its_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let location = Location::files(dir.path().into());
+        let path = dir.path().join("relay.json");
+        for document in [
+            json!([]),
+            json!({"env": []}),
+            json!({"env": {"ANTHROPIC_AUTH_TOKEN": "fake"}}),
+            json!({"env": {"ANTHROPIC_BASE_URL": "https://user:secret@relay.invalid",
+                "ANTHROPIC_AUTH_TOKEN": "fake"}}),
+            json!({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "", "ANTHROPIC_API_KEY": ""}}),
+            // Root-level variables are not Claude Code settings.
+            json!({"ANTHROPIC_BASE_URL": "https://relay.invalid", "ANTHROPIC_API_KEY": "fake"}),
+        ] {
+            fs::write(&path, document.to_string()).unwrap();
+            assert!(load(&location, "relay", "").is_err(), "{document}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn symlinks_are_not_followed() {
         let dir = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        let location = Location::files(dir.path().into());
         std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
-        write(
-            &Location::files(outside.path().into()),
-            "settings-team.json",
-            "ANTHROPIC_API_KEY",
-        );
-        assert!(load(&location, "team").is_err());
+        write(outside.path(), "settings-team.json", "ANTHROPIC_API_KEY");
+        assert!(load(&Location::files(dir.path().into()), "team", "").is_err());
     }
 }

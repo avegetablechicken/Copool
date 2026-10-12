@@ -457,8 +457,9 @@
 "accounts.notice.claude_switch_done" = "已切換 Claude 帳號，重新啟動 Claude Code 後生效";
 "accounts.notice.claude_settings_override_format" = "settings.json 設定了 %@，Claude Code 會繼續使用它而非此帳號";
 "settings.sub2api.claude_help" = "依名稱在 Claude 設定目錄內遞迴尋找來源 JSON，優先比對 settings 檔案。切換時將來源設定同步至主 settings.json。管理位址留空則由來源設定推導。";
-"settings.sub2api.claude_name" = "名稱";
-"settings.sub2api.claude_name_placeholder" = "例如 team-sub2api";
+"settings.sub2api.claude_settings" = "設定";
+"settings.sub2api.claude_settings_placeholder" = "名稱或路徑，如 myServer 或 ~/.claude/profiles/myServer.json";
+"settings.sub2api.choose_settings_file" = "選擇設定檔";
 "settings.sub2api.claude_base_url" = "Sub2api 位址";
 "settings.sub2api.claude_base_url_placeholder" = "https://主機:6060";
 "settings.sub2api.claude_api_key" = "API Key";

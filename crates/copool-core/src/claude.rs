@@ -107,43 +107,55 @@ impl Location {
 /// Authentication overrides in the user's `settings.json`. A custom API URL
 /// only changes routing and can still use the current subscription login.
 pub fn login_overrides(location: &Location) -> Vec<String> {
-    let Some(settings) = fs::read_to_string(location.config_dir.join("settings.json"))
+    read_settings(location)
         .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-    else {
-        return vec![];
-    };
-    let set = |v: &Value| match v {
-        Value::Null => false,
-        Value::String(s) => !s.trim().is_empty(),
-        Value::Bool(b) => *b,
-        _ => true,
-    };
-    let mut keys: Vec<String> = ["apiKeyHelper"]
-        .into_iter()
-        .filter(|key| settings.get(key).is_some_and(set))
-        .map(str::to_owned)
-        .collect();
-    if let Some(env) = settings["env"].as_object() {
-        keys.extend(
-            [
-                "ANTHROPIC_API_KEY",
-                "ANTHROPIC_AUTH_TOKEN",
-                "CLAUDE_CODE_OAUTH_TOKEN",
-                "CLAUDE_CODE_USE_BEDROCK",
-                "CLAUDE_CODE_USE_VERTEX",
-                "CLAUDE_CODE_USE_FOUNDRY",
-            ]
-            .into_iter()
-            .filter(|key| {
-                env.get(*key).is_some_and(|v| {
-                    set(v) && !matches!(v.as_str().map(str::trim), Some("0" | "false"))
-                })
-            })
-            .map(str::to_owned),
-        );
+        .and_then(|text| parse_settings(text.as_deref()).ok())
+        .map(|settings| provider_config::overrides(&settings))
+        .unwrap_or_default()
+}
+
+fn settings_file(location: &Location) -> PathBuf {
+    location.config_dir.join("settings.json")
+}
+/// The main settings as they are; none when the file is missing.
+fn read_settings(location: &Location) -> Result<Option<String>> {
+    match fs::read_to_string(settings_file(location)) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err("Cannot read main Claude settings".into()),
     }
-    keys
+}
+fn parse_settings(text: Option<&str>) -> Result<Value> {
+    let text = text.filter(|t| !t.trim().is_empty()).unwrap_or("{}");
+    let settings: Value =
+        serde_json::from_str(text).map_err(|_| "Invalid main Claude settings JSON")?;
+    if !settings.is_object() || !settings.get("env").is_none_or(Value::is_object) {
+        return Err("Invalid main Claude settings object".into());
+    }
+    Ok(settings)
+}
+/// Settings rendered in place of `previous`, keeping its final newline.
+fn render_settings(settings: &Value, previous: Option<&str>) -> Result<String> {
+    let mut text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    if previous.is_none_or(|t| t.ends_with('\n')) {
+        text.push('\n');
+    }
+    Ok(text)
+}
+/// Writes the main settings verbatim, or removes them for none.
+fn put_settings(location: &Location, text: Option<&str>) -> Result<()> {
+    let path = settings_file(location);
+    match text {
+        Some(text) => write_text(&path, text),
+        None if path.exists() => fs::remove_file(path).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+/// Whether Claude Code uses its subscription login with the main settings.
+fn settings_are_official(location: &Location) -> bool {
+    read_settings(location)
+        .and_then(|text| parse_settings(text.as_deref()))
+        .is_ok_and(|settings| provider_config::overrides(&settings).is_empty())
 }
 
 pub(crate) trait Network: Send + Sync {
@@ -298,6 +310,9 @@ struct Store {
     current_account_id: Option<String>,
     /// Sub2api providers whose Claude accounts join the pool.
     providers: Vec<sub2api::Provider>,
+    /// The provider whose settings were last merged into Claude Code's; it
+    /// is current while the main settings replace the login.
+    settings_provider: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -920,6 +935,30 @@ impl Application {
         self.publish();
         Ok(())
     }
+    /// Where the official main settings are recorded on leaving them.
+    fn claude_official_path(&self) -> PathBuf {
+        self.paths.data_dir.join("claude-official-settings.json")
+    }
+    /// The official main settings last recorded: their text, or none when
+    /// the file was missing.
+    fn claude_official_settings(&self) -> Result<Option<Option<String>>> {
+        match fs::read(self.claude_official_path()) {
+            Ok(bytes) => {
+                let record: Value = serde_json::from_slice(&bytes)
+                    .map_err(|_| "Invalid recorded official Claude settings")?;
+                match &record["settings"] {
+                    Value::Null => Ok(Some(None)),
+                    Value::String(text) => Ok(Some(Some(text.clone()))),
+                    _ => Err("Invalid recorded official Claude settings".into()),
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    fn claude_record_official(&self, settings: Option<&str>) -> Result<()> {
+        write_json(&self.claude_official_path(), &json!({"settings": settings}))
+    }
     pub fn claude_location(&self) -> Location {
         self.claude.location.read().unwrap().clone()
     }
@@ -948,20 +987,16 @@ impl Application {
         if follow_live(&mut store, live.as_ref()) {
             self.claude_save(&store)?;
         }
-        // A Sub2api gateway in settings.json takes Claude Code off its login.
-        let gateway = sub2api::active(&store, &location);
-        let pool_login = provider_config::uses_pool_login(&location);
+        // Official settings use the login; others, the provider last applied.
+        let official = settings_are_official(&location);
+        let provider = store.settings_provider.as_deref().filter(|_| !official);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
             .map(|a| {
-                a.summary(
-                    gateway.is_none()
-                        && pool_login
-                        && store.current_account_id.as_deref() == Some(a.id.as_str()),
-                )
+                a.summary(official && store.current_account_id.as_deref() == Some(a.id.as_str()))
             })
-            .chain(sub2api::summaries(&store, gateway))
+            .chain(sub2api::summaries(&store, provider))
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
         Ok(summaries)
@@ -1222,6 +1257,19 @@ impl Application {
             .find(|a| a.id == id)
             .ok_or("Account not found")?
             .clone();
+        // Settings that replace the login give way to the official ones
+        // recorded when leaving them, or else lose only what replaces it.
+        let settings = read_settings(&location)?;
+        let current = parse_settings(settings.as_deref())?;
+        let official = if provider_config::overrides(&current).is_empty() {
+            None
+        } else if let Some(recorded) = self.claude_official_settings()? {
+            Some(recorded)
+        } else {
+            let mut stripped = current;
+            provider_config::remove_overrides(&mut stripped);
+            Some(Some(render_settings(&stripped, settings.as_deref())?))
+        };
         let previous_document = live.as_ref().map(|l| l.document.clone());
         let previous_account = live.as_ref().and_then(|l| l.account.clone());
         if live.is_some() {
@@ -1245,21 +1293,24 @@ impl Application {
         if let Err(error) = write_account(&location, &target.account) {
             return rollback(error).await;
         }
-        let settings = match sub2api::leave(&store, &location) {
-            Ok(previous) => previous,
-            Err(error) => {
-                if let Some(previous) = &previous_account {
-                    let _ = write_account(&location, previous);
-                }
-                return rollback(error).await;
-            }
-        };
-        store.current_account_id = Some(id.into());
-        if let Err(error) = self.claude_save(&store) {
-            let _ = sub2api::restore_settings(&location, settings);
+        let restore_account = || {
             if let Some(previous) = &previous_account {
                 let _ = write_account(&location, previous);
             }
+        };
+        if let Some(official) = &official {
+            if let Err(error) = put_settings(&location, official.as_deref()) {
+                restore_account();
+                return rollback(error).await;
+            }
+        }
+        store.current_account_id = Some(id.into());
+        store.settings_provider = None;
+        if let Err(error) = self.claude_save(&store) {
+            if official.is_some() {
+                let _ = put_settings(&location, settings.as_deref());
+            }
+            restore_account();
             return rollback(error).await;
         }
         Ok(SwitchExecution {

@@ -1,11 +1,11 @@
-//! Select native Claude authentication/routing settings, without a Copool marker.
-use super::{set_member, write_text, Location, Result};
-use serde_json::{json, Value};
-use std::fs;
+//! Claude Code's user settings across official and provider switches. They
+//! are official while nothing in them replaces the subscription login (the
+//! Keychain entry or credentials file); a provider's settings file is merged
+//! over them as Claude Code merges a `--settings` file over the user settings.
+use serde_json::{Map, Value};
 
-const FIRST_PARTY: &str = "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL";
-const BASE: &str = "ANTHROPIC_BASE_URL";
-const OVERRIDES: &[&str] = &[
+/// `env` variables that take Claude Code off its subscription login.
+const ENV_OVERRIDES: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -21,194 +21,183 @@ const OVERRIDES: &[&str] = &[
     "ANTHROPIC_ORGANIZATION_ID",
 ];
 
-fn nonempty(value: &Value) -> bool {
-    value.as_str().is_some_and(|s| !s.trim().is_empty()) || value.as_bool() == Some(true)
-}
-
-fn pool_login(settings: &Value) -> bool {
-    if !settings.is_object() || (!settings["env"].is_null() && !settings["env"].is_object()) {
-        return false;
-    }
-    let env = &settings["env"];
-    if nonempty(&settings["apiKeyHelper"])
-        || nonempty(&settings["forceLoginGatewayUrl"])
-        || matches!(
-            settings["forceLoginMethod"].as_str(),
-            Some("gateway" | "console")
-        )
-        || OVERRIDES.iter().any(|key| nonempty(&env[*key]))
-    {
-        return false;
-    }
-    if nonempty(&env[FIRST_PARTY]) {
-        return true;
-    }
-    match env[BASE].as_str().filter(|s| !s.trim().is_empty()) {
-        None => true,
-        Some(url) => reqwest::Url::parse(url).is_ok_and(|url| {
-            url.scheme() == "https"
-                && url.host_str() == Some("api.anthropic.com")
-                && url.port_or_known_default() == Some(443)
-                && url.username().is_empty()
-                && url.password().is_none()
-        }),
+/// A non-blank string other than `0`/`false`, true, or any other value.
+fn is_set(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(s) => !matches!(s.trim(), "" | "0" | "false"),
+        Value::Bool(b) => *b,
+        _ => true,
     }
 }
 
-/// Only the user settings are observable here; this is not process inspection.
-pub(super) fn uses_pool_login(location: &Location) -> bool {
-    match fs::read_to_string(location.config_dir.join("settings.json")) {
-        Ok(raw) => serde_json::from_str(&raw).is_ok_and(|settings| pool_login(&settings)),
-        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+/// What in the settings replaces the subscription login; none when official.
+pub(super) fn overrides(settings: &Value) -> Vec<String> {
+    let mut keys = vec![];
+    for key in ["apiKeyHelper", "forceLoginGatewayUrl"] {
+        if settings.get(key).is_some_and(is_set) {
+            keys.push(key.to_owned());
+        }
     }
-}
-
-/// A matching URL alone does not select a gateway's authentication.
-pub(super) fn uses_gateway(location: &Location) -> bool {
-    let Ok(raw) = fs::read_to_string(location.config_dir.join("settings.json")) else {
-        return false;
-    };
-    let Ok(settings) = serde_json::from_str::<Value>(&raw) else {
-        return false;
-    };
-    let env = &settings["env"];
-    ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"]
-        .iter()
-        .any(|key| nonempty(&env[*key]))
-        && !OVERRIDES
-            .iter()
-            .filter(|key| !matches!(**key, "ANTHROPIC_AUTH_TOKEN" | "ANTHROPIC_API_KEY"))
-            .any(|key| nonempty(&env[*key]))
-        && !nonempty(&settings["forceLoginGatewayUrl"])
-        && !nonempty(&settings["forceLoginMethod"])
-}
-
-/// A single settings write; the caller retains the returned document for rollback.
-pub(super) fn select(location: &Location, leaving_known_gateway: bool) -> Result<Option<String>> {
-    let path = location.config_dir.join("settings.json");
-    let previous = match fs::read_to_string(&path) {
-        Ok(raw) => Some(raw),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.to_string()),
-    };
-    let raw = previous
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or("{}");
-    let settings: Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
-    if !settings.is_object() || (!settings["env"].is_null() && !settings["env"].is_object()) {
-        return Err("Invalid Claude settings object".into());
+    if matches!(
+        settings["forceLoginMethod"].as_str(),
+        Some("console" | "gateway")
+    ) {
+        keys.push("forceLoginMethod".into());
     }
-    let mut env = settings["env"].as_object().cloned().unwrap_or_default();
-    // Preserve a declared first-party relay, never reuse a third-party credential's URL.
-    let keep_relay = !leaving_known_gateway
-        && (nonempty(&env.get(FIRST_PARTY).cloned().unwrap_or_default())
-            || (!OVERRIDES
+    if let Some(env) = settings["env"].as_object() {
+        keys.extend(
+            ENV_OVERRIDES
                 .iter()
-                .any(|key| env.get(*key).is_some_and(nonempty))
-                && !nonempty(&settings["apiKeyHelper"])));
-    // Empty values also mask inherited shell variables in normal CLI sessions.
-    for key in OVERRIDES {
-        env.insert((*key).into(), json!(""));
+                .filter(|key| env.get(**key).is_some_and(is_set))
+                .map(|key| (*key).to_owned()),
+        );
     }
-    env.insert("ANTHROPIC_CUSTOM_HEADERS".into(), json!(""));
-    env.remove("ANTHROPIC_UNIX_SOCKET");
-    if !keep_relay || !env.get(BASE).is_some_and(nonempty) {
-        env.insert(BASE.into(), json!("https://api.anthropic.com"));
+    keys
+}
+
+/// Removes what replaces the login, keeping the rest of the settings.
+pub(super) fn remove_overrides(settings: &mut Value) {
+    let keys = overrides(settings);
+    let Some(root) = settings.as_object_mut() else {
+        return;
+    };
+    for key in &keys {
+        if root.shift_remove(key).is_none() {
+            if let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) {
+                env.shift_remove(key);
+            }
+        }
     }
-    env.insert(FIRST_PARTY.into(), json!("1"));
-    let mut updated = set_member(raw, "env", &Value::Object(env))?;
-    if settings.get("apiKeyHelper").is_some() {
-        updated = set_member(&updated, "apiKeyHelper", &json!(""))?;
+}
+
+/// Primitives compare by value; objects and arrays are distinct, as
+/// lodash's `uniq` compares them by reference.
+fn duplicate(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        (Value::Object(_) | Value::Array(_), _) => false,
+        _ => a == b,
     }
-    // These fields have enum/URL schemas; an empty value would be invalid.
-    if settings.get("forceLoginMethod").is_some() || settings.get("forceLoginGatewayUrl").is_some()
-    {
-        let mut document: Value = serde_json::from_str(&updated).map_err(|e| e.to_string())?;
-        let object = document.as_object_mut().unwrap();
-        object.remove("forceLoginMethod");
-        object.remove("forceLoginGatewayUrl");
-        updated = serde_json::to_string_pretty(&document).map_err(|e| e.to_string())?;
+}
+
+/// Merges a later settings source over an earlier one as Claude Code 2.1.285
+/// does (lodash `mergeWith` with its `settingsMergeCustomizer`): objects merge
+/// deeply and later values win; arrays concatenate without duplicates, except
+/// `fallbackModel`, which the later replaces, as it replaces `modelPicker`;
+/// `extraKnownMarketplaces` and `managedMcpServers` merge only by entry.
+pub(super) fn merge(base: &mut Value, overlay: &Value) {
+    let (Some(base), Some(overlay)) = (base.as_object_mut(), overlay.as_object()) else {
+        return;
+    };
+    merge_object(base, overlay);
+}
+fn merge_object(base: &mut Map<String, Value>, overlay: &Map<String, Value>) {
+    for (key, value) in overlay {
+        match base.get_mut(key) {
+            Some(slot) => merge_value(slot, value, key),
+            None => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
     }
-    write_text(&path, &updated)?;
-    Ok(previous)
+}
+fn merge_value(slot: &mut Value, value: &Value, key: &str) {
+    if key == "modelPicker" {
+        *slot = value.clone();
+        return;
+    }
+    match (&mut *slot, value) {
+        (Value::Array(base), Value::Array(overlay)) if key != "fallbackModel" => {
+            for item in overlay {
+                if !base.iter().any(|existing| duplicate(existing, item)) {
+                    base.push(item.clone());
+                }
+            }
+        }
+        (Value::Object(base), Value::Object(overlay))
+            if matches!(key, "extraKnownMarketplaces" | "managedMcpServers") =>
+        {
+            for (k, v) in overlay {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        (Value::Object(base), Value::Object(overlay)) => merge_object(base, overlay),
+        _ => *slot = value.clone(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
     #[test]
-    fn routing_and_authentication_must_both_match() {
-        assert!(pool_login(&json!({})));
-        assert!(!pool_login(&json!([])));
-        assert!(!pool_login(&json!({"env": []})));
-        assert!(!pool_login(
-            &json!({"env": {"ANTHROPIC_BASE_URL":"https://relay.invalid"}})
-        ));
-        let mut settings = json!({"env": {BASE:"https://relay.invalid", FIRST_PARTY:"1"}});
-        assert!(pool_login(&settings));
-        for key in OVERRIDES {
-            settings["env"][*key] = json!("override");
-            assert!(!pool_login(&settings), "{key}");
-            settings["env"].as_object_mut().unwrap().remove(*key);
-        }
-        assert!(!pool_login(
-            &json!({"env": {BASE:"https://api.anthropic.com.evil.invalid"}})
-        ));
+    fn overrides_name_what_replaces_the_login() {
+        let relay = json!({"apiKeyHelper": "", "forceLoginMethod": "claudeai",
+            "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "", "ANTHROPIC_API_KEY": "",
+                "CLAUDE_CODE_USE_BEDROCK": "0", "CLAUDE_CODE_CUSTOM_OAUTH_URL": "x"}});
+        assert!(overrides(&relay).is_empty());
+        assert!(overrides(&json!({})).is_empty());
+        assert!(overrides(&json!([])).is_empty());
+        let gateway = json!({"apiKeyHelper": "helper", "forceLoginMethod": "console",
+            "forceLoginGatewayUrl": "https://gateway.invalid",
+            "env": {"ANTHROPIC_AUTH_TOKEN": "fake", "CLAUDE_CODE_USE_VERTEX": true,
+                "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1"}});
+        assert_eq!(
+            overrides(&gateway),
+            [
+                "apiKeyHelper",
+                "forceLoginGatewayUrl",
+                "forceLoginMethod",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_USE_VERTEX"
+            ]
+        );
+        let mut stripped = gateway.clone();
+        remove_overrides(&mut stripped);
+        assert_eq!(
+            stripped,
+            json!({"env": {"CLAUDE_CODE_USE_POWERSHELL_TOOL": "1"}})
+        );
+        let mut blank = relay.clone();
+        remove_overrides(&mut blank);
+        assert_eq!(blank, relay);
     }
 
     #[test]
-    fn switches_native_settings_without_changing_unrelated_preferences() {
-        let dir = tempfile::tempdir().unwrap();
-        let location = Location::files(dir.path().into());
-        let path = dir.path().join("settings.json");
-        let original = json!({"model":"opus", "permissions":{"allow":[]},
-            "env":{BASE:"https://relay.invalid", "DISABLE_TELEMETRY":"1"}})
-        .to_string();
-        fs::write(&path, &original).unwrap();
-        assert_eq!(select(&location, false).unwrap(), Some(original));
-        assert!(uses_pool_login(&location));
-        let settings: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(settings["env"][BASE], "https://relay.invalid");
-        fs::write(&path, json!({"model":"opus", "env":{BASE:"https://gateway.invalid", "ANTHROPIC_API_KEY":"fake-key", "DISABLE_TELEMETRY":"1"}}).to_string()).unwrap();
-        assert!(!uses_pool_login(&location));
-        select(&location, true).unwrap();
-        assert!(uses_pool_login(&location));
-        let settings: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(settings["env"][BASE], "https://api.anthropic.com");
-        assert_eq!(settings["env"]["ANTHROPIC_AUTH_TOKEN"], "");
-        assert_eq!(settings["env"]["ANTHROPIC_API_KEY"], "");
-        assert_eq!(settings["model"], "opus");
-        assert_eq!(settings["env"]["DISABLE_TELEMETRY"], "1");
-        fs::write(&path, "broken").unwrap();
-        assert!(!uses_pool_login(&location));
-        assert!(select(&location, false).is_err());
-        assert_eq!(fs::read_to_string(path).unwrap(), "broken");
-    }
-    #[test]
-    fn switching_clears_competing_credentials_and_does_not_reuse_unknown_gateway() {
-        let dir = tempfile::tempdir().unwrap();
-        let location = Location::files(dir.path().into());
-        let path = dir.path().join("settings.json");
-        fs::write(
-            &path,
-            json!({"apiKeyHelper":"old-helper", "forceLoginMethod":"gateway",
-            "forceLoginGatewayUrl":"https://sso.invalid", "permissions":{"allow":["Read"]},
-            "env":{BASE:"https://unknown.invalid", "ANTHROPIC_AUTH_TOKEN":"fake",
-                "CLAUDE_CODE_USE_VERTEX":"1"}})
-            .to_string(),
-        )
-        .unwrap();
-        select(&location, false).unwrap();
-        assert!(uses_pool_login(&location));
-        let settings: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(settings["env"][BASE], "https://api.anthropic.com");
-        assert!(settings.get("forceLoginMethod").is_none());
-        assert!(settings.get("forceLoginGatewayUrl").is_none());
-        assert_eq!(settings["apiKeyHelper"], "");
-        assert_eq!(settings["permissions"]["allow"], json!(["Read"]));
-        for key in OVERRIDES {
-            assert_eq!(settings["env"][*key], "", "{key}");
-        }
+    fn merge_follows_claude_code_settings_sources() {
+        let mut base = json!({"model": "opus", "permissions": {"allow": ["Read", "Bash(ls)"],
+                "defaultMode": "default"},
+            "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "", "DISABLE_TELEMETRY": "1"},
+            "fallbackModel": ["sonnet"], "modelPicker": {"options": ["a"], "extra": 1},
+            "extraKnownMarketplaces": {"one": {"source": {"repo": "a/one"}}},
+            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "a"}]}]},
+            "statusLine": {"type": "command", "command": "status"}});
+        let overlay = json!({"model": "relay-model", "permissions": {"allow": ["Read", "Edit"]},
+            "env": {"ANTHROPIC_BASE_URL": "https://relay.invalid", "ANTHROPIC_AUTH_TOKEN": "fake"},
+            "fallbackModel": ["haiku"], "modelPicker": {"options": ["b"]},
+            "extraKnownMarketplaces": {"one": {"source": {"path": "/one"}}, "two": {}},
+            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "a"}]}]},
+            "statusLine": null});
+        merge(&mut base, &overlay);
+        assert_eq!(
+            base,
+            json!({"model": "relay-model",
+                "permissions": {"allow": ["Read", "Bash(ls)", "Edit"], "defaultMode": "default"},
+                "env": {"ANTHROPIC_BASE_URL": "https://relay.invalid",
+                    "ANTHROPIC_AUTH_TOKEN": "fake", "DISABLE_TELEMETRY": "1"},
+                "fallbackModel": ["haiku"], "modelPicker": {"options": ["b"]},
+                "extraKnownMarketplaces": {"one": {"source": {"path": "/one"}}, "two": {}},
+                "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "a"}]},
+                    {"hooks": [{"type": "command", "command": "a"}]}]},
+                "statusLine": null})
+        );
+        // Base keys keep their place; new ones follow.
+        let mut base = json!({"z": 1, "a": {"y": 1}});
+        merge(&mut base, &json!({"b": 2, "a": {"x": 2}}));
+        assert_eq!(base.to_string(), r#"{"z":1,"a":{"y":1,"x":2},"b":2}"#);
     }
 }

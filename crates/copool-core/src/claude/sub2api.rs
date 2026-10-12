@@ -1,28 +1,21 @@
 //! Sub2api in the Claude pool: its Claude (anthropic) OAuth accounts as cards,
-//! and Claude Code pointed at its gateway through `env` in `settings.json`, as
-//! cc-switch does for third-party providers.
-#[cfg(test)]
-use super::set_member;
+//! and Claude Code pointed at its gateway by merging the provider's settings
+//! file over the official settings, as `claude --settings` would.
 use super::{
-    login_overrides, provider_config, settings_source, write_text, Location, Result, Store,
+    login_overrides, parse_settings, provider_config, put_settings, read_settings, render_settings,
+    settings_source, Result, Store,
 };
 use crate::{
     application::{Application, SwitchExecution},
     codex_config::Definition,
     models::AccountSummary,
-    persistence::write_json,
     sub2api::{self, Account, Platform},
     utils::now_unix_seconds,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Map;
-use serde_json::{json, Value};
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::collections::BTreeMap;
 
 const CARD_PREFIX: &str = "claude-sub2api-";
-const BASE_URL: &str = "ANTHROPIC_BASE_URL";
-#[cfg(test)]
-const AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -35,6 +28,13 @@ pub struct Provider {
     /// Optional admin API override, independent of the Claude Code gateway.
     #[serde(rename = "adminBaseURL")]
     pub admin_base_url: String,
+    /// The Claude Code settings file naming the gateway and its credential;
+    /// empty when it is searched for by `name` on every use.
+    pub settings_path: String,
+    /// The form's Settings input, a name or a settings file path; only in a
+    /// draft and in the listing, not stored.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub settings: String,
     pub username: String,
     /// Only in a draft from the form; the system keyring keeps it.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -54,6 +54,14 @@ pub struct Provider {
     pub account_proxy_urls: BTreeMap<String, String>,
 }
 impl Provider {
+    /// The Settings input showing this provider's settings.
+    fn settings_input(&self) -> String {
+        if self.settings_path.is_empty() {
+            self.name.clone()
+        } else {
+            self.settings_path.clone()
+        }
+    }
     /// The root Claude Code sends its requests to (`ANTHROPIC_BASE_URL`).
     fn gateway(&self) -> String {
         gateway(&self.base_url)
@@ -89,39 +97,14 @@ fn card(store: &Store, id: &str) -> Option<(usize, Account)> {
     })
 }
 
-fn settings_path(location: &Location) -> PathBuf {
-    location.config_dir.join("settings.json")
-}
-fn settings_env(location: &Location) -> Map<String, Value> {
-    fs::read_to_string(settings_path(location))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|v| v.get("env").and_then(Value::as_object).cloned())
-        .unwrap_or_default()
-}
-/// The provider whose gateway Claude Code uses, if any.
-pub(super) fn active(store: &Store, location: &Location) -> Option<usize> {
-    if provider_config::uses_pool_login(location) {
-        return None;
-    }
-    let main: Value =
-        serde_json::from_str(&fs::read_to_string(settings_path(location)).ok()?).ok()?;
-    let mut matching = store.providers.iter().enumerate().filter_map(|(i, p)| {
-        settings_source::load(location, &p.name)
-            .ok()
-            .filter(|source| source.matches(&main))
-            .map(|_| i)
-    });
-    let first = matching.next()?;
-    matching.next().is_none().then_some(first)
-}
-pub(super) fn summaries(store: &Store, active: Option<usize>) -> Vec<AccountSummary> {
+/// The cards of every provider; those of the `current` provider are current.
+pub(super) fn summaries(store: &Store, current: Option<&str>) -> Vec<AccountSummary> {
     let mut result = vec![];
-    for (i, p) in store.providers.iter().enumerate() {
+    for p in &store.providers {
         for a in &p.cached_accounts {
             let mut summary = a.summary();
             summary.id = p.card_id(a.id);
-            summary.is_current = active == Some(i);
+            summary.is_current = current == Some(p.id.as_str());
             // Sub2api names Claude accounts freely; the name stands in for an email.
             summary.email = summary.email.or_else(|| Some(a.name.clone()));
             summary.label = summary.email.clone().unwrap_or_default();
@@ -136,76 +119,30 @@ pub(super) fn summaries(store: &Store, active: Option<usize>) -> Vec<AccountSumm
     result
 }
 
-/// Edits `env` in Claude Code's user settings, keeping the rest of the file;
-/// returns the previous file (none when it was missing) for a rollback.
-#[cfg(test)]
-fn edit_env(
-    location: &Location,
-    edit: impl FnOnce(&mut Map<String, Value>),
-) -> Result<Option<String>> {
-    let path = settings_path(location);
-    let previous = match fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.to_string()),
-    };
-    let text = previous
-        .clone()
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or_else(|| "{}".into());
-    let document: Value =
-        serde_json::from_str(&text).map_err(|e| format!("Invalid Claude settings: {e}"))?;
-    let mut env = document
-        .get("env")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let before = env.clone();
-    edit(&mut env);
-    if env != before {
-        write_text(&path, &set_member(&text, "env", &Value::Object(env))?)?;
-    }
-    Ok(previous)
-}
-pub(super) fn restore_settings(location: &Location, previous: Option<String>) -> Result<()> {
-    let path = settings_path(location);
-    match previous {
-        Some(text) => write_text(&path, &text),
-        None if path.exists() => fs::remove_file(path).map_err(|e| e.to_string()),
-        None => Ok(()),
-    }
-}
-/// Select the pool login using native settings, leaving a known gateway first.
-pub(super) fn leave(store: &Store, location: &Location) -> Result<Option<String>> {
-    let env = settings_env(location);
-    let ours = env
-        .get(BASE_URL)
-        .and_then(Value::as_str)
-        .is_some_and(|url| {
-            store
-                .providers
-                .iter()
-                .any(|p| p.gateway().eq_ignore_ascii_case(&gateway(url)))
-        });
-    provider_config::select(location, ours && provider_config::uses_gateway(location))
-}
-
 impl Application {
     /// Claude Sub2api providers, without their secrets.
     pub fn claude_sub2api_providers(&self) -> Result<Vec<Provider>> {
+        let location = self.claude_location();
         let mut providers = self.claude_load()?.providers;
         for p in &mut providers {
-            p.has_api_key = settings_source::load(&self.claude_location(), &p.name).is_ok();
+            p.has_api_key = settings_source::load(&location, &p.name, &p.settings_path).is_ok();
+            p.settings = p.settings_input();
         }
         Ok(providers)
     }
     pub async fn claude_save_sub2api_provider(&self, mut draft: Provider) -> Result<Provider> {
-        draft.name = draft.name.trim().into();
+        // A path is kept; a name found by searching is searched for again.
+        let input = match draft.settings.trim() {
+            "" => draft.settings_input(),
+            input => input.to_owned(),
+        };
+        (draft.name, draft.settings_path) = settings_source::parse(&input)?;
         draft.username = draft.username.trim().into();
         draft.base_url = draft.base_url.trim().trim_end_matches('/').into();
         draft.admin_base_url = draft.admin_base_url.trim().trim_end_matches('/').into();
         draft.proxy_url = draft.proxy_url.trim().into();
-        let source = settings_source::load(&self.claude_location(), &draft.name)?;
+        let source =
+            settings_source::load(&self.claude_location(), &draft.name, &draft.settings_path)?;
         draft.base_url = source.base_url.clone();
         if draft.id.trim().is_empty() {
             draft.id = uuid::Uuid::new_v4().to_string();
@@ -257,11 +194,13 @@ impl Application {
         draft.password.clear();
         draft.api_key.clear();
         draft.has_api_key = true;
+        draft.settings.clear();
         match existing {
             Some(i) => store.providers[i] = draft.clone(),
             None => store.providers.push(draft.clone()),
         }
         self.claude_save(&store)?;
+        draft.settings = draft.settings_input();
         Ok(draft)
     }
     pub async fn claude_remove_sub2api_provider(&self, id: &str) -> Result<()> {
@@ -275,7 +214,7 @@ impl Application {
         self.secrets.remove(&api_key_secret(id))
     }
     fn claude_sub2api_connection(&self, p: &Provider) -> Result<sub2api::Connection> {
-        let source = settings_source::load(&self.claude_location(), &p.name)?;
+        let source = settings_source::load(&self.claude_location(), &p.name, &p.settings_path)?;
         let password = self
             .secrets
             .get(&password_secret(&p.id))?
@@ -457,28 +396,57 @@ impl Application {
         }
         Ok(())
     }
-    /// Re-read the named source settings and sync them to the main document.
-    /// The previous main document is kept in `claude-before-switch.json`.
+    /// Merges the provider's settings file over the official main settings,
+    /// recording these when leaving them; the file is read again each time.
     pub(super) async fn claude_switch_sub2api(&self, id: &str) -> Result<SwitchExecution> {
         let location = self.claude_location();
-        let store = self.claude_load()?;
+        let _lock = self.claude.lock.lock().await;
+        let mut store = self.claude_load()?;
         let (i, account) = card(&store, id).ok_or("Account not found")?;
         if !account.status.eq_ignore_ascii_case("active") {
             return Err("Account is deactivated".into());
         }
-        let p = &store.providers[i];
-        let source = settings_source::load(&location, &p.name)?;
-        let previous = match fs::read_to_string(settings_path(&location)) {
-            Ok(raw) => Some(raw),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e.to_string()),
+        let p = store.providers[i].clone();
+        let source = settings_source::load(&location, &p.name, &p.settings_path)?;
+        let settings = read_settings(&location)?;
+        let current = parse_settings(settings.as_deref())?;
+        let leaving_official = provider_config::overrides(&current).is_empty();
+        let recorded = self.claude_official_settings()?;
+        // Without a record, other settings lose only what replaces the login.
+        let mut merged = match (&recorded, leaving_official) {
+            (Some(official), false) => parse_settings(official.as_deref())?,
+            (None, false) => {
+                let mut stripped = current;
+                provider_config::remove_overrides(&mut stripped);
+                stripped
+            }
+            (_, true) => current,
         };
-        write_json(
-            &self.paths.data_dir.join("claude-before-switch.json"),
-            &json!({"settings": previous}),
-        )?;
-        source.sync(&location)?;
-        self.publish();
+        provider_config::merge(&mut merged, &source.document);
+        let merged = render_settings(&merged, settings.as_deref())?;
+        if leaving_official {
+            self.claude_record_official(settings.as_deref())?;
+        }
+        let undo = || {
+            let _ = put_settings(&location, settings.as_deref());
+            if leaving_official {
+                let _ = match &recorded {
+                    Some(previous) => self.claude_record_official(previous.as_deref()),
+                    None => {
+                        std::fs::remove_file(self.claude_official_path()).map_err(|e| e.to_string())
+                    }
+                };
+            }
+        };
+        if let Err(error) = put_settings(&location, Some(&merged)) {
+            undo();
+            return Err(error);
+        }
+        store.settings_provider = Some(p.id.clone());
+        if let Err(error) = self.claude_save(&store) {
+            undo();
+            return Err(error);
+        }
         Ok(SwitchExecution {
             provider: Some(p.name.clone()),
             login_overrides: login_overrides(&location)
@@ -492,8 +460,13 @@ impl Application {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{tests::sign_in, tests::Fake, Location};
     use super::*;
-    use std::{collections::HashMap, sync::Mutex};
+    use serde_json::{json, Value};
+    use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex};
+
+    const BASE_URL: &str = "ANTHROPIC_BASE_URL";
+    const AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 
     #[derive(Default)]
     struct Secrets(Mutex<HashMap<String, String>>);
@@ -542,57 +515,116 @@ mod tests {
         format!("http://{address}")
     }
 
-    fn source_file(
-        location: &Location,
-        name: &str,
-        base: &str,
-        key_name: &str,
-        key: &str,
-    ) -> PathBuf {
-        let path = location
-            .config_dir
-            .join("profiles")
-            .join(format!("{name}.settings.json"));
+    /// A provider settings file outside the Claude configuration directory.
+    fn source_file(dir: &std::path::Path, base: &str, key_name: &str, key: &str) -> PathBuf {
+        let path = dir.join("providers/team.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, json!({"model":"source-model", "env":{BASE_URL:base, key_name:key, "DISABLE_TELEMETRY":"1"}}).to_string()).unwrap();
+        fs::write(
+            &path,
+            json!({"model": "source-model", "permissions": {"allow": ["Edit"]},
+                "env": {BASE_URL: base, key_name: key}})
+            .to_string(),
+        )
+        .unwrap();
         path
+    }
+    fn main_path(location: &Location) -> PathBuf {
+        location.config_dir.join("settings.json")
+    }
+    fn main_settings(location: &Location) -> Value {
+        serde_json::from_str(&fs::read_to_string(main_path(location)).unwrap()).unwrap()
+    }
+    fn write_main(location: &Location, settings: &Value) {
+        fs::create_dir_all(&location.config_dir).unwrap();
+        fs::write(main_path(location), settings.to_string()).unwrap();
+    }
+    fn current(accounts: &[AccountSummary]) -> Vec<String> {
+        accounts
+            .iter()
+            .filter(|a| a.is_current)
+            .map(|a| a.id.clone())
+            .collect()
+    }
+    fn open(dir: &std::path::Path) -> (Application, Location) {
+        let app = Application::open_with_secrets(
+            crate::Paths {
+                data_dir: dir.join("data"),
+                codex_auth: dir.join("codex/auth.json"),
+            },
+            std::sync::Arc::new(Secrets::default()),
+        )
+        .unwrap();
+        let location = Location::files(dir.join("claude"));
+        app.set_claude_location(location.clone());
+        (app, location)
+    }
+    /// A synced provider, and an imported login as the official account.
+    async fn pool(
+        dir: &std::path::Path,
+    ) -> (Application, Location, String, PathBuf, String, String) {
+        let (app, location) = open(dir);
+        let base = server(std::sync::Arc::new(Mutex::new(vec![]))).await;
+        let path = source_file(dir, &base, AUTH_TOKEN, "sk-team");
+        let saved = app
+            .claude_save_sub2api_provider(Provider {
+                settings: path.to_str().unwrap().into(),
+                username: "admin@example.com".into(),
+                password: "secret".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        app.claude_sync_sub2api().await.unwrap();
+        app.set_claude_network(std::sync::Arc::new(Fake::default()));
+        sign_in(&location, "alice", 4_000_000_000_000);
+        app.claude_import_current().await.unwrap();
+        let alice = app
+            .claude_accounts()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|a| a.source_tag.is_none())
+            .unwrap()
+            .id;
+        (app, location, base, path, saved.card_id(7), alice)
     }
 
     #[tokio::test]
     async fn provider_form_derives_gateway_and_key_and_keeps_admin_url_separate() {
         let dir = tempfile::tempdir().unwrap();
-        let app = Application::open_with_secrets(
-            crate::Paths {
-                data_dir: dir.path().join("data"),
-                codex_auth: dir.path().join("codex/auth.json"),
-            },
-            std::sync::Arc::new(Secrets::default()),
-        )
-        .unwrap();
-        let location = Location::files(dir.path().join("claude"));
-        app.set_claude_location(location.clone());
-        edit_env(&location, |env| {
-            env.insert(BASE_URL.into(), "https://gateway.example".into());
-            env.insert(AUTH_TOKEN.into(), "sk-from-claude".into());
-            env.insert("ANTHROPIC_API_KEY".into(), "stale-api-key".into());
-        })
-        .unwrap();
-        source_file(
+        let (app, location) = open(dir.path());
+        write_main(
             &location,
-            "team",
+            &json!({"env": {BASE_URL: "https://gateway.example", AUTH_TOKEN: "sk-from-claude"}}),
+        );
+        let path = source_file(
+            dir.path(),
             "https://gateway.example",
             AUTH_TOKEN,
             "sk-from-source",
         );
+        let draft = Provider {
+            username: "admin".into(),
+            password: "admin-password".into(),
+            ..Default::default()
+        };
+        // The settings file is required, never taken from the main settings.
+        assert_eq!(
+            app.claude_save_sub2api_provider(draft.clone())
+                .await
+                .unwrap_err(),
+            "error.sub2api.configuration_incomplete"
+        );
         let mut saved = app
             .claude_save_sub2api_provider(Provider {
-                name: "team".into(),
-                username: "admin".into(),
-                password: "admin-password".into(),
-                ..Default::default()
+                settings: format!(" {} ", path.display()),
+                ..draft
             })
             .await
             .unwrap();
+        assert_eq!(saved.name, "team");
+        assert_eq!(saved.settings_path, path.to_str().unwrap());
+        assert_eq!(saved.settings, saved.settings_path);
         assert_eq!(saved.gateway(), "https://gateway.example");
         assert!(saved.has_api_key);
         assert!(saved.password.is_empty() && saved.api_key.is_empty());
@@ -611,32 +643,17 @@ mod tests {
         );
         assert_eq!(connection.configuration.password, "admin-password");
         let stored = fs::read_to_string(app.claude_store_path()).unwrap();
-        assert!(!stored.contains("sk-from-claude") && !stored.contains("admin-password"));
-
-        // A credential for another gateway must never be copied to this provider.
-        edit_env(&location, |env| {
-            env.insert(BASE_URL.into(), "https://other.example".into());
-            env.insert(AUTH_TOKEN.into(), "sk-other".into());
-        })
-        .unwrap();
-        saved = app.claude_save_sub2api_provider(saved).await.unwrap();
-        assert_eq!(saved.base_url, "https://gateway.example");
-        assert!(app
-            .secrets
-            .get(&api_key_secret(&saved.id))
-            .unwrap()
-            .is_none());
+        assert!(!stored.contains("sk-from") && !stored.contains("admin-password"));
         assert!(app
             .claude_save_sub2api_provider(Provider {
-                name: "unrelated".into(),
-                base_url: "https://unrelated.example".into(),
+                settings: dir.path().join("missing.json").to_str().unwrap().into(),
                 username: "admin".into(),
                 password: "password".into(),
                 ..Default::default()
             })
             .await
             .unwrap_err()
-            .contains("not found"));
+            .contains("Cannot read"));
         saved.admin_base_url = "https://user:password@admin.example".into();
         assert_eq!(
             app.claude_save_sub2api_provider(saved).await.unwrap_err(),
@@ -645,183 +662,166 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn syncs_claude_accounts_and_switches_claude_code_between_gateway_and_login() {
+    async fn switches_merge_the_provider_over_the_official_settings_and_restore_them() {
         let dir = tempfile::tempdir().unwrap();
-        let app = Application::open_with_secrets(
-            crate::Paths {
-                data_dir: dir.path().join("data"),
-                codex_auth: dir.path().join("codex/auth.json"),
-            },
-            std::sync::Arc::new(Secrets::default()),
-        )
-        .unwrap();
-        let location = Location::files(dir.path().join("claude"));
-        app.set_claude_location(location.clone());
-        fs::create_dir_all(&location.config_dir).unwrap();
-        fs::write(
-            settings_path(&location),
-            "{\n  \"model\": \"opus\",\n  \"env\": {\"ANTHROPIC_AUTH_TOKEN\": \"old\", \"DISABLE_TELEMETRY\": \"1\"}\n}\n",
-        )
-        .unwrap();
-        let requests = std::sync::Arc::new(Mutex::new(vec![]));
-        let base = server(requests.clone()).await;
-        assert_eq!(
-            app.claude_sync_sub2api().await.unwrap_err(),
-            "error.claude.sub2api_not_configured"
+        let (app, location, base, path, card, alice) = pool(dir.path()).await;
+        let relay = "http://127.0.0.1:8787/anthropic";
+        let official = format!(
+            "{{\n  \"model\": \"opus\",\n  \"permissions\": {{\"allow\": [\"Read\"]}},\n  \"env\": {{\"{BASE_URL}\": \"{relay}\", \"{AUTH_TOKEN}\": \"\", \"DISABLE_TELEMETRY\": \"1\"}}\n}}\n"
         );
-        let source_path = source_file(&location, "team", &base, AUTH_TOKEN, "sk-team");
+        fs::write(main_path(&location), &official).unwrap();
+        // Settings without a replacing credential are official, at any address.
+        assert_eq!(
+            current(&app.claude_accounts().await.unwrap()),
+            [alice.clone()]
+        );
+
+        // A missing settings file fails without changing anything.
+        let source_raw = fs::read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(app.claude_switch_account(&card).await.is_err());
+        assert_eq!(fs::read_to_string(main_path(&location)).unwrap(), official);
+        assert!(!app.claude_official_path().exists());
+        fs::write(&path, &source_raw).unwrap();
+
+        let execution = app.claude_switch_account(&card).await.unwrap();
+        assert_eq!(execution.provider.as_deref(), Some("team"));
+        assert!(execution.login_overrides.is_empty());
+        assert_eq!(
+            main_settings(&location),
+            json!({"model": "source-model", "permissions": {"allow": ["Read", "Edit"]},
+                "env": {BASE_URL: base, AUTH_TOKEN: "sk-team", "DISABLE_TELEMETRY": "1"}})
+        );
+        assert_eq!(fs::read(&path).unwrap(), source_raw);
+        assert_eq!(
+            current(&app.claude_accounts().await.unwrap()),
+            [card.clone()]
+        );
+
+        // Provider to provider merges over the recorded official settings,
+        // and the file is read again: the old credential does not remain.
+        let mut edited = main_settings(&location);
+        edited["statusLine"] = json!({"type": "command"});
+        write_main(&location, &edited);
+        source_file(dir.path(), &base, "ANTHROPIC_API_KEY", "rotated-model-key");
+        let execution = app.claude_switch_account(&card).await.unwrap();
+        assert!(execution.login_overrides.is_empty());
+        assert_eq!(
+            main_settings(&location)["env"],
+            json!({BASE_URL: base, AUTH_TOKEN: "", "DISABLE_TELEMETRY": "1",
+                "ANTHROPIC_API_KEY": "rotated-model-key"})
+        );
+        assert_eq!(
+            current(&app.claude_accounts().await.unwrap()),
+            [card.clone()]
+        );
+
+        // Back to the login: the recorded settings return verbatim.
+        let execution = app.claude_switch_account(&alice).await.unwrap();
+        assert!(execution.login_overrides.is_empty());
+        assert_eq!(fs::read_to_string(main_path(&location)).unwrap(), official);
+        assert_eq!(
+            current(&app.claude_accounts().await.unwrap()),
+            [alice.clone()]
+        );
+        // Between logins the settings are left alone.
+        let mut changed = main_settings(&location);
+        changed["theme"] = "dark".into();
+        write_main(&location, &changed);
+        app.claude_switch_account(&alice).await.unwrap();
+        assert_eq!(main_settings(&location), changed);
+
+        // A credential written outside Copool takes Claude Code off the login.
+        let outside = json!({"apiKeyHelper": "helper", "theme": "dark",
+            "env": {AUTH_TOKEN: "outside", "DISABLE_TELEMETRY": "1"}});
+        write_main(&location, &outside);
+        assert!(current(&app.claude_accounts().await.unwrap()).is_empty());
+        // Without a record, only what replaces the login goes.
+        fs::remove_file(app.claude_official_path()).unwrap();
+        app.claude_switch_account(&alice).await.unwrap();
+        assert_eq!(
+            main_settings(&location),
+            json!({"theme": "dark", "env": {"DISABLE_TELEMETRY": "1"}})
+        );
+        assert!(!app.claude_official_path().exists());
+        write_main(&location, &outside);
+        app.claude_switch_account(&card).await.unwrap();
+        assert_eq!(
+            main_settings(&location),
+            json!({"theme": "dark", "env": {"DISABLE_TELEMETRY": "1",
+                BASE_URL: base, "ANTHROPIC_API_KEY": "rotated-model-key"},
+                "model": "source-model", "permissions": {"allow": ["Edit"]}})
+        );
+        assert!(!app.claude_official_path().exists());
+        app.claude_delete_account(&card).await.unwrap();
+        assert_eq!(app.claude_accounts().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_settings_name_is_searched_for_on_every_use_and_never_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location) = open(dir.path());
+        let base = server(std::sync::Arc::new(Mutex::new(vec![]))).await;
+        let found = location.config_dir.join("profiles/team-settings.json");
+        fs::create_dir_all(found.parent().unwrap()).unwrap();
+        let write = |path: &PathBuf, key: &str| {
+            fs::write(
+                path,
+                json!({"env": {BASE_URL: base, AUTH_TOKEN: key}}).to_string(),
+            )
+            .unwrap()
+        };
+        write(&found, "sk-found");
         let saved = app
             .claude_save_sub2api_provider(Provider {
-                name: "team".into(),
-                base_url: format!("{base}/api/v1/"),
+                settings: "team".into(),
                 username: "admin@example.com".into(),
                 password: "secret".into(),
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert!(saved.has_api_key);
-        assert!(!fs::read_to_string(app.claude_store_path())
-            .unwrap()
-            .contains("secret"));
-        assert_eq!(app.claude_sync_sub2api().await.unwrap(), 1);
-        assert!(requests.lock().unwrap()[1].contains("platform=anthropic"));
         assert_eq!(
-            requests.lock().unwrap()[2],
-            "/api/v1/admin/accounts/7/usage"
+            (saved.name.as_str(), saved.settings_path.as_str()),
+            ("team", "")
         );
-
-        let accounts = app.claude_accounts().await.unwrap();
-        assert_eq!(accounts.len(), 1);
-        let card = accounts[0].clone();
-        assert_eq!(card.source_tag.as_deref(), Some("SUB2API"));
-        assert_eq!(card.label, "claude-team");
-        assert_eq!(card.plan_type.as_deref(), Some("max"));
-        let usage = card.usage.as_ref().unwrap();
-        assert!(usage.five_hour.is_none());
-        assert_eq!(usage.one_week.as_ref().unwrap().used_percent, 34.0);
-        assert!(!card.is_current);
-
-        app.set_claude_network(std::sync::Arc::new(super::super::tests::Fake::default()));
-        super::super::tests::sign_in(&location, "alice", 4_000_000_000_000);
-        app.claude_import_current().await.unwrap();
-
-        // A missing source must fail without modifying the main settings.
-        let source_raw = fs::read(&source_path).unwrap();
-        fs::remove_file(&source_path).unwrap();
-        let before = fs::read(settings_path(&location)).unwrap();
-        assert!(app
-            .claude_switch_account(&card.id)
+        assert_eq!(saved.settings, "team");
+        let stored = fs::read_to_string(app.claude_store_path()).unwrap();
+        assert!(!stored.contains("team-settings.json") && !stored.contains("\"settings\""));
+        assert_eq!(app.claude_sub2api_providers().unwrap()[0].settings, "team");
+        app.claude_sync_sub2api().await.unwrap();
+        // The file moved: the next switch searches again.
+        let moved = location.config_dir.join("other/settings-team.json");
+        fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        fs::rename(&found, &moved).unwrap();
+        write(&moved, "sk-moved");
+        app.claude_switch_account(&saved.card_id(7)).await.unwrap();
+        assert_eq!(main_settings(&location)["env"][AUTH_TOKEN], "sk-moved");
+        // A path chosen later is kept instead.
+        let picked = dir.path().join("elsewhere/team.json");
+        fs::create_dir_all(picked.parent().unwrap()).unwrap();
+        write(&picked, "sk-picked");
+        let saved = app
+            .claude_save_sub2api_provider(Provider {
+                settings: picked.to_str().unwrap().into(),
+                ..saved
+            })
             .await
-            .unwrap_err()
-            .contains("not found"));
-        assert_eq!(fs::read(settings_path(&location)).unwrap(), before);
-        fs::write(&source_path, &source_raw).unwrap();
-        let execution = app.claude_switch_account(&card.id).await.unwrap();
-        assert_eq!(execution.provider.as_deref(), Some("team"));
-        assert!(execution.login_overrides.is_empty());
-        let text = fs::read_to_string(settings_path(&location)).unwrap();
-        let main: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(main["model"], "source-model");
-        assert_eq!(fs::read(&source_path).unwrap(), source_raw);
-        let env = settings_env(&location);
-        assert_eq!(env[BASE_URL], base.as_str());
-        assert_eq!(env[AUTH_TOKEN], "sk-team");
-        assert!(!env.contains_key("ANTHROPIC_API_KEY"));
-        assert_eq!(env["DISABLE_TELEMETRY"], "1");
-        let accounts = app.claude_accounts().await.unwrap();
-        assert!(
-            accounts
-                .iter()
-                .find(|a| a.id == card.id)
-                .unwrap()
-                .is_current
-        );
-        assert!(accounts.iter().all(|a| a.is_current == (a.id == card.id)));
-
-        // Back to an account login: only the gateway Copool set is removed.
-        let alice = app
-            .claude_accounts()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|a| a.source_tag.is_none())
             .unwrap();
-        assert!(!alice.is_current);
-        // The same URL can be a first-party relay: identity is the native
-        // routing/auth combination, not the saved gateway URL alone.
-        edit_env(&location, |env| {
-            env.insert(AUTH_TOKEN.into(), "".into());
-            env.insert(
-                "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL".into(),
-                "1".into(),
-            );
-        })
-        .unwrap();
-        let accounts = app.claude_accounts().await.unwrap();
-        assert!(
-            accounts
-                .iter()
-                .find(|a| a.id == alice.id)
-                .unwrap()
-                .is_current
-        );
-        assert!(
-            !accounts
-                .iter()
-                .find(|a| a.id == card.id)
-                .unwrap()
-                .is_current
-        );
-        app.claude_switch_account(&alice.id).await.unwrap();
-        assert_eq!(settings_env(&location)[BASE_URL], base.as_str());
-        app.claude_switch_account(&card.id).await.unwrap();
-        assert!(!settings_env(&location).contains_key("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"));
-        app.claude_switch_account(&alice.id).await.unwrap();
-        let env = settings_env(&location);
-        assert_eq!(env[BASE_URL], "https://api.anthropic.com");
-        assert_eq!(env[AUTH_TOKEN], "");
-        assert_eq!(env["DISABLE_TELEMETRY"], "1");
-        let accounts = app.claude_accounts().await.unwrap();
-        assert!(
-            accounts
-                .iter()
-                .find(|a| a.id == alice.id)
-                .unwrap()
-                .is_current
-        );
-        assert!(
-            !accounts
-                .iter()
-                .find(|a| a.id == card.id)
-                .unwrap()
-                .is_current
-        );
+        assert_eq!(saved.settings_path, picked.to_str().unwrap());
+        app.claude_switch_account(&saved.card_id(7)).await.unwrap();
+        assert_eq!(main_settings(&location)["env"][AUTH_TOKEN], "sk-picked");
+    }
 
-        // Source edits change both the variable name and credential on the
-        // next switch, without re-importing or using a cached secret.
-        source_file(
-            &location,
-            "team",
-            &base,
-            "ANTHROPIC_API_KEY",
-            "rotated-model-key",
-        );
-        let execution = app.claude_switch_account(&card.id).await.unwrap();
-        assert!(execution.login_overrides.is_empty());
-        let env = settings_env(&location);
-        assert_eq!(env["ANTHROPIC_API_KEY"], "rotated-model-key");
-        assert!(!env.contains_key(AUTH_TOKEN));
-        assert!(
-            app.claude_accounts()
-                .await
-                .unwrap()
-                .iter()
-                .find(|a| a.id == card.id)
-                .unwrap()
-                .is_current
-        );
-        app.claude_delete_account(&card.id).await.unwrap();
-        assert_eq!(app.claude_accounts().await.unwrap().len(), 1);
+    #[tokio::test]
+    async fn a_missing_official_settings_file_is_restored_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _, _, card, alice) = pool(dir.path()).await;
+        assert!(!main_path(&location).exists());
+        app.claude_switch_account(&card).await.unwrap();
+        assert!(main_path(&location).exists());
+        app.claude_switch_account(&alice).await.unwrap();
+        assert!(!main_path(&location).exists());
+        assert_eq!(current(&app.claude_accounts().await.unwrap()), [alice]);
     }
 }
