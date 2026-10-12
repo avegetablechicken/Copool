@@ -96,9 +96,8 @@ impl Location {
     }
 }
 
-/// Keys of the user's `settings.json` that make Claude Code use an API key,
-/// a gateway or a cloud provider instead of the account login (the
-/// connection keys cc-switch manages there).
+/// Authentication overrides in the user's `settings.json`. A custom API URL
+/// only changes routing and can still use the current subscription login.
 pub fn login_overrides(location: &Location) -> Vec<String> {
     let Some(settings) = fs::read_to_string(location.config_dir.join("settings.json"))
         .ok()
@@ -122,7 +121,6 @@ pub fn login_overrides(location: &Location) -> Vec<String> {
             [
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_AUTH_TOKEN",
-                "ANTHROPIC_BASE_URL",
                 "CLAUDE_CODE_OAUTH_TOKEN",
                 "CLAUDE_CODE_USE_BEDROCK",
                 "CLAUDE_CODE_USE_VERTEX",
@@ -762,6 +760,50 @@ fn follow_live(store: &mut Store, live: Option<&Live>) -> bool {
     changed
 }
 
+// Compare only the credential generation, not unrelated profile/MCP metadata.
+fn same_oauth_generation(a: &Value, b: &Value) -> bool {
+    ["accessToken", "refreshToken", "expiresAt"]
+        .iter()
+        .all(|key| a[*key] == b[*key])
+}
+
+/// Only adopt an observed change for this account. A different live login must
+/// never replace the account being refreshed, even if its expiry is later.
+fn changed_live_oauth(
+    account: &Stored,
+    before: Option<&Live>,
+    after: Option<&Live>,
+) -> Option<Value> {
+    let after = after?;
+    let oauth = after.oauth()?;
+    let named = after.account.as_ref().and_then(identity)?;
+    let expected = identity(&account.account).or_else(|| {
+        let before = before?;
+        let previous = before.oauth()?;
+        let shares_token = ["accessToken", "refreshToken"].iter().any(|key| {
+            text(&previous[*key]).is_some() && text(&previous[*key]) == text(&account.oauth[*key])
+        });
+        shares_token
+            .then(|| before.account.as_ref().and_then(identity))
+            .flatten()
+    })?;
+    if named != expected {
+        return None;
+    }
+    if let Some(previous) = before.and_then(Live::oauth) {
+        if same_oauth_generation(previous, oauth) {
+            return None;
+        }
+    } else if same_oauth_generation(&account.oauth, oauth)
+        || expires_at(oauth) < expires_at(&account.oauth)
+    {
+        return None;
+    }
+    Some(oauth.clone())
+}
+
+const CREDENTIALS_CHANGED: &str = "Claude credentials changed during refresh; retry usage";
+
 impl Application {
     fn claude_store_path(&self) -> PathBuf {
         self.paths.data_dir.join("claude-accounts.json")
@@ -1159,7 +1201,7 @@ impl Application {
         let location = self.claude_location();
         // Adopt newer external credentials when accessible, but the pool remains
         // usable even when the live login is locked, missing or unreadable.
-        let live = read_live(&location).await.ok().flatten();
+        let mut live = read_live(&location).await.ok().flatten();
         let account = {
             let _lock = self.claude.lock.lock().await;
             let mut store = self.claude_load()?;
@@ -1190,86 +1232,116 @@ impl Application {
         let mut oauth = account.oauth.clone();
         let mut profiled = None;
         let mut rate_limited = false;
-        let result = async {
-            let refresh = |oauth: &Value| {
-                let network = network.clone();
-                let token = text(&oauth["refreshToken"]);
-                async move {
-                    let token = token.ok_or(SIGN_IN_EXPIRED)?;
-                    network.refresh(&token, proxy).await
-                }
-            };
-            if expires_at(&oauth) != 0 && expires_at(&oauth) <= (now_unix_seconds() + 60) * 1000 {
-                let tokens = refresh(&oauth).await?;
-                apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
-            }
-            // An account imported without its name is probed first, through
-            // its own proxy.
-            if identity(&account.account).is_none() {
-                let token = text(&oauth["accessToken"]).unwrap_or_default();
-                let found = match network.profile(&token, proxy).await {
-                    Err(error) if error == SIGN_IN_EXPIRED => {
-                        let tokens = refresh(&oauth).await?;
-                        apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
-                        let token = text(&oauth["accessToken"]).unwrap_or_default();
-                        network.profile(&token, proxy).await
+        let mut reloads = 0;
+        let result = loop {
+            let result = async {
+                let refresh = |oauth: &Value| {
+                    let network = network.clone();
+                    let token = text(&oauth["refreshToken"]);
+                    let location = &location;
+                    let account = &account;
+                    let before = live.as_ref();
+                    async move {
+                        // Another app may have renewed while our usage request ran.
+                        let latest = read_live(location).await.ok().flatten();
+                        if changed_live_oauth(account, before, latest.as_ref()).is_some() {
+                            return Err(CREDENTIALS_CHANGED.into());
+                        }
+                        let token = token.ok_or(SIGN_IN_EXPIRED)?;
+                        network.refresh(&token, proxy).await
                     }
-                    found => found,
-                }?;
-                let (named, subscription, tier) = profile_account(Some(&found), &Value::Null);
-                if identity(&named).is_none() {
-                    return Err("Claude did not report the account".into());
+                };
+                if expires_at(&oauth) != 0 && expires_at(&oauth) <= (now_unix_seconds() + 60) * 1000
+                {
+                    let tokens = refresh(&oauth).await?;
+                    apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                 }
-                if let Some(subscription) = subscription {
-                    oauth["subscriptionType"] = subscription.into();
-                }
-                if let Some(tier) = tier {
-                    oauth["rateLimitTier"] = tier.into();
-                }
-                profiled = Some(named);
-            }
-            let token = text(&oauth["accessToken"]).unwrap_or_default();
-            let (mut status, mut body) = network.usage(&token, proxy).await?;
-            if status == 401 {
-                let tokens = refresh(&oauth).await?;
-                apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
-                let token = text(&oauth["accessToken"]).unwrap_or_default();
-                (status, body) = network.usage(&token, proxy).await?;
-            }
-            // An account added without its profile learns its plan here,
-            // through its own proxy.
-            if (200..=299).contains(&status)
-                && profiled.is_none()
-                && text(&oauth["subscriptionType"]).is_none()
-            {
-                if let Ok(found) = network.profile(&token, proxy).await {
+                // An account imported without its name is probed first, through
+                // its own proxy.
+                if identity(&account.account).is_none() {
+                    let token = text(&oauth["accessToken"]).unwrap_or_default();
+                    let found = match network.profile(&token, proxy).await {
+                        Err(error) if error == SIGN_IN_EXPIRED => {
+                            let tokens = refresh(&oauth).await?;
+                            apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
+                            let token = text(&oauth["accessToken"]).unwrap_or_default();
+                            network.profile(&token, proxy).await
+                        }
+                        found => found,
+                    }?;
                     let (named, subscription, tier) = profile_account(Some(&found), &Value::Null);
-                    if identity(&named) == identity(&account.account) {
-                        if let Some(subscription) = subscription {
-                            oauth["subscriptionType"] = subscription.into();
+                    if identity(&named).is_none() {
+                        return Err("Claude did not report the account".into());
+                    }
+                    if let Some(subscription) = subscription {
+                        oauth["subscriptionType"] = subscription.into();
+                    }
+                    if let Some(tier) = tier {
+                        oauth["rateLimitTier"] = tier.into();
+                    }
+                    profiled = Some(named);
+                }
+                let token = text(&oauth["accessToken"]).unwrap_or_default();
+                let (mut status, mut body) = network.usage(&token, proxy).await?;
+                if status == 401 {
+                    let tokens = refresh(&oauth).await?;
+                    apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
+                    let token = text(&oauth["accessToken"]).unwrap_or_default();
+                    (status, body) = network.usage(&token, proxy).await?;
+                }
+                // An account added without its profile learns its plan here,
+                // through its own proxy.
+                if (200..=299).contains(&status)
+                    && profiled.is_none()
+                    && text(&oauth["subscriptionType"]).is_none()
+                {
+                    let token = text(&oauth["accessToken"]).unwrap_or_default();
+                    if let Ok(found) = network.profile(&token, proxy).await {
+                        let (named, subscription, tier) =
+                            profile_account(Some(&found), &Value::Null);
+                        if identity(&named) == identity(&account.account) {
+                            if let Some(subscription) = subscription {
+                                oauth["subscriptionType"] = subscription.into();
+                            }
+                            if let Some(tier) = tier {
+                                oauth["rateLimitTier"] = tier.into();
+                            }
+                            profiled = Some(named);
                         }
-                        if let Some(tier) = tier {
-                            oauth["rateLimitTier"] = tier.into();
-                        }
-                        profiled = Some(named);
+                    }
+                }
+                rate_limited = status == 429;
+                match status {
+                    200..=299 => usage_snapshot(&body, plan(&oauth), now_unix_seconds()),
+                    401 => Err(SIGN_IN_EXPIRED.to_string()),
+                    _ => {
+                        let message = body["error"]["message"].as_str().unwrap_or_default();
+                        Err(
+                            format!("Claude usage request failed: HTTP {status} {message}")
+                                .trim()
+                                .to_owned(),
+                        )
                     }
                 }
             }
-            rate_limited = status == 429;
-            match status {
-                200..=299 => usage_snapshot(&body, plan(&oauth), now_unix_seconds()),
-                401 => Err(SIGN_IN_EXPIRED.to_string()),
-                _ => {
-                    let message = body["error"]["message"].as_str().unwrap_or_default();
-                    Err(
-                        format!("Claude usage request failed: HTTP {status} {message}")
-                            .trim()
-                            .to_owned(),
-                    )
+            .await;
+            // Check on success AND failure: another app may win a rotation
+            // while our refresh is in flight. Never overwrite that generation
+            // with our response. Retry the read with the adopted credentials once.
+            let latest = read_live(&location).await.ok().flatten();
+            if let Some(updated) = changed_live_oauth(&account, live.as_ref(), latest.as_ref()) {
+                oauth = updated;
+                live = latest;
+                profiled = None;
+                rate_limited = false;
+                if reloads == 0 {
+                    reloads += 1;
+                    continue;
                 }
+                break Err(CREDENTIALS_CHANGED.to_owned());
             }
-        }
-        .await;
+            break result;
+        };
         let refreshed = Some(oauth).filter(|oauth| *oauth != account.oauth);
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
@@ -1463,10 +1535,20 @@ mod tests {
         usage: Mutex<Vec<(u16, Value)>>,
         refreshed: Mutex<Vec<String>>,
         profile_proxies: Mutex<Vec<String>>,
+        usage_tokens: Mutex<Vec<String>>,
+        usage_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+        refresh_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+        refresh_error: Mutex<Option<String>>,
     }
     impl Network for Fake {
-        fn usage<'a>(&'a self, _: &'a str, _: &'a str) -> Response<'a, (u16, Value)> {
+        fn usage<'a>(&'a self, token: &'a str, _: &'a str) -> Response<'a, (u16, Value)> {
             Box::pin(async move {
+                self.usage_tokens.lock().unwrap().push(token.into());
+                let mut hooks = self.usage_hooks.lock().unwrap();
+                if !hooks.is_empty() {
+                    hooks.remove(0)();
+                }
+                drop(hooks);
                 let mut queued = self.usage.lock().unwrap();
                 Ok(if queued.is_empty() {
                     (
@@ -1481,6 +1563,14 @@ mod tests {
         fn refresh<'a>(&'a self, token: &'a str, _: &'a str) -> Response<'a, Value> {
             Box::pin(async move {
                 self.refreshed.lock().unwrap().push(token.into());
+                let mut hooks = self.refresh_hooks.lock().unwrap();
+                if !hooks.is_empty() {
+                    hooks.remove(0)();
+                }
+                drop(hooks);
+                if let Some(error) = self.refresh_error.lock().unwrap().take() {
+                    return Err(error);
+                }
                 Ok(
                     json!({"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":3600}),
                 )
@@ -1817,6 +1907,136 @@ mod tests {
         assert!(fake.refreshed.lock().unwrap().is_empty());
     }
 
+    fn external_update(location: Location, user: &str, access: &str) -> Box<dyn FnOnce() + Send> {
+        let user = user.to_owned();
+        let access = access.to_owned();
+        Box::new(move || {
+            let (mut oauth, account) = login(&user, LATER);
+            oauth["accessToken"] = access.clone().into();
+            oauth["refreshToken"] = format!("{access}-refresh").into();
+            write_json(
+                &location.credentials_file(),
+                &json!({"claudeAiOauth": oauth}),
+            )
+            .unwrap();
+            write_account(&location, &account).unwrap();
+        })
+    }
+
+    #[tokio::test]
+    async fn external_rotation_wins_over_refresh_success_or_failure() {
+        for failed in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (app, location, fake) = waiting_app(&dir);
+            sign_in(&location, "alice", 1);
+            app.claude_import_current().await.unwrap();
+            let id = app.claude_load().unwrap().accounts[0].id.clone();
+            app.claude_release_new_accounts(Some(&id)).await.unwrap();
+            fake.refresh_hooks.lock().unwrap().push(external_update(
+                location.clone(),
+                "alice",
+                "external",
+            ));
+            if failed {
+                *fake.refresh_error.lock().unwrap() = Some(SIGN_IN_EXPIRED.into());
+            }
+            app.claude_refresh_usage(&id).await.unwrap();
+            let stored = app.claude_load().unwrap();
+            assert_eq!(stored.accounts[0].oauth["accessToken"], "external");
+            assert_eq!(stored.accounts[0].oauth["refreshToken"], "external-refresh");
+            assert!(stored.accounts[0].usage_error.is_none());
+            assert_eq!(*fake.refreshed.lock().unwrap(), vec!["alice-refresh"]);
+            assert_eq!(
+                fake.usage_tokens.lock().unwrap().last().unwrap(),
+                "external"
+            );
+            assert_eq!(live_access(&location), "external");
+        }
+    }
+
+    #[tokio::test]
+    async fn external_rotation_during_401_avoids_a_redundant_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        fake.usage_hooks.lock().unwrap().push(external_update(
+            location.clone(),
+            "alice",
+            "external",
+        ));
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert!(fake.refreshed.lock().unwrap().is_empty());
+        assert_eq!(
+            *fake.usage_tokens.lock().unwrap(),
+            vec!["alice-access", "external"]
+        );
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["accessToken"],
+            "external"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_external_changes_are_saved_but_retried_only_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        fake.usage_hooks.lock().unwrap().extend([
+            external_update(location.clone(), "alice", "first"),
+            external_update(location.clone(), "alice", "second"),
+        ]);
+        assert_eq!(
+            app.claude_refresh_usage(&id).await.unwrap_err(),
+            CREDENTIALS_CHANGED
+        );
+        assert_eq!(
+            *fake.usage_tokens.lock().unwrap(),
+            vec!["alice-access", "first"]
+        );
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["accessToken"],
+            "second"
+        );
+        assert_eq!(live_access(&location), "second");
+    }
+
+    #[tokio::test]
+    async fn external_account_switch_does_not_replace_the_refreshed_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", 1);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        fake.refresh_hooks.lock().unwrap().push(external_update(
+            location.clone(),
+            "bob",
+            "bob-new",
+        ));
+        app.claude_refresh_usage(&id).await.unwrap();
+        let stored = app.claude_load().unwrap();
+        assert_eq!(stored.accounts[0].oauth["accessToken"], "fresh-access");
+        assert_eq!(stored.accounts[0].account["accountUuid"], "acct-alice");
+        assert_eq!(live_access(&location), "bob-new");
+    }
+
+    #[test]
+    fn generation_comparison_includes_expiry_but_ignores_metadata() {
+        let (oauth, _) = login("alice", LATER);
+        let mut changed = oauth.clone();
+        changed["subscriptionType"] = "pro".into();
+        assert!(same_oauth_generation(&oauth, &changed));
+        changed["expiresAt"] = (LATER + 1).into();
+        assert!(!same_oauth_generation(&oauth, &changed));
+    }
+
     #[tokio::test]
     async fn a_browser_sign_in_is_stored_without_changing_claude_code() {
         let dir = tempfile::tempdir().unwrap();
@@ -2078,7 +2298,7 @@ mod tests {
             r#"{"apiKeyHelper":"","env":{"ANTHROPIC_BASE_URL":"https://gateway.invalid","ANTHROPIC_AUTH_TOKEN":"","CLAUDE_CODE_USE_BEDROCK":"0","DISABLE_TELEMETRY":"1"}}"#,
         )
         .unwrap();
-        assert_eq!(login_overrides(&location), vec!["ANTHROPIC_BASE_URL"]);
+        assert!(login_overrides(&location).is_empty());
     }
 
     #[test]
