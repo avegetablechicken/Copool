@@ -251,16 +251,24 @@ impl Tunnel {
             let _ = child.wait().await;
         }
         self.hostname = None;
-        if let Some((token, account, id)) = &self.cleanup {
-            api(
-                &reqwest::Client::new(),
-                token,
+        if let Some((token, account, id)) = self.cleanup.take() {
+            // A killed cloudflared leaves its connections registered, and
+            // Cloudflare refuses to delete a tunnel that still has any.
+            let client = reqwest::Client::new();
+            let path = format!("/accounts/{account}/cfd_tunnel/{id}");
+            let _ = api(
+                &client,
+                &token,
                 reqwest::Method::DELETE,
-                &format!("/accounts/{account}/cfd_tunnel/{id}"),
+                &format!("{path}/connections"),
                 None,
             )
-            .await?;
-            self.cleanup = None;
+            .await;
+            // The local tunnel is already gone; a failed remote cleanup must not
+            // keep the proxy from stopping or the next tunnel from starting.
+            if let Err(error) = api(&client, &token, reqwest::Method::DELETE, &path, None).await {
+                self.last_error = Some(error);
+            }
         }
         Ok(())
     }
