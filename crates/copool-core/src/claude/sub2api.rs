@@ -517,17 +517,30 @@ mod tests {
     const AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 
     #[derive(Default)]
-    struct Secrets(Mutex<HashMap<String, String>>);
+    struct Secrets {
+        values: Mutex<HashMap<String, String>>,
+        gets: Mutex<Vec<String>>,
+    }
+    impl Secrets {
+        /// The secret ids read since the last `clear_reads`.
+        fn reads(&self) -> Vec<String> {
+            self.gets.lock().unwrap().clone()
+        }
+        fn clear_reads(&self) {
+            self.gets.lock().unwrap().clear();
+        }
+    }
     impl crate::credentials::SecretStore for Secrets {
         fn get(&self, id: &str) -> Result<Option<String>> {
-            Ok(self.0.lock().unwrap().get(id).cloned())
+            self.gets.lock().unwrap().push(id.into());
+            Ok(self.values.lock().unwrap().get(id).cloned())
         }
         fn set(&self, id: &str, value: &str) -> Result<()> {
-            self.0.lock().unwrap().insert(id.into(), value.into());
+            self.values.lock().unwrap().insert(id.into(), value.into());
             Ok(())
         }
         fn remove(&self, id: &str) -> Result<()> {
-            self.0.lock().unwrap().remove(id);
+            self.values.lock().unwrap().remove(id);
             Ok(())
         }
     }
@@ -594,24 +607,48 @@ mod tests {
             .collect()
     }
     fn open(dir: &std::path::Path) -> (Application, Location) {
+        let (app, location, _) = open_recording(dir);
+        (app, location)
+    }
+    /// `open`, keeping the handle that records secret reads.
+    fn open_recording(dir: &std::path::Path) -> (Application, Location, std::sync::Arc<Secrets>) {
+        let secrets = std::sync::Arc::new(Secrets::default());
         let app = Application::open_with_secrets(
             crate::Paths {
                 data_dir: dir.join("data"),
                 codex_auth: dir.join("codex/auth.json"),
             },
-            std::sync::Arc::new(Secrets::default()),
+            secrets.clone(),
         )
         .unwrap();
         let location = Location::files(dir.join("claude"));
         app.set_claude_location(location.clone());
-        (app, location)
+        (app, location, secrets)
     }
     /// A synced provider, and an imported login as the official account.
     async fn pool(
         dir: &std::path::Path,
     ) -> (Application, Location, String, PathBuf, String, String) {
-        let (app, location) = open(dir);
-        let base = server(std::sync::Arc::new(Mutex::new(vec![]))).await;
+        let (app, location, base, path, card, alice, _, _) = pool_recording(dir).await;
+        (app, location, base, path, card, alice)
+    }
+    /// `pool`, plus the handles showing what it read and requested.
+    #[allow(clippy::type_complexity)]
+    async fn pool_recording(
+        dir: &std::path::Path,
+    ) -> (
+        Application,
+        Location,
+        String,
+        PathBuf,
+        String,
+        String,
+        std::sync::Arc<Secrets>,
+        std::sync::Arc<Mutex<Vec<String>>>,
+    ) {
+        let requests = std::sync::Arc::new(Mutex::new(vec![]));
+        let (app, location, secrets) = open_recording(dir);
+        let base = server(requests.clone()).await;
         let path = source_file(dir, &base, AUTH_TOKEN, "sk-team");
         let saved = app
             .claude_save_sub2api_provider(Provider {
@@ -634,7 +671,51 @@ mod tests {
             .find(|a| a.source_tag.is_none())
             .unwrap()
             .id;
-        (app, location, base, path, saved.card_id(7), alice)
+        (
+            app,
+            location,
+            base,
+            path,
+            saved.card_id(7),
+            alice,
+            secrets,
+            requests,
+        )
+    }
+    /// A second synced provider on its own server, with its request log.
+    async fn add_provider(
+        app: &Application,
+        dir: &std::path::Path,
+        password: &str,
+    ) -> (Provider, std::sync::Arc<Mutex<Vec<String>>>) {
+        let requests = std::sync::Arc::new(Mutex::new(vec![]));
+        let base = server(requests.clone()).await;
+        let path = dir.join("providers/other.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            json!({"env": {BASE_URL: base, AUTH_TOKEN: "sk-other"}}).to_string(),
+        )
+        .unwrap();
+        let saved = app
+            .claude_save_sub2api_provider(Provider {
+                settings: path.to_str().unwrap().into(),
+                username: "other@example.com".into(),
+                password: password.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        app.claude_sync_sub2api().await.unwrap();
+        (saved, requests)
+    }
+    fn logins(requests: &std::sync::Arc<Mutex<Vec<String>>>) -> usize {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|uri| uri.starts_with("/api/v1/auth/login"))
+            .count()
     }
 
     #[tokio::test]
@@ -1007,5 +1088,70 @@ mod tests {
         app.claude_switch_account(&alice).await.unwrap();
         assert!(!main_path(&location).exists());
         assert_eq!(current(&app.claude_accounts().await.unwrap()), [alice]);
+    }
+
+    #[tokio::test]
+    async fn recurring_refresh_leaves_providers_alone_while_the_login_is_in_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, _, _card, alice, secrets, requests) = pool_recording(dir.path()).await;
+        let provider = app.claude_load().unwrap().providers[0].id.clone();
+        assert_eq!(current(&app.claude_accounts().await.unwrap()), [alice]);
+        secrets.clear_reads();
+        requests.lock().unwrap().clear();
+        app.claude_refresh_recurring(0).await.unwrap();
+        // No provider is in use, so no password is read and none is contacted.
+        assert!(secrets.reads().is_empty());
+        assert!(requests.lock().unwrap().is_empty());
+        // The manual path still reads the password and refreshes the provider.
+        app.claude_refresh(None).await.unwrap();
+        assert_eq!(secrets.reads(), [password_secret(&provider)]);
+        assert_eq!(logins(&requests), 1);
+    }
+
+    #[tokio::test]
+    async fn recurring_refresh_touches_only_the_provider_in_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, _, card, _, secrets, requests) = pool_recording(dir.path()).await;
+        let (_, other_requests) = add_provider(&app, dir.path(), "other-secret").await;
+        let first = app.claude_load().unwrap().providers[0].id.clone();
+        // A second card of the in-use provider, on its own egress route.
+        let mut store = app.claude_load().unwrap();
+        let extra = store.providers[0].card_id(9);
+        let mut account = store.providers[0].cached_accounts[0].clone();
+        account.id = 9;
+        store.providers[0].imported_account_ids.push(9);
+        store.providers[0].cached_accounts.push(account);
+        app.claude_save(&store).unwrap();
+        app.claude_save_account_proxy(&extra, "direct://")
+            .await
+            .unwrap();
+        app.claude_switch_account(&card).await.unwrap();
+        secrets.clear_reads();
+        requests.lock().unwrap().clear();
+        other_requests.lock().unwrap().clear();
+        // An intermediate tick refreshes every card of the in-use provider:
+        // both routes are contacted, and the other provider stays untouched.
+        app.claude_refresh_recurring(1).await.unwrap();
+        assert_eq!(secrets.reads(), [password_secret(&first)]);
+        assert_eq!(logins(&requests), 2);
+        assert!(other_requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn manual_refresh_still_reads_every_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, _, _, _, secrets, requests) = pool_recording(dir.path()).await;
+        let (other, other_requests) = add_provider(&app, dir.path(), "other-secret").await;
+        let first = app.claude_load().unwrap().providers[0].id.clone();
+        secrets.clear_reads();
+        requests.lock().unwrap().clear();
+        other_requests.lock().unwrap().clear();
+        app.claude_refresh(None).await.unwrap();
+        let mut reads = secrets.reads();
+        reads.sort();
+        let mut expected = vec![password_secret(&first), password_secret(&other.id)];
+        expected.sort();
+        assert_eq!(reads, expected);
+        assert_eq!((logins(&requests), logins(&other_requests)), (1, 1));
     }
 }

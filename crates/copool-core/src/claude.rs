@@ -1754,8 +1754,18 @@ impl Application {
         }
         Ok(())
     }
-    /// Every account, or only the current one between full refreshes.
+    /// Every account and every provider, or only the ids between full refreshes.
     pub async fn claude_refresh(&self, ids: Option<Vec<String>>) -> Result<()> {
+        self.claude_refresh_scoped(ids.clone(), ids.as_deref())
+            .await
+    }
+    /// Accounts by `ids`, provider cards by their own set: `None` refreshes
+    /// every provider, an empty slice none at all.
+    async fn claude_refresh_scoped(
+        &self,
+        ids: Option<Vec<String>>,
+        cards: Option<&[String]>,
+    ) -> Result<()> {
         let accounts = self.claude_accounts().await?;
         let refreshes = accounts
             .iter()
@@ -1768,7 +1778,7 @@ impl Application {
             });
         let (accounts, providers) = tokio::join!(
             futures_util::future::join_all(refreshes),
-            self.claude_refresh_sub2api_cards(ids.as_deref())
+            self.claude_refresh_sub2api_cards(cards)
         );
         let errors: Vec<String> = accounts
             .into_iter()
@@ -1782,13 +1792,21 @@ impl Application {
             Err(errors.join("\n"))
         }
     }
+    /// Like the Codex pool, an automatic tick touches only the provider in use:
+    /// its cards refresh on every tick, and other providers wait for an
+    /// explicit refresh.
     pub async fn claude_refresh_recurring(&self, tick: u64) -> Result<()> {
         let accounts = self.claude_accounts().await?;
         if accounts.is_empty() {
             return Ok(());
         }
-        self.claude_refresh(crate::refresh_policy::recurring_ids(tick, &accounts))
-            .await
+        let ids = crate::refresh_policy::recurring_ids(tick, &accounts);
+        let cards: Vec<String> = accounts
+            .iter()
+            .filter(|a| a.is_current && sub2api::is_card(&a.id))
+            .map(|a| a.id.clone())
+            .collect();
+        self.claude_refresh_scoped(ids, Some(&cards)).await
     }
     /// The Codex pool's automatic switch rules, over the Claude accounts.
     async fn claude_auto_switch_if_needed(&self) -> Result<Option<String>> {

@@ -218,3 +218,9 @@ macOS 上 366 项核心测试、Rust 格式及 diff 检查通过，新增回归�
 2026-10-14（令牌过期时间健壮性）：过期时间仅在 1970 年后至 9999-12-31 之间时显示（核心 `displayed_expiry` 与前端 `tokenExpiry` 同一范围），排除 0/负值、把毫秒当作秒等异常声明；此前超出 JS Date 范围的值会令悬停时间格式化抛错并中断整个账号列表渲染。Codex JWT `exp` 接受小数（RFC 7519 NumericDate），同时用于判断是否需要预先续期。Codex 已轮换 auth.json 中的登录而 Copool 尚未采纳时，当前账号卡片显示正在生效的那份令牌的过期时间。
 
 验证：371 项核心测试、122 项前端测试、独立 daemon 检查通过；新增回归覆盖小数/0/负数/毫秒/字符串/缺失的 `exp`、前端非法值不渲染且不抛错，以及仅采纳更新的 auth.json 登录。未在 Tauri GUI 中实机查看，未打包。
+
+2026-10-14（Claude Sub2api 自动刷新只读当前 Provider）：Claude 池的后台刷新不再刷新所有 Provider。此前启动的首个 tick 与每第 6 个 tick 是全池 tick，会经 `claude_refresh(None)` 刷新每个 Provider 的卡片，即使官方登录在用、没有任何 Provider 被选中，也会读取（并请求授权）Sub2api 管理员密码。现在自动路径与 Codex 池一致，只刷新“在用 Provider”——`settings_provider` 已设置且主设置非官方时 UI 上被标记为当前的卡片所属 Provider——并刷新其全部已导入卡片；当前为官方登录时，自动刷新不读任何 Provider 密码，也不联系任何 Provider。启动步骤仍只保留 Claude Code 凭据的一次互动授权（`claude_authorize_at_startup`，读取策略不变）。手动全量刷新（`claude_refresh(None)`）、单卡刷新与显式同步保持原语义，仍读取所有 Provider 的密码。
+
+行为变化：非在用 Provider 的卡片保留上次快照，直到手动刷新或同步；在用 Provider 的每个 tick 都刷新其全部卡片（此前中间 tick 只刷新当前卡片）；不经 Copool 把 Claude Code 设置指向某个 Provider 时 `settings_provider` 为空，该 Provider 不自动刷新。
+
+验证：`python3 scripts/test_rust.py` 通过（390 项核心测试、123 项前端测试、Rust 格式、UI 语法及独立 daemon 检查）。新增回归覆盖：官方登录在用时后台 tick 不读密码且不联系 Provider，随后手动刷新仍读取密码并命中管理端登录；切到 Provider 的卡片后中间 tick 只读该 Provider 的密码、刷新其全部卡片（两条出口各一次登录），另一 Provider 保持零请求；手动全量刷新读取并刷新两个 Provider。测试使用临时目录、合成凭据与本机模拟服务，未访问真实钥匙串；真实弹窗次数、GUI 与 Windows/Linux 未实机验证，未打包或安装。
