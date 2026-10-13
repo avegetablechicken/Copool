@@ -873,6 +873,7 @@ impl Application {
         let _lock = self.state.store_lock.lock().await;
         let mut saved = store::load_store_from_path(&self.paths.store())?;
         let current = saved.extra.get("currentAccountId").and_then(Value::as_str) == Some(id);
+        let mut live_write = None;
         if let Some(target) = saved.accounts.iter_mut().find(|a| a.id == id) {
             target.updated_at = now_unix_seconds();
             target
@@ -905,13 +906,15 @@ impl Application {
                     // made outside Copool to the stored selection.
                     if current
                         && auth != auth_json
-                        && self.current_auth()?.as_ref().and_then(|v| identity(v).ok())
+                        && self
+                            .current_auth()
+                            .ok()
+                            .flatten()
+                            .as_ref()
+                            .and_then(|v| identity(v).ok())
                             == identity(auth).ok()
                     {
-                        write_json(
-                            &self.paths.codex_auth,
-                            &crate::auth::normalized_auth_for_write(auth.clone())?,
-                        )?;
+                        live_write = Some(auth);
                     }
                 }
                 Err(error) => {
@@ -938,6 +941,13 @@ impl Application {
                 }
             }
             self.persist_accounts(&saved)?;
+        }
+        // Written only once the store keeps the rotated tokens.
+        if let Some(auth) = live_write {
+            write_json(
+                &self.paths.codex_auth,
+                &crate::auth::normalized_auth_for_write(auth.clone())?,
+            )?;
         }
         result.map(|_| ())
     }
