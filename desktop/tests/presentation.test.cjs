@@ -300,3 +300,21 @@ test("token expiry shows the largest whole unit left, or expired", () => {
   assert.equal(left(6 * 86400, "zh-Hans"), "6天");
   assert.equal(left(5 * 3600, "zh_CN"), "5小时");
 });
+test("A provider's cards gather where its first card stands", () => {
+  // A provider with a single card (q) keeps an ordinary card.
+  const cards = ["a", "p1", "b", "q1", "p2"].map((id) => ({ id }));
+  const groups = P.providerGroups(cards, (c) =>
+    c.id.length === 2 ? c.id[0] : null,
+  );
+  assert.deepEqual(
+    groups.map((g) => (g.account ? g.account.id : `${g.key}:${g.accounts.map((c) => c.id)}`)),
+    ["a", "p:p1,p2", "b", "q1"],
+  );
+  assert.deepEqual(P.providerGroups([], () => null), []);
+  // Inside a group, by Sub2api account id rather than the usage ranking.
+  const ranked = ["sub2api-x-12", "sub2api-x-3", "sub2api-x-7"].map((id) => ({ id }));
+  assert.deepEqual(
+    P.providerGroups(ranked, () => "x")[0].accounts.map((c) => c.id),
+    ["sub2api-x-3", "sub2api-x-7", "sub2api-x-12"],
+  );
+});

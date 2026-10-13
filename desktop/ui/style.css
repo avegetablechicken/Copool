@@ -1200,6 +1200,24 @@ html:not(.macos) .select-menu {
   font-size: 11px;
 }
 
+/* A Sub2api provider's cards in one block, its controls where a single
+   account's card has them; the accounts are close insets without any. */
+.account-group-members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.account-member {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--label) 4%, transparent);
+}
+
 /* Collapsed: one row per account in a single flush block. */
 /* Fixed columns keep the values aligned from row to row. */
 .account-row {
@@ -1212,8 +1230,16 @@ html:not(.macos) .select-menu {
   border-radius: 5px;
 }
 
-.account-row + .account-row {
+.account-row + .account-row,
+.account-row + .account-row-group,
+.account-row-group + .account-row,
+.account-row-group + .account-row-group {
   box-shadow: 0 -0.5px 0 var(--separator);
+}
+
+/* A provider's rows stay together, without separators between them. */
+.account-row-group .account-row + .account-row {
+  box-shadow: none;
 }
 
 .account-row-name {

@@ -8,6 +8,8 @@ const P = window.CopoolPresentation;
 let collapsed = false;
 let selectedPage = "accounts";
 let editingAccount = null;
+// The cards the proxy dialog saves to: one, or all of a provider's.
+let editingIds = [];
 let switchingId = null;
 let accountsCache = [];
 let proxyCache = null;
@@ -25,6 +27,7 @@ const CLAUDE_COMMANDS = {
   delete_account: "claude_delete_account",
   save_account_proxy: "claude_save_account_proxy",
   refresh_usage: "claude_refresh_usage",
+  refresh_provider: "claude_refresh_provider",
   switch_account: "claude_switch_account",
   smart_switch: "claude_smart_switch",
   begin_login: "begin_claude_login",
@@ -386,51 +389,69 @@ document.addEventListener("contextmenu", (event) => {
     event.preventDefault();
 });
 let renderedAccountsState;
+/// The provider of a Sub2api card, from its id (`sub2api-<provider>-<n>`,
+/// `claude-sub2api-<provider>-<n>`): cards synced since the provider list
+/// was last read still group with their provider.
+function providerKey(account) {
+  if (account.sourceTag !== "SUB2API") return null;
+  return /^(?:claude-)?sub2api-(.+)-\d+$/.exec(account.id)?.[1] ?? null;
+}
+/// The saved Sub2api provider a card belongs to, if any.
+function accountProvider(account) {
+  const key = providerKey(account);
+  if (key === null) return null;
+  return pool === "claude"
+    ? claudeProvidersSaved.find((p) => p.id === key) || null
+    : providerController.persisted.find(
+        (p) => p.providerID.trim().toLowerCase() === key.toLowerCase(),
+      ) || null;
+}
+function providerTitle(account) {
+  const provider = accountProvider(account);
+  return (
+    (pool === "claude" ? provider?.name : provider?.providerID) ||
+    providerKey(account) ||
+    "Sub2api"
+  );
+}
 function accountUsesExplicitProxy(account) {
   let proxy = (account.proxyUrl || "").trim();
-  if (!proxy && account.sourceTag === "SUB2API") {
-    const providers = pool === "claude"
-      ? claudeProvidersSaved
-      : providerController.persisted;
-    const provider = providers.find((provider) =>
-      (provider.cachedAccounts || []).some((cached) =>
-        account.id === (pool === "claude"
-          ? `claude-sub2api-${provider.id}-${cached.id}`
-          : `sub2api-${provider.providerID}-${cached.id}`),
-      ),
-    );
-    proxy = (provider?.proxyURL || "").trim();
-  }
+  if (!proxy && account.sourceTag === "SUB2API")
+    proxy = (accountProvider(account)?.proxyURL || "").trim();
   if (account.sourceTag !== "SUB2API")
     proxy ||= (preferences?.accountProxyUrl || "").trim();
   return !!proxy && proxy !== "direct://";
 }
-/// Proxy and removal, in the card's top row as in the SwiftUI card.
-function accountManagement(account) {
+/// Proxy and removal, in the card's top row as in the SwiftUI card. A
+/// Sub2api provider's group sets the proxy of, and removes, all its cards at
+/// once; its accounts have neither of their own.
+function accountManagement(account, group = null, title = null) {
   const actions = el("span", "block-aside");
+  const cards = group ? group.accounts : [account];
+  const name = group ? title : account.label;
   const proxyButton = button("", "network", "icon-btn card-proxy", () =>
-    openAccountProxy(account),
+    group ? openProviderProxy(group, title) : openAccountProxy(account),
   );
-  proxyButton.classList.toggle("proxy-muted", !accountUsesExplicitProxy(account));
+  proxyButton.classList.toggle("proxy-muted", !cards.some(accountUsesExplicitProxy));
   proxyButton.title = tr("accounts.proxy.title");
   proxyButton.setAttribute(
     "aria-label",
-    `${tr("accounts.proxy.title")} ${account.email || account.label}`,
+    `${tr("accounts.proxy.title")} ${group ? title : account.email || account.label}`,
   );
   const remove = button("", "trash", "icon-btn destructive", async () => {
     if (
       await confirmAction(
         tr("common.remove"),
         extra(
-          `Remove ${account.label} from the account pool?`,
-          `从账号池移除 ${account.label}？`,
+          `Remove ${name} from the account pool?`,
+          `从账号池移除 ${name}？`,
         ),
         tr("common.remove"),
         true,
       )
     )
       await action(
-        () => accountsController.removeAccount(account.id),
+        () => accountsController.removeAccounts(cards.map((a) => a.id)),
         tr(
           account.sourceTag === "SUB2API"
             ? "accounts.notice.sub2api_removed"
@@ -439,13 +460,14 @@ function accountManagement(account) {
       );
   });
   remove.title = tr("common.remove");
-  remove.setAttribute("aria-label", `${tr("common.remove")} ${account.label}`);
+  remove.setAttribute("aria-label", `${tr("common.remove")} ${name}`);
   actions.append(proxyButton, remove);
   return actions;
 }
 /// Usage warning, refresh and switch, at the card's bottom right as in the
-/// SwiftUI card, clear of long account names.
-function accountControls(account, full, view) {
+/// SwiftUI card, clear of long account names. A provider's card keeps only
+/// its warning: its group refreshes and switches.
+function accountControls(account, full, view, grouped = false) {
   const actions = el("span", "block-aside");
   const reauthenticate = P.needsReauthentication(
     account,
@@ -478,6 +500,7 @@ function accountControls(account, full, view) {
     actions.append(signInAgain);
     return actions;
   }
+  if (grouped) return actions;
   const refresh = button("", "refresh", "icon-btn card-refresh", () =>
     refreshUsage(account.id),
   );
@@ -503,12 +526,13 @@ function planTag(account, view) {
   const known = P.clean(account.usage?.planType) || P.clean(account.planType);
   return pool === "claude" && !known ? "" : el("span", "tag plan", view.plan);
 }
-function accountTags(account, view) {
+function accountTags(account, view, grouped = false) {
   const tags = el("span", "account-tags");
   tags.append(planTag(account, view));
-  if (view.workspaceTag)
+  // A provider's group carries its SUB2API and CURRENT tags once.
+  if (view.workspaceTag && !grouped)
     tags.append(el("span", "tag muted", view.workspaceTag));
-  if (account.isCurrent)
+  if (account.isCurrent && !grouped)
     tags.append(el("span", "tag good", tr("accounts.card.current")));
   // Imported but not yet requested upstream: refreshing the card sends the
   // first request, after its proxy is set.
@@ -534,6 +558,186 @@ function tokenLabel(account) {
     ? tr("accounts.card.token_expired")
     : tr("accounts.card.token_expires_format", expiry.remaining);
 }
+/// Refresh and switch for a whole Sub2api provider, which its cards share:
+/// switching to any of them selects the provider.
+function providerControls(group, title, current) {
+  const actions = el("span", "block-aside");
+  const ids = group.accounts.map((a) => a.id);
+  const refresh = button("", "refresh", "icon-btn card-refresh", () =>
+    refreshProvider(group),
+  );
+  refresh.title = tr("common.refresh_usage");
+  refresh.setAttribute("aria-label", `${refresh.title} ${title}`);
+  refresh.classList.toggle(
+    "spinning",
+    ids.some(
+      (id) =>
+        accountsController.refreshingIds.has(id) ||
+        accountsController.remoteRefreshingIds.has(id),
+    ),
+  );
+  actions.append(refresh);
+  if (!current) {
+    const target = switchTarget(group);
+    const control = button("", "switch", "icon-btn card-switch", () =>
+      switchAccount(target),
+    );
+    control.dataset.id = target.id;
+    control.dataset.available = String(
+      group.accounts.some((a) => a.available !== false),
+    );
+    control.title = tr("accounts.card.switch_to_this");
+    control.setAttribute("aria-label", `${control.title} ${title}`);
+    actions.append(control);
+  }
+  return actions;
+}
+/// The card a provider's switch goes through: any active one will do.
+function switchTarget(group) {
+  return group.accounts.find((a) => a.available !== false) || group.accounts[0];
+}
+function accountCard(account, grouped = false) {
+  const full = account.email || account.accountId || account.label;
+  const view = P.card(account, collapsed, usageMode(), (epoch) =>
+    P.formatReset(epoch, locale),
+  );
+  if (collapsed) {
+    const interaction = P.collapsedInteraction({
+      collapsed,
+      current: account.isCurrent,
+      switching: switchingId === account.id,
+      hovered: false,
+    });
+    const row = el(
+      "div",
+      `account-row${!grouped && account.isCurrent ? " current running" : ""}`,
+    );
+    row.classList.toggle("can-reveal", !grouped && interaction.canReveal);
+    row.classList.toggle("revealed", !grouped && interaction.visible);
+    row.dataset.plan = view.plan;
+    const name = el("span", "account-row-name", view.name);
+    name.title = full;
+    row.append(
+      el("span", grouped ? "" : "dot"),
+      name,
+      planTag(account, view) || el("span", "tag plan placeholder"),
+      compactUsage(view.compact[0], "5h"),
+      compactUsage(view.compact[1], "1w"),
+      accountControls(account, full, view, grouped),
+    );
+    return row;
+  }
+  const card = el(
+    grouped ? "div" : "section",
+    grouped
+      ? "account-member"
+      : `block account${account.isCurrent ? " current" : ""}`,
+  );
+  card.dataset.plan = view.plan;
+  const head = el("div", "block-head");
+  // The CURRENT tag alone marks the active account, as in the SwiftUI card.
+  const name = el("div", "account-name");
+  const title = el("span", "block-title", full);
+  title.title = full;
+  name.append(title);
+  const tags = accountTags(account, view, grouped);
+  head.append(tags, ...(grouped ? [] : [accountManagement(account)]));
+  // A negative reset count is unavailable, as in AccountCardPresentation.
+  // Sub2api cards keep their credits, which their usage reports.
+  const credits =
+    view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
+  const count = account.usage?.remainingResetCount;
+  const resets = count != null && count >= 0 ? count : null;
+  const footer = el("div", "account-footer");
+  const footerText = el(
+    "span",
+    "account-footer-text",
+    `${tr("accounts.card.credits_format", credits)} · ${tr(
+      resets !== null
+        ? "accounts.card.remaining_resets_format"
+        : "accounts.card.resets_unavailable_format",
+      resets ?? "--",
+    )}`,
+  );
+  const token = tokenLabel(account);
+  if (token) {
+    const expiry = el("span", "account-token", token);
+    expiry.title = tr(
+      "accounts.card.token_expires.help",
+      P.formatReset(account.tokenExpiresAt, locale),
+    );
+    footerText.append(" · ", expiry);
+  }
+  footer.append(footerText, accountControls(account, full, view, grouped));
+  card.append(
+    // A provider's account without a plan tag has no tag row to show.
+    ...(grouped && !tags.childElementCount ? [] : [head]),
+    name,
+    usageWindow(
+      view.fiveHour,
+      tr("accounts.window.five_hour"),
+      "five-hour",
+    ),
+    usageWindow(
+      view.oneWeek,
+      tr("accounts.window.one_week"),
+      "one-week",
+    ),
+    footer,
+  );
+  return card;
+}
+/// A Sub2api provider's cards close together in one card, which shows once
+/// whether the provider is in use, with its controls where a single
+/// account's card has them: proxy and removal at the top right, refresh and
+/// switch at the bottom right.
+function providerGroup(group) {
+  const title = providerTitle(group.accounts[0]);
+  const source = el("span", "tag muted", P.clean(group.accounts[0].sourceTag) || "SUB2API");
+  // A provider's cards are current together.
+  const current = group.accounts.some((a) => a.isCurrent);
+  const members = group.accounts.map((account) => accountCard(account, true));
+  if (collapsed) {
+    // No head row: the first account's row carries the provider's dot and
+    // its refresh and switch, as a single account's row does.
+    const first = members[0];
+    const target = switchTarget(group);
+    const interaction = P.collapsedInteraction({
+      collapsed,
+      current,
+      switching: switchingId === target.id,
+      hovered: false,
+    });
+    first.classList.toggle("current", current);
+    first.classList.toggle("running", current);
+    first.classList.toggle("can-reveal", interaction.canReveal);
+    first.classList.toggle("revealed", interaction.visible);
+    first.firstElementChild.replaceWith(el("span", "dot"));
+    first.lastElementChild.replaceWith(providerControls(group, title, current));
+    const wrapper = el("div", "account-row-group");
+    wrapper.append(...members);
+    return wrapper;
+  }
+  const block = el(
+    "section",
+    `block account account-group${current ? " current" : ""}`,
+  );
+  const head = el("div", "block-head");
+  const name = el("span", "block-title", title);
+  name.title = title;
+  head.append(name, source);
+  if (current) head.append(el("span", "tag good", tr("accounts.card.current")));
+  head.append(accountManagement(group.accounts[0], group, title));
+  const list = el("div", "account-group-members");
+  list.append(...members);
+  const footer = el("div", "account-footer");
+  footer.append(
+    el("span", "account-footer-text"),
+    providerControls(group, title, current),
+  );
+  block.append(head, list, footer);
+  return block;
+}
 function renderAccounts(accounts) {
   const renderState = [
     accounts,
@@ -543,6 +747,8 @@ function renderAccounts(accounts) {
     locale,
     preferences?.usageDisplay,
     accounts.map(accountUsesExplicitProxy),
+    // Cards group under their provider, which may load after them.
+    accounts.map(providerTitle),
     [...accountsController.refreshingIds],
     [...accountsController.remoteRefreshingIds],
     switchingId,
@@ -574,94 +780,8 @@ function renderAccounts(accounts) {
     list.append(empty);
     return;
   }
-  for (const account of accounts) {
-    const full = account.email || account.accountId || account.label;
-    const view = P.card(account, collapsed, usageMode(), (epoch) =>
-      P.formatReset(epoch, locale),
-    );
-    if (collapsed) {
-      const interaction = P.collapsedInteraction({
-        collapsed,
-        current: account.isCurrent,
-        switching: switchingId === account.id,
-        hovered: false,
-      });
-      const row = el(
-        "div",
-        `account-row${account.isCurrent ? " current running" : ""}`,
-      );
-      row.classList.toggle("can-reveal", interaction.canReveal);
-      row.classList.toggle("revealed", interaction.visible);
-      row.dataset.plan = view.plan;
-      const name = el("span", "account-row-name", view.name);
-      name.title = full;
-      row.append(
-        el("span", "dot"),
-        name,
-        planTag(account, view) || el("span", "tag plan placeholder"),
-        compactUsage(view.compact[0], "5h"),
-        compactUsage(view.compact[1], "1w"),
-        accountControls(account, full, view),
-      );
-      list.append(row);
-      continue;
-    }
-    const card = el(
-      "section",
-      `block account${account.isCurrent ? " current" : ""}`,
-    );
-    card.dataset.plan = view.plan;
-    const head = el("div", "block-head");
-    head.append(accountTags(account, view), accountManagement(account));
-    // The CURRENT tag alone marks the active account, as in the SwiftUI card.
-    const name = el("div", "account-name");
-    const title = el("span", "block-title", full);
-    title.title = full;
-    name.append(title);
-    // A negative reset count is unavailable, as in AccountCardPresentation.
-    // Sub2api cards keep their credits, which their usage reports.
-    const credits =
-      view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
-    const count = account.usage?.remainingResetCount;
-    const resets = count != null && count >= 0 ? count : null;
-    const footer = el("div", "account-footer");
-    const footerText = el(
-      "span",
-      "account-footer-text",
-      `${tr("accounts.card.credits_format", credits)} · ${tr(
-        resets !== null
-          ? "accounts.card.remaining_resets_format"
-          : "accounts.card.resets_unavailable_format",
-        resets ?? "--",
-      )}`,
-    );
-    const token = tokenLabel(account);
-    if (token) {
-      const expiry = el("span", "account-token", token);
-      expiry.title = tr(
-        "accounts.card.token_expires.help",
-        P.formatReset(account.tokenExpiresAt, locale),
-      );
-      footerText.append(" · ", expiry);
-    }
-    footer.append(footerText, accountControls(account, full, view));
-    card.append(
-      head,
-      name,
-      usageWindow(
-        view.fiveHour,
-        tr("accounts.window.five_hour"),
-        "five-hour",
-      ),
-      usageWindow(
-        view.oneWeek,
-        tr("accounts.window.one_week"),
-        "one-week",
-      ),
-      footer,
-    );
-    list.append(card);
-  }
+  for (const entry of P.providerGroups(accounts, providerKey))
+    list.append(entry.account ? accountCard(entry.account) : providerGroup(entry));
   alignMeters(list);
 }
 /// Gives every usage row the widest label and value, so all meters line up.
@@ -1019,8 +1139,9 @@ document.addEventListener("keydown", (event) => {
     $(TOOLBAR_SHORTCUTS[event.key]).click();
   }
 });
-function openAccountProxy(account) {
+function openAccountProxy(account, ids = [account.id]) {
   editingAccount = account;
+  editingIds = ids;
   $("edit-name").textContent =
     account.email || account.accountId || account.label;
   const direct = account.proxyUrl === "direct://";
@@ -1036,6 +1157,19 @@ function openAccountProxy(account) {
   $("edit-dialog").showModal();
   $(direct ? "edit-proxy-enabled" : "edit-proxy").focus();
 }
+/// One proxy for every card of a provider. Cards set apart show a blank
+/// field, which saving would apply to all of them.
+function openProviderProxy(group, title) {
+  const values = new Set(group.accounts.map((a) => a.proxyUrl || ""));
+  openAccountProxy(
+    {
+      label: title,
+      sourceTag: "SUB2API",
+      proxyUrl: values.size === 1 ? [...values][0] : "",
+    },
+    group.accounts.map((a) => a.id),
+  );
+}
 $("edit-proxy-enabled").onchange = () => {
   $("edit-proxy").disabled = !$("edit-proxy-enabled").checked;
 };
@@ -1048,10 +1182,10 @@ $("edit-form").onsubmit = (event) => {
   if (save) save.disabled = true;
   action(async () => {
     try {
-      await accountsController.saveProxy(
-        editingAccount.id,
-        $("edit-proxy-enabled").checked ? $("edit-proxy").value : "direct://",
-      );
+      const value = $("edit-proxy-enabled").checked
+        ? $("edit-proxy").value
+        : "direct://";
+      for (const id of editingIds) await accountsController.saveProxy(id, value);
       $("edit-dialog").close();
     } catch (error) {
       $("edit-error").textContent = String(error);
@@ -1072,6 +1206,16 @@ function refreshUsage(id = null) {
       // As Swift: only a manual refresh of every account reports success.
       if (done && id === null) notice(tr("accounts.notice.usage_refreshed"));
     })
+    .catch((error) => notice(error, true))
+    .finally(() => refreshView().catch((error) => notice(error, true)));
+}
+/// Refreshes every card of one Sub2api provider.
+function refreshProvider(group) {
+  accountsController
+    .refreshProvider(
+      group.key,
+      group.accounts.map((a) => a.id),
+    )
     .catch((error) => notice(error, true))
     .finally(() => refreshView().catch((error) => notice(error, true)));
 }

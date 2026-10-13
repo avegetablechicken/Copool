@@ -743,3 +743,32 @@ test("Authorizing a pending workspace does not turn Add into Cancel", async () =
   await task;
   assert.equal(model.authorizing, null);
 });
+test("A provider refresh locks only its cards and refreshes them in one call", async () => {
+  const gate = deferred();
+  const { model, db } = fixture([account("a"), account("p1"), account("p2")], [], {
+    refresh_provider: () => gate.promise,
+  });
+  const running = model.refreshProvider("team", ["p1", "p2"]);
+  assert.deepEqual([...model.refreshingIds], ["p1", "p2"]);
+  // The provider's cards are busy; another account is not.
+  assert.equal(await model.refreshProvider("team", ["p2"]), false);
+  assert.equal(model.refreshingIds.has("a"), false);
+  gate.resolve();
+  assert.equal(await running, true);
+  assert.equal(model.refreshingIds.size, 0);
+  assert.deepEqual(
+    db.calls.filter(([command]) => command === "refresh_provider"),
+    [["refresh_provider", { id: "team", sync: false }]],
+  );
+});
+test("A provider's cards are removed together with one reload", async () => {
+  const { model, db } = fixture([account("a"), account("p1"), account("p2")], [], {
+    delete_account: (args, db) => {
+      db.accounts = db.accounts.filter((a) => a.id !== args.id);
+    },
+  });
+  await model.removeAccounts(["p1", "p2"]);
+  assert.deepEqual(model.visible.map((a) => a.id), ["a"]);
+  assert.equal(db.calls.filter(([command]) => command === "accounts").length, 1);
+  assert.equal(db.mutations, 1);
+});

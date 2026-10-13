@@ -284,6 +284,10 @@ async fn claude_remove_sub2api_provider(app: State<'_, App>, id: String) -> Resu
     app.claude_remove_sub2api_provider(&id).await
 }
 #[tauri::command]
+async fn claude_refresh_provider(app: State<'_, App>, id: String) -> Result<(), String> {
+    app.claude_refresh_sub2api_provider(&id).await
+}
+#[tauri::command]
 async fn claude_sync_sub2api(app: State<'_, App>) -> Result<usize, String> {
     app.claude_sync_sub2api().await
 }
@@ -660,6 +664,7 @@ fn main() {
             claude_sub2api_providers,
             claude_save_sub2api_provider,
             claude_remove_sub2api_provider,
+            claude_refresh_provider,
             pick_settings_file,
             claude_sync_sub2api
         ])

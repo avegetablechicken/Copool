@@ -275,6 +275,11 @@ impl Application {
         }
         Ok(fetched)
     }
+    /// Every card of one provider, in a single pass as the Codex pool's
+    /// `refresh_provider`.
+    pub async fn claude_refresh_sub2api_provider(&self, provider: &str) -> Result<()> {
+        self.claude_refresh_sub2api(provider, None).await
+    }
     /// Imports every active Claude OAuth account of each provider; returns how many.
     pub async fn claude_sync_sub2api(&self) -> Result<usize> {
         let providers = self.claude_load()?.providers;

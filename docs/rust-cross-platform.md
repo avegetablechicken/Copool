@@ -224,3 +224,7 @@ macOS 上 366 项核心测试、Rust 格式及 diff 检查通过，新增回归�
 行为变化：非在用 Provider 的卡片保留上次快照，直到手动刷新或同步；在用 Provider 的每个 tick 都刷新其全部卡片（此前中间 tick 只刷新当前卡片）；不经 Copool 把 Claude Code 设置指向某个 Provider 时 `settings_provider` 为空，该 Provider 不自动刷新。
 
 验证：`python3 scripts/test_rust.py` 通过（390 项核心测试、123 项前端测试、Rust 格式、UI 语法及独立 daemon 检查）。新增回归覆盖：官方登录在用时后台 tick 不读密码且不联系 Provider，随后手动刷新仍读取密码并命中管理端登录；切到 Provider 的卡片后中间 tick 只读该 Provider 的密码、刷新其全部卡片（两条出口各一次登录），另一 Provider 保持零请求；手动全量刷新读取并刷新两个 Provider。测试使用临时目录、合成凭据与本机模拟服务，未访问真实钥匙串；真实弹窗次数、GUI 与 Windows/Linux 未实机验证，未打包或安装。
+
+2026-10-14（同一 Sub2api Provider 的卡片合并显示）：账号页把同一 Provider 的多张卡片收进一个分组，放在该 Provider 第一张卡片原本的位置（`providerGroups`）。只有一张卡片的 Provider 仍按普通卡片显示。组内账号按 Sub2api 账号 id（卡片 id 末尾的数字）升序排列，不按用量排名；分组本身的位置仍取其排名最靠前的卡片。卡片所属 Provider 从卡片 id 解析（`sub2api-<provider>-<n>`、`claude-sub2api-<provider>-<n>`），不依赖可能过期的 Provider 列表缓存；Claude 同步后也会重新读取 Provider 列表。分组标题只显示一次 Provider 名、SUB2API 来源标签和“当前”标签，按钮位置与单个账号卡片一致：代理和移除在右上角，刷新和切换在右下角。移除只能对整组进行，会移除该 Provider 的全部卡片（`removeAccounts`，结束后只重新加载一次）。组内各账号保持普通卡片的结构（标签行、名称、用量、额度和用量错误提示），只是没有自己的 SUB2API 标签、代理、移除、刷新、切换和“当前”；没有套餐标签时不显示空的标签行。折叠模式下没有标题行：同组账号显示为普通折叠行，状态点和刷新、切换按钮只在组内第一行出现，组内各行之间不画分隔线。刷新一次刷新该 Provider 的全部卡片：Codex 用现有的 `refresh_provider`（不同步成员），Claude 用新增的 `claude_refresh_provider`。分组代理会写入每张卡片；各卡片代理一致时预填该值，不一致时为空。分组切换经由组内任一可用卡片完成，核心层本来就按 Provider 切换。这是对原 SwiftUI 卡片布局的有意调整，由用户要求。
+
+验证：`python3 scripts/test_rust.py` 通过（390 项核心测试、128 项前端测试）。新增回归覆盖：分组顺序、Provider 刷新只锁该组卡片且只调用一次、分组代理写入每张卡片。另在 headless Chrome 中用桩数据查看了展开与折叠两种布局。未在 Tauri GUI 中实机查看，未打包。

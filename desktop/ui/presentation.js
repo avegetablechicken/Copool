@@ -468,6 +468,36 @@
         ),
     );
   }
+  /// The cards in display order, each provider's cards gathered where its
+  /// first card stands: `{ account }` alone, `{ key, accounts }` for a
+  /// provider with several. `keyOf` gives a card's provider, or null.
+  function providerGroups(accounts, keyOf) {
+    const entries = [],
+      groups = new Map();
+    for (const account of accounts) {
+      const key = keyOf(account);
+      if (key == null) {
+        entries.push({ account });
+        continue;
+      }
+      let group = groups.get(key);
+      if (!group) {
+        group = { key, accounts: [] };
+        groups.set(key, group);
+        entries.push(group);
+      }
+      group.accounts.push(account);
+    }
+    // A provider's accounts are not comparable by usage: they keep their
+    // Sub2api account id order, the number ending each card id.
+    const sub2apiId = (account) => Number(/-(\d+)$/.exec(account.id)?.[1] ?? 0);
+    for (const e of entries)
+      e.accounts?.sort((a, b) => sub2apiId(a) - sub2apiId(b));
+    // A provider's only card is an ordinary card.
+    return entries.map((e) =>
+      e.accounts?.length === 1 ? { account: e.accounts[0] } : e,
+    );
+  }
   function needsReauthentication(
     account,
     translated = "Sign-in expired. Please sign in again.",
@@ -491,6 +521,7 @@
     normalizeLogs,
     visibleAccounts,
     pendingCards,
+    providerGroups,
     needsReauthentication,
     cardsEqual,
     settingsControls,

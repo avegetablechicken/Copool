@@ -210,6 +210,31 @@
         this.onUpdate();
       }
     }
+    /// Every card of one Sub2api provider in a single pass; only its cards
+    /// show as refreshing.
+    async refreshProvider(provider, ids) {
+      const busy =
+        this.manualRefreshing ||
+        ids.some(
+          (id) => this.refreshingIds.has(id) || this.remoteRefreshingIds.has(id),
+        );
+      if (busy) return false;
+      for (const id of ids) this.refreshingIds.add(id);
+      this.onUpdate();
+      try {
+        await this.invoke("refresh_provider", { id: provider, sync: false });
+        await this.load();
+        this.notice = "accounts.notice.usage_refreshed";
+        return true;
+      } catch (error) {
+        this.notice = messageOf(error);
+        await this.load();
+        throw error;
+      } finally {
+        for (const id of ids) this.refreshingIds.delete(id);
+        this.onUpdate();
+      }
+    }
     async refreshPending() {
       const generation = ++this.pendingGeneration;
       try {
@@ -294,9 +319,17 @@
       return this.runImport(() => this.invoke("import_current"));
     }
     async removeAccount(id) {
-      await this.invoke("delete_account", { id });
-      await this.load();
-      this.onMutation();
+      await this.removeAccounts([id]);
+    }
+    /// A Sub2api provider's cards go together; the list reloads once, even
+    /// when a removal fails partway.
+    async removeAccounts(ids) {
+      try {
+        for (const id of ids) await this.invoke("delete_account", { id });
+      } finally {
+        await this.load();
+        this.onMutation();
+      }
     }
     async saveProxy(id, value) {
       await this.invoke("save_account_proxy", { id, value });

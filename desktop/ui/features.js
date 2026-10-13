@@ -1102,6 +1102,8 @@ async function syncClaudeSub2api() {
   syncButtons();
   await action(async () => {
     const count = await invoke("claude_sync_sub2api");
+    // The cards' providers, as the sync left them.
+    await loadClaudeProviders();
     notice(tr("accounts.notice.sub2api_imported_format", count));
   });
   controller.importing = false;
