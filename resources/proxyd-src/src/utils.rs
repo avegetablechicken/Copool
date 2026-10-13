@@ -1,6 +1,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -20,10 +21,42 @@ pub(crate) fn short_account(account_id: &str) -> String {
 
 pub(crate) fn truncate_for_error(value: &str, max_len: usize) -> String {
     if value.len() <= max_len {
-        value.to_string()
-    } else {
-        format!("{}...", &value[..max_len])
+        return value.to_string();
     }
+    // Upstream errors are arbitrary text (often Chinese), so the cut has to land
+    // on a character boundary instead of panicking mid-character.
+    let mut end = max_len;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
+}
+
+/// Compares two secrets without leaking how much of a prefix matched.
+pub(crate) fn constant_time_eq(left: &str, right: &str) -> bool {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (left, right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    std::hint::black_box(difference) == 0
+}
+
+/// Same-directory temporary file followed by an atomic replacement, so a crash
+/// or a full disk cannot leave a half-written file behind.
+pub(crate) fn write_private_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
+    // Replace a symlink's target, not the link.
+    let path = &fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let parent = path.parent().ok_or("Invalid file path")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    file.write_all(contents).map_err(|e| e.to_string())?;
+    file.as_file().sync_all().map_err(|e| e.to_string())?;
+    file.persist(path).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub(crate) fn set_private_permissions(path: &Path) {

@@ -2,8 +2,6 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fs;
-use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -51,6 +49,7 @@ use crate::store::load_store_from_path;
 use crate::store::save_store_to_path;
 use crate::usage::fetch_usage_snapshot_from;
 use crate::usage::{chatgpt_base_origin, resolve_chatgpt_base_origin};
+use crate::utils::constant_time_eq;
 use crate::utils::now_unix_seconds;
 use crate::utils::truncate_for_error;
 
@@ -1570,7 +1569,13 @@ async fn send_codex_request_over_candidates(
             }
 
             if let Some(failure) = classify_retriable_failure(status, &upstream_body) {
-                mark_candidate_cooldown(context, &candidate, failure.category).await;
+                // Only an account-scoped rejection parks the account. A request the
+                // upstream rejects on its own terms (a model no account serves, a
+                // malformed body) must still fail over, but cooling every candidate
+                // down over it would stall the whole pool for minutes.
+                if is_account_scoped_failure(status) {
+                    mark_candidate_cooldown(context, &candidate, failure.category).await;
+                }
                 retriable_failures.push(failure);
                 break;
             }
@@ -2065,6 +2070,17 @@ async fn persist_candidate_usage_result(
     }
 }
 
+/// Whether a rejection says something about the account rather than the request.
+fn is_account_scoped_failure(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::UNAUTHORIZED
+            | StatusCode::PAYMENT_REQUIRED
+            | StatusCode::FORBIDDEN
+            | StatusCode::TOO_MANY_REQUESTS
+    )
+}
+
 fn cooldown_duration_seconds(category: RetryFailureCategory) -> i64 {
     match category {
         RetryFailureCategory::RateLimited => 60,
@@ -2382,11 +2398,14 @@ fn build_retriable_failure_summary(failures: &[RetryFailureInfo]) -> String {
 }
 
 fn is_authorized(headers: &HeaderMap, api_key: &str) -> bool {
+    if api_key.is_empty() {
+        return false;
+    }
     if let Some(value) = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
     {
-        if value == api_key {
+        if constant_time_eq(value, api_key) {
             return true;
         }
     }
@@ -2396,7 +2415,7 @@ fn is_authorized(headers: &HeaderMap, api_key: &str) -> bool {
         .and_then(|value| value.to_str().ok())
     {
         if let Some(token) = value.strip_prefix("Bearer ") {
-            return token == api_key;
+            return constant_time_eq(token, api_key);
         }
     }
 
@@ -2488,7 +2507,7 @@ fn read_api_proxy_key_file(storage: &ProxyStorageContext) -> Result<Option<Strin
 
 fn write_api_proxy_key_file(storage: &ProxyStorageContext, api_key: &str) -> Result<(), String> {
     let path = api_proxy_key_path(storage)?;
-    write_private_file_atomically(&path, api_key.as_bytes())
+    crate::utils::write_private_file_atomically(&path, api_key.as_bytes())
 }
 
 fn api_proxy_key_path(storage: &ProxyStorageContext) -> Result<PathBuf, String> {
@@ -2500,16 +2519,6 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map_err(|error| format!("无法获取应用数据目录: {error}"))
-}
-
-fn write_private_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
-    let parent = path.parent().ok_or("Invalid key directory")?;
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    file.write_all(contents).map_err(|e| e.to_string())?;
-    file.as_file().sync_all().map_err(|e| e.to_string())?;
-    file.persist(path).map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 fn read_current_api_key(shared: &Arc<RwLock<String>>) -> String {
@@ -2566,7 +2575,20 @@ fn build_passthrough_sse_response(upstream: reqwest::Response) -> Response<Body>
                     }
                 }
                 Ok(None) => break,
-                Err(_) => return,
+                Err(error) => {
+                    // Tell the client the stream broke; an already-200 SSE body that
+                    // just stops is indistinguishable from a finished answer.
+                    yield Ok::<Bytes, Infallible>(serialize_sse_event(
+                        None,
+                        &json!({
+                            "type": "error",
+                            "code": "upstream_error",
+                            "message": format!("上游流式响应中断: {error}"),
+                        })
+                        .to_string(),
+                    ));
+                    return;
+                }
             }
         }
 

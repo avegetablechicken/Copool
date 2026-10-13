@@ -9,7 +9,6 @@ use std::time::UNIX_EPOCH;
 
 use crate::models::CurrentAuthStatus;
 use crate::models::ExtractedAuth;
-use crate::utils::set_private_permissions;
 use crate::utils::truncate_for_error;
 
 pub(crate) struct CodexOAuthTokens {
@@ -103,18 +102,12 @@ pub(crate) fn read_current_auth_status() -> Result<CurrentAuthStatus, String> {
 
 pub(crate) fn write_active_codex_auth(auth_json: &Value) -> Result<(), String> {
     let path = codex_auth_path()?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("无法解析 auth 目录 {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("创建 auth 目录失败 {}: {e}", parent.display()))?;
-
     let serialized = serde_json::to_string_pretty(auth_json)
         .map_err(|e| format!("序列化 auth.json 失败: {e}"))?;
-    fs::write(&path, serialized)
-        .map_err(|e| format!("写入 auth.json 失败 {}: {e}", path.display()))?;
-    set_private_permissions(&path);
-    Ok(())
+    // The login Codex is using holds its only refresh token, so replace it
+    // atomically instead of truncating first.
+    crate::utils::write_private_file_atomically(&path, serialized.as_bytes())
+        .map_err(|e| format!("写入 auth.json 失败 {}: {e}", path.display()))
 }
 
 pub(crate) fn remove_active_codex_auth() -> Result<(), String> {
