@@ -753,6 +753,16 @@ function renderPreferences() {
   if (document.activeElement !== $("proxy-port"))
     $("proxy-port").value = preferences.proxyPort;
 }
+let preferenceSave = Promise.resolve();
+/// Every save of the preferences runs in turn, each over the preferences the
+/// previous one stored: each writes all of them.
+function queuePreferenceSave(patch) {
+  const save = preferenceSave.then(async () => {
+    preferences = await providerController.savePreferences(preferences, patch);
+  });
+  preferenceSave = save.catch(() => {});
+  return save;
+}
 async function savePreference(patch) {
   if (
     patch.restartEditorsOnSwitch &&
@@ -765,7 +775,7 @@ async function savePreference(patch) {
       ? "settings.notice.restart_target_updated"
       : "settings.notice.updated";
   const result = await action(async () => {
-    preferences = await providerController.savePreferences(preferences, patch);
+    await queuePreferenceSave(patch);
     locale = appLocale();
     translate();
     renderPreferences();
@@ -1184,10 +1194,9 @@ $("proxy-port").oninput = () => {
   const port = Number($("proxy-port").value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return;
   portSaveTimer = setTimeout(() => {
-    preferences = { ...preferences, proxyPort: port };
-    providerController
-      .savePreferences(preferences, {})
-      .catch((error) => notice(error, true));
+    queuePreferenceSave({ proxyPort: port }).catch((error) =>
+      notice(error, true),
+    );
   }, 350);
 };
 $("toggle-key").onclick = () => {
