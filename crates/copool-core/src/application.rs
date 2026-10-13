@@ -69,6 +69,16 @@ pub struct Preferences {
     /// Default proxy for stored accounts without their own proxy; never for login/import.
     #[serde(alias = "importProxyUrl")]
     pub account_proxy_url: String,
+    /// The order the account page's cards were dragged into, per pool.
+    pub account_order: AccountOrder,
+}
+/// Card keys in display order: an account's id, or `sub2api:<provider>` for
+/// all of a Sub2api provider's cards. Cards not listed follow, ranked.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountOrder {
+    pub codex: Vec<String>,
+    pub claude: Vec<String>,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -87,6 +97,7 @@ impl Default for Preferences {
             restart_editor_targets: vec![],
             request_new_accounts: false,
             account_proxy_url: String::new(),
+            account_order: AccountOrder::default(),
         }
     }
 }
@@ -160,6 +171,12 @@ impl Preferences {
                 .get("requestNewAccounts")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            // An order this build cannot read is only a display preference.
+            account_order: settings
+                .extra
+                .get("accountOrder")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
         };
         validate_preferences(&p)?;
         Ok(p)
@@ -412,6 +429,10 @@ impl Application {
             .insert("requestNewAccounts".into(), p.request_new_accounts.into());
         s.extra
             .insert("refreshSeconds".into(), p.refresh_seconds.into());
+        s.extra.insert(
+            "accountOrder".into(),
+            serde_json::to_value(&p.account_order).unwrap_or_default(),
+        );
         s.extra
             .insert("rustPreferencesMigrated".into(), true.into());
     }
@@ -1550,6 +1571,31 @@ mod tests {
             .unwrap();
         let saved: Value = serde_json::from_slice(&fs::read(app.paths.store()).unwrap()).unwrap();
         assert_eq!(saved["accounts"][0]["workspaceName"], "Research");
+    }
+    #[tokio::test]
+    async fn account_order_round_trips_and_tolerates_a_bad_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(&dir);
+        let order = AccountOrder {
+            codex: vec!["sub2api:team".into(), "a".into()],
+            claude: vec!["claude-1".into()],
+        };
+        app.save_preferences(Preferences {
+            account_order: order.clone(),
+            ..app.preferences().unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(app.preferences().unwrap().account_order, order);
+        let mut settings = app.configuration().unwrap();
+        settings
+            .extra
+            .insert("accountOrder".into(), json!("broken"));
+        app.persist_configuration(&settings).unwrap();
+        assert_eq!(
+            app.preferences().unwrap().account_order,
+            AccountOrder::default()
+        );
     }
     #[test]
     fn exclusive_instance_and_invalid_settings() {

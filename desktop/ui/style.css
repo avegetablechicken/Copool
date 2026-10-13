@@ -1218,6 +1218,56 @@ html:not(.macos) .select-menu {
   background: color-mix(in srgb, var(--label) 4%, transparent);
 }
 
+/* Dragging a card, as in OpenQuota: the card keeps its slot unseen while a
+   lifted copy follows the pointer. */
+.account-list [data-reorder-handle] {
+  cursor: grab;
+}
+
+.account-list [data-reorder-handle] :is(button, input) {
+  cursor: default;
+}
+
+.reorder-source {
+  opacity: 0 !important;
+}
+
+.reorder-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  overflow: visible;
+  pointer-events: none;
+  isolation: isolate;
+}
+
+.reorder-lift {
+  position: absolute;
+  margin: 0;
+  border-radius: 8px;
+  /* The card as it shows over the window, but opaque above the others. */
+  background: linear-gradient(var(--block), var(--block)), var(--window);
+  box-shadow: 0 0 0 0.5px var(--block-border), 0 8px 28px rgba(0, 0, 0, 0.18);
+  transform: scale(1.018);
+  transform-origin: center;
+  transition: none !important;
+}
+
+.reorder-lift * {
+  pointer-events: none !important;
+}
+
+/* A newly activated card rising to the top passes over the others. */
+.reorder-raised {
+  position: relative;
+  z-index: 1;
+}
+
+:root.is-reordering,
+:root.is-reordering * {
+  cursor: grabbing !important;
+}
+
 /* Collapsed: one row per account in a single flush block. */
 /* Fixed columns keep the values aligned from row to row. */
 .account-row {

@@ -11,6 +11,8 @@ let editingAccount = null;
 // The cards the proxy dialog saves to: one, or all of a provider's.
 let editingIds = [];
 let switchingId = null;
+// A card is being dragged: the list waits to render until it is dropped.
+let reorderingAccounts = false;
 let accountsCache = [];
 let proxyCache = null;
 let preferences = null;
@@ -389,6 +391,8 @@ document.addEventListener("contextmenu", (event) => {
     event.preventDefault();
 });
 let renderedAccountsState;
+// The pool, mode and current card last rendered, to see an activation.
+let renderedActivation = null;
 /// The provider of a Sub2api card, from its id (`sub2api-<provider>-<n>`,
 /// `claude-sub2api-<provider>-<n>`): cards synced since the provider list
 /// was last read still group with their provider.
@@ -625,6 +629,7 @@ function accountCard(account, grouped = false) {
       compactUsage(view.compact[1], "1w"),
       accountControls(account, full, view, grouped),
     );
+    if (!grouped) row.dataset.reorderHandle = "";
     return row;
   }
   const card = el(
@@ -642,6 +647,8 @@ function accountCard(account, grouped = false) {
   name.append(title);
   const tags = accountTags(account, view, grouped);
   head.append(tags, ...(grouped ? [] : [accountManagement(account)]));
+  // A card is dragged by its tags and name, as OpenQuota by its header.
+  if (!grouped) head.dataset.reorderHandle = name.dataset.reorderHandle = "";
   // A negative reset count is unavailable, as in AccountCardPresentation.
   // Sub2api cards keep their credits, which their usage reports.
   const credits =
@@ -715,6 +722,7 @@ function providerGroup(group) {
     first.firstElementChild.replaceWith(el("span", "dot"));
     first.lastElementChild.replaceWith(providerControls(group, title, current));
     const wrapper = el("div", "account-row-group");
+    wrapper.dataset.reorderHandle = "";
     wrapper.append(...members);
     return wrapper;
   }
@@ -728,6 +736,7 @@ function providerGroup(group) {
   head.append(name, source);
   if (current) head.append(el("span", "tag good", tr("accounts.card.current")));
   head.append(accountManagement(group.accounts[0], group, title));
+  head.dataset.reorderHandle = "";
   const list = el("div", "account-group-members");
   list.append(...members);
   const footer = el("div", "account-footer");
@@ -738,7 +747,18 @@ function providerGroup(group) {
   block.append(head, list, footer);
   return block;
 }
+/// A card's key in the saved order: a Sub2api provider's cards share one.
+function entryKey(entry) {
+  const key = entry.account ? providerKey(entry.account) : entry.key;
+  return key === null ? entry.account.id : `sub2api:${key}`;
+}
+function entryIsCurrent(entry) {
+  return entry.account
+    ? entry.account.isCurrent
+    : entry.accounts.some((a) => a.isCurrent);
+}
 function renderAccounts(accounts) {
+  if (reorderingAccounts) return;
   const renderState = [
     accounts,
     // Relative times change without new data.
@@ -749,6 +769,7 @@ function renderAccounts(accounts) {
     accounts.map(accountUsesExplicitProxy),
     // Cards group under their provider, which may load after them.
     accounts.map(providerTitle),
+    preferences?.accountOrder?.[pool],
     [...accountsController.refreshingIds],
     [...accountsController.remoteRefreshingIds],
     switchingId,
@@ -761,8 +782,14 @@ function renderAccounts(accounts) {
   accounts = P.visibleAccounts(accounts);
   const list = $("accounts");
   list.className = collapsed ? "account-list compact block flush" : "account-list";
+  const before = new Map(
+    [...list.children]
+      .filter((node) => node.dataset.reorderId)
+      .map((node) => [node.dataset.reorderId, node.getBoundingClientRect()]),
+  );
   list.replaceChildren();
   if (!accounts.length) {
+    renderedActivation = null;
     list.className = "account-list block";
     const empty = el("div", "empty");
     empty.append(
@@ -780,9 +807,64 @@ function renderAccounts(accounts) {
     list.append(empty);
     return;
   }
-  for (const entry of P.providerGroups(accounts, providerKey))
-    list.append(entry.account ? accountCard(entry.account) : providerGroup(entry));
+  const entries = P.orderEntries(
+    P.providerGroups(accounts, providerKey),
+    preferences?.accountOrder?.[pool],
+    entryKey,
+    entryIsCurrent,
+  );
+  for (const entry of entries) {
+    const node = entry.account ? accountCard(entry.account) : providerGroup(entry);
+    node.dataset.reorderId = entryKey(entry);
+    // The current card stays first: it is neither dragged nor passed.
+    if (entryIsCurrent(entry)) {
+      node.dataset.reorderFixed = "";
+      for (const handle of [node, ...node.querySelectorAll("[data-reorder-handle]")])
+        delete handle.dataset.reorderHandle;
+    }
+    list.append(node);
+  }
   alignMeters(list);
+  // A newly activated card rises to the top as a dragged card moves, and
+  // the cards it passes make way.
+  const current = entries.find(entryIsCurrent);
+  const activation = { pool, collapsed, current: current && entryKey(current) };
+  if (
+    activation.current &&
+    renderedActivation?.pool === pool &&
+    renderedActivation.collapsed === collapsed &&
+    renderedActivation.current !== activation.current
+  )
+    for (const node of list.children) {
+      const from = before.get(node.dataset.reorderId);
+      if (from)
+        window.CopoolReorder.slide(
+          node,
+          from,
+          node.dataset.reorderId === activation.current,
+        );
+    }
+  renderedActivation = activation;
+}
+/// Dragging the cards, as in OpenQuota; the order is kept per pool.
+window.CopoolReorder.attach($("accounts"), {
+  onStart: () => (reorderingAccounts = true),
+  onEnd: ({ order, moved, cancelled }) => {
+    reorderingAccounts = false;
+    if (moved && !cancelled) saveAccountOrder(order);
+    renderedAccountsState = undefined;
+    renderAccounts(accountsCache);
+  },
+});
+function saveAccountOrder(order) {
+  const accountOrder = { ...preferences.accountOrder, [pool]: order };
+  preferences = { ...preferences, accountOrder };
+  queuePreferenceSave({ accountOrder }).catch(async (error) => {
+    notice(error, true);
+    preferences = await invoke("preferences").catch(() => preferences);
+    renderedAccountsState = undefined;
+    renderAccounts(accountsCache);
+  });
 }
 /// Gives every usage row the widest label and value, so all meters line up.
 function alignMeters(list) {

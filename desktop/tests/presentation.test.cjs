@@ -318,3 +318,18 @@ test("A provider's cards gather where its first card stands", () => {
     ["sub2api-x-3", "sub2api-x-7", "sub2api-x-12"],
   );
 });
+test("Dragged order first, then cards not yet ordered as ranked", () => {
+  const entries = ["a", "b", "c", "d"].map((id) => ({ id }));
+  const order = (saved) =>
+    P.orderEntries(entries, saved, (e) => e.id).map((e) => e.id);
+  assert.deepEqual(order([]), ["a", "b", "c", "d"]);
+  assert.deepEqual(order(undefined), ["a", "b", "c", "d"]);
+  // A removed card's key ("x") is ignored; new cards follow.
+  assert.deepEqual(order(["c", "x", "a"]), ["c", "a", "b", "d"]);
+  // The current card leads whatever the saved order.
+  assert.deepEqual(
+    P.orderEntries(entries, ["c", "a", "b", "d"], (e) => e.id, (e) => e.id === "b")
+      .map((e) => e.id),
+    ["b", "c", "a", "d"],
+  );
+});

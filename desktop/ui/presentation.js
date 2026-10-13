@@ -498,6 +498,17 @@
       e.accounts?.length === 1 ? { account: e.accounts[0] } : e,
     );
   }
+  /// The cards in the order they were dragged into: saved keys first, in
+  /// that order, then any card not saved yet, as ranked. The current card
+  /// always leads, whatever the saved order.
+  function orderEntries(entries, order = [], keyOf, isCurrent = () => false) {
+    const rank = new Map(order.map((key, i) => [key, i]));
+    const saved = entries
+      .filter((e) => rank.has(keyOf(e)))
+      .sort((a, b) => rank.get(keyOf(a)) - rank.get(keyOf(b)));
+    const ordered = [...saved, ...entries.filter((e) => !rank.has(keyOf(e)))];
+    return [...ordered.filter(isCurrent), ...ordered.filter((e) => !isCurrent(e))];
+  }
   function needsReauthentication(
     account,
     translated = "Sign-in expired. Please sign in again.",
@@ -522,6 +533,7 @@
     visibleAccounts,
     pendingCards,
     providerGroups,
+    orderEntries,
     needsReauthentication,
     cardsEqual,
     settingsControls,
