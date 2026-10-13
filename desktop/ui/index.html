@@ -332,7 +332,7 @@
         </section>
         <section id="settings-page" class="content settings-page" hidden>
           <div class="page">
-            <section class="block">
+            <section class="block settings-general">
               <div class="block-head">
                 <span
                   class="block-title"
@@ -398,7 +398,9 @@
                   class="row-label"
                   data-l10n="settings.usage_progress_display"
                 ></span
-                ><select id="usage-display" class="select">
+                ><span class="content-sized-select">
+                  <span id="usage-display-label" class="select-size-label" aria-hidden="true"></span>
+                  <select id="usage-display" class="select">
                   <option
                     value="used"
                     data-l10n="settings.usage_progress_display.used"
@@ -406,11 +408,13 @@
                   <option
                     value="remaining"
                     data-l10n="settings.usage_progress_display.remaining"
-                  ></option></select
+                  ></option></select></span
               ></label>
               <label class="row"
                 ><span class="row-label" data-l10n="settings.language"></span
-                ><select id="language" class="select"></select
+                ><span class="content-sized-select">
+                  <span id="language-label" class="select-size-label" aria-hidden="true"></span>
+                  <select id="language" class="select"></select></span
               ></label>
             </section>
             <section class="block">

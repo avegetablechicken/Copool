@@ -177,6 +177,7 @@ function translate() {
     }),
   );
   $("language").value = locale;
+  syncGeneralSelectLabels();
   $("page-title").textContent = tr(`tab.${selectedPage}`);
   document.querySelectorAll(".pool-btn").forEach((button) => {
     button.title = withShortcut(
@@ -707,6 +708,11 @@ async function refreshView() {
   );
   syncButtons();
 }
+function syncGeneralSelectLabels() {
+  for (const id of ["usage-display", "language"]) {
+    $(`${id}-label`).textContent = $(id).selectedOptions[0]?.textContent || "";
+  }
+}
 function renderPreferences() {
   document
     .querySelectorAll("[data-preference]")
@@ -718,6 +724,7 @@ function renderPreferences() {
     $("account-proxy").value = preferences.accountProxyUrl || "";
   const controls = P.settingsControls(preferences, installedEditors);
   $("usage-display").value = controls.usagePicker.selectedValue;
+  syncGeneralSelectLabels();
   $("restart-target").disabled = !controls.restartPicker.isEnabled;
   $("restart-target").value = controls.restartPicker.selectedValue || "";
   // An edit still waiting to be saved is not overwritten.
@@ -1185,9 +1192,14 @@ document
   );
 $("account-proxy").onchange = () =>
   savePreference({ accountProxyUrl: $("account-proxy").value.trim() });
-$("usage-display").onchange = () =>
+$("usage-display").onchange = () => {
+  syncGeneralSelectLabels();
   savePreference({ usageDisplay: $("usage-display").value });
-$("language").onchange = () => savePreference({ locale: $("language").value });
+};
+$("language").onchange = () => {
+  syncGeneralSelectLabels();
+  savePreference({ locale: $("language").value });
+};
 $("quit").onclick = () =>
   providerController.quit().catch((error) => notice(error, true));
 document.addEventListener(

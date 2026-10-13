@@ -742,6 +742,39 @@ select:disabled {
   opacity: 0.4;
 }
 
+.settings-general input:not(.switch),
+.settings-general select {
+  text-align: right;
+}
+
+.settings-general select {
+  text-align-last: right;
+}
+
+/* The selected label determines the width, including space for the arrows. */
+.content-sized-select {
+  position: relative;
+  flex: none;
+  max-width: 100%;
+  height: 20px;
+  font-size: 11px;
+}
+
+.select-size-label {
+  display: block;
+  visibility: hidden;
+  padding: 0 20px 0 7px;
+  white-space: nowrap;
+}
+
+.content-sized-select > select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
 input.field,
 .row > input:not(.switch),
 .copy-row input {
