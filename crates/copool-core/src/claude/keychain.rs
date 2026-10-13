@@ -75,12 +75,64 @@ pub(super) async fn read(service: &str, access: KeychainAccess) -> Result<Option
     .map_err(|e| e.to_string())?
 }
 
+/// The item a read would find: `user`'s, or else the one item of the service
+/// under another account name. `Ok(false)` when there is none to update.
+fn update_resolving(
+    user: &str,
+    mut update: impl FnMut(&str) -> Result<bool>,
+    accounts: impl FnOnce() -> Result<Vec<String>>,
+) -> Result<bool> {
+    if update(user)? {
+        return Ok(true);
+    }
+    match accounts()?.as_slice() {
+        [] => Ok(false),
+        [other] if other != user => update(other),
+        [_] => Ok(false),
+        _ => Err("Several Claude Code Keychain entries exist; keep only one".into()),
+    }
+}
+
+/// The account names of the service's items; attributes need no access.
+fn accounts(service: &str, access: KeychainAccess) -> Result<Vec<String>> {
+    use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+    let found = ItemSearchOptions::new()
+        .class(ItemClass::generic_password())
+        .service(service)
+        .load_attributes(true)
+        .skip_authenticated_items(access == KeychainAccess::Background)
+        .limit(Limit::All)
+        .search();
+    match found {
+        Ok(items) => Ok(items
+            .iter()
+            .filter_map(|item| item.simplify_dict()?.remove("acct"))
+            .collect()),
+        Err(error) if error.code() == -25300 => Ok(vec![]),
+        Err(error) => Err(format!("Claude Code Keychain access failed: {error}")),
+    }
+}
+
+fn update(service: &str, user: &str, bytes: &[u8], access: KeychainAccess) -> Result<bool> {
+    // Reads fall back to an item under another account name; write that one.
+    update_resolving(
+        user,
+        |account| update_account(service, account, bytes, access),
+        || accounts(service, access),
+    )
+}
+
 // Update only value data: never replace the existing access/partition settings.
 // Do not use set_generic_password here: its add-before-update path can disturb
 // the ACL of a shared Claude Code item even when adding reports a duplicate.
 #[allow(deprecated)]
-fn update(service: &str, user: &str, bytes: &[u8], access: KeychainAccess) -> Result<bool> {
-    let query = options(service, Some(user), access);
+fn update_account(
+    service: &str,
+    account: &str,
+    bytes: &[u8],
+    access: KeychainAccess,
+) -> Result<bool> {
+    let query = options(service, Some(account), access);
     let query = CFDictionary::from_CFType_pairs(&query.query);
     let attributes = value_attributes(bytes);
     // SAFETY: Both owned dictionaries remain alive for the Security call.
@@ -252,6 +304,43 @@ mod tests {
             let interactive = options("test-service", account, KeychainAccess::Interactive);
             assert!(!interactive.query.iter().any(|(k, _)| *k == key));
         }
+    }
+
+    #[test]
+    fn writes_go_to_the_item_a_read_falls_back_to() {
+        let missing = |calls: &mut Vec<String>, account: &str| {
+            calls.push(account.to_owned());
+            Ok(account != "test-user")
+        };
+        let mut calls = vec![];
+        let updated = update_resolving(
+            "test-user",
+            |a| missing(&mut calls, a),
+            || Ok(vec!["other".into()]),
+        );
+        assert_eq!(
+            (updated, calls),
+            (Ok(true), vec!["test-user".into(), "other".into()])
+        );
+        assert_eq!(
+            update_resolving("test-user", |_| Ok(false), || Ok(vec![])),
+            Ok(false)
+        );
+        let several = || Ok(vec!["one".into(), "two".into()]);
+        assert!(update_resolving("test-user", |_| Ok(false), several).is_err());
+        let mut found = 0;
+        assert_eq!(
+            update_resolving(
+                "test-user",
+                |_| Ok(true),
+                || {
+                    found += 1;
+                    Ok(vec![])
+                }
+            ),
+            Ok(true)
+        );
+        assert_eq!(found, 0);
     }
 
     #[test]
