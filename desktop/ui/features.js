@@ -1110,5 +1110,6 @@ async function syncClaudeSub2api() {
 const initializeClaudeFeatures = initializeFeatures;
 initializeFeatures = async () => {
   await initializeClaudeFeatures();
-  await loadClaudeProviders();
+  // A Claude store error must not keep the rest of the app from rendering.
+  await loadClaudeProviders().catch((error) => notice(error, true));
 };
