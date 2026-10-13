@@ -88,13 +88,7 @@ pub(crate) async fn fetch(
     now: i64,
 ) -> Result<(Value, UsageSnapshot), String> {
     let mut auth = original.clone();
-    let expired = auth
-        .pointer("/tokens/access_token")
-        .or_else(|| auth.get("access_token"))
-        .and_then(Value::as_str)
-        .and_then(|t| crate::auth::decode_jwt_payload(t).ok())
-        .and_then(|v| v["exp"].as_i64())
-        .is_some_and(|exp| exp <= now);
+    let expired = crate::auth::access_token_expiry(&auth).is_some_and(|exp| exp <= now);
     if expired {
         auth = network.refresh(&auth, proxy).await?;
     }

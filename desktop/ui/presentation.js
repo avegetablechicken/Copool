@@ -95,6 +95,27 @@
       }).format(date)
     );
   }
+  /// Time left on the access token in its largest whole unit (minutes round
+  /// up), or expired; null without a known expiry.
+  function tokenExpiry(epoch, now, locale = "en") {
+    if (epoch == null) return null;
+    const seconds = epoch - now;
+    if (seconds <= 0) return { expired: true, remaining: null };
+    const [unit, amount] =
+      seconds >= 86400
+        ? ["day", Math.floor(seconds / 86400)]
+        : seconds >= 3600
+          ? ["hour", Math.floor(seconds / 3600)]
+          : ["minute", Math.ceil(seconds / 60)];
+    return {
+      expired: false,
+      remaining: new Intl.NumberFormat(resolveLocale(locale), {
+        style: "unit",
+        unit,
+        unitDisplay: "narrow",
+      }).format(amount),
+    };
+  }
   function windowPresentation(
     window,
     mode = "used",
@@ -477,6 +498,7 @@
     displayPercent,
     windowPresentation,
     formatReset,
+    tokenExpiry,
     card,
     actions,
     collapsedInteraction,

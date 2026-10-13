@@ -521,9 +521,24 @@ function accountTags(account, view) {
     tags.append(el("span", "tag bad", tr("accounts.card.status.deactivated")));
   return tags;
 }
+/// The access token's remaining time, for the card footer; renewal happens
+/// on the first usage refresh after it expires.
+function tokenLabel(account) {
+  const expiry = P.tokenExpiry(
+    account.tokenExpiresAt,
+    Date.now() / 1000,
+    locale,
+  );
+  if (!expiry) return null;
+  return expiry.expired
+    ? tr("accounts.card.token_expired")
+    : tr("accounts.card.token_expires_format", expiry.remaining);
+}
 function renderAccounts(accounts) {
   const renderState = [
     accounts,
+    // Relative times change without new data.
+    accounts.map(tokenLabel),
     collapsed,
     locale,
     preferences?.usageDisplay,
@@ -610,19 +625,26 @@ function renderAccounts(accounts) {
     const count = account.usage?.remainingResetCount;
     const resets = count != null && count >= 0 ? count : null;
     const footer = el("div", "account-footer");
-    footer.append(
-      el(
-        "span",
-        "account-footer-text",
-        `${tr("accounts.card.credits_format", credits)} · ${tr(
-          resets !== null
-            ? "accounts.card.remaining_resets_format"
-            : "accounts.card.resets_unavailable_format",
-          resets ?? "--",
-        )}`,
-      ),
-      accountControls(account, full, view),
+    const footerText = el(
+      "span",
+      "account-footer-text",
+      `${tr("accounts.card.credits_format", credits)} · ${tr(
+        resets !== null
+          ? "accounts.card.remaining_resets_format"
+          : "accounts.card.resets_unavailable_format",
+        resets ?? "--",
+      )}`,
     );
+    const token = tokenLabel(account);
+    if (token) {
+      const expiry = el("span", "account-token", token);
+      expiry.title = tr(
+        "accounts.card.token_expires.help",
+        P.formatReset(account.tokenExpiresAt, locale),
+      );
+      footerText.append(" · ", expiry);
+    }
+    footer.append(footerText, accountControls(account, full, view));
     card.append(
       head,
       name,

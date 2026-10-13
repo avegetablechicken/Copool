@@ -280,3 +280,18 @@ test("A missing usage window has no data", () => {
   assert.equal(c.compact[0], null);
   assert.equal(c.oneWeek.available, true);
 });
+test("token expiry shows the largest whole unit left, or expired", () => {
+  const now = 1_800_000_000;
+  assert.equal(P.tokenExpiry(null, now), null);
+  assert.equal(P.tokenExpiry(undefined, now), null);
+  assert.deepEqual(P.tokenExpiry(now, now), { expired: true, remaining: null });
+  const left = (seconds, locale) =>
+    P.tokenExpiry(now + seconds, now, locale).remaining;
+  assert.equal(left(6 * 86400 + 80000), "6d");
+  assert.equal(left(86400), "1d");
+  assert.equal(left(5 * 3600 + 3599), "5h");
+  assert.equal(left(61), "2m");
+  assert.equal(left(1), "1m");
+  assert.equal(left(6 * 86400, "zh-Hans"), "6天");
+  assert.equal(left(5 * 3600, "zh_CN"), "5小时");
+});

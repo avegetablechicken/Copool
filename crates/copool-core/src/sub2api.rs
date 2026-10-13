@@ -69,6 +69,7 @@ impl Account {
             usage_error: self.usage_error.clone(),
             is_current: false,
             awaiting_first_request: false,
+            token_expires_at: None,
             available: self.status.eq_ignore_ascii_case("active"),
             proxy_url: self.proxy_url.clone().unwrap_or_default(),
         }

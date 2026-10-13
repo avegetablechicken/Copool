@@ -122,6 +122,9 @@
 "accounts.card.credits_format" = "Créditos: %@";
 "accounts.card.remaining_resets_format" = "Restablecimientos: %@";
 "accounts.card.resets_unavailable_format" = "Restablecimientos: %@";
+"accounts.card.token_expires_format" = "Token: %@";
+"accounts.card.token_expired" = "Token: caducado";
+"accounts.card.token_expires.help" = "El token de acceso caduca el %@ y se renueva automáticamente en la siguiente actualización del uso.";
 "accounts.card.unlimited" = "Ilimitado";
 "accounts.card.switching" = "Cambiando...";
 "accounts.card.switch_to_this" = "Cambiar a esta cuenta";

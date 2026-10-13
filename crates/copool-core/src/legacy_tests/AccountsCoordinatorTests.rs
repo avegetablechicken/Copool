@@ -317,6 +317,18 @@ async fn testSelectiveUsageRefreshOnlyRequestsTargetAccounts() {
     assert!(saved.accounts[1].usage.is_none());
 }
 #[tokio::test]
+async fn testAccountCardsCarryTheAccessTokenExpiry() {
+    let (_dir, app, _) = super::network_fixture::fixture();
+    let mut a = stored("a", "a", "account-1");
+    a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1_900_000_000})).into();
+    let mut b = stored("b", "b", "account-2");
+    b["authJson"]["tokens"]["access_token"] = "opaque".into();
+    save_fixture(&app, json!({"accounts":[a, b]}));
+    let cards = app.accounts().await.unwrap();
+    assert_eq!(cards[0].token_expires_at, Some(1_900_000_000));
+    assert_eq!(cards[1].token_expires_at, None);
+}
+#[tokio::test]
 async fn testRefreshUsageRefreshesExpiredStoredAuthBeforeFetching() {
     let (_dir, app, network) = super::network_fixture::fixture();
     let mut a = stored("a", "a", "account-1");

@@ -122,6 +122,9 @@
 "accounts.card.credits_format" = "Guthaben: %@";
 "accounts.card.remaining_resets_format" = "Zurücksetzungen: %@";
 "accounts.card.resets_unavailable_format" = "Zurücksetzungen: %@";
+"accounts.card.token_expires_format" = "Token: %@";
+"accounts.card.token_expired" = "Token: abgelaufen";
+"accounts.card.token_expires.help" = "Das Zugriffstoken läuft am %@ ab und wird danach bei der nächsten Nutzungsaktualisierung automatisch erneuert.";
 "accounts.card.unlimited" = "Unbegrenzt";
 "accounts.card.switching" = "Wechsel läuft...";
 "accounts.card.switch_to_this" = "Zu diesem Konto wechseln";

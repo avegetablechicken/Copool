@@ -122,6 +122,9 @@
 "accounts.card.credits_format" = "Кредиты: %@";
 "accounts.card.remaining_resets_format" = "Сбросы: %@";
 "accounts.card.resets_unavailable_format" = "Сбросы: %@";
+"accounts.card.token_expires_format" = "Токен: %@";
+"accounts.card.token_expired" = "Токен: истёк";
+"accounts.card.token_expires.help" = "Токен доступа истекает %@ и автоматически обновляется при следующем обновлении использования.";
 "accounts.card.unlimited" = "Без ограничений";
 "accounts.card.switching" = "Переключение...";
 "accounts.card.switch_to_this" = "Переключиться на этот аккаунт";

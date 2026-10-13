@@ -363,6 +363,7 @@ impl Stored {
             usage_error: self.usage_error.clone(),
             is_current: current,
             awaiting_first_request: self.first_request_pending,
+            token_expires_at: Some(expires_at(&self.oauth) / 1000).filter(|&at| at > 0),
         }
     }
 }
@@ -2690,6 +2691,16 @@ mod tests {
         )
         .unwrap();
         let _ = fs::remove_file(&location.global_config);
+    }
+
+    #[tokio::test]
+    async fn cards_carry_the_access_token_expiry_in_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let accounts = app.claude_accounts().await.unwrap();
+        assert_eq!(accounts[0].token_expires_at, Some(LATER / 1000));
     }
 
     #[tokio::test]

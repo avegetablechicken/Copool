@@ -1190,6 +1190,11 @@ html:not(.macos) .select-menu {
   overflow-wrap: anywhere;
 }
 
+/* The token time wraps as a whole, never mid-phrase. */
+.account-token {
+  white-space: nowrap;
+}
+
 .account-footer .block-aside {
   gap: 2px;
   font-size: 11px;

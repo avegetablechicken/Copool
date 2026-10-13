@@ -92,6 +92,9 @@ pub struct AccountSummary {
     /// A newly imported account Copool has not contacted upstream yet.
     #[serde(default)]
     pub awaiting_first_request: bool,
+    /// When the access token expires (Unix seconds); a later usage refresh
+    /// renews it. None without a readable expiry.
+    pub token_expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,6 +455,7 @@ impl StoredAccount {
             usage: self.usage.clone().map(UsageSnapshot::with_matching_windows),
             usage_error: self.usage_error.clone(),
             awaiting_first_request: self.awaiting_first_request(),
+            token_expires_at: crate::auth::access_token_expiry(&self.auth_json),
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),

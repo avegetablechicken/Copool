@@ -122,6 +122,9 @@
 "accounts.card.credits_format" = "额度：%@";
 "accounts.card.remaining_resets_format" = "重置：%@ 次";
 "accounts.card.resets_unavailable_format" = "重置：%@";
+"accounts.card.token_expires_format" = "令牌：%@后过期";
+"accounts.card.token_expired" = "令牌：已过期";
+"accounts.card.token_expires.help" = "访问令牌过期时间：%@，过期后刷新用量时自动续期。";
 "accounts.card.unlimited" = "无限制";
 "accounts.card.switching" = "切换中...";
 "accounts.card.switch_to_this" = "切换到此账号";
