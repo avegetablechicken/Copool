@@ -422,6 +422,34 @@ async fn testRefreshUsageShowsRefreshFailureMessageWhenRefreshTokenIsReused() {
     assert_eq!(network.calls.lock().unwrap().len(), 1);
 }
 #[tokio::test]
+async fn testLateRefreshDoesNotOverwriteALoginRenewedSince() {
+    let (_dir, app, network) = super::network_fixture::fixture();
+    let mut a = stored("a", "a", "account-1");
+    a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1})).into();
+    save_fixture(&app, json!({"accounts":[a],"currentAccountId":"a"}));
+    let app = std::sync::Arc::new(app);
+    app.switch_account("a").await.unwrap();
+    network
+        .block
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let task = {
+        let app = app.clone();
+        tokio::spawn(async move { app.refresh_usage("a").await })
+    };
+    network.started.notified().await;
+    // Codex renews the same login while the request is answered late.
+    let mut renewed: Value =
+        serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
+    renewed["tokens"]["access_token"] = "renewed-by-codex".into();
+    renewed["last_refresh"] = "2099-01-01T00:00:00Z".into();
+    crate::persistence::write_json(&app.paths.codex_auth, &renewed).unwrap();
+    network.resume.notify_one();
+    task.await.unwrap().unwrap();
+    let current: Value =
+        serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
+    assert_eq!(current["tokens"]["access_token"], "renewed-by-codex");
+}
+#[tokio::test]
 async fn testRefreshUsageDoesNotOverwriteConcurrentProxySwitchProjection() {
     let (_dir, app, network) = super::network_fixture::fixture();
     let first = stored("a", "a", "account-1");

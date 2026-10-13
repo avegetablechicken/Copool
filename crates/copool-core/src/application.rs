@@ -883,9 +883,13 @@ impl Application {
                 Ok((auth, value)) => {
                     target.usage = Some(value.clone());
                     target.usage_error = None;
-                    // Tokens the proxy rotated during the request are newer than
-                    // the snapshot; only a refresh or adoption made here is written.
-                    if auth != &account.auth_json {
+                    // Tokens the proxy or another refresh rotated during the request
+                    // are newer than the snapshot; only a newer refresh or adoption
+                    // made here replaces them.
+                    if auth != &account.auth_json
+                        && (target.auth_json == account.auth_json
+                            || newer_login(auth, &target.auth_json))
+                    {
                         target.auth_json = auth.clone();
                     }
                     let extracted = crate::auth::extract_auth(auth)?;
@@ -918,7 +922,10 @@ impl Application {
                     }
                 }
                 Err(error) => {
-                    if let Some(live) = &live {
+                    if let Some(live) = live
+                        .as_ref()
+                        .filter(|live| newer_login(live, &target.auth_json))
+                    {
                         target.auth_json = live.clone();
                     }
                     target.usage_error = Some(if crate::account_network::expired_error(error) {
@@ -942,12 +949,27 @@ impl Application {
             }
             self.persist_accounts(&saved)?;
         }
-        // Written only once the store keeps the rotated tokens.
-        if let Some(auth) = live_write {
-            write_json(
-                &self.paths.codex_auth,
-                &crate::auth::normalized_auth_for_write(auth.clone())?,
-            )?;
+        // Written only once the store keeps the rotated tokens, and with the
+        // store's check of their generation: only over the login they were
+        // renewed from, or an older one. A request answered late must not
+        // replace a login renewed since.
+        let kept = |auth: &Value| {
+            saved
+                .accounts
+                .iter()
+                .any(|a| a.id == id && a.auth_json == *auth)
+        };
+        if let Some(auth) = live_write.filter(|auth| kept(auth)) {
+            let renewable = self.current_auth().ok().flatten().is_some_and(|disk| {
+                identity(&disk).ok() == identity(auth).ok()
+                    && (disk["tokens"] == auth_json["tokens"] || newer_login(auth, &disk))
+            });
+            if renewable {
+                write_json(
+                    &self.paths.codex_auth,
+                    &crate::auth::normalized_auth_for_write(auth.clone())?,
+                )?;
+            }
         }
         result.map(|_| ())
     }
