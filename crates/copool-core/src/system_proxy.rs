@@ -153,6 +153,8 @@ mod platform {
             encoding: u32,
         ) -> CFTypeRef;
         fn CFStringGetCString(s: CFTypeRef, buffer: *mut c_char, size: isize, encoding: u32) -> u8;
+        fn CFStringGetLength(s: CFTypeRef) -> isize;
+        fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
         fn CFURLCreateWithString(alloc: CFTypeRef, s: CFTypeRef, base: CFTypeRef) -> CFTypeRef;
         fn CFArrayGetCount(array: CFTypeRef) -> isize;
         fn CFArrayGetValueAtIndex(array: CFTypeRef, index: isize) -> CFTypeRef;
@@ -198,7 +200,9 @@ mod platform {
         if value.is_null() {
             return None;
         }
-        let mut buffer = vec![0 as c_char; 4096];
+        // Inline PAC scripts run to tens of kilobytes.
+        let size = CFStringGetMaximumSizeForEncoding(CFStringGetLength(value), UTF8);
+        let mut buffer = vec![0 as c_char; usize::try_from(size).ok()?.checked_add(1)?];
         (CFStringGetCString(value, buffer.as_mut_ptr(), buffer.len() as isize, UTF8) != 0)
             .then(|| unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) })
             .map(|s| s.to_string_lossy().into_owned())
