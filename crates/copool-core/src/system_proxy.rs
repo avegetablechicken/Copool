@@ -314,44 +314,43 @@ mod platform {
             .insert(address.to_owned(), (Instant::now(), script.clone()));
         script
     }
-    /// PAC files are local files or plain HTTP, usually served on loopback by
-    /// the proxy client; HTTP/1.0 keeps the response unchunked.
-    fn fetch(address: &str) -> Option<String> {
-        use std::io::{Read, Write};
+    /// A PAC file: a local file, or one served over HTTP(S), redirects
+    /// followed. It is fetched directly, on a thread of its own: this runs
+    /// inside reqwest's connector, where no runtime may be blocked on.
+    pub(super) fn fetch(address: &str) -> Option<String> {
         let url = Url::parse(address).ok()?;
         if url.scheme() == "file" {
             return std::fs::read_to_string(url.to_file_path().ok()?).ok();
         }
-        if url.scheme() != "http" {
+        if !matches!(url.scheme(), "http" | "https") {
             return None;
         }
-        let timeout = std::time::Duration::from_secs(2);
-        let socket = std::net::ToSocketAddrs::to_socket_addrs(&(
-            url.host_str()?,
-            url.port_or_known_default()?,
-        ))
-        .ok()?
-        .next()?;
-        let mut stream = std::net::TcpStream::connect_timeout(&socket, timeout).ok()?;
-        stream.set_read_timeout(Some(timeout)).ok()?;
-        let path = match url.query() {
-            Some(query) => format!("{}?{query}", url.path()),
-            None => url.path().to_owned(),
-        };
-        write!(
-            stream,
-            "GET {path} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            url.host_str()?
-        )
-        .ok()?;
-        let mut response = Vec::new();
-        stream.take(1 << 20).read_to_end(&mut response).ok()?;
-        let response = String::from_utf8_lossy(&response);
-        let (head, body) = response.split_once("\r\n\r\n")?;
-        head.split_whitespace()
-            .nth(1)
-            .filter(|status| *status == "200")
-            .map(|_| body.to_owned())
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok()?;
+            runtime.block_on(async move {
+                let builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5));
+                let client = crate::utils::with_account_proxy(builder, "direct://")
+                    .ok()?
+                    .build()
+                    .ok()?;
+                let response = client.get(url).send().await.ok()?;
+                if response.status() != reqwest::StatusCode::OK
+                    || response
+                        .content_length()
+                        .is_some_and(|length| length > 1 << 20)
+                {
+                    return None;
+                }
+                let body = response.bytes().await.ok()?;
+                (body.len() <= 1 << 20).then(|| String::from_utf8_lossy(&body).into_owned())
+            })
+        })
+        .join()
+        .ok()
+        .flatten()
     }
 }
 
@@ -475,6 +474,26 @@ fn windows_proxy(registry: &str, url: &Url) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pac_files_are_fetched_through_redirects_from_the_runtime() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for reply in [
+                "HTTP/1.1 302 Found\r\nLocation: /proxy.pac\r\nContent-Length: 0\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nfunction ",
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = stream.read(&mut [0; 1024]);
+                stream.write_all(reply.as_bytes()).unwrap();
+            }
+        });
+        let address = format!("http://127.0.0.1:{port}/old.pac");
+        let script = tokio::task::block_in_place(|| platform::fetch(&address));
+        assert_eq!(script.as_deref(), Some("function "));
+    }
     #[test]
     fn exemptions_match_hosts_and_domain_suffixes() {
         assert!(exempt("api.example.com", ["example.com"]));
