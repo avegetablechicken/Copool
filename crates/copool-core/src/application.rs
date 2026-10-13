@@ -1,5 +1,10 @@
 use crate::{
-    auth, models::*, persistence::write_json, proxy_service, state::AppState, store,
+    auth::{self, newer_login},
+    models::*,
+    persistence::write_json,
+    proxy_service,
+    state::AppState,
+    store,
     utils::now_unix_seconds,
 };
 use serde::{Deserialize, Serialize};
@@ -309,8 +314,8 @@ impl Application {
             crate::codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
         ));
         let paths = self.paths.clone();
-        storage.on_auth_refreshed = Some(Arc::new(move |id, auth| {
-            crate::proxy_integration::sync_refreshed_auth(&paths, id, auth)
+        storage.on_auth_refreshed = Some(Arc::new(move |id, from, auth| {
+            crate::proxy_integration::sync_refreshed_auth(&paths, id, from, auth)
         }));
         let paths = self.paths.clone();
         storage.provider_candidates = Some(Arc::new(move || {
@@ -995,7 +1000,7 @@ impl Application {
         if let Some(auth) = live_write.filter(|auth| kept(auth)) {
             let renewable = self.current_auth().ok().flatten().is_some_and(|disk| {
                 identity(&disk).ok() == identity(auth).ok()
-                    && (disk["tokens"] == auth_json["tokens"] || newer_login(auth, &disk))
+                    && auth::renewal_replaces(auth, auth_json, &disk)
             });
             if renewable {
                 write_json(
@@ -1211,23 +1216,6 @@ fn validate_proxy(value: &str) -> Result<()> {
 
 fn identity(document: &Value) -> Result<(String, String)> {
     auth::account_identity(document)
-}
-
-/// Whether `live` is a later login of the same account than `stored`: other
-/// tokens, refreshed later. A login without a refresh time is older.
-fn newer_login(live: &Value, stored: &Value) -> bool {
-    let refreshed = |document: &Value| {
-        document["last_refresh"]
-            .as_str()
-            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t.trim()).ok())
-    };
-    identity(live).is_ok()
-        && identity(live).ok() == identity(stored).ok()
-        && live["tokens"] != stored["tokens"]
-        && match (refreshed(live), refreshed(stored)) {
-            (Some(live), Some(stored)) => live > stored,
-            (live, stored) => live.is_some() || stored.is_none(),
-        }
 }
 
 fn score(a: &AccountSummary) -> f64 {

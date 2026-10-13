@@ -244,9 +244,12 @@ pub(crate) fn select(paths: &Paths, id: &str, auth_json: &Value) -> Result<bool,
     .map(|_| true)
 }
 
+/// Writes a login the proxy renewed from `from` to auth.json, when Codex
+/// still uses that account at that generation or an older one.
 pub(crate) fn sync_refreshed_auth(
     paths: &Paths,
     id: &str,
+    from: &Value,
     auth_json: &Value,
 ) -> Result<(), String> {
     let settings = repository::load_settings(&paths.data_dir.join("settings.json"))?;
@@ -265,7 +268,9 @@ pub(crate) fn sync_refreshed_auth(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.to_string()),
     };
-    if auth::account_identity(&current).ok() != auth::account_identity(auth_json).ok() {
+    if auth::account_identity(&current).ok() != auth::account_identity(auth_json).ok()
+        || !auth::renewal_replaces(auth_json, from, &current)
+    {
         return Ok(());
     }
     let mut next = auth::normalized_auth_for_write(auth_json.clone())?;
@@ -310,20 +315,29 @@ mod refresh_tests {
         app.import_json(&document.to_string()).await.unwrap();
         let id = app.accounts().await.unwrap()[0].id.clone();
         app.switch_account(&id).await.unwrap();
-        let mut refreshed = document.clone();
-        refreshed["tokens"]["access_token"] = "new".into();
-        sync_refreshed_auth(&app.paths, "different-card", &refreshed).unwrap();
         let read =
             || serde_json::from_slice::<Value>(&fs::read(&app.paths.codex_auth).unwrap()).unwrap();
+        let from = read();
+        let mut refreshed = from.clone();
+        refreshed["tokens"]["access_token"] = "new".into();
+        sync_refreshed_auth(&app.paths, "different-card", &from, &refreshed).unwrap();
         assert_eq!(read()["tokens"]["access_token"], "old");
         let mut settings = app.configuration().unwrap();
         settings.local_proxy_host_api_only = true;
         app.persist_configuration(&settings).unwrap();
-        sync_refreshed_auth(&app.paths, &id, &refreshed).unwrap();
+        sync_refreshed_auth(&app.paths, &id, &from, &refreshed).unwrap();
         assert_eq!(read()["tokens"]["access_token"], "old");
         settings.local_proxy_host_api_only = false;
         app.persist_configuration(&settings).unwrap();
-        sync_refreshed_auth(&app.paths, &id, &refreshed).unwrap();
+        // A renewal answered after Codex renewed the login keeps Codex's.
+        let mut renewed = from.clone();
+        renewed["tokens"]["access_token"] = "renewed-by-codex".into();
+        renewed["last_refresh"] = "2099-01-01T00:00:00Z".into();
+        write_json(&app.paths.codex_auth, &renewed).unwrap();
+        sync_refreshed_auth(&app.paths, &id, &from, &refreshed).unwrap();
+        assert_eq!(read()["tokens"]["access_token"], "renewed-by-codex");
+        write_json(&app.paths.codex_auth, &from).unwrap();
+        sync_refreshed_auth(&app.paths, &id, &from, &refreshed).unwrap();
         assert_eq!(read()["tokens"]["access_token"], "new");
     }
 }

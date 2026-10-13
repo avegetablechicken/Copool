@@ -285,6 +285,30 @@ pub(crate) fn account_identity(document: &Value) -> Result<(String, String), Str
     Ok((extracted.account_id, principal))
 }
 
+/// Whether `live` is a later login of the same account than `stored`: other
+/// tokens, refreshed later. A login without a refresh time is older.
+pub(crate) fn newer_login(live: &Value, stored: &Value) -> bool {
+    let refreshed = |document: &Value| {
+        document["last_refresh"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t.trim()).ok())
+    };
+    account_identity(live).is_ok()
+        && account_identity(live).ok() == account_identity(stored).ok()
+        && live["tokens"] != stored["tokens"]
+        && match (refreshed(live), refreshed(stored)) {
+            (Some(live), Some(stored)) => live > stored,
+            (live, stored) => live.is_some() || stored.is_none(),
+        }
+}
+
+/// Whether a login renewed from `from` may replace `current`, wherever it is
+/// kept: `current` still holds that generation, or an older one. A renewal
+/// answered late must not replace a login renewed since.
+pub(crate) fn renewal_replaces(renewed: &Value, from: &Value, current: &Value) -> bool {
+    current["tokens"] == from["tokens"] || newer_login(renewed, current)
+}
+
 pub(crate) fn current_auth_account_id() -> Option<String> {
     read_current_codex_auth()
         .ok()

@@ -132,8 +132,9 @@ pub(crate) struct ProxyStorageContext {
     pub(crate) prefer_local_selection: bool,
     pub(crate) active_auth_path: Option<PathBuf>,
     pub(crate) upstream_base_url: Option<String>,
+    /// A login renewed from the first one (id, from, renewed), once stored.
     pub(crate) on_auth_refreshed:
-        Option<Arc<dyn Fn(&str, &Value) -> Result<(), String> + Send + Sync>>,
+        Option<Arc<dyn Fn(&str, &Value, &Value) -> Result<(), String> + Send + Sync>>,
     pub(crate) account_proxy: Option<Arc<dyn Fn() -> Result<String, String> + Send + Sync>>,
     pub(crate) provider_candidates:
         Option<Arc<dyn Fn() -> Result<Vec<StoredAccount>, String> + Send + Sync>>,
@@ -2127,7 +2128,14 @@ async fn refresh_proxy_candidate_auth(
 ) -> Result<ProxyCandidate, String> {
     let refreshed_auth_json =
         refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?;
-    persist_refreshed_candidate_auth(storage, &candidate.id, &refreshed_auth_json).await?;
+    // A login renewed elsewhere in the meantime is the one to retry with.
+    let refreshed_auth_json = persist_refreshed_candidate_auth(
+        storage,
+        &candidate.id,
+        &candidate.auth_json,
+        &refreshed_auth_json,
+    )
+    .await?;
 
     let extracted = extract_auth(&refreshed_auth_json)
         .map_err(|error| format!("刷新后解析账号登录态失败: {error}"))?;
@@ -2146,11 +2154,14 @@ async fn refresh_proxy_candidate_auth(
     })
 }
 
+/// Stores a login renewed from `from`, unless the stored one was renewed
+/// since; returns the login now stored. auth.json gets the same check.
 async fn persist_refreshed_candidate_auth(
     storage: &ProxyStorageContext,
     account_id: &str,
+    from: &Value,
     refreshed_auth_json: &Value,
-) -> Result<(), String> {
+) -> Result<Value, String> {
     let _guard = storage.store_lock.lock().await;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = load_store_from_path(&store_path)?;
@@ -2160,13 +2171,16 @@ async fn persist_refreshed_candidate_auth(
         .iter_mut()
         .find(|account| account.id == account_id)
     {
+        if !crate::auth::renewal_replaces(refreshed_auth_json, from, &account.auth_json) {
+            return Ok(account.auth_json.clone());
+        }
         account.auth_json = refreshed_auth_json.clone();
         account.updated_at = now_unix_seconds();
     }
 
     save_store_to_path(&store_path, &store)?;
     if let Some(callback) = &storage.on_auth_refreshed {
-        callback(account_id, refreshed_auth_json)?;
+        callback(account_id, from, refreshed_auth_json)?;
     }
 
     if storage.sync_active_auth_on_refresh
@@ -2176,12 +2190,13 @@ async fn persist_refreshed_candidate_auth(
             .is_some_and(|current| {
                 crate::auth::account_identity(current).ok()
                     == crate::auth::account_identity(refreshed_auth_json).ok()
+                    && crate::auth::renewal_replaces(refreshed_auth_json, from, current)
             })
     {
         write_active_codex_auth(refreshed_auth_json)?;
     }
 
-    Ok(())
+    Ok(refreshed_auth_json.clone())
 }
 
 fn should_retry_with_token_refresh(status: StatusCode, body: &Bytes) -> bool {
@@ -4128,7 +4143,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             serde_json::from_value(json!({"accounts":[account("alice"),account("bob")]})).unwrap();
         let path = account_store_path_from_data_dir(dir.path());
         save_store_to_path(&path, &saved).unwrap();
-        persist_refreshed_candidate_auth(&storage, "bob", &json!({"updated":"bob"}))
+        let from = account("bob")["authJson"].clone();
+        persist_refreshed_candidate_auth(&storage, "bob", &from, &json!({"updated":"bob"}))
             .await
             .unwrap();
         persist_candidate_usage_result(&storage, "bob", Err("bob-only".into())).await;
@@ -4140,6 +4156,46 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         assert_eq!(saved.accounts[0].usage_error, None);
         assert_eq!(saved.accounts[1].auth_json["updated"], "bob");
         assert_eq!(saved.accounts[1].usage_error.as_deref(), Some("bob-only"));
+    }
+
+    #[tokio::test]
+    async fn a_late_renewal_keeps_the_login_stored_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        let auth = |token: &str, refreshed: &str| {
+            json!({"tokens":{"access_token":token,
+            "id_token":"test","account_id":"team"},"last_refresh":refreshed})
+        };
+        let older = auth("older", "2026-01-01T00:00:00Z");
+        let newer = auth("newer", "2026-01-03T00:00:00Z");
+        let late = auth("late", "2026-01-02T00:00:00Z");
+        let saved = serde_json::from_value(json!({"accounts":[{"id":"bob","label":"bob",
+            "accountId":"team","authJson":newer,"addedAt":1,"updatedAt":1}]}))
+        .unwrap();
+        let path = account_store_path_from_data_dir(dir.path());
+        save_store_to_path(&path, &saved).unwrap();
+        // Renewed from the older login, after another path stored the newer.
+        let kept = persist_refreshed_candidate_auth(&storage, "bob", &older, &late)
+            .await
+            .unwrap();
+        assert_eq!(kept, newer);
+        let stored = load_store_from_path(&path).unwrap().accounts[0]
+            .auth_json
+            .clone();
+        assert_eq!(stored, newer);
+        // Renewed from the login stored, it replaces it.
+        let renewed = auth("renewed", "2026-01-04T00:00:00Z");
+        persist_refreshed_candidate_auth(&storage, "bob", &newer, &renewed)
+            .await
+            .unwrap();
+        let stored = load_store_from_path(&path).unwrap().accounts[0]
+            .auth_json
+            .clone();
+        assert_eq!(stored, renewed);
     }
 
     #[test]
