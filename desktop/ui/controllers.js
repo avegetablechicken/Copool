@@ -386,6 +386,7 @@
         accountId: "",
         zoneId: "",
         apiToken: "",
+        hasAPIToken: false,
       };
       this.remoteServers = [];
       this.remoteStatuses = {};
@@ -421,6 +422,7 @@
             ? ""
             : cf.accountId || "",
           zoneID: this.tunnelConfiguration.zoneId ? "" : cf.zoneId || "",
+          hasAPIToken: !!cf.hasAPIToken,
         },
         remoteServers: this.remoteServers,
         remoteStatuses: this.remoteStatuses,
@@ -456,6 +458,7 @@
         tunnelMode: snapshot.cloudflaredTunnelMode || "quick",
         useHTTP2: !!snapshot.cloudflaredUseHTTP2,
         namedHostname: named.hostname || "",
+        hasAPIToken: !!named.hasAPIToken,
       });
       for (const [local, remote] of [
         ["apiToken", "apiToken"],
@@ -481,10 +484,15 @@
       this.onUpdate();
       return changed;
     }
+    /// The token typed in, or one saved in the Keychain, which the
+    /// configuration never returns.
     get namedTunnelReady() {
       const c = this.tunnelConfiguration;
-      return [c.apiToken, c.accountId, c.zoneId, c.namedHostname].every(
-        (value) => !!value?.trim(),
+      return (
+        (c.hasAPIToken || !!c.apiToken?.trim()) &&
+        [c.accountId, c.zoneId, c.namedHostname].every(
+          (value) => !!value?.trim(),
+        )
       );
     }
     /// ProxyPageModel.canStartCloudflared.

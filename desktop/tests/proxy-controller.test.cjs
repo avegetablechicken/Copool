@@ -459,6 +459,29 @@ test("A named tunnel starts only with every field filled in", () => {
   });
   assert.equal(model.canStartTunnel, true);
 });
+test("A named tunnel starts with the token saved in the Keychain", () => {
+  const model = new Proxy();
+  const snapshot = (hasAPIToken) =>
+    model.applyLocal(
+      { running: true, port: 8787 },
+      {
+        cloudflared: {
+          enabled: true,
+          tunnelMode: "named",
+          namedHostname: "api.example.test",
+          accountId: "account",
+          zoneId: "zone",
+          hasAPIToken,
+        },
+      },
+      { installed: true, running: false },
+    );
+  snapshot(false);
+  assert.equal(model.canStartTunnel, false);
+  snapshot(true);
+  assert.equal(model.tunnelConfiguration.apiToken, "");
+  assert.equal(model.canStartTunnel, true);
+});
 test("Saving a remote card locks only that card", async () => {
   let release;
   const model = new Proxy(async (command, { value }) => {

@@ -70,18 +70,42 @@ impl Application {
         config: &crate::tunnel::Configuration,
     ) -> Result<(), String> {
         let _op = self.operations.lock().await;
+        let mut config = config.clone();
         if !config.api_token.is_empty() {
             self.secrets
                 .set("cloudflare-api-token", &config.api_token)?;
         }
+        config.has_api_token = !config.api_token.is_empty() || self.has_cloudflare_token();
         let mut settings = self.configuration()?;
         settings.proxy_configuration["cloudflared"] =
-            serde_json::to_value(config).map_err(|e| e.to_string())?;
+            serde_json::to_value(&config).map_err(|e| e.to_string())?;
         self.persist_configuration(&settings)
+    }
+    fn has_cloudflare_token(&self) -> bool {
+        self.secrets
+            .get("cloudflare-api-token")
+            .ok()
+            .flatten()
+            .is_some_and(|token| !token.is_empty())
     }
     pub(crate) fn migrate_provider_credentials(&self) -> Result<(), String> {
         let mut settings = self.configuration()?;
         let mut changed = false;
+        // A named tunnel saved before the token was marked as kept.
+        if let Some(cloudflared) = settings
+            .proxy_configuration
+            .get_mut("cloudflared")
+            .and_then(serde_json::Value::as_object_mut)
+            .filter(|c| !c.contains_key("hasAPIToken"))
+            .filter(|c| {
+                c.get("accountId")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| !v.is_empty())
+            })
+        {
+            cloudflared.insert("hasAPIToken".into(), self.has_cloudflare_token().into());
+            changed = true;
+        }
         for p in &mut settings.sub2_api_provider.providers {
             if !p.legacy_admin_base_url.is_empty() {
                 if let Some(id) = codex_config::matching_provider(

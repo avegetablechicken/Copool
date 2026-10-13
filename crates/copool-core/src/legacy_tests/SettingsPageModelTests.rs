@@ -653,3 +653,32 @@ async fn global_sub2api_refresh_batches_by_route_and_isolates_failures() {
         .usage_error
         .is_some());
 }
+#[tokio::test]
+async fn testSavedCloudflareTokenIsMarkedWithoutBeingReturned() {
+    let (_dir, app, secrets) = fixture();
+    let mut settings = serde_json::to_value(app.configuration().unwrap()).unwrap();
+    settings["proxyConfiguration"]["cloudflared"] = json!({"enabled":true,"tunnelMode":"named",
+        "accountId":"account","zoneId":"zone","namedHostname":"api.example.test"});
+    std::fs::write(
+        app.paths.data_dir.join("settings.json"),
+        serde_json::to_vec(&settings).unwrap(),
+    )
+    .unwrap();
+    secrets.set("cloudflare-api-token", "token").unwrap();
+    let cloudflared = || {
+        serde_json::to_value(app.configuration().unwrap()).unwrap()["proxyConfiguration"]
+            ["cloudflared"]
+            .clone()
+    };
+    // A token saved before the mark existed is marked once.
+    app.migrate_provider_credentials().unwrap();
+    assert_eq!(cloudflared()["hasAPIToken"], true);
+    assert!(cloudflared().get("apiToken").is_none());
+    // Saving without typing the token again keeps it, and the mark.
+    let config: crate::tunnel::Configuration = serde_json::from_value(cloudflared()).unwrap();
+    app.save_tunnel_configuration(&config).await.unwrap();
+    assert_eq!(cloudflared()["hasAPIToken"], true);
+    secrets.remove("cloudflare-api-token").unwrap();
+    app.save_tunnel_configuration(&config).await.unwrap();
+    assert_eq!(cloudflared()["hasAPIToken"], false);
+}

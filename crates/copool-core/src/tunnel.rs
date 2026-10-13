@@ -21,6 +21,9 @@ pub struct Configuration {
     pub zone_id: String,
     #[serde(skip_serializing)]
     pub api_token: String,
+    /// Whether a token is kept in the Keychain; the token itself never is.
+    #[serde(rename = "hasAPIToken")]
+    pub has_api_token: bool,
 }
 impl Default for Configuration {
     fn default() -> Self {
@@ -32,6 +35,7 @@ impl Default for Configuration {
             account_id: String::new(),
             zone_id: String::new(),
             api_token: String::new(),
+            has_api_token: false,
         }
     }
 }
