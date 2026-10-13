@@ -939,7 +939,11 @@ async function refreshFeatureState() {
     invoke("refresh_activity"),
     invoke("tunnel_action", { action: "status", value: null }),
   ]);
-  accountsController.syncActivity(activity);
+  // Activity covers both pools; each pool waits only on its own accounts.
+  for (const controller of Object.values(poolControllers))
+    controller.syncActivity(
+      activity.filter((id) => controller.accounts.some((a) => a.id === id)),
+    );
   proxyController.tunnelStatus = tunnel;
   proxyController.remoteServers = settings.remoteServers;
   proxyController.applyLocal(
