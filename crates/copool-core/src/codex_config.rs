@@ -215,8 +215,7 @@ fn header_path(header: &str) -> Vec<String> {
 /// The profile the root `profile` key selects, when that profile assigns
 /// `model_provider` in a form the editor below can rewrite. It comes from the
 /// same line scan as the rewrite: a profile written as an inline table or a
-/// dotted key is invisible to it, and the switch then edits the root assignment
-/// as the original app did instead of failing the whole switch.
+/// dotted key is invisible to it, and is rewritten by the TOML editor instead.
 fn profile_target(lines: &[String]) -> Option<String> {
     let mut active = None;
     let mut assigned: Vec<String> = Vec::new();
@@ -246,13 +245,37 @@ fn profile_target(lines: &[String]) -> Option<String> {
     }
     active.filter(|profile| assigned.iter().any(|name| name == profile))
 }
+/// The configuration with `provider` in effect: the active profile's
+/// `model_provider` when it assigns one, else the root one. The result is
+/// checked against what Codex would select.
 pub fn updating(raw: &str, provider: &str) -> Result<String, String> {
     let provider = provider.trim();
     if provider.is_empty() {
         return Err("Provider ID is required".into());
     }
+    let updated = rewriting(raw, provider)?;
+    let doc = updated.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    if selected(&doc) != provider {
+        return Err(
+            "The Codex configuration selects its provider in a form Copool cannot switch".into(),
+        );
+    }
+    Ok(updated)
+}
+/// The active profile's `model_provider` value, wherever the profile is written.
+fn profile_provider<'a>(
+    doc: &'a mut DocumentMut,
+    profile: &str,
+) -> Option<&'a mut toml_edit::Value> {
+    doc.get_mut("profiles")?
+        .get_mut(profile)?
+        .as_table_like_mut()?
+        .get_mut("model_provider")?
+        .as_value_mut()
+}
+fn rewriting(raw: &str, provider: &str) -> Result<String, String> {
     // Refuse to rewrite a config the parser cannot read.
-    raw.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    let mut doc = raw.parse::<DocumentMut>().map_err(|e| e.to_string())?;
     let mut lines: Vec<String> = if raw.is_empty() {
         vec![]
     } else {
@@ -261,6 +284,17 @@ pub fn updating(raw: &str, provider: &str) -> Result<String, String> {
     let target: Vec<String> = profile_target(&lines)
         .map(|profile| vec!["profiles".into(), profile])
         .unwrap_or_default();
+    // An inline table or dotted key the line editor cannot see is edited in
+    // place, its spacing kept; the root assignment would not take effect.
+    let active = doc.get("profile").and_then(Item::as_str).map(str::to_owned);
+    if let (true, Some(profile)) = (target.is_empty(), active) {
+        if let Some(value) = profile_provider(&mut doc, &profile) {
+            let decor = value.decor().clone();
+            *value = toml_edit::Value::from(provider);
+            *value.decor_mut() = decor;
+            return Ok(doc.to_string());
+        }
+    }
     let mut section = Vec::<String>::new();
     let mut insertion = lines
         .iter()
@@ -345,23 +379,20 @@ mod tests {
     }
 
     #[test]
-    fn updating_writes_the_root_assignment_when_the_profile_is_not_a_table() {
-        // An inline table or a dotted key is invisible to the line editor, so the
-        // switch goes to the root assignment as the original app did rather than
-        // failing on a config it cannot rewrite in place.
+    fn updating_rewrites_a_profile_written_as_an_inline_table_or_dotted_key() {
+        // The root assignment would not take effect: the profile's is edited.
         for raw in [
             "profile = \"work\"\n[profiles]\nwork = { model_provider = \"old\" }\n",
             "profile = \"work\"\n[profiles]\nwork.model_provider = \"old\"\n",
+            "profile = \"work\"\nprofiles.work.model_provider = \"old\" # kept\n",
         ] {
-            assert_eq!(
-                updating(raw, "new").unwrap(),
-                raw.replacen(
-                    "profile = \"work\"\n",
-                    "profile = \"work\"\nmodel_provider = \"new\"\n",
-                    1
-                )
-            );
+            let updated = updating(raw, "new").unwrap();
+            assert_eq!(updated, raw.replace("\"old\"", "\"new\""));
+            assert_eq!(resolve(&updated).id, "new");
         }
+        // A profile without its own provider uses the root assignment.
+        let raw = "profile = \"work\"\n[profiles.work]\nmodel = \"m\"\n";
+        assert_eq!(resolve(&updating(raw, "new").unwrap()).id, "new");
     }
 
     #[test]
