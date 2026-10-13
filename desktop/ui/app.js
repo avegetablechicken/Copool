@@ -1190,6 +1190,16 @@ document
       (input.onchange = () =>
         savePreference({ [input.dataset.preference]: input.checked })),
   );
+// Support horizontal trackpad gestures and Shift+wheel without trapping page scroll.
+$("account-proxy").addEventListener("wheel", (event) => {
+  const input = event.currentTarget;
+  const delta = event.deltaX || (event.shiftKey ? event.deltaY : 0);
+  if (!delta) return;
+  const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? input.clientWidth : 1;
+  const previous = input.scrollLeft;
+  input.scrollLeft += delta * scale;
+  if (input.scrollLeft !== previous) event.preventDefault();
+}, { passive: false });
 $("account-proxy").onchange = () =>
   savePreference({ accountProxyUrl: $("account-proxy").value.trim() });
 $("usage-display").onchange = () => {

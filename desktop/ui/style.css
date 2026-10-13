@@ -751,6 +751,35 @@ select:disabled {
   text-align-last: right;
 }
 
+.settings-general {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(80px, 1fr);
+  column-gap: 16px;
+}
+
+.settings-general > .block-head,
+.settings-general > .row {
+  grid-column: 1 / -1;
+}
+
+.settings-general > .row {
+  display: grid;
+  grid-template-columns: subgrid;
+  column-gap: 16px;
+}
+
+.settings-general > .row > :last-child {
+  justify-self: end;
+}
+
+#account-proxy {
+  text-overflow: clip;
+}
+
+.settings-general .row > #account-proxy {
+  width: 100%;
+}
+
 /* The selected label determines the width, including space for the arrows. */
 .content-sized-select {
   position: relative;
