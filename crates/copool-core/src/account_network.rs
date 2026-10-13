@@ -81,24 +81,39 @@ pub(crate) fn deactivated(error: &str) -> bool {
     .iter()
     .any(|v| error.contains(v))
 }
+/// A failed request still reports the login it used: a refresh that succeeded
+/// before the failure already spent the caller's copy of the tokens.
+pub(crate) struct FetchFailure {
+    pub auth: Value,
+    pub message: String,
+}
+
 pub(crate) async fn fetch(
     network: &dyn AccountNetwork,
     original: &Value,
     proxy: &str,
     now: i64,
-) -> Result<(Value, UsageSnapshot), String> {
+) -> Result<(Value, UsageSnapshot), FetchFailure> {
     let mut auth = original.clone();
     let expired = crate::auth::access_token_expiry(&auth).is_some_and(|exp| exp <= now);
     if expired {
-        auth = network.refresh(&auth, proxy).await?;
+        auth = match network.refresh(&auth, proxy).await {
+            Ok(refreshed) => refreshed,
+            Err(message) => return Err(FetchFailure { auth, message }),
+        };
     }
     match network.usage(&auth, proxy).await {
         Ok(usage) => Ok((auth, usage)),
         Err(error) if expired_error(&error) => {
-            auth = network.refresh(&auth, proxy).await?;
-            let usage = network.usage(&auth, proxy).await?;
-            Ok((auth, usage))
+            auth = match network.refresh(&auth, proxy).await {
+                Ok(refreshed) => refreshed,
+                Err(message) => return Err(FetchFailure { auth, message }),
+            };
+            match network.usage(&auth, proxy).await {
+                Ok(usage) => Ok((auth, usage)),
+                Err(message) => Err(FetchFailure { auth, message }),
+            }
         }
-        Err(error) => Err(error),
+        Err(message) => Err(FetchFailure { auth, message }),
     }
 }

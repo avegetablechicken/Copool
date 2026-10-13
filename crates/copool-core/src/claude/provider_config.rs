@@ -31,42 +31,53 @@ fn is_set(value: &Value) -> bool {
     }
 }
 
-/// What in the settings replaces the subscription login; none when official.
-pub(super) fn overrides(settings: &Value) -> Vec<String> {
-    let mut keys = vec![];
+/// The root and `env` keys that replace the subscription login. The two are
+/// kept apart because the same name can appear in both places.
+fn override_keys(settings: &Value) -> (Vec<String>, Vec<String>) {
+    let mut root = vec![];
     for key in ["apiKeyHelper", "forceLoginGatewayUrl"] {
         if settings.get(key).is_some_and(is_set) {
-            keys.push(key.to_owned());
+            root.push(key.to_owned());
         }
     }
     if matches!(
         settings["forceLoginMethod"].as_str(),
         Some("console" | "gateway")
     ) {
-        keys.push("forceLoginMethod".into());
+        root.push("forceLoginMethod".into());
     }
-    if let Some(env) = settings["env"].as_object() {
-        keys.extend(
+    let env = settings["env"]
+        .as_object()
+        .map(|env| {
             ENV_OVERRIDES
                 .iter()
                 .filter(|key| env.get(**key).is_some_and(is_set))
-                .map(|key| (*key).to_owned()),
-        );
-    }
-    keys
+                .map(|key| (*key).to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    (root, env)
+}
+
+/// What in the settings replaces the subscription login; none when official.
+pub(super) fn overrides(settings: &Value) -> Vec<String> {
+    let (mut root, env) = override_keys(settings);
+    root.extend(env);
+    root
 }
 
 /// Removes what replaces the login, keeping the rest of the settings.
 pub(super) fn remove_overrides(settings: &mut Value) {
-    let keys = overrides(settings);
+    let (root_keys, env_keys) = override_keys(settings);
     let Some(root) = settings.as_object_mut() else {
         return;
     };
-    for key in &keys {
-        if root.shift_remove(key).is_none() {
-            if let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) {
-                env.shift_remove(key);
-            }
+    for key in &root_keys {
+        root.shift_remove(key);
+    }
+    if let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) {
+        for key in &env_keys {
+            env.shift_remove(key);
         }
     }
 }

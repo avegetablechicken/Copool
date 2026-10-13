@@ -362,11 +362,23 @@ impl Application {
         if settings.extra.get("rustPreferencesMigrated").is_none() {
             let old = self.paths.settings();
             if old.exists() {
-                let legacy: Preferences =
-                    serde_json::from_slice(&fs::read(old).map_err(|e| e.to_string())?)
-                        .map_err(|e| e.to_string())?;
-                validate_preferences(&legacy)?;
-                Self::project_preferences(&mut settings, &legacy);
+                // A preferences.json this build cannot read must not fail every
+                // later call: keep a copy and fall back to the settings.
+                let legacy = fs::read(&old)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+                    .and_then(|legacy| validate_preferences(&legacy).map(|()| legacy));
+                match legacy {
+                    Ok(legacy) => Self::project_preferences(&mut settings, &legacy),
+                    Err(error) => {
+                        log::warn!("读取旧 preferences.json 失败, 已保留副本: {error}");
+                        let backup = old.with_file_name(format!(
+                            "preferences.corrupt-{}.json",
+                            now_unix_seconds()
+                        ));
+                        let _ = fs::rename(&old, backup);
+                    }
+                }
             }
             settings
                 .extra
@@ -444,7 +456,7 @@ impl Application {
         }
         // auth.json may be changed outside Copool; the login Codex actually uses wins over
         // the stored selection. A missing or unreadable login keeps the stored selection.
-        let live = self.current_auth()?;
+        let live = self.current_auth().ok().flatten();
         let current = live.as_ref().and_then(|v| identity(v).ok());
         if let Some(current) = &current {
             let matches = |a: &StoredAccount| identity(&a.auth_json).ok().as_ref() == Some(current);
@@ -921,19 +933,40 @@ impl Application {
                         live_write = Some(auth);
                     }
                 }
-                Err(error) => {
+                Err(crate::account_network::FetchFailure { auth, message }) => {
+                    // A refresh that succeeded before the request failed has already
+                    // spent the stored copy, so keep the rotated login even though the
+                    // usage call did not answer.
+                    if auth != &account.auth_json
+                        && (target.auth_json == account.auth_json
+                            || newer_login(auth, &target.auth_json))
+                    {
+                        target.auth_json = auth.clone();
+                    }
                     if let Some(live) = live
                         .as_ref()
                         .filter(|live| newer_login(live, &target.auth_json))
                     {
                         target.auth_json = live.clone();
                     }
-                    target.usage_error = Some(if crate::account_network::expired_error(error) {
+                    if current
+                        && auth != auth_json
+                        && self
+                            .current_auth()
+                            .ok()
+                            .flatten()
+                            .as_ref()
+                            .and_then(|v| identity(v).ok())
+                            == identity(auth).ok()
+                    {
+                        live_write = Some(auth);
+                    }
+                    target.usage_error = Some(if crate::account_network::expired_error(message) {
                         "error.accounts.sign_in_expired".into()
                     } else {
-                        error.clone()
+                        message.clone()
                     });
-                    if crate::account_network::deactivated(error) {
+                    if crate::account_network::deactivated(message) {
                         target
                             .extra
                             .insert("workspaceStatus".into(), "deactivated".into());
@@ -971,7 +1004,7 @@ impl Application {
                 )?;
             }
         }
-        result.map(|_| ())
+        result.map(|_| ()).map_err(|failure| failure.message)
     }
     /// A manual refresh lets new accounts contact upstream: one account, or
     /// all of them without an id.

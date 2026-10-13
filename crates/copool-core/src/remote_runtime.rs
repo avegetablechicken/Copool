@@ -145,25 +145,34 @@ impl Application {
         let _op = self.operations.lock().await;
         let mut settings = self.configuration()?;
         let mut server = remote::normalize(value, || uuid::Uuid::new_v4().to_string())?;
+        // ["ssh-password", "ssh-key"] in order; a submitted secret is never
+        // replaced by the one carried over from the previous id.
+        let mut submitted = [false, false];
         if let Some(password) = server.password.take().filter(|v| !v.is_empty()) {
             self.secrets
                 .set(&format!("ssh-password:{}", server.id), &password)?;
+            submitted[0] = true;
         }
         if let Some(key) = server.private_key.take().filter(|v| !v.is_empty()) {
             self.secrets.set(&format!("ssh-key:{}", server.id), &key)?;
+            submitted[1] = true;
         }
         if let Some(old) = previous_id.filter(|id| *id != server.id) {
-            for prefix in ["ssh-password", "ssh-key"] {
-                if (prefix == "ssh-password"
-                    && matches!(server.auth_mode, RemoteAuthMode::Password))
-                    || (prefix == "ssh-key"
-                        && matches!(server.auth_mode, RemoteAuthMode::KeyContent))
-                {
+            for (index, prefix) in ["ssh-password", "ssh-key"].into_iter().enumerate() {
+                let used_by_auth_mode = match index {
+                    0 => matches!(server.auth_mode, RemoteAuthMode::Password),
+                    _ => matches!(server.auth_mode, RemoteAuthMode::KeyContent),
+                };
+                if !used_by_auth_mode {
+                    continue;
+                }
+                if !submitted[index] {
                     if let Some(secret) = self.secrets.get(&format!("{prefix}:{old}"))? {
                         self.secrets
                             .set(&format!("{prefix}:{}", server.id), &secret)?;
                     }
                 }
+                self.secrets.remove(&format!("{prefix}:{old}"))?;
             }
             settings
                 .remote_servers

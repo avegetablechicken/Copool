@@ -212,28 +212,55 @@ fn header_path(header: &str) -> Vec<String> {
     parts.push(part.trim().into());
     parts
 }
+/// The profile the root `profile` key selects, when that profile assigns
+/// `model_provider` in a form the editor below can rewrite. It comes from the
+/// same line scan as the rewrite: a profile written as an inline table or a
+/// dotted key is invisible to it, and the switch then edits the root assignment
+/// as the original app did instead of failing the whole switch.
+fn profile_target(lines: &[String]) -> Option<String> {
+    let mut active = None;
+    let mut assigned: Vec<String> = Vec::new();
+    let mut section = Vec::<String>::new();
+    for line in lines {
+        let end = unquoted(line, '#').unwrap_or(line.len());
+        let content = line[..end].trim();
+        if content.starts_with('[') && content.ends_with(']') {
+            section = header_path(content.trim_start_matches('[').trim_end_matches(']'));
+            continue;
+        }
+        let Some(eq) = unquoted(content, '=') else {
+            continue;
+        };
+        let key = content[..eq].trim().trim_matches(['\'', '"']);
+        let value = content[eq + 1..].trim().trim_matches(['\'', '"']);
+        if value.is_empty() {
+            continue;
+        }
+        if section.is_empty() {
+            if key == "profile" {
+                active = Some(value.to_owned());
+            }
+        } else if key == "model_provider" && section.len() == 2 && section[0] == "profiles" {
+            assigned.push(section[1].clone());
+        }
+    }
+    active.filter(|profile| assigned.iter().any(|name| name == profile))
+}
 pub fn updating(raw: &str, provider: &str) -> Result<String, String> {
     let provider = provider.trim();
     if provider.is_empty() {
         return Err("Provider ID is required".into());
     }
-    let doc = raw.parse::<DocumentMut>().map_err(|e| e.to_string())?;
-    let target: Vec<String> = doc
-        .get("profile")
-        .and_then(Item::as_str)
-        .filter(|p| {
-            doc.get("profiles")
-                .and_then(|t| t.get(p))
-                .and_then(|t| t.get("model_provider"))
-                .is_some()
-        })
-        .map(|p| vec!["profiles".into(), p.into()])
-        .unwrap_or_default();
+    // Refuse to rewrite a config the parser cannot read.
+    raw.parse::<DocumentMut>().map_err(|e| e.to_string())?;
     let mut lines: Vec<String> = if raw.is_empty() {
         vec![]
     } else {
         raw.split('\n').map(str::to_owned).collect()
     };
+    let target: Vec<String> = profile_target(&lines)
+        .map(|profile| vec!["profiles".into(), profile])
+        .unwrap_or_default();
     let mut section = Vec::<String>::new();
     let mut insertion = lines
         .iter()
@@ -302,4 +329,43 @@ pub fn switch(path: &Path, provider: &str) -> Result<(), String> {
     file.as_file().sync_all().map_err(|e| e.to_string())?;
     file.persist(path).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn updating_replaces_the_model_provider_of_the_active_profile() {
+        let raw = "profile = \"work\"\n[profiles.work]\nmodel_provider = \"old\"\n";
+        assert_eq!(
+            updating(raw, "new").unwrap(),
+            "profile = \"work\"\n[profiles.work]\nmodel_provider = \"new\"\n"
+        );
+    }
+
+    #[test]
+    fn updating_writes_the_root_assignment_when_the_profile_is_not_a_table() {
+        // An inline table or a dotted key is invisible to the line editor, so the
+        // switch goes to the root assignment as the original app did rather than
+        // failing on a config it cannot rewrite in place.
+        for raw in [
+            "profile = \"work\"\n[profiles]\nwork = { model_provider = \"old\" }\n",
+            "profile = \"work\"\n[profiles]\nwork.model_provider = \"old\"\n",
+        ] {
+            assert_eq!(
+                updating(raw, "new").unwrap(),
+                raw.replacen(
+                    "profile = \"work\"\n",
+                    "profile = \"work\"\nmodel_provider = \"new\"\n",
+                    1
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn updating_rejects_a_config_it_cannot_parse() {
+        assert!(updating("model_provider = \n", "new").is_err());
+    }
 }

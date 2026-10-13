@@ -46,11 +46,18 @@ impl Application {
                     extracted = auth::extract_auth(&document)?;
                     (Some(usage), None)
                 }
-                Err(error) if account_network::deactivated(&error) => {
+                Err(account_network::FetchFailure { message, .. })
+                    if account_network::deactivated(&message) =>
+                {
                     self.mark_pending_deactivated(&extracted.account_id).await?;
                     return Err("error.accounts.workspace_deactivated".into());
                 }
-                Err(error) => (None, Some(error)),
+                Err(account_network::FetchFailure { auth, message }) => {
+                    // Keep the rotated login: the refresh already spent the old one.
+                    document = auth;
+                    extracted = auth::extract_auth(&document)?;
+                    (None, Some(message))
+                }
             },
         };
         let mut name = workspace

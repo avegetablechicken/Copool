@@ -101,6 +101,10 @@ impl Application {
             .unwrap_or_default())
     }
     pub async fn dismiss_workspace(&self, id: &str) -> Result<(), String> {
+        // A blank id matches every row that carries no workspace key.
+        if normalized(id).is_empty() {
+            return Ok(());
+        }
         let _op = self.operations.lock().await;
         self.mutate_accounts(|store| {
             if let Some(rows) = store
