@@ -137,6 +137,15 @@ async fn status(server: &RemoteServerConfig, unit: &str) -> Result<Value, String
     )
 }
 impl Application {
+    /// Logins the remote daemon renewed replace the older local copies.
+    async fn adopt_remote_logins(&self, remote: &Value) -> Result<(), String> {
+        let _lock = self.state.store_lock.lock().await;
+        let mut store = crate::store::load_store_from_path(&self.paths.store())?;
+        if remote::adopt_newer_logins(&mut store.accounts, remote) {
+            self.persist_accounts(&store)?;
+        }
+        Ok(())
+    }
     pub async fn save_remote(
         &self,
         value: Value,
@@ -280,14 +289,6 @@ impl Application {
                 )
                 .await?;
                 let operation = async {
-                    let payload = remote::accounts_payload(&self.paths.store())?;
-                    ssh(
-                        &server,
-                        &format!("cat > {}", remote::quote(&format!("{stage}/accounts.json"))),
-                        Some(payload),
-                        90,
-                    )
-                    .await?;
                     if action == "deploy" {
                         let arch = ssh(&server, "uname -m", None, 15).await?;
                         let target = match arch.trim() {
@@ -322,26 +323,57 @@ impl Application {
                             30,
                         )
                         .await?;
+                    }
+                    // The daemon renews tokens in its own accounts.json: logins it
+                    // renewed are kept, and an upload made while it renews again
+                    // is merged anew rather than replacing them.
+                    let mut attempt = 0;
+                    loop {
+                        attempt += 1;
+                        let snapshot = ssh(
+                            &server,
+                            &remote::with_root(&remote::snapshot_command(
+                                &server.remote_dir,
+                                &stage,
+                            )),
+                            None,
+                            30,
+                        )
+                        .await?;
+                        let (checksum, remote_accounts) = remote::parse_snapshot(&snapshot);
+                        if let Some(remote_accounts) = &remote_accounts {
+                            self.adopt_remote_logins(remote_accounts).await?;
+                        }
+                        let payload = remote::accounts_payload(
+                            &self.paths.store(),
+                            remote_accounts.as_ref(),
+                        )?;
                         ssh(
                             &server,
-                            &remote::with_root(&remote::install_command(&server, &unit, &stage)),
-                            None,
+                            &format!("cat > {}", remote::quote(&format!("{stage}/accounts.json"))),
+                            Some(payload),
                             90,
                         )
                         .await?;
-                    } else {
-                        ssh(
-                            &server,
-                            &remote::with_root(&remote::sync_command(
+                        let command = if action == "deploy" {
+                            remote::install_command(&server, &unit, &stage, &checksum)
+                        } else {
+                            remote::sync_command(
                                 &server.remote_dir,
                                 &unit,
                                 &stage,
                                 restart,
-                            )),
-                            None,
-                            60,
-                        )
-                        .await?;
+                                &checksum,
+                            )
+                        };
+                        match ssh(&server, &remote::with_root(&command), None, 90).await {
+                            Err(error)
+                                if error.contains(remote::ACCOUNTS_CHANGED) && attempt < 3 => {}
+                            result => {
+                                result?;
+                                break;
+                            }
+                        };
                     }
                     status(&server, &unit).await
                 }

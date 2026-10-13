@@ -123,8 +123,44 @@ pub(crate) fn systemd_unit(server: &RemoteServerConfig, unit: &str) -> String {
     format!("[Unit]\nDescription=Codex Tools Remote API Proxy ({unit})\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory={dir}\nEnvironment=\"COPOOL_SERVER_ID={}\"\nEnvironment=\"COPOOL_SERVER_LABEL={}\"\nExecStart=\"{dir}/codex-tools-proxyd\" serve --data-dir \"{dir}\" --host 0.0.0.0 --port {} --no-sync-current-auth\nRestart=always\nRestartSec=3\nEnvironment=RUST_LOG=info\n\n[Install]\nWantedBy=multi-user.target\n",systemd_string(&server.id),systemd_string(&server.label),server.listen_port)
 }
 const UNIT_DIRS:&str="/etc/systemd/system/codex-tools-proxyd-*.service /lib/systemd/system/codex-tools-proxyd-*.service /usr/lib/systemd/system/codex-tools-proxyd-*.service";
-pub(crate) fn install_command(server: &RemoteServerConfig, unit: &str, stage: &str) -> String {
-    let mut command = format!(
+/// Marks an upload refused because the remote accounts changed meanwhile.
+pub(crate) const ACCOUNTS_CHANGED: &str = "copool-remote-accounts-changed";
+/// Copies the remote accounts into the stage, then prints the copy's
+/// checksum on one line and its contents: nothing when there are none.
+pub(crate) fn snapshot_command(dir: &str, stage: &str) -> String {
+    format!(
+        "F={}; S={}; if [ -f \"$F\" ]; then cp \"$F\" \"$S\" && cksum < \"$S\" && cat \"$S\"; fi",
+        quote(&format!("{dir}/accounts.json")),
+        quote(&format!("{stage}/remote-accounts.json"))
+    )
+}
+/// The checksum and accounts a snapshot printed.
+pub(crate) fn parse_snapshot(output: &str) -> (String, Option<Value>) {
+    match output.split_once('\n') {
+        Some((checksum, accounts)) => (
+            checksum.trim().to_owned(),
+            serde_json::from_str(accounts).ok(),
+        ),
+        None => (output.trim().to_owned(), None),
+    }
+}
+/// Refuses to go on when the remote accounts are no longer the snapshot: the
+/// daemon rotated a token since, and the upload must be merged again.
+fn unchanged_since(dir: &str, checksum: &str) -> String {
+    format!(
+        "F={}; CURRENT=\"\"; [ -f \"$F\" ] && CURRENT=$(cksum < \"$F\"); if [ \"$CURRENT\" != {} ]; then echo {ACCOUNTS_CHANGED} >&2; exit 75; fi; ",
+        quote(&format!("{dir}/accounts.json")),
+        quote(checksum)
+    )
+}
+pub(crate) fn install_command(
+    server: &RemoteServerConfig,
+    unit: &str,
+    stage: &str,
+    checksum: &str,
+) -> String {
+    let mut command = unchanged_since(&server.remote_dir, checksum);
+    command += &format!(
         "mkdir -p {}; TARGET_DIR={}; TARGET_PORT={}; TARGET_UNIT={}; ",
         quote(&server.remote_dir),
         quote(&server.remote_dir),
@@ -156,8 +192,15 @@ pub(crate) fn install_command(server: &RemoteServerConfig, unit: &str, stage: &s
     command.push_str(&format!("rm -rf {}; systemctl daemon-reload; systemctl enable {} >/dev/null 2>&1 || true; if systemctl is-active --quiet {}; then systemctl restart {}; else systemctl start {}; fi",quote(stage),quote(unit),quote(unit),quote(unit),quote(unit)));
     command
 }
-pub(crate) fn sync_command(dir: &str, unit: &str, stage: &str, restart: bool) -> String {
-    let mut command=format!("DIR={}; UNIT={}; mkdir -p \"$DIR\"; mv {} \"$DIR/accounts.json\"; chmod 600 \"$DIR/accounts.json\"; rm -rf {}; ",quote(dir),quote(unit),quote(&format!("{stage}/accounts.json")),quote(stage));
+pub(crate) fn sync_command(
+    dir: &str,
+    unit: &str,
+    stage: &str,
+    restart: bool,
+    checksum: &str,
+) -> String {
+    let mut command = unchanged_since(dir, checksum);
+    command+=&format!("DIR={}; UNIT={}; mkdir -p \"$DIR\"; mv {} \"$DIR/accounts.json\"; chmod 600 \"$DIR/accounts.json\"; rm -rf {}; ",quote(dir),quote(unit),quote(&format!("{stage}/accounts.json")),quote(stage));
     command.push_str(if restart{r#"if [ -f "/etc/systemd/system/$UNIT" ] || [ -f "/lib/systemd/system/$UNIT" ] || [ -f "/usr/lib/systemd/system/$UNIT" ]; then systemctl restart "$UNIT"; fi;"#}else{"true"});
     command
 }
@@ -217,7 +260,37 @@ pub(crate) fn with_root(command: &str) -> String {
     )
 }
 
-pub(crate) fn accounts_payload(path: &std::path::Path) -> Result<Vec<u8>, String> {
+/// Logins the remote daemon renewed since they were synced replace the older
+/// copies of the same accounts; which accounts there are is not changed.
+pub(crate) fn adopt_newer_logins(
+    accounts: &mut [crate::models::StoredAccount],
+    remote: &Value,
+) -> bool {
+    let remote: Vec<&Value> = remote["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|account| &account["authJson"])
+        .collect();
+    let mut adopted = false;
+    for account in accounts {
+        if let Some(newer) = remote
+            .iter()
+            .find(|auth| crate::auth::newer_login(auth, &account.auth_json))
+        {
+            account.auth_json = (*newer).clone();
+            adopted = true;
+        }
+    }
+    adopted
+}
+
+/// The accounts to upload: the local ones, with the logins the remote
+/// renewed since kept.
+pub(crate) fn accounts_payload(
+    path: &std::path::Path,
+    remote: Option<&Value>,
+) -> Result<Vec<u8>, String> {
     let loaded = crate::store::load_store_from_path(path)?;
     let mut merged: Vec<crate::models::StoredAccount> = Vec::new();
     for incoming in loaded.accounts {
@@ -232,6 +305,9 @@ pub(crate) fn accounts_payload(path: &std::path::Path) -> Result<Vec<u8>, String
         } else {
             merged.push(incoming);
         }
+    }
+    if let Some(remote) = remote {
+        adopt_newer_logins(&mut merged, remote);
     }
     if !merged
         .iter()

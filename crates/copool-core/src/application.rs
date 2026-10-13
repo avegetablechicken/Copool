@@ -272,7 +272,7 @@ impl Application {
         let _lock = self.state.store_lock.lock().await;
         crate::repository::mutate_accounts(&self.paths.store(), edit)
     }
-    fn persist_accounts(&self, accounts: &AccountsStore) -> Result<()> {
+    pub(crate) fn persist_accounts(&self, accounts: &AccountsStore) -> Result<()> {
         store::save_store_to_path(&self.paths.store(), accounts)?;
         self.publish();
         Ok(())

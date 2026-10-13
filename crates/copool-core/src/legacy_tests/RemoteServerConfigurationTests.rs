@@ -84,6 +84,7 @@ fn testDeploymentPlanInstallCommandReplacesConflictingServiceByDirectoryOrPort()
         &d,
         &service_name(&d.id),
         "/tmp/codex-tools-remote-server-1-123",
+        "",
     );
     for text in [
         "TARGET_DIR='/srv/codex tools'",
@@ -118,9 +119,60 @@ fn testDeploymentPlanDiscoverCommandParsesWorkingDirectoryAndPort() {
 }
 #[test]
 fn testDeploymentPlanSyncAccountsCommandRestartsOnlyWhenRequested() {
-    assert!(sync_command("/srv/codex", "unit", "/tmp/stage", true).contains("systemctl restart"));
-    assert!(!sync_command("/srv/codex", "unit", "/tmp/stage", false).contains("systemctl restart"));
-    assert!(sync_command("/srv/codex", "unit", "/tmp/stage", false).contains("true"));
+    assert!(
+        sync_command("/srv/codex", "unit", "/tmp/stage", true, "").contains("systemctl restart")
+    );
+    assert!(
+        !sync_command("/srv/codex", "unit", "/tmp/stage", false, "").contains("systemctl restart")
+    );
+    assert!(sync_command("/srv/codex", "unit", "/tmp/stage", false, "").contains("true"));
+}
+#[cfg(unix)]
+#[test]
+fn testSyncRefusesAccountsTheDaemonWroteSinceTheSnapshot() {
+    let d = tempfile::tempdir().unwrap();
+    let (dir, stage) = (d.path().join("srv"), d.path().join("stage"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |command: &str| {
+        std::process::Command::new("sh")
+            .args(["-c", command])
+            .output()
+            .unwrap()
+    };
+    let (dir_s, stage_s) = (dir.to_str().unwrap(), stage.to_str().unwrap());
+    let remote = dir.join("accounts.json");
+    let snapshot = || {
+        std::fs::create_dir_all(&stage).unwrap();
+        let output = run(&crate::remote::snapshot_command(dir_s, stage_s));
+        crate::remote::parse_snapshot(&String::from_utf8_lossy(&output.stdout))
+    };
+    std::fs::write(&remote, r#"{"accounts":[{"id":"older"}]}"#).unwrap();
+    let (checksum, accounts) = snapshot();
+    assert_eq!(accounts.unwrap()["accounts"][0]["id"], "older");
+    // The daemon renews a token after the snapshot was taken.
+    std::fs::write(&remote, r#"{"accounts":[{"id":"renewed"}]}"#).unwrap();
+    std::fs::write(stage.join("accounts.json"), "uploaded").unwrap();
+    let refused = run(&sync_command(dir_s, "unit", stage_s, false, &checksum));
+    assert_eq!(refused.status.code(), Some(75));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains(crate::remote::ACCOUNTS_CHANGED));
+    assert_eq!(
+        std::fs::read_to_string(&remote).unwrap(),
+        r#"{"accounts":[{"id":"renewed"}]}"#
+    );
+    let (checksum, _) = snapshot();
+    assert!(run(&sync_command(dir_s, "unit", stage_s, false, &checksum))
+        .status
+        .success());
+    assert_eq!(std::fs::read_to_string(&remote).unwrap(), "uploaded");
+    // A first sync finds no accounts, and expects none.
+    std::fs::remove_file(&remote).unwrap();
+    let (checksum, accounts) = snapshot();
+    assert_eq!((checksum.as_str(), accounts), ("", None));
+    std::fs::write(stage.join("accounts.json"), "first").unwrap();
+    assert!(run(&sync_command(dir_s, "unit", stage_s, false, &checksum))
+        .status
+        .success());
+    assert_eq!(std::fs::read_to_string(&remote).unwrap(), "first");
 }
 #[test]
 fn testDeploymentPlanUninstallCommandStopsDisablesAndRemovesServiceArtifacts() {
