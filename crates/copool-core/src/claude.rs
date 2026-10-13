@@ -814,6 +814,20 @@ async fn write_credentials(
     }
     write_json(&file, document)
 }
+/// Removes a login written where there was none, as `write_credentials`
+/// would have placed it.
+async fn remove_credentials(location: &Location, access: KeychainAccess) -> Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = access;
+    #[cfg(target_os = "macos")]
+    if let Some(service) = &location.keychain {
+        keychain::delete(service, access).await?;
+    }
+    match fs::remove_file(location.credentials_file()) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
+}
 fn write_account(location: &Location, account: &Value) -> Result<()> {
     let path = location.account_file();
     let document = match fs::read_to_string(&path) {
@@ -1321,23 +1335,27 @@ impl Application {
         }
         let mut document = previous_document.clone().unwrap_or_else(|| json!({}));
         document["claudeAiOauth"] = target.oauth.clone();
-        write_credentials(&location, &document, access).await?;
         let rollback = |error: String| async {
+            // Without a previous login, none is left either.
             let restored = match &previous_document {
                 Some(previous) => write_credentials(&location, previous, access).await,
-                None => Ok(()),
+                None => remove_credentials(&location, access).await,
             };
             restored
                 .map_err(|rollback| format!("{error}; rollback failed: {rollback}"))
                 .and(Err(error))
         };
+        // The Keychain may already hold the target when the file write fails.
+        if let Err(error) = write_credentials(&location, &document, access).await {
+            return rollback(error).await;
+        }
         if let Err(error) = write_account(&location, &target.account) {
             return rollback(error).await;
         }
+        // Without a previous account, the target's must not stay either.
         let restore_account = || {
-            if let Some(previous) = &previous_account {
-                let _ = write_account(&location, previous);
-            }
+            let previous = previous_account.as_ref().unwrap_or(&Value::Null);
+            let _ = write_account(&location, previous);
         };
         if let Some(official) = &official {
             if let Err(error) = put_settings(&location, official.as_deref()) {
@@ -2318,6 +2336,21 @@ mod tests {
         let stored = app.claude_load().unwrap();
         let bob_stored = stored.accounts.iter().find(|a| a.id == bob.id).unwrap();
         assert_eq!(bob_stored.oauth["accessToken"], "bob-newer");
+    }
+
+    #[tokio::test]
+    async fn a_failed_switch_leaves_no_login_where_there_was_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        fs::remove_file(location.credentials_file()).unwrap();
+        // The identity cannot be written after the credentials are.
+        fs::remove_file(location.account_file()).unwrap();
+        fs::create_dir(location.account_file()).unwrap();
+        assert!(app.claude_switch_account(&id).await.is_err());
+        assert!(!location.credentials_file().exists());
     }
 
     #[tokio::test]

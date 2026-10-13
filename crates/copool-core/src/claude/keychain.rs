@@ -12,7 +12,7 @@ use security_framework::{
 };
 use security_framework_sys::{
     item::{kSecAttrAccount, kSecUseAuthenticationUI, kSecValueData},
-    keychain_item::SecItemUpdate,
+    keychain_item::{SecItemDelete, SecItemUpdate},
 };
 use serde_json::Value;
 
@@ -133,6 +133,30 @@ fn creation_command(
         return Err("Claude credentials are too large to create through the Keychain tool; sign in with Claude Code first".into());
     }
     Ok(command)
+}
+
+/// Removes `$USER`'s item, the one a write creates when there was none.
+#[allow(deprecated)]
+pub(super) async fn delete(service: &str, access: KeychainAccess) -> Result<()> {
+    let service = service.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let user = std::env::var("USER").unwrap_or_default();
+        if user.is_empty() {
+            return Err("The Keychain account name is unavailable".into());
+        }
+        let query = options(&service, Some(&user), access);
+        let query = CFDictionary::from_CFType_pairs(&query.query);
+        // SAFETY: The owned dictionary remains alive for the Security call.
+        match unsafe { SecItemDelete(query.as_concrete_TypeRef()) } {
+            0 | -25300 => Ok(()),
+            code => Err(format!(
+                "Could not remove the Claude Code Keychain entry: {}",
+                Error::from_code(code)
+            )),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub(super) async fn write(service: &str, document: &Value, access: KeychainAccess) -> Result<()> {
