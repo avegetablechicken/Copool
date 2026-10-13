@@ -71,6 +71,36 @@ pub(super) fn remove_overrides(settings: &mut Value) {
     }
 }
 
+/// `base` with the changes made since `applied` was written over it, which
+/// `current` holds: what is still as written takes the value of `base` again;
+/// what was changed, added or removed since keeps the state of `current`.
+pub(super) fn rebase(base: &Value, applied: &Value, current: &Value) -> Value {
+    if current == applied {
+        return base.clone();
+    }
+    let (Some(applied), Some(current)) = (applied.as_object(), current.as_object()) else {
+        return current.clone();
+    };
+    let mut rebased = base.as_object().cloned().unwrap_or_default();
+    let added = current.keys().filter(|key| !applied.contains_key(*key));
+    for key in applied.keys().chain(added) {
+        match (applied.get(key), current.get(key)) {
+            (written, now) if written == now => {}
+            (Some(written), Some(now)) if written.is_object() && now.is_object() => {
+                let base = base.get(key).unwrap_or(&Value::Null);
+                rebased.insert(key.clone(), rebase(base, written, now));
+            }
+            (_, Some(now)) => {
+                rebased.insert(key.clone(), now.clone());
+            }
+            (_, None) => {
+                rebased.shift_remove(key);
+            }
+        }
+    }
+    Value::Object(rebased)
+}
+
 /// Primitives compare by value; objects and arrays are distinct, as
 /// lodash's `uniq` compares them by reference.
 fn duplicate(a: &Value, b: &Value) -> bool {
@@ -164,6 +194,24 @@ mod tests {
         let mut blank = relay.clone();
         remove_overrides(&mut blank);
         assert_eq!(blank, relay);
+    }
+
+    #[test]
+    fn rebase_keeps_changes_made_since_the_provider_was_applied() {
+        let base = json!({"theme": "light", "model": "opus",
+            "env": {"DISABLE_TELEMETRY": "1"}});
+        let applied = json!({"theme": "light", "model": "relay-model",
+            "env": {"DISABLE_TELEMETRY": "1", "ANTHROPIC_BASE_URL": "https://relay.invalid",
+                "ANTHROPIC_AUTH_TOKEN": "fake"}});
+        assert_eq!(rebase(&base, &applied, &applied), base);
+        let current = json!({"model": "relay-model", "hooks": {"Stop": []},
+            "env": {"DISABLE_TELEMETRY": "0", "ANTHROPIC_BASE_URL": "https://relay.invalid",
+                "ANTHROPIC_AUTH_TOKEN": "fake", "EXTRA": "1"}});
+        assert_eq!(
+            rebase(&base, &applied, &current),
+            json!({"model": "opus", "env": {"DISABLE_TELEMETRY": "0", "EXTRA": "1"},
+                "hooks": {"Stop": []}})
+        );
     }
 
     #[test]

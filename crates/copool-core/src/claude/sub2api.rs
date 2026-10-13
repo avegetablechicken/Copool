@@ -2,8 +2,8 @@
 //! and Claude Code pointed at its gateway by merging the provider's settings
 //! file over the official settings, as `claude --settings` would.
 use super::{
-    login_overrides, parse_settings, provider_config, put_settings, read_settings, render_settings,
-    settings_source, Result, Store,
+    login_overrides, official_base, parse_settings, provider_config, put_settings, read_settings,
+    render_settings, settings_source, without_login_replacement, Official, Result, Store,
 };
 use crate::{
     application::{Application, SwitchExecution},
@@ -442,33 +442,35 @@ impl Application {
         let source = settings_source::load(&location, &p.name, &p.settings_path)?;
         let settings = read_settings(&location)?;
         let current = parse_settings(settings.as_deref())?;
-        let leaving_official = provider_config::overrides(&current).is_empty();
         let recorded = self.claude_official_settings()?;
-        // Without a record, other settings lose only what replaces the login.
-        let mut merged = match (&recorded, leaving_official) {
-            (Some(official), false) => parse_settings(official.as_deref())?,
-            (None, false) => {
-                let mut stripped = current;
-                provider_config::remove_overrides(&mut stripped);
-                stripped
+        // A record not yet restored keeps what changed since its provider was
+        // applied, its credential removed or not. Without one, official
+        // settings are recorded as they are, and others lose only what
+        // replaces the login and its gateway.
+        let base = match &recorded {
+            Some(official) => official_base(official, &current, settings.as_deref())?,
+            None if provider_config::overrides(&current).is_empty() => settings.clone(),
+            None => {
+                let stripped = without_login_replacement(current);
+                Some(render_settings(&stripped, settings.as_deref())?)
             }
-            (_, true) => current,
         };
+        let mut merged = parse_settings(base.as_deref())?;
         provider_config::merge(&mut merged, &source.document);
         let merged = render_settings(&merged, settings.as_deref())?;
-        if leaving_official {
-            self.claude_record_official(settings.as_deref())?;
-        }
+        // Leaving the provider drops what it added, and keeps what changed since.
+        self.claude_record_official(&Official {
+            settings: base,
+            applied: Some(merged.clone()),
+        })?;
         let undo = || {
             let _ = put_settings(&location, settings.as_deref());
-            if leaving_official {
-                let _ = match &recorded {
-                    Some(previous) => self.claude_record_official(previous.as_deref()),
-                    None => {
-                        std::fs::remove_file(self.claude_official_path()).map_err(|e| e.to_string())
-                    }
-                };
-            }
+            let _ = match &recorded {
+                Some(previous) => self.claude_record_official(previous),
+                None => {
+                    std::fs::remove_file(self.claude_official_path()).map_err(|e| e.to_string())
+                }
+            };
         };
         if let Err(error) = put_settings(&location, Some(&merged)) {
             undo();
@@ -828,6 +830,9 @@ mod tests {
         // and the file is read again: the old credential does not remain.
         let mut edited = main_settings(&location);
         edited["statusLine"] = json!({"type": "command"});
+        // An address set while a provider's credential is in use is not the
+        // login's: the relay recorded with the login returns.
+        edited["env"][BASE_URL] = "https://edited.invalid".into();
         write_main(&location, &edited);
         source_file(dir.path(), &base, "ANTHROPIC_API_KEY", "rotated-model-key");
         let execution = app.claude_switch_account(&card).await.unwrap();
@@ -842,10 +847,13 @@ mod tests {
             [card.clone()]
         );
 
-        // Back to the login: the recorded settings return verbatim.
+        // Back to the login: the recorded settings return, with what changed
+        // while a provider was applied, and the relay recorded with them.
         let execution = app.claude_switch_account(&alice).await.unwrap();
         assert!(execution.login_overrides.is_empty());
-        assert_eq!(fs::read_to_string(main_path(&location)).unwrap(), official);
+        let mut restored: Value = serde_json::from_str(&official).unwrap();
+        restored["statusLine"] = json!({"type": "command"});
+        assert_eq!(main_settings(&location), restored);
         assert_eq!(
             current(&app.claude_accounts().await.unwrap()),
             [alice.clone()]
@@ -859,7 +867,8 @@ mod tests {
 
         // A credential written outside Copool takes Claude Code off the login.
         let outside = json!({"apiKeyHelper": "helper", "theme": "dark",
-            "env": {AUTH_TOKEN: "outside", "DISABLE_TELEMETRY": "1"}});
+            "env": {AUTH_TOKEN: "outside", BASE_URL: "https://gateway.invalid",
+                "DISABLE_TELEMETRY": "1"}});
         write_main(&location, &outside);
         assert!(current(&app.claude_accounts().await.unwrap()).is_empty());
         // The record went with its restore, so only what replaces the login goes.
@@ -878,9 +887,44 @@ mod tests {
                 BASE_URL: base, "ANTHROPIC_API_KEY": "rotated-model-key"},
                 "model": "source-model", "permissions": {"allow": ["Edit"]}})
         );
+        // What remained is recorded, so the login does not keep the provider's
+        // base URL and send its token to the gateway.
+        assert!(app.claude_official_path().exists());
+        app.claude_switch_account(&alice).await.unwrap();
+        assert_eq!(
+            main_settings(&location),
+            json!({"theme": "dark", "env": {"DISABLE_TELEMETRY": "1"}})
+        );
         assert!(!app.claude_official_path().exists());
         app.claude_delete_account(&card).await.unwrap();
         assert_eq!(app.claude_accounts().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_credential_removed_by_hand_does_not_leave_its_gateway() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, base, _, card, alice) = pool(dir.path()).await;
+        let official = json!({"theme": "dark", "env": {"DISABLE_TELEMETRY": "1"}});
+        write_main(&location, &official);
+        app.claude_switch_account(&card).await.unwrap();
+        let without_credential = || {
+            let mut edited = main_settings(&location);
+            edited["env"]
+                .as_object_mut()
+                .unwrap()
+                .shift_remove(AUTH_TOKEN);
+            write_main(&location, &edited);
+            assert_eq!(main_settings(&location)["env"][BASE_URL], base);
+        };
+        // Between providers, the record is kept rather than replaced.
+        without_credential();
+        app.claude_switch_account(&card).await.unwrap();
+        assert_eq!(main_settings(&location)["env"][AUTH_TOKEN], "sk-team");
+        // Back to the login, the gateway goes with what the provider added.
+        without_credential();
+        app.claude_switch_account(&alice).await.unwrap();
+        assert_eq!(main_settings(&location), official);
+        assert!(!app.claude_official_path().exists());
     }
 
     #[tokio::test]

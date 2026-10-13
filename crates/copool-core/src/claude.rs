@@ -152,6 +152,62 @@ fn put_settings(location: &Location, text: Option<&str>) -> Result<()> {
         None => Ok(()),
     }
 }
+/// The official main settings recorded on leaving them (`None` when the file
+/// was missing), and the provider settings then written in their place.
+struct Official {
+    settings: Option<String>,
+    applied: Option<String>,
+}
+/// The official settings to return to: the record, with the changes made to
+/// the main settings since they were written, except what replaces the login.
+/// Unchanged settings return the recorded text verbatim.
+fn official_base(
+    official: &Official,
+    current: &Value,
+    text: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(applied) = &official.applied else {
+        return Ok(official.settings.clone());
+    };
+    let applied = parse_settings(Some(applied))?;
+    if applied == *current {
+        return Ok(official.settings.clone());
+    }
+    let base = parse_settings(official.settings.as_deref())?;
+    let mut rebased = provider_config::rebase(&base, &applied, current);
+    provider_config::remove_overrides(&mut rebased);
+    // The login is sent to the address recorded with it, never to one set
+    // while a provider's credential was in use.
+    let recorded = base["env"].get(BASE_URL);
+    match (
+        recorded,
+        rebased.get_mut("env").and_then(Value::as_object_mut),
+    ) {
+        (Some(url), Some(env)) => {
+            env.insert(BASE_URL.into(), url.clone());
+        }
+        (None, Some(env)) => {
+            env.shift_remove(BASE_URL);
+        }
+        (Some(url), None) => rebased["env"] = json!({BASE_URL: url}),
+        (None, None) => {}
+    }
+    render_settings(&rebased, text).map(Some)
+}
+const BASE_URL: &str = "ANTHROPIC_BASE_URL";
+/// Settings without what replaces the login. A base URL set beside such a
+/// credential is its gateway, and goes with it; official settings keep theirs
+/// (a relay that forwards the login, say), as they are left untouched.
+fn without_login_replacement(mut settings: Value) -> Value {
+    if provider_config::overrides(&settings).is_empty() {
+        return settings;
+    }
+    provider_config::remove_overrides(&mut settings);
+    if let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) {
+        env.shift_remove(BASE_URL);
+    }
+    settings
+}
 /// Whether Claude Code uses its subscription login with the main settings.
 fn settings_are_official(location: &Location) -> bool {
     read_settings(location)
@@ -976,25 +1032,34 @@ impl Application {
     fn claude_official_path(&self) -> PathBuf {
         self.paths.data_dir.join("claude-official-settings.json")
     }
-    /// The official main settings last recorded: their text, or none when
-    /// the file was missing.
-    fn claude_official_settings(&self) -> Result<Option<Option<String>>> {
+    /// The official main settings last recorded, with the main settings
+    /// written over them.
+    fn claude_official_settings(&self) -> Result<Option<Official>> {
+        let invalid = || "Invalid recorded official Claude settings".to_owned();
         match fs::read(self.claude_official_path()) {
             Ok(bytes) => {
-                let record: Value = serde_json::from_slice(&bytes)
-                    .map_err(|_| "Invalid recorded official Claude settings")?;
-                match &record["settings"] {
-                    Value::Null => Ok(Some(None)),
-                    Value::String(text) => Ok(Some(Some(text.clone()))),
-                    _ => Err("Invalid recorded official Claude settings".into()),
-                }
+                let record: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+                let settings = match &record["settings"] {
+                    Value::Null => None,
+                    Value::String(text) => Some(text.clone()),
+                    _ => return Err(invalid()),
+                };
+                let applied = match &record["applied"] {
+                    Value::Null => None,
+                    Value::String(text) => Some(text.clone()),
+                    _ => return Err(invalid()),
+                };
+                Ok(Some(Official { settings, applied }))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.to_string()),
         }
     }
-    fn claude_record_official(&self, settings: Option<&str>) -> Result<()> {
-        write_json(&self.claude_official_path(), &json!({"settings": settings}))
+    fn claude_record_official(&self, official: &Official) -> Result<()> {
+        write_json(
+            &self.claude_official_path(),
+            &json!({"settings": official.settings, "applied": official.applied}),
+        )
     }
     pub fn claude_location(&self) -> Location {
         self.claude.location.read().unwrap().clone()
@@ -1319,15 +1384,17 @@ impl Application {
         // recorded when leaving them, or else lose only what replaces it.
         let settings = read_settings(&location)?;
         let current = parse_settings(settings.as_deref())?;
+        // A record not yet restored comes first: a provider's credential
+        // removed by hand still leaves its gateway.
         let mut restoring_record = false;
-        let official = if provider_config::overrides(&current).is_empty() {
-            None
-        } else if let Some(recorded) = self.claude_official_settings()? {
+        let official = if let Some(recorded) = self.claude_official_settings()? {
             restoring_record = true;
-            Some(recorded)
+            // Changes made while a provider was applied are kept.
+            Some(official_base(&recorded, &current, settings.as_deref())?)
+        } else if provider_config::overrides(&current).is_empty() {
+            None
         } else {
-            let mut stripped = current;
-            provider_config::remove_overrides(&mut stripped);
+            let stripped = without_login_replacement(current);
             Some(Some(render_settings(&stripped, settings.as_deref())?))
         };
         let previous_document = live.as_ref().map(|l| l.document.clone());
