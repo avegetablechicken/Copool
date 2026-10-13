@@ -1098,10 +1098,10 @@ impl Application {
         // Refresh the whole pool at launch; the UI shows the stored values
         // meanwhile and updates each card as its refresh lands.
         let mut tick = 0u64;
-        let _ = tokio::join!(
-            self.refresh_recurring(tick),
-            self.claude_refresh_recurring(tick)
-        );
+        let _ = tokio::join!(self.refresh_recurring(tick), async {
+            let _ = self.claude_authorize_at_startup().await;
+            self.claude_refresh_recurring(tick).await
+        });
         loop {
             let seconds = self.preferences().map(|p| p.refresh_seconds).unwrap_or(10);
             tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;

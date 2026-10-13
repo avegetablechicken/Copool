@@ -747,7 +747,7 @@ fn set_member(document: &str, key: &str, value: &Value) -> Result<String> {
     ))
 }
 
-/// Background synchronization must never open a Keychain authorization dialog.
+/// Recurring synchronization stays silent; startup and explicit actions may authorize.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum KeychainAccess {
     Background,
@@ -990,6 +990,22 @@ impl Application {
     }
     fn claude_network(&self) -> Arc<dyn Network> {
         self.claude.network.read().unwrap().clone()
+    }
+    /// Request access once at startup, before recurring refreshes. A refusal
+    /// leaves the saved pool intact; importing or switching can request again.
+    pub(crate) async fn claude_authorize_at_startup(&self) -> Result<()> {
+        if self.claude_load()?.accounts.is_empty() {
+            return Ok(());
+        }
+        let _op = self.claude.operations.lock().await;
+        let live =
+            read_live_with_access(&self.claude_location(), KeychainAccess::Interactive).await?;
+        let _lock = self.claude.lock.lock().await;
+        let mut store = self.claude_load()?;
+        if follow_live(&mut store, live.as_ref()) {
+            self.claude_save(&store)?;
+        }
+        Ok(())
     }
     /// The Claude pool, following the login Claude Code uses.
     pub async fn claude_accounts(&self) -> Result<Vec<AccountSummary>> {
@@ -2053,6 +2069,45 @@ mod tests {
             json!({"accessToken": format!("{user}-access"), "refreshToken": format!("{user}-refresh"), "expiresAt": expires, "subscriptionType": "max", "rateLimitTier": "default_claude_max_20x"}),
             json!({"accountUuid": format!("acct-{user}"), "organizationUuid": format!("org-{user}"), "emailAddress": format!("{user}@example.com")}),
         )
+    }
+    #[tokio::test]
+    async fn startup_authorization_follows_the_live_account_without_refreshing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "alice", LATER);
+
+        app.claude_authorize_at_startup().await.unwrap();
+
+        let store = app.claude_load().unwrap();
+        let current = store
+            .accounts
+            .iter()
+            .find(|a| Some(&a.id) == store.current_account_id.as_ref())
+            .unwrap();
+        assert_eq!(current.label, "alice@example.com");
+        assert!(store.accounts.iter().all(|a| a.usage.is_none()));
+        assert!(fake.usage.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn startup_authorization_skips_empty_pools_and_preserves_them_on_read_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _) = waiting_app(&dir);
+        fs::create_dir_all(&location.config_dir).unwrap();
+        fs::write(location.credentials_file(), "invalid credentials").unwrap();
+        // An empty pool must not inspect even an existing credentials file.
+        app.claude_authorize_at_startup().await.unwrap();
+
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let before = fs::read(app.claude_store_path()).unwrap();
+        fs::write(location.credentials_file(), "invalid credentials").unwrap();
+        assert!(app.claude_authorize_at_startup().await.is_err());
+        assert_eq!(fs::read(app.claude_store_path()).unwrap(), before);
     }
     pub(super) fn sign_in(location: &Location, user: &str, expires: i64) {
         let (oauth, account) = login(user, expires);
