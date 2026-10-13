@@ -1280,8 +1280,9 @@ impl Application {
             .proxy_url = value.trim().into();
         self.claude_save(&store)
     }
-    /// Gives Claude Code this account's login and identity. Its previous login
-    /// is kept in `claude-before-switch.json`; a failed step is rolled back.
+    /// Gives Claude Code this account's login and identity. A previous login
+    /// outside the pool is kept in `claude-before-switch.json`; a failed step
+    /// is rolled back.
     pub async fn claude_switch_account(&self, id: &str) -> Result<SwitchExecution> {
         self.claude_switch_with_access(id, KeychainAccess::Interactive)
             .await
@@ -1327,7 +1328,20 @@ impl Application {
         };
         let previous_document = live.as_ref().map(|l| l.document.clone());
         let previous_account = live.as_ref().and_then(|l| l.account.clone());
-        if live.is_some() {
+        // A login the pool holds is not backed up: it would replace the backup
+        // of one it does not hold, whose refresh token is kept nowhere else.
+        let pooled = live.as_ref().is_some_and(|live| {
+            store.accounts.iter().any(|a| {
+                live.oauth()
+                    .is_some_and(|oauth| same_tokens(&a.oauth, oauth))
+                    || live
+                        .account
+                        .as_ref()
+                        .and_then(identity)
+                        .is_some_and(|named| identity(&a.account) == Some(named))
+            })
+        });
+        if live.is_some() && !pooled {
             write_json(
                 &self.paths.data_dir.join("claude-before-switch.json"),
                 &json!({"credentials": previous_document, "oauthAccount": previous_account}),
@@ -2314,11 +2328,9 @@ mod tests {
         assert!(config.contains("\"alpha\": [1, {\"a\": \"}\"}]"));
         let config: Value = serde_json::from_str(&config).unwrap();
         assert_eq!(config["oauthAccount"]["accountUuid"], "acct-alice");
-        assert!(app
-            .paths
-            .data_dir
-            .join("claude-before-switch.json")
-            .exists());
+        // Bob is in the pool: only a login outside it is backed up.
+        let backup = app.paths.data_dir.join("claude-before-switch.json");
+        assert!(!backup.exists());
         let current = app.claude_accounts().await.unwrap();
         assert_eq!(current.iter().find(|a| a.is_current).unwrap().id, alice);
 
@@ -2336,6 +2348,18 @@ mod tests {
         let stored = app.claude_load().unwrap();
         let bob_stored = stored.accounts.iter().find(|a| a.id == bob.id).unwrap();
         assert_eq!(bob_stored.oauth["accessToken"], "bob-newer");
+
+        // A login outside the pool is backed up, and stays so across switches.
+        sign_in(&location, "carol", LATER);
+        app.claude_switch_account(&alice).await.unwrap();
+        let read_backup = || serde_json::from_slice::<Value>(&fs::read(&backup).unwrap()).unwrap();
+        let backed_up = read_backup();
+        assert_eq!(
+            backed_up["credentials"]["claudeAiOauth"]["accessToken"],
+            "carol-access"
+        );
+        app.claude_switch_account(&bob.id).await.unwrap();
+        assert_eq!(read_backup(), backed_up);
     }
 
     #[tokio::test]
