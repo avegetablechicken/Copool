@@ -2733,22 +2733,69 @@ fn extract_completed_response_from_sse(bytes: &[u8]) -> Result<Value, String> {
     let mut decoder = SseDecoder::default();
     let mut accumulator = CompletedResponseAccumulator::default();
     let mut completed_response = None;
-    for event in decoder.push(bytes) {
+    let mut failure = None;
+    let mut events = decoder.push(bytes);
+    events.extend(decoder.finish());
+    for event in events {
         accumulator.observe(&event);
         if let Some(response) = response_completed_from_event(&event) {
             completed_response = Some(response);
         }
-    }
-    for event in decoder.finish() {
-        accumulator.observe(&event);
-        if let Some(response) = response_completed_from_event(&event) {
-            completed_response = Some(response);
-        }
+        failure = failure.or_else(|| failure_from_event(&event));
     }
 
+    // A failure the upstream reported is the reason, not a missing event.
     completed_response
         .map(|response| accumulator.finalize_response(response))
-        .ok_or_else(|| "未在 Codex SSE 中找到 response.completed 事件".to_string())
+        .ok_or_else(|| {
+            failure.unwrap_or_else(|| "未在 Codex SSE 中找到 response.completed 事件".to_string())
+        })
+}
+
+/// The Chat Completions finish reason of an answer the upstream cut off.
+fn incomplete_finish_reason(parsed: &Value) -> Option<&'static str> {
+    if parsed.get("type").and_then(Value::as_str) != Some("response.incomplete") {
+        return None;
+    }
+    match parsed["response"]["incomplete_details"]["reason"].as_str() {
+        Some("max_output_tokens") => Some("length"),
+        Some("content_filter") => Some("content_filter"),
+        _ => None,
+    }
+}
+
+/// The error a failed, incomplete or error event reports, as Chat
+/// Completions errors are shaped.
+fn stream_failure(parsed: &Value) -> Value {
+    let error = match parsed.get("type").and_then(Value::as_str) {
+        Some("error") => parsed.get("error").unwrap_or(parsed),
+        _ => &parsed["response"]["error"],
+    };
+    let reason = parsed["response"]["incomplete_details"]["reason"].as_str();
+    let message = error["message"]
+        .as_str()
+        .filter(|message| !message.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| match reason {
+            Some(reason) => format!("The upstream response is incomplete: {reason}"),
+            None => "The upstream response failed".to_owned(),
+        });
+    let mut failure = json!({"message": message, "type": "upstream_error"});
+    if let Some(code) = error.get("code").filter(|code| !code.is_null()) {
+        failure["code"] = code.clone();
+    }
+    failure
+}
+
+/// The failure an SSE event reports, if it is one.
+fn failure_from_event(event: &SseEvent) -> Option<String> {
+    let parsed = serde_json::from_str::<Value>(&event.data).ok()?;
+    match parsed.get("type").and_then(Value::as_str)? {
+        "response.failed" | "response.incomplete" | "error" => stream_failure(&parsed)["message"]
+            .as_str()
+            .map(str::to_owned),
+        _ => None,
+    }
 }
 
 fn response_completed_from_event(event: &SseEvent) -> Option<Value> {
@@ -3110,6 +3157,19 @@ fn translate_sse_event_to_chat_chunk(event: &SseEvent, state: &mut ChatStreamSta
                 Some(finish_reason),
                 parsed.get("response").and_then(|value| value.get("usage")),
             )]
+        }
+        // A cut-off answer ends as Chat Completions reports one; any other
+        // failure inside the 200 stream is passed on rather than dropped.
+        "response.incomplete" | "response.failed" | "error" => {
+            match incomplete_finish_reason(&parsed) {
+                Some(finish_reason) => vec![build_chat_chunk(
+                    state,
+                    json!({}),
+                    Some(finish_reason),
+                    parsed.get("response").and_then(|value| value.get("usage")),
+                )],
+                None => vec![json!({"error": stream_failure(&parsed)})],
+            }
         }
         _ => {
             let _ = &event.event;
@@ -4004,6 +4064,50 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
                 .and_then(|value| value.get("model"))
                 .and_then(|value| value.as_str()),
             Some("GPT-5.4")
+        );
+    }
+
+    #[test]
+    fn streaming_failures_reach_the_chat_client() {
+        let event = |data: serde_json::Value| SseEvent {
+            event: data["type"].as_str().map(str::to_owned),
+            data: data.to_string(),
+        };
+        let mut state = ChatStreamState::default();
+        let failed = event(
+            json!({"type": "response.failed", "response": {"status": "failed",
+            "error": {"code": "server_error", "message": "The model failed"}}}),
+        );
+        assert_eq!(
+            translate_sse_event_to_chat_chunk(&failed, &mut state),
+            [
+                json!({"error": {"message": "The model failed", "type": "upstream_error",
+                "code": "server_error"}})
+            ]
+        );
+        let error = event(json!({"type": "error", "error": {"message": "Rate limited"}}));
+        assert_eq!(
+            translate_sse_event_to_chat_chunk(&error, &mut state)[0]["error"]["message"],
+            "Rate limited"
+        );
+        let cut_off = |reason: &str| {
+            event(
+                json!({"type": "response.incomplete", "response": {"status": "incomplete",
+                "incomplete_details": {"reason": reason}}}),
+            )
+        };
+        let chunks = translate_sse_event_to_chat_chunk(&cut_off("max_output_tokens"), &mut state);
+        assert_eq!(chunks[0]["choices"][0]["finish_reason"], "length");
+        let chunks = translate_sse_event_to_chat_chunk(&cut_off("other"), &mut state);
+        assert_eq!(
+            chunks[0]["error"]["message"],
+            "The upstream response is incomplete: other"
+        );
+        // Without streaming, the reported failure is the error.
+        let body = format!("event: response.failed\ndata: {}\n\n", failed.data);
+        assert_eq!(
+            extract_completed_response_from_sse(body.as_bytes()).unwrap_err(),
+            "The model failed"
         );
     }
 
