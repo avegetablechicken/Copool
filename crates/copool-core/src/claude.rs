@@ -363,7 +363,7 @@ impl Stored {
             usage_error: self.usage_error.clone(),
             is_current: current,
             awaiting_first_request: self.first_request_pending,
-            token_expires_at: Some(expires_at(&self.oauth) / 1000).filter(|&at| at > 0),
+            token_expires_at: crate::models::displayed_expiry(expires_at(&self.oauth) / 1000),
         }
     }
 }

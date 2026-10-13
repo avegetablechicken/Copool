@@ -450,14 +450,16 @@ fn auth_token_object(auth_json: &Value) -> Option<&Map<String, Value>> {
         })
 }
 
-/// When the stored access token expires (Unix seconds), from its JWT claims.
+/// When the stored access token expires (Unix seconds), from its JWT claims;
+/// a JWT NumericDate may be fractional.
 pub(crate) fn access_token_expiry(auth_json: &Value) -> Option<i64> {
     auth_json
         .pointer("/tokens/access_token")
         .or_else(|| auth_json.get("access_token"))
         .and_then(Value::as_str)
         .and_then(|t| decode_jwt_payload(t).ok())
-        .and_then(|v| v["exp"].as_i64())
+        .and_then(|v| v["exp"].as_f64())
+        .map(|exp| exp as i64)
 }
 
 pub(crate) fn decode_jwt_payload(token: &str) -> Result<Value, String> {

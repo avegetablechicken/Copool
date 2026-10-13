@@ -323,10 +323,33 @@ async fn testAccountCardsCarryTheAccessTokenExpiry() {
     a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1_900_000_000})).into();
     let mut b = stored("b", "b", "account-2");
     b["authJson"]["tokens"]["access_token"] = "opaque".into();
-    save_fixture(&app, json!({"accounts":[a, b]}));
+    // A JWT NumericDate may be fractional; malformed claims show nothing,
+    // including milliseconds taken for seconds.
+    let mut accounts = vec![a, b];
+    for (i, exp) in [
+        json!(1_900_000_000.75),
+        json!(0),
+        json!(-5),
+        json!(1_900_000_000_000i64),
+        json!("1900000000"),
+        json!(null),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut c = stored(&format!("c{i}"), &format!("c{i}"), &format!("account-c{i}"));
+        c["authJson"]["tokens"]["access_token"] = super::jwt(json!({ "exp": exp })).into();
+        accounts.push(c);
+    }
+    save_fixture(&app, json!({ "accounts": accounts }));
     let cards = app.accounts().await.unwrap();
-    assert_eq!(cards[0].token_expires_at, Some(1_900_000_000));
-    assert_eq!(cards[1].token_expires_at, None);
+    let expiry = |id: &str| cards.iter().find(|c| c.id == id).unwrap().token_expires_at;
+    assert_eq!(expiry("a"), Some(1_900_000_000));
+    assert_eq!(expiry("b"), None);
+    assert_eq!(expiry("c0"), Some(1_900_000_000));
+    for i in 1..6 {
+        assert_eq!(expiry(&format!("c{i}")), None, "case {i}");
+    }
 }
 #[tokio::test]
 async fn testRefreshUsageRefreshesExpiredStoredAuthBeforeFetching() {

@@ -98,7 +98,10 @@
   /// Time left on the access token in its largest whole unit (minutes round
   /// up), or expired; null without a known expiry.
   function tokenExpiry(epoch, now, locale = "en") {
-    if (epoch == null) return null;
+    // As the core's displayed_expiry: seconds from 1970 to 9999-12-31, so a
+    // date always formats.
+    if (!Number.isFinite(epoch) || epoch <= 0 || epoch > 253402300799)
+      return null;
     const seconds = epoch - now;
     if (seconds <= 0) return { expired: true, remaining: null };
     const [unit, amount] =

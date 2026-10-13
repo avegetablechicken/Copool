@@ -285,6 +285,11 @@ test("token expiry shows the largest whole unit left, or expired", () => {
   assert.equal(P.tokenExpiry(null, now), null);
   assert.equal(P.tokenExpiry(undefined, now), null);
   assert.deepEqual(P.tokenExpiry(now, now), { expired: true, remaining: null });
+  // Values the core never sends still neither render nor throw.
+  for (const epoch of [0, -5, NaN, Infinity, "1900000000", 9e15, 253402300800])
+    assert.equal(P.tokenExpiry(epoch, now), null, String(epoch));
+  assert.equal(P.tokenExpiry(253402300799, now).expired, false);
+  assert.doesNotThrow(() => P.formatReset(253402300799));
   const left = (seconds, locale) =>
     P.tokenExpiry(now + seconds, now, locale).remaining;
   assert.equal(left(6 * 86400 + 80000), "6d");

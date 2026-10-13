@@ -70,6 +70,12 @@ pub(crate) struct CurrentAccountSelection {
     pub(crate) account_key: Option<String>,
 }
 
+/// A token expiry a card can show: after 1970 and by 9999-12-31. Anything
+/// else is malformed, e.g. milliseconds taken for seconds.
+pub(crate) fn displayed_expiry(at: i64) -> Option<i64> {
+    (1..=253_402_300_799).contains(&at).then_some(at)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSummary {
@@ -455,7 +461,8 @@ impl StoredAccount {
             usage: self.usage.clone().map(UsageSnapshot::with_matching_windows),
             usage_error: self.usage_error.clone(),
             awaiting_first_request: self.awaiting_first_request(),
-            token_expires_at: crate::auth::access_token_expiry(&self.auth_json),
+            token_expires_at: crate::auth::access_token_expiry(&self.auth_json)
+                .and_then(displayed_expiry),
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),

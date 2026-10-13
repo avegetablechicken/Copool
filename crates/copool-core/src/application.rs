@@ -444,7 +444,8 @@ impl Application {
         }
         // auth.json may be changed outside Copool; the login Codex actually uses wins over
         // the stored selection. A missing or unreadable login keeps the stored selection.
-        let current = self.current_auth()?.as_ref().and_then(|v| identity(v).ok());
+        let live = self.current_auth()?;
+        let current = live.as_ref().and_then(|v| identity(v).ok());
         if let Some(current) = &current {
             let matches = |a: &StoredAccount| identity(&a.auth_json).ok().as_ref() == Some(current);
             let stored_id = store.extra.get("currentAccountId").and_then(Value::as_str);
@@ -493,6 +494,12 @@ impl Application {
             .map(|a| {
                 let mut summary = a.to_summary(None);
                 summary.is_current = selected.as_ref().is_some_and(|id| *id == a.id);
+                // Codex renews the login it uses in auth.json; until a refresh
+                // adopts it, that token's expiry is the one in effect.
+                if let Some(live) = live.as_ref().filter(|l| newer_login(l, &a.auth_json)) {
+                    summary.token_expires_at =
+                        auth::access_token_expiry(live).and_then(crate::models::displayed_expiry);
+                }
                 summary
             })
             .collect();
@@ -1299,6 +1306,37 @@ mod tests {
             network.calls.lock().unwrap()[0].2,
             "socks5://127.0.0.1:7891"
         );
+    }
+
+    #[tokio::test]
+    async fn the_current_card_shows_the_expiry_of_the_login_codex_rotated_in() {
+        let (_dir, app, _) = crate::legacy_tests::network_fixture::fixture();
+        let token = |exp: i64| {
+            let claims = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({"exp": exp})).unwrap());
+            format!("x.{claims}.x")
+        };
+        let mut login = document("alice");
+        login["tokens"]["access_token"] = token(1_800_000_000).into();
+        login["last_refresh"] = "2026-10-02T10:29:58Z".into();
+        app.import_json(&login.to_string()).await.unwrap();
+        let id = app.accounts().await.unwrap()[0].id.clone();
+        app.switch_account(&id).await.unwrap();
+        let expiry = || async { app.accounts().await.unwrap()[0].token_expires_at };
+        assert_eq!(expiry().await, Some(1_800_000_000));
+
+        let mut live = login.clone();
+        live["tokens"]["access_token"] = token(1_900_000_000).into();
+        live["last_refresh"] = "2000-01-01T00:00:00Z".into();
+        write_json(&app.paths.codex_auth, &live).unwrap();
+        assert_eq!(
+            expiry().await,
+            Some(1_800_000_000),
+            "an older login is ignored"
+        );
+
+        live["last_refresh"] = "2099-01-01T00:00:00Z".into();
+        write_json(&app.paths.codex_auth, &live).unwrap();
+        assert_eq!(expiry().await, Some(1_900_000_000));
     }
 
     #[tokio::test]
