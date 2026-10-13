@@ -950,6 +950,10 @@ fn changed_live_oauth(
 }
 
 const CREDENTIALS_CHANGED: &str = "Claude credentials changed during refresh; retry usage";
+/// Renewing rotates the refresh token: the login Claude Code may be using is
+/// not renewed unless the new tokens can be seen to reach it.
+const LIVE_UNREADABLE: &str =
+    "Cannot read the Claude Code login; allow access before renewing the account it uses";
 
 impl Application {
     fn claude_store_path(&self) -> PathBuf {
@@ -1436,17 +1440,20 @@ impl Application {
         // Adopt newer external credentials when accessible, but the pool remains
         // usable even when the live login is locked, missing or unreadable.
         let mut live = read_live(&location).await.ok().flatten();
-        let account = {
+        let (account, in_use) = {
             let _lock = self.claude.lock.lock().await;
             let mut store = self.claude_load()?;
             if follow_live(&mut store, live.as_ref()) {
                 self.claude_save(&store)?;
             }
-            store
+            // An unreadable login keeps the selection last seen.
+            let in_use = store.current_account_id.as_deref() == Some(id);
+            let account = store
                 .accounts
                 .into_iter()
                 .find(|a| a.id == id)
-                .ok_or("Account not found")?
+                .ok_or("Account not found")?;
+            (account, in_use)
         };
         if account.first_request_pending {
             return Ok(());
@@ -1483,7 +1490,11 @@ impl Application {
                     let before = live.as_ref();
                     async move {
                         // Another app may have renewed while our usage request ran.
-                        let latest = read_live(location).await.ok().flatten();
+                        let latest = match read_live(location).await {
+                            Ok(latest) => latest,
+                            Err(_) if in_use => return Err(LIVE_UNREADABLE.into()),
+                            Err(_) => None,
+                        };
                         if changed_live_oauth(account, before, latest.as_ref()).is_some() {
                             return Err(CREDENTIALS_CHANGED.into());
                         }
@@ -2440,6 +2451,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unreadable_login_keeps_the_account_in_use_from_renewing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", 1);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        fs::write(location.credentials_file(), "{").unwrap();
+        assert_eq!(
+            app.claude_refresh_usage(&id).await.unwrap_err(),
+            LIVE_UNREADABLE
+        );
+        assert!(fake.refreshed.lock().unwrap().is_empty());
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
+            "alice-refresh"
+        );
+    }
+
+    #[tokio::test]
     async fn an_inactive_login_renews_once_without_writing_live_credentials() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = waiting_app(&dir);
@@ -2476,6 +2507,9 @@ mod tests {
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
         app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        // Only the account Claude Code uses waits for its login to be readable.
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
         fs::write(location.credentials_file(), "invalid").unwrap();
         app.claude_refresh_usage(&id).await.unwrap();
         fake.usage.lock().unwrap().push((401, Value::Null));
