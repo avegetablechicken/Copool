@@ -55,7 +55,18 @@ fn normalized_mode(mode: &str) -> &str {
         "used"
     }
 }
-fn window(title: &str, window: Option<&UsageWindow>, offset: i32) -> WindowSnapshot {
+/// The offset a reset is rendered in: the caller's when the host resolved one,
+/// otherwise the local one in effect at the reset instant, so the zone of a
+/// reset still ahead cannot be taken from the offset at build time.
+fn zone_offset(offset: Option<i32>, date: DateTime<chrono::Utc>) -> FixedOffset {
+    let seconds = offset.unwrap_or_else(|| {
+        date.with_timezone(&chrono::Local)
+            .offset()
+            .local_minus_utc()
+    });
+    FixedOffset::east_opt(seconds).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())
+}
+fn window(title: &str, window: Option<&UsageWindow>, offset: Option<i32>) -> WindowSnapshot {
     let used = window
         .map(|w| w.used_percent)
         .unwrap_or(100.)
@@ -64,11 +75,9 @@ fn window(title: &str, window: Option<&UsageWindow>, offset: i32) -> WindowSnaps
         .and_then(|w| w.reset_at)
         .and_then(|stamp| DateTime::from_timestamp(stamp, 0))
         .map(|date| {
-            date.with_timezone(
-                &FixedOffset::east_opt(offset).unwrap_or(FixedOffset::east_opt(0).unwrap()),
-            )
-            .format("%y/%-m/%-d %H:%M:%S")
-            .to_string()
+            date.with_timezone(&zone_offset(offset, date))
+                .format("%y/%-m/%-d %H:%M:%S")
+                .to_string()
         })
         .unwrap_or_else(|| "--".into());
     WindowSnapshot {
@@ -79,7 +88,7 @@ fn window(title: &str, window: Option<&UsageWindow>, offset: i32) -> WindowSnaps
         reset_text: reset,
     }
 }
-fn card(account: &AccountSummary, offset: i32) -> CardSnapshot {
+fn card(account: &AccountSummary, offset: Option<i32>) -> CardSnapshot {
     let raw = account
         .usage
         .as_ref()
@@ -120,7 +129,12 @@ fn card(account: &AccountSummary, offset: i32) -> CardSnapshot {
         ),
     }
 }
-pub fn build(accounts: &[AccountSummary], mode: &str, offset_seconds: i32, now: i64) -> Snapshot {
+pub fn build(
+    accounts: &[AccountSummary],
+    mode: &str,
+    offset_seconds: Option<i32>,
+    now: i64,
+) -> Snapshot {
     let mut accounts = accounts.to_vec();
     sort_for_display(&mut accounts);
     if accounts.is_empty() {
@@ -162,7 +176,7 @@ pub fn write(
     path: &Path,
     accounts: &[AccountSummary],
     mode: &str,
-    offset_seconds: i32,
+    offset_seconds: Option<i32>,
     now: i64,
     reload: impl FnOnce(&str),
 ) -> Result<(), String> {

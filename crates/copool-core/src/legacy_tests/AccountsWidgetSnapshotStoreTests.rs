@@ -21,7 +21,7 @@ fn testSaveWritesSnapshotToExplicitURL() {
     let s = build(
         &[super::account("current", 30., 20., true)],
         "remaining",
-        0,
+        Some(0),
         1,
     );
     save(&path, &s).unwrap();
@@ -36,7 +36,7 @@ fn testWriterUsesExplicitUsageProgressDisplayModeOverride() {
         &path,
         &[super::account("current", 40., 25., true)],
         "remaining",
-        0,
+        Some(0),
         1,
         |_| {},
     )
@@ -52,7 +52,7 @@ fn testWriterReloadsCurrentWidgetKindAfterSave() {
         &path,
         &[super::account("current", 40., 25., true)],
         "used",
-        0,
+        Some(0),
         1,
         |kind| {
             assert!(path.is_file());

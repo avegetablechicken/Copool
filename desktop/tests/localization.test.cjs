@@ -35,9 +35,11 @@ legacy(
   "LocalizationConsistencyTests",
   "testSourceLocalizationKeysExistInAllLocales",
   () => {
-    const source =
-      fs.readFileSync(path.join(root, "desktop/ui/index.html"), "utf8") +
-      fs.readFileSync(path.join(root, "desktop/ui/app.js"), "utf8");
+    // Every file that resolves keys has to be scanned, not just the first two:
+    // features.js and presentation.js render most of the settings and proxy text.
+    const source = ["index.html", "app.js", "features.js", "presentation.js"]
+      .map((name) => fs.readFileSync(path.join(root, "desktop/ui", name), "utf8"))
+      .join("");
     const used = new Set(
       [...source.matchAll(/data-(?:l10n|title)="([^"]+)"/g)].map((m) => m[1]),
     );

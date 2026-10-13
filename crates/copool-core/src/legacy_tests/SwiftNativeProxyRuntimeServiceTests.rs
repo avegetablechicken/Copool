@@ -107,7 +107,11 @@ async fn testLoadCandidatesIncludesSub2APIProviderFromProfileConfig() {
 }
 async fn start(app: &Application, upstream: Option<&str>) -> ApiProxyStatus {
     let mut storage = app.storage();
-    storage.upstream_base_url = upstream.map(str::to_owned);
+    // Only an explicit upstream replaces the one resolved for this app: clearing
+    // it would send the usage refresh to whatever `~/.codex/config.toml` names.
+    if let Some(upstream) = upstream {
+        storage.upstream_base_url = Some(upstream.to_owned());
+    }
     proxy::start_api_proxy_with_runtime(&storage, &app.state.api_proxy, Some(0), "127.0.0.1")
         .await
         .unwrap()

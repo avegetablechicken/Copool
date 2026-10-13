@@ -459,9 +459,13 @@
     return pending.sort(
       (a, b) =>
         (a.status === b.status ? 0 : a.status === "deactivated" ? -1 : 1) ||
-        a.workspaceName.localeCompare(b.workspaceName, undefined, {
-          sensitivity: "base",
-        }),
+        // A directory row keeps whatever the store holds, so a missing name
+        // must sort as empty instead of failing the whole render.
+        String(a.workspaceName ?? "").localeCompare(
+          String(b.workspaceName ?? ""),
+          undefined,
+          { sensitivity: "base" },
+        ),
     );
   }
   function needsReauthentication(

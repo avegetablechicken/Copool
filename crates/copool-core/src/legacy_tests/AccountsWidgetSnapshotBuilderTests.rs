@@ -16,7 +16,7 @@ fn currentAccountBecomesPrimaryCardAndSecondaryUsesNextDisplayAccount() {
             account("a", true, "current@example.com", 15., 25.),
         ],
         "used",
-        0,
+        Some(0),
         100,
     );
     let current = s.current_card.unwrap();
@@ -36,7 +36,7 @@ fn rowsKeepWorkspaceAndAccountLabelsAndExposeWindowSnapshots() {
             team,
         ],
         "used",
-        0,
+        Some(0),
         100,
     );
     assert_eq!(s.rows.len(), 1);
@@ -50,7 +50,7 @@ fn resetTimeUsesStableWidgetFormat() {
     let s = build(
         &[account("current", true, "current@example.com", 12., 34.)],
         "used",
-        8 * 3600,
+        Some(8 * 3600),
         100,
     );
     let card = s.current_card.unwrap();
@@ -61,14 +61,14 @@ fn resetTimeUsesStableWidgetFormat() {
 fn defaultBuilderLimitsLargeRowsToFourAccounts() {
     let accounts = ["current", "a", "b", "c", "d"]
         .map(|id| account(id, id == "current", &format!("{id}@example.com"), 10., 20.));
-    assert_eq!(build(&accounts, "used", 0, 100).rows.len(), 4);
+    assert_eq!(build(&accounts, "used", Some(0), 100).rows.len(), 4);
 }
 #[test]
 fn snapshotCarriesUsageProgressDisplayMode() {
     let s = build(
         &[account("current", true, "current@example.com", 12., 34.)],
         "remaining",
-        0,
+        Some(0),
         100,
     );
     assert_eq!(s.usage_progress_display_mode, "remaining");

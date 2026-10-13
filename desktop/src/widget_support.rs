@@ -23,7 +23,7 @@ pub async fn publish(app: &Arc<Application>) -> Result<(), String> {
         &path,
         &accounts,
         &preferences.usage_display,
-        now.offset().local_minus_utc(),
+        None,
         now.timestamp(),
         |_| {
             #[cfg(target_os = "macos")]
