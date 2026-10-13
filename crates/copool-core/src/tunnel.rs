@@ -41,6 +41,10 @@ pub struct Tunnel {
     log: Option<PathBuf>,
     hostname: Option<String>,
     cleanup: Option<(String, String, String)>,
+    /// Named tunnels whose remote cleanup failed, tried again on each stop.
+    orphans: Vec<(String, String, String)>,
+    /// Why a cleanup still pending failed; cleared once none is.
+    cleanup_error: Option<String>,
     last_error: Option<String>,
 }
 #[derive(Serialize)]
@@ -122,7 +126,10 @@ impl Tunnel {
             running,
             binary_path: path,
             public_url: url,
-            last_error: self.last_error.clone(),
+            last_error: match (&self.last_error, &self.cleanup_error) {
+                (Some(error), Some(cleanup)) => Some(format!("{error}\n{cleanup}")),
+                (error, cleanup) => error.clone().or_else(|| cleanup.clone()),
+            },
         }
     }
     pub async fn start(
@@ -251,10 +258,15 @@ impl Tunnel {
             let _ = child.wait().await;
         }
         self.hostname = None;
-        if let Some((token, account, id)) = self.cleanup.take() {
+        self.orphans.extend(self.cleanup.take());
+        if self.orphans.is_empty() {
+            return Ok(());
+        }
+        let client = reqwest::Client::new();
+        let mut failed = vec![];
+        for (token, account, id) in std::mem::take(&mut self.orphans) {
             // A killed cloudflared leaves its connections registered, and
             // Cloudflare refuses to delete a tunnel that still has any.
-            let client = reqwest::Client::new();
             let path = format!("/accounts/{account}/cfd_tunnel/{id}");
             let _ = api(
                 &client,
@@ -266,10 +278,15 @@ impl Tunnel {
             .await;
             // The local tunnel is already gone; a failed remote cleanup must not
             // keep the proxy from stopping or the next tunnel from starting.
-            if let Err(error) = api(&client, &token, reqwest::Method::DELETE, &path, None).await {
-                self.last_error = Some(error);
+            match api(&client, &token, reqwest::Method::DELETE, &path, None).await {
+                Ok(_) => {}
+                Err(error) => failed.push((error, (token, account, id))),
             }
         }
+        self.cleanup_error = failed
+            .last()
+            .map(|(error, _)| format!("Cloudflare tunnel cleanup failed: {error}"));
+        self.orphans = failed.into_iter().map(|(_, orphan)| orphan).collect();
         Ok(())
     }
 }
