@@ -432,6 +432,18 @@ impl Application {
     /// recording these when leaving them; the file is read again each time.
     pub(super) async fn claude_switch_sub2api(&self, id: &str) -> Result<SwitchExecution> {
         let location = self.claude_location();
+        // The settings file is found before the pool is locked.
+        let found = {
+            let store = self.claude_load()?;
+            let (i, _) = card(&store, id).ok_or("Account not found")?;
+            store.providers[i].clone()
+        };
+        let source = settings_source::load_off_runtime(
+            location.clone(),
+            found.name.clone(),
+            found.settings_path.clone(),
+        )
+        .await?;
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         let (i, account) = card(&store, id).ok_or("Account not found")?;
@@ -439,7 +451,9 @@ impl Application {
             return Err("Account is deactivated".into());
         }
         let p = store.providers[i].clone();
-        let source = settings_source::load(&location, &p.name, &p.settings_path)?;
+        if (&p.id, &p.name, &p.settings_path) != (&found.id, &found.name, &found.settings_path) {
+            return Err("The Claude provider changed during the switch; switch again".into());
+        }
         let settings = read_settings(&location)?;
         let current = parse_settings(settings.as_deref())?;
         let recorded = self.claude_official_settings()?;

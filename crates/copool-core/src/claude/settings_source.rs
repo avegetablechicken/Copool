@@ -69,9 +69,31 @@ fn resolve(path: &str) -> Result<PathBuf> {
     Ok(resolved)
 }
 
+/// Claude Code's own data in its configuration directory: transcripts,
+/// plugin checkouts, caches and history, never a provider's settings.
+const DATA_DIRECTORIES: &[&str] = &[
+    "backups",
+    "cache",
+    "debug",
+    "downloads",
+    "file-history",
+    "ide",
+    "logs",
+    "paste-cache",
+    "plans",
+    "plugins",
+    "projects",
+    "session-env",
+    "sessions",
+    "shell-snapshots",
+    "statsig",
+    "telemetry",
+    "todos",
+];
+
 /// The one file `name` selects: files whose names contain both `settings`
 /// and the name take precedence over the exact file name or stem. Symlinks,
-/// `.git` and the main settings are skipped.
+/// `.git`, `node_modules`, Claude Code's data and the main settings are skipped.
 fn find(location: &Location, name: &str) -> Result<PathBuf> {
     let mut preferred = BTreeSet::new();
     let mut exact = BTreeSet::new();
@@ -90,7 +112,14 @@ fn find(location: &Location, name: &str) -> Result<PathBuf> {
                 Err(_) => return Err("Cannot read Claude settings entry".into()),
             };
             if kind.is_dir() {
-                if entry.file_name() != ".git" {
+                let skipped = entry.file_name() == ".git"
+                    || entry.file_name() == "node_modules"
+                    || directory == location.config_dir
+                        && entry
+                            .file_name()
+                            .to_str()
+                            .is_some_and(|name| DATA_DIRECTORIES.contains(&name));
+                if !skipped {
                     pending.push(entry.path());
                 }
                 continue;
@@ -128,6 +157,17 @@ fn find(location: &Location, name: &str) -> Result<PathBuf> {
         .into_iter()
         .next()
         .ok_or_else(|| "Claude provider settings file not found".into())
+}
+
+/// `load` on a blocking thread: searching walks the configuration directory.
+pub(super) async fn load_off_runtime(
+    location: Location,
+    name: String,
+    path: String,
+) -> Result<Source> {
+    tokio::task::spawn_blocking(move || load(&location, &name, &path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// A provider's settings: they route to its gateway with its own credential.
@@ -237,6 +277,24 @@ mod tests {
         );
         assert!(parse("/claude/").is_err());
         assert!(parse("a:b").is_err());
+    }
+
+    #[test]
+    fn claude_code_data_is_not_searched() {
+        let dir = tempfile::tempdir().unwrap();
+        let location = Location::files(dir.path().into());
+        write(dir.path(), "profiles/team.json", "ANTHROPIC_API_KEY");
+        for data in [
+            "projects/app/team.json",
+            "plugins/marketplaces/repo/team-settings.json",
+            "profiles/node_modules/team.json",
+        ] {
+            write(dir.path(), data, "ANTHROPIC_AUTH_TOKEN");
+        }
+        assert_eq!(
+            load(&location, "team", "").unwrap().auth_key,
+            "ANTHROPIC_API_KEY"
+        );
     }
 
     #[test]
