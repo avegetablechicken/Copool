@@ -1355,6 +1355,7 @@ function showMenu(trigger, items) {
     if (item.icon) option.prepend(item.icon);
     option.type = "button";
     option.setAttribute("role", "menuitem");
+    if (item.selected) option.setAttribute("aria-checked", "true");
     option.onclick = () => {
       closeMenu(true);
       item.run();
@@ -1375,7 +1376,9 @@ function showMenu(trigger, items) {
   menu.style.maxHeight = `${innerHeight - top - 8}px`;
   trigger.setAttribute("aria-expanded", "true");
   openMenu = { menu, trigger };
-  menu.querySelector("button")?.focus();
+  (
+    menu.querySelector("[aria-checked=true]") || menu.querySelector("button")
+  )?.focus();
 }
 document.addEventListener("pointerdown", (event) => {
   if (
@@ -1385,6 +1388,49 @@ document.addEventListener("pointerdown", (event) => {
   )
     closeMenu();
 });
+// On Linux a <select>'s popup is a GTK menu outside the panel's frosted
+// material; the in-panel menu replaces it there.
+if (document.documentElement.classList.contains("linux")) {
+  const showSelectMenu = (select) => {
+    if (openMenu?.trigger === select) {
+      closeMenu(true);
+      return;
+    }
+    showMenu(
+      select,
+      [...select.options].map((option, index) => ({
+        label: option.textContent,
+        selected: option.selected,
+        run: () => {
+          if (select.selectedIndex === index) return;
+          select.selectedIndex = index;
+          select.dispatchEvent(new Event("change"));
+        },
+      })),
+    );
+  };
+  document.addEventListener("mousedown", (event) => {
+    const select = event.target.closest?.("select");
+    if (!select || select.disabled || event.button !== 0) return;
+    event.preventDefault();
+    showSelectMenu(select);
+  });
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      const select = event.target.closest?.("select");
+      if (!select || select.disabled || openMenu) return;
+      const opens =
+        event.key === " " ||
+        event.key === "Enter" ||
+        (event.altKey && ["ArrowDown", "ArrowUp"].includes(event.key));
+      if (!opens) return;
+      event.preventDefault();
+      showSelectMenu(select);
+    },
+    true,
+  );
+}
 $("import-open").onclick = () => {
   if (openMenu?.trigger === $("import-open")) {
     closeMenu(true);
