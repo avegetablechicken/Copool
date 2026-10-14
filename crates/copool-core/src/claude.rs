@@ -24,7 +24,6 @@ pub use sub2api::Provider as Sub2ApiProvider;
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const ORGANIZATIONS_URL: &str = "https://api.anthropic.com/api/oauth/organizations";
-const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const USER_AGENT: &str = "claude-code/2.1.69";
 // The banked resets are returned only to Claude Code 2.1.280 or later, by its
 // User-Agent; others read `eligible: false` with the rest of the usage intact.
@@ -46,6 +45,13 @@ fn rate_limit_pause(count: u32, retry_after: Option<u64>) -> i64 {
     doubled.min(RATE_LIMIT_LONGEST_PAUSE).max(requested)
 }
 
+/// The only custom OAuth endpoints Claude Code accepts; with another, it keeps
+/// its login in the credentials file alone.
+const APPROVED_CUSTOM_OAUTH: [&str; 3] = [
+    "https://beacon.claude-ai.staging.ant.dev",
+    "https://claude.fedstart.com",
+    "https://claude-staging.fedstart.com",
+];
 /// Where Claude Code keeps its login.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,50 +60,93 @@ pub struct Location {
     pub global_config: PathBuf,
     /// The macOS Keychain service holding the credentials; none for the file.
     pub keychain: Option<String>,
+    /// The directory of the credentials file Claude Code reads without the
+    /// Keychain item.
+    pub storage_dir: PathBuf,
 }
 impl Location {
     pub fn discover() -> Result<Self> {
-        let env = |name| {
-            std::env::var_os(name)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
-        // An isolated directory for smoke tests, never the Keychain.
-        if let Some(dir) = env("COPOOL_CLAUDE_CONFIG_DIR") {
-            return Ok(Self::files(dir));
-        }
         let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-        let (config_dir, global_config, service) = match env("CLAUDE_CONFIG_DIR") {
-            // Claude Code scopes the Keychain entry of a custom directory by its hash.
-            Some(dir) => {
-                let digest = hex(&Sha256::digest(
-                    dir.to_string_lossy().replace('\\', "/").as_bytes(),
-                ));
-                let service = format!("{KEYCHAIN_SERVICE}-{}", &digest[..8]);
-                (dir.clone(), dir.join(".claude.json"), service)
-            }
+        Ok(Self::resolve(
+            &|name| std::env::var(name).ok(),
+            home,
+            cfg!(target_os = "macos"),
+        ))
+    }
+    /// Claude Code's own rules (2.1.285), as observed in its sessions: the
+    /// Keychain service `Claude Code{suffix}-credentials{-hash}`, else the
+    /// credentials file. `CLAUDE_CODE_CUSTOM_OAUTH_URL`, from the user
+    /// settings' `env` or else the environment, adds `-custom-oauth` for an
+    /// endpoint Claude Code approves; for any other, Claude Code cannot name
+    /// its Keychain item and keeps its login in the file alone. The hash and
+    /// the file's directory follow `CLAUDE_SECURESTORAGE_CONFIG_DIR` when it is
+    /// set at all, else `CLAUDE_CONFIG_DIR`. The global configuration stays
+    /// `.claude.json`, which Claude Code resolves before applying the settings.
+    fn resolve(env: &dyn Fn(&str) -> Option<String>, home: PathBuf, keychain: bool) -> Self {
+        let set = |name: &str| env(name).filter(|v| !v.is_empty());
+        // An isolated directory for smoke tests, never the Keychain.
+        if let Some(dir) = set("COPOOL_CLAUDE_CONFIG_DIR") {
+            return Self::files(dir.into());
+        }
+        let custom_dir = set("CLAUDE_CONFIG_DIR").map(PathBuf::from);
+        let config_dir = custom_dir.clone().unwrap_or_else(|| home.join(".claude"));
+        let global_config = match &custom_dir {
+            Some(dir) => dir.join(".claude.json"),
+            None => home.join(".claude.json"),
+        };
+        // The settings' env overrides the environment, an empty value included.
+        let custom_oauth = fs::read_to_string(config_dir.join("settings.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|settings| {
+                settings["env"]["CLAUDE_CODE_CUSTOM_OAUTH_URL"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .or_else(|| env("CLAUDE_CODE_CUSTOM_OAUTH_URL"))
+            .filter(|url| !url.is_empty());
+        let approved = custom_oauth
+            .as_deref()
+            .is_none_or(|url| APPROVED_CUSTOM_OAUTH.contains(&url.trim_end_matches('/')));
+        let digest =
+            |dir: &str| hex(&Sha256::digest(dir.replace('\\', "/").as_bytes()))[..8].to_owned();
+        let (hash, storage_dir) = match env("CLAUDE_SECURESTORAGE_CONFIG_DIR") {
+            Some(dir) if dir.is_empty() => (None, home.join(".claude")),
+            Some(dir) => (Some(digest(&dir)), PathBuf::from(dir)),
             None => (
-                home.join(".claude"),
-                home.join(".claude.json"),
-                KEYCHAIN_SERVICE.into(),
+                custom_dir
+                    .as_ref()
+                    .map(|dir| digest(&dir.to_string_lossy())),
+                config_dir.clone(),
             ),
         };
-        Ok(Self {
+        let service = format!(
+            "Claude Code{}-credentials{}",
+            if custom_oauth.is_some() {
+                "-custom-oauth"
+            } else {
+                ""
+            },
+            hash.map(|h| format!("-{h}")).unwrap_or_default()
+        );
+        Self {
             config_dir,
             global_config,
-            keychain: cfg!(target_os = "macos").then_some(service),
-        })
+            keychain: (keychain && approved).then_some(service),
+            storage_dir,
+        }
     }
     /// Credentials and account in files of one directory, without the Keychain.
     pub fn files(dir: PathBuf) -> Self {
         Self {
             global_config: dir.join(".claude.json"),
+            storage_dir: dir.clone(),
             config_dir: dir,
             keychain: None,
         }
     }
     fn credentials_file(&self) -> PathBuf {
-        self.config_dir.join(".credentials.json")
+        self.storage_dir.join(".credentials.json")
     }
     /// The file holding `oauthAccount`: the global configuration, or a
     /// `.claude.json` inside the configuration directory that has one (as
@@ -657,6 +706,14 @@ struct Live {
     /// The complete credentials document; other entries (MCP logins) are kept.
     document: Value,
     account: Option<Value>,
+    held: Held,
+}
+/// Where a login was read: the Keychain item, or the file Claude Code reads
+/// while the item is missing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Held {
+    Keychain,
+    File,
 }
 impl Live {
     fn oauth(&self) -> Option<&Value> {
@@ -1089,6 +1146,11 @@ async fn read_live_with_access(
     if let Some(service) = &location.keychain {
         document = keychain::read(service, access).await?;
     }
+    let held = if document.is_some() {
+        Held::Keychain
+    } else {
+        Held::File
+    };
     if document.is_none() {
         document = match fs::read(location.credentials_file()) {
             Ok(bytes) => Some(parse_credentials(&bytes).ok_or("Invalid Claude credentials")?),
@@ -1106,17 +1168,25 @@ async fn read_live_with_access(
             .filter(|a| identity(a).is_some()),
         Err(_) => None,
     };
-    Ok(Some(Live { document, account }))
+    Ok(Some(Live {
+        document,
+        account,
+        held,
+    }))
 }
+/// Writes a login where the one it replaces was read; with none, where
+/// Claude Code reads first. A login read from the file goes back to the file:
+/// creating the Keychain item would turn Claude Code away from the file.
 async fn write_credentials(
     location: &Location,
     document: &Value,
+    held: Option<Held>,
     access: KeychainAccess,
 ) -> Result<()> {
     #[cfg(not(target_os = "macos"))]
     let _ = access;
     let file = location.credentials_file();
-    if let Some(service) = &location.keychain {
+    if let Some(service) = written_keychain(location, held) {
         #[cfg(target_os = "macos")]
         {
             keychain::write(service, document, access).await?;
@@ -1132,6 +1202,12 @@ async fn write_credentials(
         }
     }
     write_json(&file, document)
+}
+fn written_keychain(location: &Location, held: Option<Held>) -> Option<&String> {
+    location
+        .keychain
+        .as_ref()
+        .filter(|_| held != Some(Held::File))
 }
 /// Removes a login written where there was none, as `write_credentials`
 /// would have placed it.
@@ -1651,6 +1727,8 @@ impl Application {
                 .filter(|a| identity(a).is_some())
                 .cloned(),
             document: json!({"claudeAiOauth": oauth}),
+            // An export goes nowhere until a switch writes it.
+            held: Held::File,
         };
         let _op = self.claude.operations.lock().await;
         let _ = self.claude_unlock().await;
@@ -1831,10 +1909,12 @@ impl Application {
         }
         let mut document = previous_document.clone().unwrap_or_else(|| json!({}));
         document["claudeAiOauth"] = target.oauth.clone();
+        // The target replaces the login where Claude Code read it.
+        let held = live.as_ref().map(|live| live.held);
         let rollback = |error: String| async {
             // Without a previous login, none is left either.
             let restored = match &previous_document {
-                Some(previous) => write_credentials(&location, previous, access).await,
+                Some(previous) => write_credentials(&location, previous, held, access).await,
                 None => remove_credentials(&location, access).await,
             };
             restored
@@ -1842,7 +1922,7 @@ impl Application {
                 .and(Err(error))
         };
         // The Keychain may already hold the target when the file write fails.
-        if let Err(error) = write_credentials(&location, &document, access).await {
+        if let Err(error) = write_credentials(&location, &document, held, access).await {
             return rollback(error).await;
         }
         if let Err(error) = write_account(&location, &target.account) {
@@ -2175,9 +2255,13 @@ impl Application {
                     {
                         let mut document = latest.document.clone();
                         document["claudeAiOauth"] = oauth.clone();
-                        live_sync =
-                            write_credentials(&location, &document, KeychainAccess::Background)
-                                .await;
+                        live_sync = write_credentials(
+                            &location,
+                            &document,
+                            Some(latest.held),
+                            KeychainAccess::Background,
+                        )
+                        .await;
                         in_live = live_sync.is_ok();
                     }
                 }
@@ -5213,6 +5297,207 @@ mod tests {
         assert!(login_overrides(&location).is_empty());
     }
 
+    /// Resolves the location for `vars` under a home holding `settings` as
+    /// the user settings.
+    fn resolved(vars: &[(&str, &str)], settings: Option<&str>) -> (Location, PathBuf) {
+        let home = tempfile::tempdir().unwrap().keep();
+        if let Some(settings) = settings {
+            fs::create_dir_all(home.join(".claude")).unwrap();
+            fs::write(home.join(".claude/settings.json"), settings).unwrap();
+        }
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let env = move |name: &str| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone());
+        (Location::resolve(&env, home.clone(), true), home)
+    }
+    const CUSTOM: &str = "http://127.0.0.1:8787/anthropic";
+
+    #[test]
+    fn the_login_is_where_claude_code_keeps_it() {
+        let (plain, home) = resolved(&[], None);
+        assert_eq!(plain.keychain.as_deref(), Some("Claude Code-credentials"));
+        assert_eq!(plain.config_dir, home.join(".claude"));
+        assert_eq!(plain.storage_dir, home.join(".claude"));
+        assert_eq!(plain.global_config, home.join(".claude.json"));
+        assert_eq!(
+            plain.credentials_file(),
+            home.join(".claude/.credentials.json")
+        );
+        // An approved custom OAuth endpoint, from the settings or the
+        // environment, names its own item; the global configuration stays.
+        let approved = "https://claude.fedstart.com";
+        let in_settings =
+            |url: &str| format!(r#"{{"env":{{"CLAUDE_CODE_CUSTOM_OAUTH_URL":"{url}"}}}}"#);
+        for (vars, settings) in [
+            (vec![("CLAUDE_CODE_CUSTOM_OAUTH_URL", approved)], None),
+            (vec![], Some(in_settings(approved))),
+            (
+                vec![],
+                Some(in_settings("https://claude-staging.fedstart.com/")),
+            ),
+        ] {
+            let (custom, home) = resolved(&vars, settings.as_deref());
+            assert_eq!(
+                custom.keychain.as_deref(),
+                Some("Claude Code-custom-oauth-credentials")
+            );
+            assert_eq!(custom.global_config, home.join(".claude.json"));
+            assert_eq!(
+                custom.credentials_file(),
+                home.join(".claude/.credentials.json")
+            );
+        }
+        // Any other endpoint leaves Claude Code its file alone.
+        for (vars, settings) in [
+            (vec![], Some(in_settings(CUSTOM))),
+            (vec![("CLAUDE_CODE_CUSTOM_OAUTH_URL", CUSTOM)], None),
+            (
+                vec![("CLAUDE_CODE_CUSTOM_OAUTH_URL", approved)],
+                Some(in_settings(CUSTOM)),
+            ),
+        ] {
+            let (file_only, home) = resolved(&vars, settings.as_deref());
+            assert_eq!(file_only.keychain, None);
+            assert_eq!(
+                file_only.credentials_file(),
+                home.join(".claude/.credentials.json")
+            );
+        }
+        // The settings override the environment, an empty value included;
+        // other settings or unreadable ones change nothing.
+        for (vars, settings) in [
+            (
+                vec![("CLAUDE_CODE_CUSTOM_OAUTH_URL", CUSTOM)],
+                in_settings(""),
+            ),
+            (
+                vec![],
+                r#"{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8787/anthropic"}}"#.to_owned(),
+            ),
+            (
+                vec![],
+                r#"{"env":{"CLAUDE_CODE_CUSTOM_OAUTH_URL":7}}"#.to_owned(),
+            ),
+            (vec![], "not json".to_owned()),
+        ] {
+            let (location, _) = resolved(&vars, Some(&settings));
+            assert_eq!(
+                location.keychain.as_deref(),
+                Some("Claude Code-credentials"),
+                "{settings}"
+            );
+        }
+        let (empty, _) = resolved(&[("CLAUDE_CODE_CUSTOM_OAUTH_URL", "")], None);
+        assert_eq!(empty.keychain.as_deref(), Some("Claude Code-credentials"));
+    }
+
+    #[test]
+    fn the_keychain_hash_and_file_follow_the_configuration_and_storage_directories() {
+        let dir = "/work/claude-config";
+        let (custom_dir, _) = resolved(&[("CLAUDE_CONFIG_DIR", dir)], None);
+        assert_eq!(
+            custom_dir.keychain.as_deref(),
+            Some("Claude Code-credentials-619df0a7")
+        );
+        assert_eq!(custom_dir.config_dir, PathBuf::from(dir));
+        assert_eq!(custom_dir.storage_dir, PathBuf::from(dir));
+        assert_eq!(
+            custom_dir.global_config,
+            PathBuf::from(dir).join(".claude.json")
+        );
+        let (both, _) = resolved(
+            &[
+                ("CLAUDE_CONFIG_DIR", dir),
+                (
+                    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+                    "https://claude.fedstart.com",
+                ),
+            ],
+            None,
+        );
+        assert_eq!(
+            both.keychain.as_deref(),
+            Some("Claude Code-custom-oauth-credentials-619df0a7")
+        );
+        // The secure storage directory, when set at all, replaces both.
+        let (storage, _) = resolved(
+            &[
+                ("CLAUDE_CONFIG_DIR", dir),
+                ("CLAUDE_SECURESTORAGE_CONFIG_DIR", "/vault/store"),
+            ],
+            None,
+        );
+        assert_eq!(
+            storage.keychain.as_deref(),
+            Some("Claude Code-credentials-efec3556")
+        );
+        assert_eq!(storage.storage_dir, PathBuf::from("/vault/store"));
+        assert_eq!(storage.config_dir, PathBuf::from(dir));
+        let (unscoped, home) = resolved(
+            &[
+                ("CLAUDE_CONFIG_DIR", dir),
+                ("CLAUDE_SECURESTORAGE_CONFIG_DIR", ""),
+            ],
+            None,
+        );
+        assert_eq!(
+            unscoped.keychain.as_deref(),
+            Some("Claude Code-credentials")
+        );
+        assert_eq!(unscoped.storage_dir, home.join(".claude"));
+        // Off macOS there is only the file; smoke tests stay in one directory.
+        let home = tempfile::tempdir().unwrap();
+        let env = |name: &str| {
+            (name == "CLAUDE_SECURESTORAGE_CONFIG_DIR").then(|| "/vault/store".to_owned())
+        };
+        let linux = Location::resolve(&env, home.path().into(), false);
+        assert_eq!(linux.keychain, None);
+        assert_eq!(
+            linux.credentials_file(),
+            PathBuf::from("/vault/store/.credentials.json")
+        );
+        let (smoke, _) = resolved(&[("COPOOL_CLAUDE_CONFIG_DIR", "/smoke")], None);
+        assert_eq!(smoke, Location::files("/smoke".into()));
+    }
+
+    #[tokio::test]
+    async fn a_login_read_from_the_file_is_written_back_to_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = dir.path().join("storage");
+        let env = {
+            let storage = storage.to_string_lossy().into_owned();
+            move |name: &str| (name == "CLAUDE_SECURESTORAGE_CONFIG_DIR").then(|| storage.clone())
+        };
+        // Without the Keychain, as off macOS, the login is the storage file.
+        let location = Location::resolve(&env, dir.path().into(), false);
+        let (oauth, _) = login("alice", LATER);
+        fs::create_dir_all(&storage).unwrap();
+        write_json(
+            &storage.join(".credentials.json"),
+            &json!({"claudeAiOauth": oauth}),
+        )
+        .unwrap();
+        let live = read_live(&location).await.unwrap().unwrap();
+        assert_eq!(live.held, Held::File);
+        assert_eq!(live.oauth(), Some(&oauth));
+        // Where the Keychain item is missing, the file keeps receiving the
+        // login; only a login read from the item, or none, goes to the item.
+        let keychain = Location {
+            keychain: Some("Claude Code-custom-oauth-credentials".into()),
+            ..location
+        };
+        assert_eq!(written_keychain(&keychain, Some(Held::File)), None);
+        for held in [Some(Held::Keychain), None] {
+            assert_eq!(
+                written_keychain(&keychain, held).map(String::as_str),
+                Some("Claude Code-custom-oauth-credentials")
+            );
+        }
+        assert_eq!(written_keychain(&Location::files(storage), None), None);
+    }
+
     #[test]
     fn the_account_follows_a_claude_json_inside_the_configuration_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -5220,6 +5505,7 @@ mod tests {
             config_dir: dir.path().join(".claude"),
             global_config: dir.path().join(".claude.json"),
             keychain: None,
+            storage_dir: dir.path().join(".claude"),
         };
         assert_eq!(location.account_file(), location.global_config);
         fs::create_dir_all(&location.config_dir).unwrap();
