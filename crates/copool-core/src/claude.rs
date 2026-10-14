@@ -230,8 +230,13 @@ pub(crate) trait Network: Send + Sync {
     /// The HTTP status and body of the OAuth usage endpoint, with the seconds
     /// of a `Retry-After` header.
     fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, UsageResponse>;
-    /// A token response for a refresh token.
-    fn refresh<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Value>;
+    /// A token response for a refresh token, asking again for `scope`.
+    fn refresh<'a>(
+        &'a self,
+        refresh_token: &'a str,
+        scope: &'a str,
+        proxy: &'a str,
+    ) -> Response<'a, Value>;
     fn profile<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Value>;
     /// The organization's prepaid balance, which pays for extra usage.
     fn prepaid<'a>(&'a self, token: &'a str, org: &'a str, proxy: &'a str) -> Response<'a, Value>;
@@ -283,38 +288,18 @@ impl Network for Http {
             Ok((status, body, retry_after))
         })
     }
-    fn refresh<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Value> {
-        Box::pin(async move {
-            let response = client(proxy)?
-                .post(crate::login::CLAUDE_TOKEN_URL)
-                .json(&json!({
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": crate::login::CLAUDE_CLIENT,
-                    "scope": crate::login::CLAUDE_SCOPES,
-                }))
-                .send()
-                .await
-                .map_err(request_error)?;
-            let status = response.status();
-            let body: Value = response.json().await.unwrap_or(Value::Null);
-            if status.is_success() {
-                return Ok(body);
-            }
-            let code = body["error"]
-                .as_str()
-                .or_else(|| body["error"]["type"].as_str());
-            if matches!(status.as_u16(), 400 | 401) && code == Some("invalid_grant") {
-                return Err(SIGN_IN_EXPIRED.into());
-            }
-            if status.as_u16() == 429 {
-                return Err(TOKEN_REFRESH_RATE_LIMITED.into());
-            }
-            Err(format!(
-                "Claude token refresh failed: HTTP {}",
-                status.as_u16()
-            ))
-        })
+    fn refresh<'a>(
+        &'a self,
+        refresh_token: &'a str,
+        scope: &'a str,
+        proxy: &'a str,
+    ) -> Response<'a, Value> {
+        Box::pin(refresh_at(
+            crate::login::CLAUDE_TOKEN_URL,
+            refresh_token,
+            scope,
+            proxy,
+        ))
     }
     fn profile<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Value> {
         Box::pin(async move {
@@ -358,6 +343,62 @@ impl Network for Http {
             }
             response.json().await.map_err(request_error)
         })
+    }
+}
+
+/// Renews a login with the request Claude Code sends: a JSON body asking
+/// again for the login's scopes, and no User-Agent of its own. The token
+/// endpoint answers HTTP 429 to some agents (`claude-code/…`, `curl/…`)
+/// whatever the token, while Claude Code's request passes.
+async fn refresh_at(url: &str, refresh_token: &str, scope: &str, proxy: &str) -> Result<Value> {
+    let response = crate::utils::with_account_proxy(reqwest::Client::builder(), proxy)?
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?
+        .post(url)
+        .json(&json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": crate::login::CLAUDE_CLIENT,
+            "scope": scope,
+        }))
+        .send()
+        .await
+        .map_err(request_error)?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    if status.is_success() {
+        return Ok(body);
+    }
+    let code = body["error"]
+        .as_str()
+        .or_else(|| body["error"]["type"].as_str());
+    if matches!(status.as_u16(), 400 | 401) && code == Some("invalid_grant") {
+        return Err(SIGN_IN_EXPIRED.into());
+    }
+    if status.as_u16() == 429 {
+        return Err(TOKEN_REFRESH_RATE_LIMITED.into());
+    }
+    Err(format!(
+        "Claude token refresh failed: HTTP {}",
+        status.as_u16()
+    ))
+}
+/// The scopes a login was granted, as Claude Code asks for them on renewal;
+/// the default ones for a login that records none.
+fn refresh_scope(oauth: &Value) -> String {
+    let scopes: Vec<&str> = oauth["scopes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+        .collect();
+    if scopes.is_empty() {
+        crate::login::CLAUDE_SCOPES.into()
+    } else {
+        scopes.join(" ")
     }
 }
 
@@ -782,6 +823,10 @@ fn apply_tokens(oauth: &mut Value, tokens: &Value, now_ms: i64) -> Result<()> {
     }
     if let Some(scope) = text(&tokens["scope"]) {
         oauth["scopes"] = scope.split_whitespace().collect::<Vec<_>>().into();
+    }
+    // Claude Code records when the refresh token itself expires.
+    if let Some(seconds) = number(&tokens["refresh_token_expires_in"]) {
+        oauth["refreshTokenExpiresAt"] = (now_ms + (seconds * 1000.0) as i64).into();
     }
     Ok(())
 }
@@ -1691,6 +1736,7 @@ impl Application {
                     // A refresh token Claude rejected is not sent again.
                     let token =
                         text(&oauth["refreshToken"]).filter(|_| !account.is_rejected(oauth));
+                    let scope = refresh_scope(oauth);
                     let location = &location;
                     let account = &account;
                     let rejected = &rejected;
@@ -1707,7 +1753,7 @@ impl Application {
                             return Err(CREDENTIALS_CHANGED.into());
                         }
                         let token = token.ok_or(REFRESH_REJECTED)?;
-                        match network.refresh(&token, proxy).await {
+                        match network.refresh(&token, &scope, proxy).await {
                             Err(error) if error == SIGN_IN_EXPIRED => Err(REFRESH_REJECTED.into()),
                             response => response,
                         }
@@ -2585,11 +2631,208 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// Serves one canned response per connection and returns each request's
+    /// head (lowercased) and body.
+    async fn token_server(
+        responses: Vec<&'static str>,
+    ) -> (String, tokio::task::JoinHandle<Vec<(String, Value)>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/oauth/token", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut requests = vec![];
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut raw = vec![];
+                let mut buffer = [0; 4096];
+                let (head, body) = loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    raw.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&raw).into_owned();
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let head = text[..end].to_lowercase();
+                        let length: usize = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .map_or(0, |v| v.trim().parse().unwrap());
+                        if raw.len() >= end + 4 + length {
+                            break (head, text[end + 4..end + 4 + length].to_owned());
+                        }
+                    }
+                };
+                requests.push((head, serde_json::from_str(&body).unwrap()));
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        (url, server)
+    }
+
+    #[tokio::test]
+    async fn refresh_requests_match_claude_code_without_a_user_agent() {
+        let json = |status: &str, body: &str| -> &'static str {
+            Box::leak(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_boxed_str(),
+            )
+        };
+        let (url, server) = token_server(vec![
+            json("200 OK", r#"{"access_token":"new","refresh_token":"next","expires_in":28800}"#),
+            json("400 Bad Request", r#"{"error":"invalid_grant","error_description":"Refresh token not found or invalid"}"#),
+            json("429 Too Many Requests", r#"{"error":{"type":"rate_limit_error","message":"Rate limited. Please try again later."}}"#),
+            json("500 Internal Server Error", "{}"),
+        ])
+        .await;
+        let scope = "user:inference user:profile";
+        let tokens = refresh_at(&url, "rt-1", scope, "direct://").await.unwrap();
+        assert_eq!(tokens["access_token"], "new");
+        assert_eq!(
+            refresh_at(&url, "rt-2", scope, "direct://")
+                .await
+                .unwrap_err(),
+            SIGN_IN_EXPIRED
+        );
+        assert_eq!(
+            refresh_at(&url, "rt-3", scope, "direct://")
+                .await
+                .unwrap_err(),
+            TOKEN_REFRESH_RATE_LIMITED
+        );
+        assert_eq!(
+            refresh_at(&url, "rt-4", scope, "direct://")
+                .await
+                .unwrap_err(),
+            "Claude token refresh failed: HTTP 500"
+        );
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 4);
+        for (n, (head, body)) in requests.iter().enumerate() {
+            assert!(head.starts_with("post /v1/oauth/token http/1.1"), "{head}");
+            // The token endpoint refuses `claude-code/…` and `curl/…` agents.
+            assert!(!head.contains("\r\nuser-agent:"), "{head}");
+            assert!(
+                head.contains("\r\ncontent-type: application/json"),
+                "{head}"
+            );
+            assert!(!head.contains("authorization:"), "{head}");
+            assert!(!head.contains("anthropic-beta:"), "{head}");
+            assert_eq!(
+                *body,
+                json!({
+                    "grant_type": "refresh_token",
+                    "refresh_token": format!("rt-{}", n + 1),
+                    "client_id": crate::login::CLAUDE_CLIENT,
+                    "scope": scope,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn renewal_asks_again_for_the_scopes_the_login_holds() {
+        let default = crate::login::CLAUDE_SCOPES;
+        assert_eq!(
+            refresh_scope(&json!({"scopes": ["user:inference", "user:profile"]})),
+            "user:inference user:profile"
+        );
+        assert_eq!(
+            refresh_scope(&json!({"scopes": [" user:inference ", "", 7]})),
+            "user:inference"
+        );
+        for oauth in [
+            json!({}),
+            json!({"scopes": []}),
+            json!({"scopes": "user:inference"}),
+            json!({"scopes": [""]}),
+        ] {
+            assert_eq!(refresh_scope(&oauth), default, "{oauth}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refresh_sends_the_login_scopes_and_records_both_expiries() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, fake) = waiting_app(&dir);
+        let (mut oauth, account) = login("bob", 1);
+        oauth["scopes"] = json!(["user:inference", "user:profile"]);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string(),
+        )
+        .await
+        .unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(
+            *fake.refresh_scopes.lock().unwrap(),
+            ["user:inference user:profile"]
+        );
+        // A login without scopes asks for the default ones.
+        let (expiring, other) = login("carol", 1);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": expiring, "oauthAccount": other}).to_string(),
+        )
+        .await
+        .unwrap();
+        let carol = app
+            .claude_load()
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|a| a.label == "carol@example.com")
+            .unwrap()
+            .id;
+        app.claude_release_new_accounts(Some(&carol)).await.unwrap();
+        app.claude_refresh_usage(&carol).await.unwrap();
+        assert_eq!(
+            fake.refresh_scopes.lock().unwrap()[1],
+            crate::login::CLAUDE_SCOPES
+        );
+        let mut renewed = json!({});
+        let now = 1_000_000;
+        apply_tokens(
+            &mut renewed,
+            &json!({"access_token": "a", "refresh_token": "r", "expires_in": 28800, "refresh_token_expires_in": 2_592_000, "scope": "user:inference user:profile"}),
+            now,
+        )
+        .unwrap();
+        assert_eq!(renewed["expiresAt"], now + 28_800_000);
+        assert_eq!(renewed["refreshTokenExpiresAt"], now + 2_592_000_000);
+        assert_eq!(renewed["scopes"], json!(["user:inference", "user:profile"]));
+        // A response without it leaves the recorded expiry.
+        renewed["refreshTokenExpiresAt"] = 5.into();
+        apply_tokens(&mut renewed, &json!({"access_token": "b"}), now).unwrap();
+        assert_eq!(renewed["refreshTokenExpiresAt"], 5);
+        assert_eq!(renewed["refreshToken"], "r");
+    }
+
+    /// Claude's real token endpoint, through `COPOOL_LIVE_CLAUDE_PROXY` (or
+    /// the system proxy), with a refresh token that cannot exist: a request
+    /// it accepts is refused as `invalid_grant`, one it filters gets HTTP 429.
+    #[tokio::test]
+    #[ignore = "contacts platform.claude.com"]
+    async fn the_live_token_endpoint_accepts_the_refresh_request() {
+        let proxy = std::env::var("COPOOL_LIVE_CLAUDE_PROXY").unwrap_or_default();
+        let error = refresh_at(
+            crate::login::CLAUDE_TOKEN_URL,
+            "sk-ant-ort01-copool-invalid-probe",
+            crate::login::CLAUDE_SCOPES,
+            &proxy,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, SIGN_IN_EXPIRED);
+    }
+
     #[derive(Default)]
     pub(super) struct Fake {
         usage: Mutex<Vec<(u16, Value)>>,
         usage_retry_after: Mutex<Option<u64>>,
         refreshed: Mutex<Vec<String>>,
+        refresh_scopes: Mutex<Vec<String>>,
         profile_proxies: Mutex<Vec<String>>,
         usage_tokens: Mutex<Vec<String>>,
         usage_proxies: Mutex<Vec<String>>,
@@ -2621,9 +2864,15 @@ mod tests {
                 Ok((status, body, *self.usage_retry_after.lock().unwrap()))
             })
         }
-        fn refresh<'a>(&'a self, token: &'a str, _: &'a str) -> Response<'a, Value> {
+        fn refresh<'a>(
+            &'a self,
+            token: &'a str,
+            scope: &'a str,
+            _: &'a str,
+        ) -> Response<'a, Value> {
             Box::pin(async move {
                 self.refreshed.lock().unwrap().push(token.into());
+                self.refresh_scopes.lock().unwrap().push(scope.into());
                 let mut hooks = self.refresh_hooks.lock().unwrap();
                 if !hooks.is_empty() {
                     hooks.remove(0)();
