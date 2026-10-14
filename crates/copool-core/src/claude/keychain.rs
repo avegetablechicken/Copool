@@ -132,6 +132,22 @@ fn update_account(
     bytes: &[u8],
     access: KeychainAccess,
 ) -> Result<bool> {
+    update_item(
+        service,
+        account,
+        bytes,
+        access,
+        "the Claude Code Keychain entry",
+    )
+}
+#[allow(deprecated)]
+fn update_item(
+    service: &str,
+    account: &str,
+    bytes: &[u8],
+    access: KeychainAccess,
+    item: &str,
+) -> Result<bool> {
     let query = options(service, Some(account), access);
     let query = CFDictionary::from_CFType_pairs(&query.query);
     let attributes = value_attributes(bytes);
@@ -146,10 +162,39 @@ fn update_account(
         0 => Ok(true),
         -25300 => Ok(false),
         code => Err(format!(
-            "Could not update the Claude Code Keychain entry: {}",
+            "Could not update {item}: {}",
             Error::from_code(code)
         )),
     }
+}
+/// An item of Copool's own. Copool creates it, so only Copool reads it
+/// without asking; after a build changes Copool's signature, the user is asked
+/// again, which background access never does.
+pub(super) fn read_private(
+    service: &str,
+    account: &str,
+    access: KeychainAccess,
+) -> Result<Option<Vec<u8>>> {
+    match passwords::generic_password(options(service, Some(account), access)) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.code() == -25300 => Ok(None),
+        Err(error) => Err(format!("Copool Keychain access failed: {error}")),
+    }
+}
+pub(super) fn write_private(
+    service: &str,
+    account: &str,
+    label: &str,
+    bytes: &[u8],
+    access: KeychainAccess,
+) -> Result<()> {
+    if update_item(service, account, bytes, access, "Copool's Keychain item")? {
+        return Ok(());
+    }
+    let mut created = options(service, Some(account), access);
+    created.set_label(label);
+    passwords::set_generic_password_options(bytes, created)
+        .map_err(|error| format!("Could not create Copool's Keychain item: {error}"))
 }
 fn value_attributes(bytes: &[u8]) -> CFDictionary<CFString, core_foundation::base::CFType> {
     CFDictionary::from_CFType_pairs(&[(
@@ -259,6 +304,55 @@ pub(super) async fn write(service: &str, document: &Value, access: KeychainAcces
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The private item against the real Keychain, under a throwaway service
+    /// removed afterwards.
+    #[test]
+    #[ignore = "creates and deletes an item in the login Keychain"]
+    fn a_private_item_is_created_updated_and_read_in_the_keychain() {
+        let service = format!("io.github.copool.rust.test-{}", std::process::id());
+        let account = "accounts";
+        let cleanup = || {
+            let _ = passwords::delete_generic_password(&service, account);
+        };
+        cleanup();
+        let result = std::panic::catch_unwind(|| {
+            assert_eq!(
+                read_private(&service, account, KeychainAccess::Background),
+                Ok(None)
+            );
+            write_private(
+                &service,
+                account,
+                "Copool test",
+                b"first",
+                KeychainAccess::Background,
+            )
+            .unwrap();
+            assert_eq!(
+                read_private(&service, account, KeychainAccess::Interactive),
+                Ok(Some(b"first".to_vec()))
+            );
+            write_private(
+                &service,
+                account,
+                "Copool test",
+                b"second",
+                KeychainAccess::Background,
+            )
+            .unwrap();
+            assert_eq!(
+                read_private(&service, account, KeychainAccess::Background),
+                Ok(Some(b"second".to_vec()))
+            );
+        });
+        cleanup();
+        assert_eq!(
+            read_private(&service, account, KeychainAccess::Background),
+            Ok(None)
+        );
+        result.unwrap();
+    }
 
     #[test]
     fn updates_cannot_replace_access_attributes() {

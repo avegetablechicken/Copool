@@ -415,10 +415,102 @@ fn refresh_scope(oauth: &Value) -> String {
     }
 }
 
+/// Keeps the pool's tokens apart from `claude-accounts.json`. On macOS, as
+/// Claude Code keeps its login, they are in a Keychain item of Copool's own;
+/// the store then holds everything but the tokens.
+trait Vault: Send + Sync {
+    /// The stored text; none before anything was stored.
+    fn read(&self, access: KeychainAccess) -> Result<Option<String>>;
+    fn write(&self, text: &str, access: KeychainAccess) -> Result<()>;
+}
+/// Each account's tokens and alternate generations, by account id.
+type Secrets = serde_json::Map<String, Value>;
+const SECRET_KEYS: [&str; 2] = ["accessToken", "refreshToken"];
+#[cfg(target_os = "macos")]
+struct KeychainVault;
+#[cfg(target_os = "macos")]
+impl Vault for KeychainVault {
+    fn read(&self, access: KeychainAccess) -> Result<Option<String>> {
+        keychain::read_private(VAULT_SERVICE, VAULT_ACCOUNT, access)?
+            .map(|bytes| {
+                String::from_utf8(bytes).map_err(|_| "Invalid Copool Keychain item".into())
+            })
+            .transpose()
+    }
+    fn write(&self, text: &str, access: KeychainAccess) -> Result<()> {
+        keychain::write_private(
+            VAULT_SERVICE,
+            VAULT_ACCOUNT,
+            VAULT_LABEL,
+            text.as_bytes(),
+            access,
+        )
+    }
+}
+#[cfg(target_os = "macos")]
+const VAULT_SERVICE: &str = "io.github.copool.rust.claude";
+#[cfg(target_os = "macos")]
+const VAULT_ACCOUNT: &str = "accounts";
+#[cfg(target_os = "macos")]
+const VAULT_LABEL: &str = "Copool Claude accounts";
+const VAULT_LOCKED: &str =
+    "Copool cannot read the account's tokens from its Keychain item; reopen Copool and allow access";
+/// The vault's text as a map; none when it is not one, so that it is never
+/// replaced by what little is known.
+fn parse_secrets(text: Option<String>) -> Option<Secrets> {
+    match text {
+        None => Some(Secrets::new()),
+        Some(text) => serde_json::from_str::<Value>(&text)
+            .ok()?
+            .as_object()
+            .cloned(),
+    }
+}
+/// The account holds its tokens in memory, read from either place.
+fn holds_tokens(account: &Stored) -> bool {
+    SECRET_KEYS
+        .iter()
+        .any(|key| text(&account.oauth[*key]).is_some())
+}
+fn secrets_of(account: &Stored) -> Option<Value> {
+    holds_tokens(account).then(|| {
+        json!({
+            "accessToken": account.oauth["accessToken"],
+            "refreshToken": account.oauth["refreshToken"],
+            "alternates": account.alternates,
+        })
+    })
+}
+fn restore_secrets(account: &mut Stored, secrets: &Value) {
+    for key in SECRET_KEYS {
+        if !secrets[key].is_null() {
+            account.oauth[key] = secrets[key].clone();
+        }
+    }
+    if account.alternates.is_empty() {
+        account.alternates =
+            serde_json::from_value(secrets["alternates"].clone()).unwrap_or_default();
+    }
+}
+fn strip_secrets(account: &mut Stored) {
+    if let Some(oauth) = account.oauth.as_object_mut() {
+        for key in SECRET_KEYS {
+            oauth.remove(key);
+        }
+    }
+    account.alternates.clear();
+}
+
 /// The Claude pool's place in the application.
 pub(crate) struct State {
     location: std::sync::RwLock<Location>,
     network: std::sync::RwLock<Arc<dyn Network>>,
+    /// Where the pool's tokens are kept instead of the store, when not the
+    /// default for the location (tests).
+    vault: std::sync::RwLock<Option<Arc<dyn Vault>>>,
+    /// The vault's contents as last read or written: tokens by account id.
+    /// None until it has been read.
+    secrets: std::sync::Mutex<Option<Secrets>>,
     /// Until when each proxy asks for usage as `claude-code/…`.
     cli_refused: std::sync::Mutex<std::collections::HashMap<String, i64>>,
     lock: tokio::sync::Mutex<()>,
@@ -431,6 +523,8 @@ impl Default for State {
                 Location::discover().unwrap_or_else(|_| Location::files(".claude".into())),
             ),
             network: std::sync::RwLock::new(Arc::new(Http)),
+            vault: Default::default(),
+            secrets: Default::default(),
             cli_refused: Default::default(),
             lock: Default::default(),
             operations: Default::default(),
@@ -607,7 +701,10 @@ fn same_login(a: &Value, b: &Value) -> bool {
         .all(|key| text(&a[key]) == text(&b[key]))
 }
 fn push_alternate(alternates: &mut Vec<Value>, oauth: Value) {
-    let print = fingerprint(&oauth);
+    // A generation without tokens (unread from the vault) is no alternate.
+    let Some(print) = fingerprint(&oauth).map(Some) else {
+        return;
+    };
     alternates.retain(|a| fingerprint(a) != print);
     alternates.insert(0, oauth);
     alternates.truncate(MAX_ALTERNATES);
@@ -970,7 +1067,7 @@ fn set_member(document: &str, key: &str, value: &Value) -> Result<String> {
 }
 
 /// Recurring synchronization stays silent; startup and explicit actions may authorize.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KeychainAccess {
     Background,
     Interactive,
@@ -1186,18 +1283,126 @@ impl Application {
     fn claude_store_path(&self) -> PathBuf {
         self.paths.data_dir.join("claude-accounts.json")
     }
+    /// The store with each account's tokens: those the store itself holds
+    /// (written while the vault could not be), else the vault's. An account
+    /// whose tokens cannot be read is returned without them.
     fn claude_load(&self) -> Result<Store> {
-        match fs::read(self.claude_store_path()) {
+        let mut store: Store = match fs::read(self.claude_store_path()) {
             Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| format!("Invalid Claude account store: {e}")),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
-            Err(e) => Err(e.to_string()),
+                .map_err(|e| format!("Invalid Claude account store: {e}"))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Store::default(),
+            Err(e) => return Err(e.to_string()),
+        };
+        if let Some(vault) = self.claude_vault() {
+            if store.accounts.iter().any(|a| !holds_tokens(a)) {
+                if let Some(secrets) = self.claude_secrets(&*vault, KeychainAccess::Background) {
+                    for account in store.accounts.iter_mut().filter(|a| !holds_tokens(a)) {
+                        if let Some(found) = secrets.get(&account.id) {
+                            restore_secrets(account, found);
+                        }
+                    }
+                }
+            }
         }
+        Ok(store)
     }
+    /// Saves the store, its tokens in the vault. The vault keeps an
+    /// account's tokens that could not be read; when it cannot be written,
+    /// the tokens stay in the store so that none is lost.
     fn claude_save(&self, store: &Store) -> Result<()> {
-        write_json(&self.claude_store_path(), store)?;
+        let path = self.claude_store_path();
+        let vaulted = match self.claude_vault() {
+            Some(vault) => self.claude_vault_save(&*vault, store),
+            None => false,
+        };
+        if vaulted {
+            let mut file = store.clone();
+            file.accounts.iter_mut().for_each(strip_secrets);
+            write_json(&path, &file)?;
+        } else {
+            write_json(&path, store)?;
+        }
         self.publish();
         Ok(())
+    }
+    /// Whether the vault now holds every account's tokens.
+    fn claude_vault_save(&self, vault: &dyn Vault, store: &Store) -> bool {
+        let Some(known) = self.claude_secrets(vault, KeychainAccess::Background) else {
+            return false;
+        };
+        let next: Secrets = store
+            .accounts
+            .iter()
+            .filter_map(|a| {
+                Some((
+                    a.id.clone(),
+                    secrets_of(a).or_else(|| known.get(&a.id).cloned())?,
+                ))
+            })
+            .collect();
+        if next == known {
+            return true;
+        }
+        let text = Value::Object(next.clone()).to_string();
+        let stored = vault
+            .write(&text, KeychainAccess::Background)
+            .and_then(|()| vault.read(KeychainAccess::Background));
+        let mut cache = self.claude.secrets.lock().unwrap();
+        match stored {
+            Ok(Some(read)) if read == text => {
+                *cache = Some(next);
+                true
+            }
+            outcome => {
+                log::warn!(
+                    "Copool's Keychain item was not updated; tokens stay in the store: {}",
+                    outcome.err().unwrap_or_else(|| "read back differs".into())
+                );
+                // What the item holds now is not known.
+                *cache = None;
+                false
+            }
+        }
+    }
+    /// The vault's contents, read once; none when it cannot be read.
+    fn claude_secrets(&self, vault: &dyn Vault, access: KeychainAccess) -> Option<Secrets> {
+        let mut cache = self.claude.secrets.lock().unwrap();
+        if cache.is_none() {
+            *cache = parse_secrets(vault.read(access).ok()?);
+        }
+        cache.clone()
+    }
+    /// Reads the vault once, allowing the Keychain to ask the user, and
+    /// moves tokens still in the store into it. Startup and user actions do
+    /// this; background work never asks.
+    async fn claude_unlock(&self) -> Result<()> {
+        let Some(vault) = self.claude_vault() else {
+            return Ok(());
+        };
+        if self.claude.secrets.lock().unwrap().is_none() {
+            let read = tokio::task::spawn_blocking(move || vault.read(KeychainAccess::Interactive))
+                .await
+                .map_err(|e| e.to_string())??;
+            let mut cache = self.claude.secrets.lock().unwrap();
+            if cache.is_none() {
+                *cache = parse_secrets(read);
+            }
+        }
+        let _lock = self.claude.lock.lock().await;
+        let store = self.claude_load()?;
+        self.claude_save(&store)
+    }
+    /// The pool's tokens go to Copool's Keychain item where Claude Code keeps
+    /// its own login in the Keychain; elsewhere they stay in the store.
+    fn claude_vault(&self) -> Option<Arc<dyn Vault>> {
+        if let Some(vault) = self.claude.vault.read().unwrap().clone() {
+            return Some(vault);
+        }
+        #[cfg(target_os = "macos")]
+        if self.claude_location().keychain.is_some() {
+            return Some(Arc::new(KeychainVault));
+        }
+        None
     }
     /// Where the official main settings are recorded on leaving them.
     fn claude_official_path(&self) -> PathBuf {
@@ -1239,6 +1444,11 @@ impl Application {
         *self.claude.location.write().unwrap() = location;
     }
     #[cfg(test)]
+    fn set_claude_vault(&self, vault: Arc<dyn Vault>) {
+        *self.claude.vault.write().unwrap() = Some(vault);
+        *self.claude.secrets.lock().unwrap() = None;
+    }
+    #[cfg(test)]
     pub(crate) fn set_claude_network(&self, network: Arc<dyn Network>) {
         *self.claude.network.write().unwrap() = network;
     }
@@ -1252,6 +1462,10 @@ impl Application {
             return Ok(());
         }
         let _op = self.claude.operations.lock().await;
+        // A refusal leaves the tokens where they are; refreshes report it.
+        if let Err(error) = self.claude_unlock().await {
+            log::warn!("Copool's Keychain item could not be read: {error}");
+        }
         let live =
             read_live_with_access(&self.claude_location(), KeychainAccess::Interactive).await?;
         let _lock = self.claude.lock.lock().await;
@@ -1400,6 +1614,7 @@ impl Application {
     /// Imports the login Claude Code uses; returns the account label.
     pub async fn claude_import_current(&self) -> Result<String> {
         let _op = self.claude.operations.lock().await;
+        let _ = self.claude_unlock().await;
         let live = read_live_with_access(&self.claude_location(), KeychainAccess::Interactive)
             .await?
             .ok_or("error.claude.login_not_found")?;
@@ -1438,6 +1653,7 @@ impl Application {
             document: json!({"claudeAiOauth": oauth}),
         };
         let _op = self.claude.operations.lock().await;
+        let _ = self.claude_unlock().await;
         let (id, _, waiting) = self.claude_import_live(live, false).await?;
         drop(_op);
         // Should Claude reject the export, the pool's tokens take over again.
@@ -1496,6 +1712,7 @@ impl Application {
         }
         let defer = !self.preferences()?.request_new_accounts;
         let _op = self.claude.operations.lock().await;
+        let _ = self.claude_unlock().await;
         let (id, label, waiting) = self.claude_upsert(oauth, account, false, defer).await?;
         drop(_op);
         if !waiting {
@@ -1552,6 +1769,9 @@ impl Application {
         if sub2api::is_card(id) {
             return self.claude_switch_sub2api(id).await;
         }
+        if access == KeychainAccess::Interactive {
+            let _ = self.claude_unlock().await;
+        }
         // Keep tokens Claude Code refreshed for the account being left.
         self.claude_accounts().await?;
         let location = self.claude_location();
@@ -1567,6 +1787,10 @@ impl Application {
             .find(|a| a.id == id)
             .ok_or("Account not found")?
             .clone();
+        // Never hand Claude Code a login without its tokens.
+        if !holds_tokens(&target) {
+            return Err(VAULT_LOCKED.into());
+        }
         // Settings that replace the login give way to the official ones
         // recorded when leaving them, or else lose only what replaces it.
         let settings = read_settings(&location)?;
@@ -1714,6 +1938,9 @@ impl Application {
         };
         if account.first_request_pending {
             return Ok(());
+        }
+        if !holds_tokens(&account) {
+            return Err(VAULT_LOCKED.into());
         }
         if account
             .usage_retry_at
@@ -3013,6 +3240,410 @@ mod tests {
         );
     }
 
+    /// Copool's Keychain item, in memory.
+    #[derive(Default)]
+    struct MemoryVault {
+        text: Mutex<Option<String>>,
+        unreadable: std::sync::atomic::AtomicBool,
+        unwritable: std::sync::atomic::AtomicBool,
+        /// Writes report success without storing anything.
+        lost_writes: std::sync::atomic::AtomicBool,
+        reads: Mutex<Vec<KeychainAccess>>,
+        writes: Mutex<usize>,
+    }
+    impl Vault for MemoryVault {
+        fn read(&self, access: KeychainAccess) -> Result<Option<String>> {
+            self.reads.lock().unwrap().push(access);
+            if self.unreadable.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("The user denied access".into());
+            }
+            Ok(self.text.lock().unwrap().clone())
+        }
+        fn write(&self, text: &str, _: KeychainAccess) -> Result<()> {
+            if self.unwritable.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("The user denied access".into());
+            }
+            *self.writes.lock().unwrap() += 1;
+            if !self.lost_writes.load(std::sync::atomic::Ordering::SeqCst) {
+                *self.text.lock().unwrap() = Some(text.into());
+            }
+            Ok(())
+        }
+    }
+    impl MemoryVault {
+        fn secrets(&self) -> Value {
+            serde_json::from_str(self.text.lock().unwrap().as_deref().unwrap_or("{}")).unwrap()
+        }
+        fn writes(&self) -> usize {
+            *self.writes.lock().unwrap()
+        }
+        fn reads(&self) -> Vec<KeychainAccess> {
+            self.reads.lock().unwrap().clone()
+        }
+        fn set(&self, flag: &std::sync::atomic::AtomicBool, value: bool) {
+            flag.store(value, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    fn vault_app(
+        dir: &tempfile::TempDir,
+        vault: &Arc<MemoryVault>,
+    ) -> (Application, Location, Arc<Fake>) {
+        let (app, location, fake) = waiting_app(dir);
+        app.set_claude_vault(vault.clone());
+        (app, location, fake)
+    }
+    fn store_text(app: &Application) -> String {
+        fs::read_to_string(app.claude_store_path()).unwrap()
+    }
+    fn assert_no_tokens(app: &Application, tokens: &[&str]) {
+        let text = store_text(app);
+        for token in tokens {
+            assert!(!text.contains(token), "{token} in the store");
+        }
+    }
+    fn export(oauth: &Value, account: &Value) -> String {
+        json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string()
+    }
+    use KeychainAccess::{Background, Interactive};
+
+    #[tokio::test]
+    async fn the_pool_tokens_live_in_the_vault_and_the_store_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let (app, _, _) = vault_app(&dir, &vault);
+        let (oauth, account) = login("bob", LATER);
+        app.claude_import_json(&export(&oauth, &account))
+            .await
+            .unwrap();
+        let (mut newer, _) = login("bob", LATER + 1);
+        newer["accessToken"] = "bob-newer".into();
+        newer["refreshToken"] = "bob-newer-refresh".into();
+        app.claude_import_json(&export(&newer, &account))
+            .await
+            .unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        assert_no_tokens(&app, &["bob-access", "bob-refresh", "bob-newer"]);
+        let file: Value = serde_json::from_str(&store_text(&app)).unwrap();
+        let saved = &file["accounts"][0];
+        assert_eq!(
+            saved["oauth"],
+            json!({"expiresAt": LATER + 1, "subscriptionType": "max", "rateLimitTier": "default_claude_max_20x"})
+        );
+        assert!(saved.get("alternates").is_none());
+        assert_eq!(saved["label"], "bob@example.com");
+        assert_eq!(saved["firstRequestPending"], true);
+        assert_eq!(
+            vault.secrets(),
+            json!({id.clone(): {"accessToken": "bob-newer", "refreshToken": "bob-newer-refresh", "alternates": [oauth]}})
+        );
+        let loaded = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(loaded.oauth, newer);
+        assert_eq!(loaded.alternates, [oauth.clone()]);
+        // Read once, asking the user; written, and read back, as tokens change.
+        assert_eq!(vault.reads(), [Interactive, Background, Background]);
+        assert_eq!(vault.writes(), 2);
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.claude_accounts().await.unwrap();
+        assert_eq!(vault.writes(), 2);
+        assert_eq!(vault.reads().len(), 3);
+        // Reopened, the tokens come back from the vault without asking.
+        drop(app);
+        let (app, _, fake) = vault_app(&dir, &vault);
+        assert_eq!(app.claude_accounts().await.unwrap().len(), 1);
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(usages(&fake), ["bob-newer"]);
+        assert_eq!(vault.reads()[3..], [Background]);
+    }
+
+    #[tokio::test]
+    async fn tokens_left_in_the_store_move_to_the_vault_at_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        assert!(store_text(&app).contains("alice-refresh"));
+        let before = app.claude_load().unwrap();
+        drop(app);
+        let vault = Arc::new(MemoryVault::default());
+        let (app, _, _) = vault_app(&dir, &vault);
+        app.claude_authorize_at_startup().await.unwrap();
+        assert_eq!(vault.reads(), [Interactive, Background]);
+        assert_no_tokens(&app, &["alice-access", "alice-refresh"]);
+        let id = &before.accounts[0].id;
+        assert_eq!(vault.secrets()[id]["refreshToken"], "alice-refresh");
+        let after = app.claude_load().unwrap();
+        assert_eq!(after.accounts[0].oauth, before.accounts[0].oauth);
+        assert_eq!(after.current_account_id, before.current_account_id);
+        assert!(after.accounts[0].first_request_pending);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_vault_loses_no_tokens_and_contacts_no_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let (app, location, _) = vault_app(&dir, &vault);
+        let (oauth, account) = login("bob", LATER);
+        app.claude_import_json(&export(&oauth, &account))
+            .await
+            .unwrap();
+        let bob = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&bob)).await.unwrap();
+        let held = vault.secrets();
+        drop(app);
+        // Reopened without access to the vault (a new build not yet allowed).
+        vault.set(&vault.unreadable, true);
+        let (app, _, fake) = vault_app(&dir, &vault);
+        assert_eq!(app.claude_accounts().await.unwrap().len(), 1);
+        assert_eq!(
+            app.claude_refresh_usage(&bob).await.unwrap_err(),
+            VAULT_LOCKED
+        );
+        assert!(usages(&fake).is_empty());
+        assert!(refreshes(&fake).is_empty());
+        // Another import keeps its tokens in the store; the vault is untouched.
+        let (carol, carol_account) = login("carol", LATER);
+        app.claude_import_json(&export(&carol, &carol_account))
+            .await
+            .unwrap();
+        assert!(store_text(&app).contains("carol-refresh"));
+        assert_no_tokens(&app, &["bob-access", "bob-refresh"]);
+        assert_eq!(vault.secrets(), held);
+        assert_eq!(vault.writes(), 1);
+        // Claude Code is never handed a login without its tokens.
+        assert_eq!(
+            app.claude_switch_account(&bob).await.unwrap_err(),
+            VAULT_LOCKED
+        );
+        assert!(!location.credentials_file().exists());
+        // Once allowed, every token is there and moves to the vault.
+        vault.set(&vault.unreadable, false);
+        let store = app.claude_load().unwrap();
+        let tokens: Vec<_> = store
+            .accounts
+            .iter()
+            .map(|a| a.oauth["refreshToken"].clone())
+            .collect();
+        assert_eq!(tokens, [json!("bob-refresh"), json!("carol-refresh")]);
+        app.claude_authorize_at_startup().await.unwrap();
+        assert_no_tokens(&app, &["bob-refresh", "carol-refresh"]);
+        assert_eq!(vault.secrets().as_object().unwrap().len(), 2);
+        app.claude_refresh_usage(&bob).await.unwrap();
+        assert_eq!(usages(&fake), ["bob-access"]);
+    }
+
+    #[tokio::test]
+    async fn a_vault_that_does_not_take_a_write_leaves_the_tokens_in_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let (app, _, _) = vault_app(&dir, &vault);
+        // Refused: the store keeps them.
+        vault.set(&vault.unwritable, true);
+        let (oauth, account) = login("bob", LATER);
+        app.claude_import_json(&export(&oauth, &account))
+            .await
+            .unwrap();
+        assert!(store_text(&app).contains("bob-refresh"));
+        assert_eq!(vault.secrets(), json!({}));
+        assert_eq!(app.claude_load().unwrap().accounts[0].oauth, oauth);
+        // Reported done but not stored: the read back tells, the store keeps them.
+        vault.set(&vault.unwritable, false);
+        vault.set(&vault.lost_writes, true);
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        assert!(vault.writes() >= 1);
+        assert!(store_text(&app).contains("bob-refresh"));
+        assert_eq!(vault.secrets(), json!({}));
+        // The next save that sticks moves them.
+        vault.set(&vault.lost_writes, false);
+        app.claude_save_account_proxy(&id, "http://127.0.0.1:7001")
+            .await
+            .unwrap();
+        assert_no_tokens(&app, &["bob-access", "bob-refresh"]);
+        assert_eq!(vault.secrets()[&id]["refreshToken"], "bob-refresh");
+    }
+
+    #[tokio::test]
+    async fn vault_contents_that_cannot_be_read_as_tokens_are_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        *vault.text.lock().unwrap() = Some("not the pool".into());
+        let (app, _, _) = vault_app(&dir, &vault);
+        let (oauth, account) = login("bob", LATER);
+        app.claude_import_json(&export(&oauth, &account))
+            .await
+            .unwrap();
+        assert!(store_text(&app).contains("bob-refresh"));
+        assert_eq!(vault.text.lock().unwrap().as_deref(), Some("not the pool"));
+        assert_eq!(vault.writes(), 0);
+    }
+
+    #[tokio::test]
+    async fn renewals_switches_and_deletions_go_through_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let (app, location, fake) = vault_app(&dir, &vault);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let (oauth, account) = login("bob", 1);
+        app.claude_import_json(&export(&oauth, &account))
+            .await
+            .unwrap();
+        let ids = |user: &str| {
+            app.claude_load()
+                .unwrap()
+                .accounts
+                .into_iter()
+                .find(|a| a.label == format!("{user}@example.com"))
+                .unwrap()
+                .id
+        };
+        let (alice, bob) = (ids("alice"), ids("bob"));
+        app.claude_release_new_accounts(None).await.unwrap();
+        // A renewal rotates the tokens in the vault, never in the store.
+        app.claude_refresh_usage(&bob).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-refresh"]);
+        assert_eq!(vault.secrets()[&bob]["refreshToken"], "fresh-refresh");
+        assert_no_tokens(&app, &["fresh-access", "fresh-refresh", "alice-refresh"]);
+        // Renewed while the vault refuses writes: the store's newer tokens
+        // win over the vault's until they can be moved.
+        vault.set(&vault.unwritable, true);
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        *fake.refresh_response.lock().unwrap() = Some(
+            json!({"access_token": "next-access", "refresh_token": "next-refresh", "expires_in": 3600}),
+        );
+        app.claude_refresh_usage(&bob).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-refresh", "fresh-refresh"]);
+        assert!(store_text(&app).contains("next-refresh"));
+        assert_eq!(vault.secrets()[&bob]["refreshToken"], "fresh-refresh");
+        let rotated = app.claude_load().unwrap();
+        let held = rotated.accounts.iter().find(|a| a.id == bob).unwrap();
+        assert_eq!(held.oauth["refreshToken"], "next-refresh");
+        vault.set(&vault.unwritable, false);
+        // A switch hands Claude Code the tokens from the vault.
+        app.claude_switch_account(&bob).await.unwrap();
+        assert_eq!(live_access(&location), "next-access");
+        assert_no_tokens(&app, &["next-access", "next-refresh", "alice-access"]);
+        assert_eq!(vault.secrets()[&bob]["refreshToken"], "next-refresh");
+        assert_eq!(vault.secrets()[&alice]["refreshToken"], "alice-refresh");
+        // A deleted account leaves the vault too.
+        app.claude_delete_account(&alice).await.unwrap();
+        assert_eq!(
+            vault
+                .secrets()
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            [&bob]
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_codes_login_serves_its_account_while_the_vault_is_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let (app, location, _) = vault_app(&dir, &vault);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let (bob, bob_account) = login("bob", LATER);
+        app.claude_import_json(&export(&bob, &bob_account))
+            .await
+            .unwrap();
+        // The pool's alice tokens are not the ones Claude Code holds.
+        let mut store = app.claude_load().unwrap();
+        store.accounts[0].in_live = false;
+        app.claude_save(&store).unwrap();
+        let alice = store.accounts[0].id.clone();
+        drop(app);
+        vault.set(&vault.unreadable, true);
+        let (app, _, fake) = vault_app(&dir, &vault);
+        // Claude Code renewed its login meanwhile.
+        external_update(location.clone(), "alice", "alice-renewed")();
+        app.claude_accounts().await.unwrap();
+        let account = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(account.oauth["accessToken"], "alice-renewed");
+        // The tokens it could not read are no generation to fall back on.
+        assert!(account.alternates.is_empty());
+        app.claude_release_new_accounts(Some(&alice)).await.unwrap();
+        app.claude_refresh_usage(&alice).await.unwrap();
+        assert_eq!(usages(&fake), ["alice-renewed"]);
+        // Readable again: the store's newer alice tokens win over the vault's
+        // older ones, and bob's come from the vault.
+        vault.set(&vault.unreadable, false);
+        assert_eq!(vault.secrets()[&alice]["accessToken"], "alice-access");
+        let store = app.claude_load().unwrap();
+        assert_eq!(store.accounts[0].oauth["accessToken"], "alice-renewed");
+        assert_eq!(store.accounts[1].oauth["accessToken"], "bob-access");
+        app.claude_authorize_at_startup().await.unwrap();
+        assert_eq!(vault.secrets()[&alice]["accessToken"], "alice-renewed");
+        assert_no_tokens(&app, &["alice-renewed", "bob-access"]);
+    }
+
+    #[tokio::test]
+    async fn a_store_read_before_the_vault_opened_keeps_its_tokens_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let (app, _, _) = vault_app(&dir, &vault);
+        let (oauth, account) = login("bob", LATER);
+        app.claude_import_json(&export(&oauth, &account))
+            .await
+            .unwrap();
+        let held = vault.secrets();
+        drop(app);
+        vault.set(&vault.unreadable, true);
+        let (app, _, _) = vault_app(&dir, &vault);
+        // Read while the vault was closed, saved after it opened.
+        let stale = app.claude_load().unwrap();
+        assert!(!holds_tokens(&stale.accounts[0]));
+        vault.set(&vault.unreadable, false);
+        app.claude_load().unwrap();
+        app.claude_save(&stale).unwrap();
+        assert_eq!(vault.secrets(), held);
+        assert_eq!(app.claude_load().unwrap().accounts[0].oauth, oauth);
+    }
+
+    #[tokio::test]
+    async fn background_work_never_asks_for_keychain_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let (app, location, _) = vault_app(&dir, &vault);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        drop(app);
+        let (app, _, _) = vault_app(&dir, &vault);
+        let start = vault.reads().len();
+        let mut unchanged = 0;
+        app.background_round(1, &mut unchanged).await;
+        app.claude_refresh(None).await.unwrap();
+        app.claude_accounts().await.unwrap();
+        assert!(vault.reads()[start..].iter().all(|a| *a == Background));
+        assert!(!vault.reads()[start..].is_empty());
+        // A refusal is not asked again in the background, nor cached. (With
+        // Claude Code's login present, its tokens would serve the account.)
+        drop(app);
+        fs::remove_file(location.credentials_file()).unwrap();
+        vault.set(&vault.unreadable, true);
+        let (app, _, _) = vault_app(&dir, &vault);
+        let start = vault.reads().len();
+        assert!(app
+            .claude_refresh(None)
+            .await
+            .unwrap_err()
+            .ends_with(VAULT_LOCKED));
+        assert!(vault.reads()[start..].iter().all(|a| *a == Background));
+        assert!(vault.reads().len() - start >= 2);
+        // The startup authorization asks, once.
+        let start = vault.reads().len();
+        app.claude_authorize_at_startup().await.unwrap();
+        let asked = vault.reads()[start..]
+            .iter()
+            .filter(|a| **a == Interactive)
+            .count();
+        assert_eq!(asked, 1);
+    }
+
     #[derive(Default)]
     pub(super) struct Fake {
         usage: Mutex<Vec<(u16, Value)>>,
@@ -3026,6 +3657,8 @@ mod tests {
         usage_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_error: Mutex<Option<String>>,
+        /// The next token response, instead of the usual one.
+        refresh_response: Mutex<Option<Value>>,
         prepaid: Mutex<Option<Value>>,
         prepaid_requests: Mutex<Vec<(String, String)>>,
     }
@@ -3073,6 +3706,9 @@ mod tests {
                 drop(hooks);
                 if let Some(error) = self.refresh_error.lock().unwrap().take() {
                     return Err(error);
+                }
+                if let Some(response) = self.refresh_response.lock().unwrap().take() {
+                    return Ok(response);
                 }
                 Ok(
                     json!({"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":3600}),
