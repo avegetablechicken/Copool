@@ -397,8 +397,64 @@ struct Stored {
     /// Newly imported; nothing goes upstream for it until a manual refresh.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     first_request_pending: bool,
+    /// Other generations of this login not known to be invalid, newest
+    /// first: tried in turn when Claude rejects the one in use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    alternates: Vec<Value>,
+    /// Fingerprints of refresh tokens Claude rejected, never adopted again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    rejected: Vec<String>,
+    /// `oauth` is what Claude Code's login held when last read or written,
+    /// so Claude Code renewing that login rotates it away.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    in_live: bool,
 }
 impl Stored {
+    fn is_rejected(&self, oauth: &Value) -> bool {
+        fingerprint(oauth).is_some_and(|print| self.rejected.contains(&print))
+    }
+    fn reject(&mut self, print: String) {
+        if !self.rejected.contains(&print) {
+            self.rejected.insert(0, print);
+            self.rejected.truncate(MAX_REJECTED);
+        }
+        let rejected = &self.rejected;
+        self.alternates
+            .retain(|a| fingerprint(a).is_none_or(|print| !rejected.contains(&print)));
+    }
+    /// Keeps a generation to fall back on, unless Claude rejected it or it
+    /// is the one in use.
+    fn keep_alternate(&mut self, oauth: Value) {
+        if !self.is_rejected(&oauth) && fingerprint(&oauth) != fingerprint(&self.oauth) {
+            push_alternate(&mut self.alternates, oauth);
+        }
+    }
+    /// Uses a generation of this login seen elsewhere, unless Claude rejected
+    /// it. Validity, not expiry, decides between generations, so the previous
+    /// one stays to fall back on unless Claude Code renewed it away. Returns
+    /// whether the account changed.
+    fn adopt(&mut self, oauth: &Value, from_live: bool) -> bool {
+        if self.is_rejected(oauth) {
+            // Claude Code no longer holds the generation in use.
+            let changed = from_live && self.in_live;
+            self.in_live &= !from_live;
+            return changed;
+        }
+        if same_login(&self.oauth, oauth) {
+            let changed = from_live && !self.in_live;
+            self.in_live |= from_live;
+            return changed;
+        }
+        let previous = std::mem::replace(&mut self.oauth, oauth.clone());
+        let print = fingerprint(oauth);
+        self.alternates.retain(|a| fingerprint(a) != print);
+        if !(from_live && self.in_live) {
+            self.keep_alternate(previous);
+        }
+        self.in_live = from_live;
+        self.usage_error = None;
+        true
+    }
     fn summary(&self, current: bool) -> AccountSummary {
         let plan = plan(&self.oauth);
         AccountSummary {
@@ -455,6 +511,26 @@ fn identity(account: &Value) -> Option<String> {
         text(&account["organizationUuid"]).unwrap_or_default()
     ))
 }
+const MAX_ALTERNATES: usize = 3;
+const MAX_REJECTED: usize = 16;
+/// Identifies a generation by its refresh token, else its access token,
+/// without keeping the token itself.
+fn fingerprint(oauth: &Value) -> Option<String> {
+    let token = text(&oauth["refreshToken"]).or_else(|| text(&oauth["accessToken"]))?;
+    Some(hex(&Sha256::digest(token.as_bytes()))[..16].to_owned())
+}
+/// Both tokens are the same.
+fn same_login(a: &Value, b: &Value) -> bool {
+    ["accessToken", "refreshToken"]
+        .iter()
+        .all(|key| text(&a[key]) == text(&b[key]))
+}
+fn push_alternate(alternates: &mut Vec<Value>, oauth: Value) {
+    let print = fingerprint(&oauth);
+    alternates.retain(|a| fingerprint(a) != print);
+    alternates.insert(0, oauth);
+    alternates.truncate(MAX_ALTERNATES);
+}
 fn same_tokens(a: &Value, b: &Value) -> bool {
     ["accessToken", "refreshToken"]
         .iter()
@@ -484,9 +560,14 @@ fn merge_identified(store: &mut Store, id: &str) {
     let merged = store.accounts.remove(index);
     let other = if other > index { other - 1 } else { other };
     let existing = &mut store.accounts[other];
-    if expires_at(&merged.oauth) >= expires_at(&existing.oauth) {
-        existing.oauth = merged.oauth;
+    for print in merged.rejected {
+        existing.reject(print);
     }
+    for alternate in merged.alternates {
+        existing.keep_alternate(alternate);
+    }
+    // The card just refreshed holds the generation Claude last saw.
+    existing.adopt(&merged.oauth, merged.in_live);
     if merged.usage.is_some() {
         existing.usage = merged.usage;
         existing.usage_error = merged.usage_error;
@@ -916,7 +997,7 @@ fn write_text(path: &std::path::Path, text: &str) -> Result<()> {
 }
 
 /// Adopts what Claude Code changed: the current account follows its login,
-/// and tokens it refreshed replace older stored ones. A missing login keeps
+/// whose tokens are used unless Claude rejected them. A missing login keeps
 /// the stored selection. Returns whether the store changed.
 fn follow_live(store: &mut Store, live: Option<&Live>) -> bool {
     let Some(live) = live else {
@@ -949,16 +1030,14 @@ fn follow_live(store: &mut Store, live: Option<&Live>) -> bool {
         store.current_account_id = current;
         changed = true;
     }
-    if let (Some(i), Some(oauth)) = (matched, oauth) {
-        let stored = &mut store.accounts[i];
-        let rotated = ["accessToken", "refreshToken"]
-            .iter()
-            .any(|key| token(oauth, key) != token(&stored.oauth, key));
-        if rotated && expires_at(oauth) >= expires_at(&stored.oauth) {
-            stored.oauth = oauth.clone();
-            stored.usage_error = None;
+    for (j, account) in store.accounts.iter_mut().enumerate() {
+        if Some(j) != matched && account.in_live {
+            account.in_live = false;
             changed = true;
         }
+    }
+    if let (Some(i), Some(oauth)) = (matched, oauth) {
+        changed |= store.accounts[i].adopt(oauth, true);
     }
     changed
 }
@@ -971,14 +1050,21 @@ fn same_oauth_generation(a: &Value, b: &Value) -> bool {
 }
 
 /// Only adopt an observed change for this account. A different live login must
-/// never replace the account being refreshed, even if its expiry is later.
+/// never replace the account being refreshed, even if its expiry is later,
+/// nor a login Claude rejected, as stored or seen in this refresh.
 fn changed_live_oauth(
     account: &Stored,
+    rejected: &[String],
     before: Option<&Live>,
     after: Option<&Live>,
 ) -> Option<Value> {
     let after = after?;
     let oauth = after.oauth()?;
+    if account.is_rejected(oauth)
+        || fingerprint(oauth).is_some_and(|print| rejected.contains(&print))
+    {
+        return None;
+    }
     let named = after.account.as_ref().and_then(identity)?;
     let expected = identity(&account.account).or_else(|| {
         let before = before?;
@@ -997,15 +1083,15 @@ fn changed_live_oauth(
         if same_oauth_generation(previous, oauth) {
             return None;
         }
-    } else if same_oauth_generation(&account.oauth, oauth)
-        || expires_at(oauth) < expires_at(&account.oauth)
-    {
+    } else if same_oauth_generation(&account.oauth, oauth) {
         return None;
     }
     Some(oauth.clone())
 }
 
 const CREDENTIALS_CHANGED: &str = "Claude credentials changed during refresh; retry usage";
+/// Claude refused a refresh token; shown as an expired sign-in.
+const REFRESH_REJECTED: &str = "Claude rejected the refresh token";
 /// Renewing rotates the refresh token: the login Claude Code may be using is
 /// not renewed unless the new tokens can be seen to reach it.
 const LIVE_UNREADABLE: &str =
@@ -1140,11 +1226,9 @@ impl Application {
             None => same_tokens(&a.oauth, &oauth),
         }) {
             Some(existing) => {
-                // An older login (an earlier export, say) holds a refresh token
-                // the pool has since rotated.
-                if expires_at(&oauth) >= expires_at(&existing.oauth) {
-                    existing.oauth = oauth;
-                }
+                // Claude Code's login supersedes what it renewed; another
+                // generation stays to fall back on until Claude settles it.
+                existing.adopt(&oauth, current);
                 if key.is_some() {
                     existing.account = account;
                 }
@@ -1166,12 +1250,18 @@ impl Application {
                     usage_error: None,
                     usage_retry_at: None,
                     first_request_pending: defer,
+                    alternates: Vec::new(),
+                    rejected: Vec::new(),
+                    in_live: current,
                 });
                 (id, defer)
             }
         };
         if current {
             store.current_account_id = Some(id.clone());
+            for other in store.accounts.iter_mut().filter(|a| a.id != id) {
+                other.in_live = false;
+            }
         }
         self.claude_save(&store)?;
         Ok((id, label, awaiting))
@@ -1254,6 +1344,7 @@ impl Application {
         let _op = self.claude.operations.lock().await;
         let (id, _, waiting) = self.claude_import_live(live, false).await?;
         drop(_op);
+        // Should Claude reject the export, the pool's tokens take over again.
         if !waiting {
             let _ = self.claude_refresh_usage_scoped(&id, false).await;
         }
@@ -1449,6 +1540,9 @@ impl Application {
             }
         }
         store.current_account_id = Some(id.into());
+        for account in store.accounts.iter_mut() {
+            account.in_live = account.id == id;
+        }
         store.settings_provider = None;
         if let Err(error) = self.claude_save(&store) {
             if official.is_some() {
@@ -1543,17 +1637,27 @@ impl Application {
         // A refresh rotates the refresh token, so its result is kept even
         // when the usage request then fails.
         let mut oauth = account.oauth.clone();
+        // Generations to fall back on when Claude rejects the one in use.
+        let mut alternates = account.alternates.clone();
+        let mut rejected: Vec<String> = Vec::new();
+        // `oauth` came from a token response, which proves it.
+        let mut renewed = false;
+        // `oauth` is what Claude Code's login holds.
+        let mut in_live;
         let mut profiled = None;
         let mut rate_limited = false;
         let mut reloads = 0;
         let mut live_sync = Ok(());
         let result = loop {
-            let result = async {
+            let mut result = async {
                 let refresh = |oauth: &Value| {
                     let network = network.clone();
-                    let token = text(&oauth["refreshToken"]);
+                    // A refresh token Claude rejected is not sent again.
+                    let token =
+                        text(&oauth["refreshToken"]).filter(|_| !account.is_rejected(oauth));
                     let location = &location;
                     let account = &account;
+                    let rejected = &rejected;
                     let before = live.as_ref();
                     async move {
                         // Another app may have renewed while our usage request ran.
@@ -1562,17 +1666,22 @@ impl Application {
                             Err(_) if in_use => return Err(LIVE_UNREADABLE.into()),
                             Err(_) => None,
                         };
-                        if changed_live_oauth(account, before, latest.as_ref()).is_some() {
+                        if changed_live_oauth(account, rejected, before, latest.as_ref()).is_some()
+                        {
                             return Err(CREDENTIALS_CHANGED.into());
                         }
-                        let token = token.ok_or(SIGN_IN_EXPIRED)?;
-                        network.refresh(&token, proxy).await
+                        let token = token.ok_or(REFRESH_REJECTED)?;
+                        match network.refresh(&token, proxy).await {
+                            Err(error) if error == SIGN_IN_EXPIRED => Err(REFRESH_REJECTED.into()),
+                            response => response,
+                        }
                     }
                 };
                 if expires_at(&oauth) != 0 && expires_at(&oauth) <= (now_unix_seconds() + 60) * 1000
                 {
                     let tokens = refresh(&oauth).await?;
                     apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
+                    renewed = true;
                 }
                 // An account imported without its name is probed first, through
                 // its own proxy.
@@ -1582,6 +1691,7 @@ impl Application {
                         Err(error) if error == SIGN_IN_EXPIRED => {
                             let tokens = refresh(&oauth).await?;
                             apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
+                            renewed = true;
                             let token = text(&oauth["accessToken"]).unwrap_or_default();
                             network.profile(&token, proxy).await
                         }
@@ -1604,6 +1714,7 @@ impl Application {
                 if status == 401 {
                     let tokens = refresh(&oauth).await?;
                     apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
+                    renewed = true;
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
                     (status, body) = network.usage(&token, proxy).await?;
                 }
@@ -1657,6 +1768,17 @@ impl Application {
                 }
             }
             .await;
+            // Claude rejected this generation's refresh token: it is never
+            // used again, and the next generation, if any, is tried.
+            let refused = result
+                .as_ref()
+                .is_err_and(|error| error == REFRESH_REJECTED);
+            if refused {
+                rejected.extend(fingerprint(&oauth));
+                alternates
+                    .retain(|a| fingerprint(a).is_none_or(|print| !rejected.contains(&print)));
+                result = Err(SIGN_IN_EXPIRED.to_owned());
+            }
             // Renewal can fail before usage is requested, including after a
             // 401 retry. Apply the same persisted cooldown to all renewal paths.
             rate_limited |= result
@@ -1667,8 +1789,21 @@ impl Application {
             // while our refresh is in flight. Never overwrite that generation
             // with our response. Retry the read with the adopted credentials once.
             let latest = read_live(&location).await.ok().flatten();
-            if let Some(updated) = changed_live_oauth(&account, live.as_ref(), latest.as_ref()) {
-                oauth = updated;
+            if let Some(updated) =
+                changed_live_oauth(&account, &rejected, live.as_ref(), latest.as_ref())
+            {
+                // What we renewed, or a generation Claude Code's login did not
+                // hold, stays to fall back on.
+                let held = live
+                    .as_ref()
+                    .and_then(Live::oauth)
+                    .is_some_and(|held| same_login(held, &oauth));
+                let previous = std::mem::replace(&mut oauth, updated);
+                if !refused && (renewed || !held) {
+                    push_alternate(&mut alternates, previous);
+                }
+                renewed = false;
+                in_live = true;
                 live = latest;
                 profiled = None;
                 rate_limited = false;
@@ -1678,6 +1813,15 @@ impl Application {
                 }
                 break Err(CREDENTIALS_CHANGED.to_owned());
             }
+            if refused && !alternates.is_empty() {
+                oauth = alternates.remove(0);
+                renewed = false;
+                continue;
+            }
+            in_live = latest
+                .as_ref()
+                .and_then(Live::oauth)
+                .is_some_and(|current| same_login(current, &oauth));
             // Only write back when the same live login is still at the
             // generation we read before the request. Never replace a switch or
             // an external rotation. Keep all unrelated credential members.
@@ -1690,22 +1834,33 @@ impl Application {
                                 && text(&current[*key]) == text(&account.oauth[*key])
                         }),
                     };
+                    // A login Claude rejected is replaced by the generation
+                    // it accepted, renewed or not.
+                    let dead = rejected
+                        .iter()
+                        .chain(&account.rejected)
+                        .any(|print| fingerprint(current).as_ref() == Some(print));
                     if same_account
                         && same_oauth_generation(old, current)
-                        && !same_oauth_generation(&oauth, &account.oauth)
+                        && (dead || !same_oauth_generation(&oauth, &account.oauth))
                         && !same_oauth_generation(&oauth, current)
+                        && (result.is_ok() || renewed)
                     {
                         let mut document = latest.document.clone();
                         document["claudeAiOauth"] = oauth.clone();
                         live_sync =
                             write_credentials(&location, &document, KeychainAccess::Background)
                                 .await;
+                        in_live = live_sync.is_ok();
                     }
                 }
             }
             break result;
         };
-        let refreshed = Some(oauth).filter(|oauth| *oauth != account.oauth);
+        // Once renewed, the generation in use is proven.
+        if renewed {
+            alternates.clear();
+        }
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         if let Some(target) = store.accounts.iter_mut().find(|a| a.id == id) {
@@ -1718,8 +1873,30 @@ impl Application {
                 }
                 Err(error) => target.usage_error = Some(error.clone()),
             }
-            if let Some(oauth) = refreshed {
-                target.oauth = oauth;
+            // Generations offered while this refresh ran stay to fall back on;
+            // a primary this refresh did not change is left as it is now.
+            let known = |o: &Value| account.alternates.iter().any(|a| same_login(a, o));
+            let mut arrived: Vec<Value> = target
+                .alternates
+                .iter()
+                .filter(|o| !known(o))
+                .cloned()
+                .collect();
+            target.alternates = alternates;
+            if oauth != account.oauth {
+                let previous = std::mem::replace(&mut target.oauth, oauth);
+                if !same_login(&previous, &account.oauth) {
+                    arrived.insert(0, previous);
+                }
+                target.in_live = in_live;
+            } else if same_login(&target.oauth, &oauth) {
+                target.in_live = in_live;
+            }
+            for print in rejected.into_iter().rev() {
+                target.reject(print);
+            }
+            for generation in arrived.into_iter().rev() {
+                target.keep_alternate(generation);
             }
             if let Some(named) = profiled {
                 if identity(&target.account).is_none() {
@@ -2458,6 +2635,574 @@ mod tests {
         assert_eq!(read_backup(), backed_up);
     }
 
+    fn print(refresh: &str) -> String {
+        fingerprint(&json!({ "refreshToken": refresh })).unwrap()
+    }
+    fn refreshes(fake: &Fake) -> Vec<String> {
+        fake.refreshed.lock().unwrap().clone()
+    }
+    fn usages(fake: &Fake) -> Vec<String> {
+        fake.usage_tokens.lock().unwrap().clone()
+    }
+    /// Claude answers the next usage request with 401 and refuses the next
+    /// refresh token.
+    fn reject_next(fake: &Fake) {
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        *fake.refresh_error.lock().unwrap() = Some(SIGN_IN_EXPIRED.into());
+    }
+    fn refresh_tokens(oauths: &[Value]) -> Vec<String> {
+        oauths
+            .iter()
+            .map(|o| text(&o["refreshToken"]).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn fingerprints_identify_a_generation_by_its_refresh_token() {
+        let both = fingerprint(&json!({"accessToken": "a", "refreshToken": "r"})).unwrap();
+        assert_eq!(both.len(), 16);
+        assert!(both.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(
+            Some(both.clone()),
+            fingerprint(&json!({"accessToken": "b", "refreshToken": "r"}))
+        );
+        assert_ne!(Some(both), fingerprint(&json!({"accessToken": "a"})));
+        assert_eq!(fingerprint(&json!({"refreshToken": " "})), None);
+        assert_eq!(fingerprint(&json!({})), None);
+    }
+
+    #[test]
+    fn generations_are_optional_in_the_store_and_omitted_when_empty() {
+        let legacy = json!({"id": "a", "label": "a", "oauth": {}, "account": {}, "addedAt": 1, "updatedAt": 1});
+        let stored: Stored = serde_json::from_value(legacy).unwrap();
+        assert!(stored.alternates.is_empty());
+        assert!(stored.rejected.is_empty());
+        assert!(!stored.in_live);
+        let saved = serde_json::to_value(&stored).unwrap();
+        for key in ["alternates", "rejected", "inLive"] {
+            assert!(saved.get(key).is_none(), "{key}");
+        }
+    }
+
+    #[test]
+    fn adopting_keeps_what_claude_code_did_not_renew_away() {
+        let (oauth, account) = login("alice", LATER);
+        let mut stored = Stored {
+            id: "a".into(),
+            label: "alice".into(),
+            oauth: oauth.clone(),
+            account,
+            proxy_url: String::new(),
+            added_at: 0,
+            updated_at: 0,
+            usage: None,
+            usage_error: Some(SIGN_IN_EXPIRED.into()),
+            usage_retry_at: None,
+            first_request_pending: false,
+            alternates: Vec::new(),
+            rejected: Vec::new(),
+            in_live: false,
+        };
+        let generation = |refresh: &str, expires: i64| {
+            let (mut oauth, _) = login("alice", expires);
+            oauth["accessToken"] = format!("{refresh}-access").into();
+            oauth["refreshToken"] = refresh.into();
+            oauth
+        };
+        // The same tokens only record that Claude Code holds them.
+        assert!(stored.adopt(&oauth, true));
+        assert!(!stored.adopt(&oauth, true));
+        assert!(stored.alternates.is_empty());
+        // Claude Code renewed what it held: nothing to fall back on.
+        assert!(stored.adopt(&generation("b", LATER - 9), true));
+        assert!(stored.alternates.is_empty());
+        assert_eq!(stored.usage_error, None);
+        // Another source keeps the previous generation, whatever its expiry.
+        assert!(stored.adopt(&generation("c", LATER - 99), false));
+        assert_eq!(refresh_tokens(&stored.alternates), ["b"]);
+        assert!(!stored.in_live);
+        // Claude Code's login, newer or not, keeps a generation it never held.
+        assert!(stored.adopt(&generation("d", 1), true));
+        assert_eq!(refresh_tokens(&stored.alternates), ["c", "b"]);
+        // The newest generations are kept, without duplicates.
+        stored.in_live = false;
+        for refresh in ["e", "c", "f"] {
+            stored.adopt(&generation(refresh, LATER), false);
+        }
+        assert_eq!(stored.oauth["refreshToken"], "f");
+        assert_eq!(refresh_tokens(&stored.alternates), ["c", "e", "d"]);
+        // A rejected generation is dropped and never adopted again.
+        stored.reject(print("e"));
+        assert_eq!(refresh_tokens(&stored.alternates), ["c", "d"]);
+        stored.keep_alternate(generation("e", LATER));
+        assert!(!stored.adopt(&generation("e", LATER), false));
+        assert_eq!(stored.oauth["refreshToken"], "f");
+        assert_eq!(refresh_tokens(&stored.alternates), ["c", "d"]);
+        // A rejected login in Claude Code means it no longer holds ours.
+        stored.in_live = true;
+        assert!(stored.adopt(&generation("e", LATER), true));
+        assert!(!stored.in_live);
+        assert!(!stored.adopt(&generation("e", LATER), true));
+        // The rejected list stays bounded, newest first.
+        for n in 0..MAX_REJECTED + 4 {
+            stored.reject(print(&n.to_string()));
+        }
+        assert_eq!(stored.rejected.len(), MAX_REJECTED);
+        assert_eq!(stored.rejected[0], print(&(MAX_REJECTED + 3).to_string()));
+    }
+
+    #[tokio::test]
+    async fn the_live_login_replaces_rotated_pool_tokens_with_a_later_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER + 1);
+        app.claude_import_current().await.unwrap();
+        let stored = || app.claude_load().unwrap().accounts[0].clone();
+        assert!(stored().in_live);
+        // Claude Code's login expires earlier than the pool's revoked copy.
+        let (mut oauth, account) = login("alice", LATER);
+        oauth["refreshToken"] = "alice-live".into();
+        write_json(
+            &location.credentials_file(),
+            &json!({"claudeAiOauth": oauth}),
+        )
+        .unwrap();
+        write_account(&location, &account).unwrap();
+        app.claude_accounts().await.unwrap();
+        assert_eq!(stored().oauth, oauth);
+        // Claude Code renewed the generation it held: nothing is kept.
+        assert!(stored().alternates.is_empty());
+        assert!(stored().in_live);
+
+        // Importing the current login replaces a later-expiring copy too.
+        let mut pool = app.claude_load().unwrap();
+        pool.accounts[0].oauth["refreshToken"] = "alice-revoked".into();
+        pool.accounts[0].oauth["expiresAt"] = (LATER + 1).into();
+        pool.accounts[0].in_live = false;
+        app.claude_save(&pool).unwrap();
+        app.claude_import_current().await.unwrap();
+        assert_eq!(stored().oauth, oauth);
+        assert_eq!(refresh_tokens(&stored().alternates), ["alice-revoked"]);
+        assert!(refreshes(&fake).is_empty());
+        assert!(usages(&fake).is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_imported_export_is_kept_only_while_claude_accepts_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, fake) = waiting_app(&dir);
+        let (oauth, account) = login("bob", LATER);
+        let export =
+            |oauth: &Value| json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string();
+        app.claude_import_json(&export(&oauth)).await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        let stored = || app.claude_load().unwrap().accounts[0].clone();
+        // A later expiry does not make a rotated refresh token valid.
+        let (mut rotated, _) = login("bob", LATER + 1);
+        rotated["accessToken"] = "bob-revoked".into();
+        rotated["refreshToken"] = "bob-export".into();
+        reject_next(&fake);
+        app.claude_import_json(&export(&rotated)).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-export"]);
+        assert_eq!(usages(&fake), ["bob-revoked", "bob-access"]);
+        assert_eq!(stored().oauth, oauth);
+        assert!(stored().alternates.is_empty());
+        assert_eq!(stored().rejected, [print("bob-export")]);
+        assert_eq!(stored().usage_error, None);
+        assert!(stored().usage.is_some());
+        // The rejected export is never taken again.
+        app.claude_import_json(&export(&rotated)).await.unwrap();
+        assert_eq!(stored().oauth, oauth);
+        assert_eq!(refreshes(&fake), ["bob-export"]);
+        // An earlier expiry Claude accepts is used; the pool's tokens remain
+        // until its refresh token is proven.
+        let (mut valid, _) = login("bob", LATER - 1);
+        valid["accessToken"] = "bob-valid".into();
+        valid["refreshToken"] = "bob-valid-refresh".into();
+        app.claude_import_json(&export(&valid)).await.unwrap();
+        assert_eq!(stored().oauth, valid);
+        assert_eq!(stored().alternates, [oauth.clone()]);
+        // Its access token worked, but Claude later refuses its refresh token.
+        reject_next(&fake);
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-export", "bob-valid-refresh"]);
+        assert_eq!(
+            usages(&fake),
+            [
+                "bob-revoked",
+                "bob-access",
+                "bob-access",
+                "bob-valid",
+                "bob-valid",
+                "bob-access"
+            ]
+        );
+        assert_eq!(stored().oauth, oauth);
+        assert!(stored().alternates.is_empty());
+        assert_eq!(
+            stored().rejected,
+            [print("bob-valid-refresh"), print("bob-export")]
+        );
+        assert_eq!(stored().usage_error, None);
+        // Only fingerprints of rejected tokens are written down.
+        let saved = fs::read_to_string(app.claude_store_path()).unwrap();
+        assert!(!saved.contains("bob-export"));
+        assert!(!saved.contains("bob-valid"));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_refresh_token_is_never_sent_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, fake) = waiting_app(&dir);
+        let (oauth, account) = login("bob", LATER);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string(),
+        )
+        .await
+        .unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        reject_next(&fake);
+        assert_eq!(
+            app.claude_refresh_usage(&id).await.unwrap_err(),
+            SIGN_IN_EXPIRED
+        );
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        assert_eq!(
+            app.claude_refresh_usage(&id).await.unwrap_err(),
+            SIGN_IN_EXPIRED
+        );
+        assert_eq!(refreshes(&fake), ["bob-refresh"]);
+        assert_eq!(usages(&fake), ["bob-access", "bob-access"]);
+        let stored = app.claude_load().unwrap().accounts[0].clone();
+        // With nothing to fall back on, the login stays for display.
+        assert_eq!(stored.oauth, oauth);
+        assert_eq!(stored.rejected, [print("bob-refresh")]);
+        assert_eq!(stored.usage_error.as_deref(), Some(SIGN_IN_EXPIRED));
+        // A usable access token still reports usage until it expires.
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-refresh"]);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_login_falls_back_to_the_pool_and_repairs_claude_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        // Copool renewed alice, but the renewal never reached Claude Code.
+        let mut pool = app.claude_load().unwrap();
+        let renewed = &mut pool.accounts[0].oauth;
+        renewed["accessToken"] = "pool-access".into();
+        renewed["refreshToken"] = "pool-refresh".into();
+        renewed["expiresAt"] = (LATER + 1).into();
+        let renewed = renewed.clone();
+        pool.accounts[0].in_live = false;
+        app.claude_save(&pool).unwrap();
+        let stored = || app.claude_load().unwrap().accounts[0].clone();
+        app.claude_accounts().await.unwrap();
+        assert_eq!(stored().oauth["refreshToken"], "alice-refresh");
+        assert_eq!(stored().alternates, [renewed.clone()]);
+        assert!(stored().in_live);
+
+        reject_next(&fake);
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
+        assert_eq!(usages(&fake), ["alice-access", "pool-access"]);
+        let after = stored();
+        assert_eq!(after.oauth, renewed);
+        assert!(after.alternates.is_empty());
+        assert_eq!(after.rejected, [print("alice-refresh")]);
+        assert_eq!(after.usage_error, None);
+        assert!(after.in_live);
+        // Claude Code receives the accepted generation, other members intact.
+        let document: Value =
+            serde_json::from_slice(&fs::read(location.credentials_file()).unwrap()).unwrap();
+        assert_eq!(document["claudeAiOauth"], renewed);
+        assert_eq!(document["mcpOAuth"]["kept"], true);
+
+        // Claude Code holding the rejected login again is not followed...
+        sign_in(&location, "alice", LATER);
+        app.claude_accounts().await.unwrap();
+        assert_eq!(stored().oauth, renewed);
+        assert!(!stored().in_live);
+        assert_eq!(
+            app.claude_load().unwrap().current_account_id,
+            Some(id.clone())
+        );
+        // ...and the next refresh repairs it without sending the rejected token.
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
+        assert_eq!(live_access(&location), "pool-access");
+        assert!(stored().in_live);
+    }
+
+    #[tokio::test]
+    async fn a_renewal_proves_the_login_and_drops_the_alternates() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, fake) = waiting_app(&dir);
+        let (oauth, account) = login("bob", LATER);
+        let export =
+            |oauth: &Value| json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string();
+        app.claude_import_json(&export(&oauth)).await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        let (mut expiring, _) = login("bob", 1);
+        expiring["accessToken"] = "bob-new".into();
+        expiring["refreshToken"] = "bob-new-refresh".into();
+        app.claude_import_json(&export(&expiring)).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-new-refresh"]);
+        assert_eq!(usages(&fake), ["fresh-access"]);
+        let stored = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(stored.oauth["refreshToken"], "fresh-refresh");
+        assert!(stored.alternates.is_empty());
+        assert!(stored.rejected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_waiting_account_keeps_its_newest_generations_without_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, fake) = waiting_app(&dir);
+        let (oauth, account) = login("bob", LATER);
+        let export =
+            |oauth: &Value| json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string();
+        app.claude_import_json(&export(&oauth)).await.unwrap();
+        for n in 1..=5 {
+            let (mut generation, _) = login("bob", LATER - n);
+            generation["refreshToken"] = format!("bob-{n}").into();
+            app.claude_import_json(&export(&generation)).await.unwrap();
+        }
+        let stored = || app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(app.claude_load().unwrap().accounts.len(), 1);
+        assert_eq!(stored().oauth["refreshToken"], "bob-5");
+        assert_eq!(
+            refresh_tokens(&stored().alternates),
+            ["bob-4", "bob-3", "bob-2"]
+        );
+        // Importing a held generation again uses it, without a duplicate.
+        let (mut again, _) = login("bob", LATER);
+        again["refreshToken"] = "bob-3".into();
+        app.claude_import_json(&export(&again)).await.unwrap();
+        assert_eq!(stored().oauth["refreshToken"], "bob-3");
+        assert_eq!(
+            refresh_tokens(&stored().alternates),
+            ["bob-5", "bob-4", "bob-2"]
+        );
+        assert!(stored().first_request_pending);
+        assert!(refreshes(&fake).is_empty());
+        assert!(usages(&fake).is_empty());
+    }
+
+    #[tokio::test]
+    async fn claude_code_renewing_its_login_supersedes_only_what_it_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        let account = |user: &str| {
+            app.claude_load()
+                .unwrap()
+                .accounts
+                .into_iter()
+                .find(|a| a.label == format!("{user}@example.com"))
+                .unwrap()
+        };
+        assert!(account("bob").in_live);
+        assert!(!account("alice").in_live);
+        app.claude_switch_account(&account("alice").id)
+            .await
+            .unwrap();
+        assert!(account("alice").in_live);
+        assert!(!account("bob").in_live);
+        // Claude Code renews alice: the generation it held is gone.
+        external_update(location.clone(), "alice", "alice-renewed")();
+        app.claude_accounts().await.unwrap();
+        assert_eq!(account("alice").oauth["accessToken"], "alice-renewed");
+        assert!(account("alice").alternates.is_empty());
+        // A sign-in to bob there keeps bob's pool tokens, which it did not hold.
+        let bob = account("bob").oauth;
+        external_update(location.clone(), "bob", "bob-login")();
+        app.claude_accounts().await.unwrap();
+        assert_eq!(account("bob").oauth["accessToken"], "bob-login");
+        assert_eq!(account("bob").alternates, [bob]);
+        assert!(account("bob").in_live);
+        assert!(!account("alice").in_live);
+        assert_eq!(
+            app.claude_load().unwrap().current_account_id,
+            Some(account("bob").id)
+        );
+        assert!(refreshes(&fake).is_empty());
+        assert!(usages(&fake).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_renewal_survives_a_login_that_became_readable_during_the_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        let (oauth, account) = login("alice", 1);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string(),
+        )
+        .await
+        .unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        // Unreadable when the refresh starts, an older login once it renews.
+        fs::create_dir_all(&location.config_dir).unwrap();
+        fs::write(location.credentials_file(), "not json").unwrap();
+        fake.refresh_hooks.lock().unwrap().push(external_update(
+            location.clone(),
+            "alice",
+            "stale",
+        ));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
+        assert_eq!(usages(&fake), ["fresh-access", "stale"]);
+        let stored = || app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(stored().oauth["accessToken"], "stale");
+        assert_eq!(refresh_tokens(&stored().alternates), ["fresh-refresh"]);
+        assert!(stored().in_live);
+        // When Claude refuses that login, the renewal takes over and reaches
+        // Claude Code.
+        reject_next(&fake);
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(refreshes(&fake), ["alice-refresh", "stale-refresh"]);
+        assert_eq!(live_access(&location), "fresh-access");
+        assert_eq!(stored().oauth["refreshToken"], "fresh-refresh");
+        assert!(stored().alternates.is_empty());
+        assert_eq!(stored().rejected, [print("stale-refresh")]);
+        assert!(stored().in_live);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_keeps_a_generation_adopted_while_it_ran() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, fake) = waiting_app(&dir);
+        let (oauth, account) = login("bob", LATER);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string(),
+        )
+        .await
+        .unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        let (mut other, _) = login("bob", LATER);
+        other["accessToken"] = "bob-other".into();
+        other["refreshToken"] = "bob-other-refresh".into();
+        let (path, adopted) = (app.claude_store_path(), other.clone());
+        fake.usage_hooks.lock().unwrap().push(Box::new(move || {
+            let mut store: Store = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert!(store.accounts[0].adopt(&adopted, false));
+            write_json(&path, &store).unwrap();
+        }));
+        app.claude_refresh_usage(&id).await.unwrap();
+        let stored = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(stored.oauth, other);
+        assert_eq!(stored.alternates, [oauth]);
+        assert!(stored.usage.is_some());
+        assert_eq!(usages(&fake), ["bob-access"]);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_login_read_during_a_refresh_is_not_adopted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let mut pool = app.claude_load().unwrap();
+        let id = pool.accounts[0].id.clone();
+        let valid = pool.accounts[0].oauth.clone();
+        pool.accounts[0].reject(print("stale-refresh"));
+        app.claude_save(&pool).unwrap();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        // Claude Code's login turns back to a generation Claude rejected.
+        fake.usage_hooks
+            .lock()
+            .unwrap()
+            .push(external_update(location.clone(), "alice", "stale"));
+        app.claude_refresh_usage(&id).await.unwrap();
+        let stored = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(stored.oauth, valid);
+        assert!(stored.alternates.is_empty());
+        assert!(!stored.in_live);
+        assert_eq!(usages(&fake), ["alice-access"]);
+        // Nothing is written over a login that changed during the request.
+        assert_eq!(live_access(&location), "stale");
+        // Later reads keep ignoring it.
+        app.claude_accounts().await.unwrap();
+        assert_eq!(app.claude_load().unwrap().accounts[0].oauth, valid);
+    }
+
+    #[tokio::test]
+    async fn a_login_rejected_in_this_refresh_is_not_adopted_when_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let mut pool = app.claude_load().unwrap();
+        let id = pool.accounts[0].id.clone();
+        let mut renewed = pool.accounts[0].oauth.clone();
+        renewed["accessToken"] = "pool-access".into();
+        renewed["refreshToken"] = "pool-refresh".into();
+        pool.accounts[0].alternates = vec![renewed.clone()];
+        app.claude_save(&pool).unwrap();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        // Claude refuses the login; while it does, Claude Code rewrites the
+        // same rejected generation with another expiry.
+        reject_next(&fake);
+        fake.refresh_hooks.lock().unwrap().push(Box::new({
+            let location = location.clone();
+            move || sign_in(&location, "alice", LATER + 5)
+        }));
+        app.claude_refresh_usage(&id).await.unwrap();
+        let stored = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(stored.oauth, renewed);
+        assert_eq!(stored.rejected, [print("alice-refresh")]);
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
+        assert_eq!(usages(&fake), ["alice-access", "pool-access"]);
+    }
+
+    #[tokio::test]
+    async fn unrelated_failures_neither_reject_nor_fall_back() {
+        for (status, error) in [
+            (None, "Claude token refresh failed: HTTP 500"),
+            (None, TOKEN_REFRESH_RATE_LIMITED),
+            (Some(500), ""),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (app, _, fake) = waiting_app(&dir);
+            let (oauth, account) = login("bob", LATER);
+            let export = |oauth: &Value| {
+                json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string()
+            };
+            app.claude_import_json(&export(&oauth)).await.unwrap();
+            let id = app.claude_load().unwrap().accounts[0].id.clone();
+            app.claude_release_new_accounts(Some(&id)).await.unwrap();
+            let (mut other, _) = login("bob", LATER);
+            other["accessToken"] = "bob-other".into();
+            other["refreshToken"] = "bob-other-refresh".into();
+            fake.usage
+                .lock()
+                .unwrap()
+                .push((status.unwrap_or(401), Value::Null));
+            if status.is_none() {
+                *fake.refresh_error.lock().unwrap() = Some(error.into());
+            }
+            app.claude_import_json(&export(&other)).await.unwrap();
+            let stored = app.claude_load().unwrap().accounts[0].clone();
+            assert_eq!(stored.oauth, other, "{error}");
+            assert_eq!(stored.alternates, [oauth.clone()], "{error}");
+            assert!(stored.rejected.is_empty(), "{error}");
+            assert!(stored.usage_error.is_some(), "{error}");
+            assert_eq!(usages(&fake), ["bob-other"], "{error}");
+        }
+    }
+
     #[tokio::test]
     async fn a_failed_switch_leaves_no_login_where_there_was_none() {
         let dir = tempfile::tempdir().unwrap();
@@ -2673,6 +3418,16 @@ mod tests {
                 "external"
             );
             assert_eq!(live_access(&location), "external");
+            // Our renewal stays to fall back on; a rejected token does not.
+            let account = &stored.accounts[0];
+            if failed {
+                assert!(account.alternates.is_empty());
+                assert_eq!(account.rejected, [print("alice-refresh")]);
+            } else {
+                assert_eq!(refresh_tokens(&account.alternates), ["fresh-refresh"]);
+                assert!(account.rejected.is_empty());
+            }
+            assert!(account.in_live);
         }
     }
 
@@ -2981,6 +3736,15 @@ mod tests {
         sign_in_unnamed(&location, "probe");
         app.claude_import_current().await.unwrap();
         assert_eq!(app.claude_accounts().await.unwrap().len(), 2);
+        let mut pool = app.claude_load().unwrap();
+        let probe = pool
+            .accounts
+            .iter_mut()
+            .find(|a| a.oauth["accessToken"] == "probe-access")
+            .unwrap();
+        probe.alternates = vec![json!({"accessToken": "old", "refreshToken": "probe-old"})];
+        probe.rejected = vec![print("probe-rejected")];
+        app.claude_save(&pool).unwrap();
         app.claude_release_new_accounts(None).await.unwrap();
         app.claude_refresh(None).await.unwrap();
         let accounts = app.claude_accounts().await.unwrap();
@@ -2988,11 +3752,17 @@ mod tests {
         assert_eq!(accounts[0].label, "new@example.com");
         assert!(accounts[0].is_current);
         // Switching to it later names the account in Claude Code again.
+        let stored = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(stored.oauth["accessToken"], "probe-access");
+        // The sign-in Claude Code never held stays to fall back on, with what
+        // the folded card knew.
         assert_eq!(
-            app.claude_load().unwrap().accounts[0].oauth["accessToken"],
-            "probe-access"
+            refresh_tokens(&stored.alternates),
+            ["browser-refresh", "probe-old"]
         );
-        let _ = fake;
+        assert_eq!(stored.rejected, [print("probe-rejected")]);
+        assert!(stored.in_live);
+        assert!(refreshes(&fake).is_empty());
     }
 
     #[tokio::test]
