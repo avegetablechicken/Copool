@@ -41,20 +41,40 @@
     globalThis.CSS?.supports?.("transition-timing-function", springEasing)
       ? springEasing
       : "cubic-bezier(0.2, 0.9, 0.3, 1)";
+  /// Runs `keyframes` on `node` with the reorder spring (`options` add a
+  /// delay or fill), or nothing with reduced motion.
+  function springAnimate(node, keyframes, options = {}) {
+    if (reducedMotion()) return null;
+    return node.animate(keyframes, {
+      duration: DURATION,
+      easing: easing(),
+      ...options,
+    });
+  }
   /// Slides `node` with the reorder spring from `from`, its rect before the
-  /// DOM changed. A raised node passes over the others on its way.
+  /// DOM changed, scaled from that width when it differs (a card caught
+  /// growing out of a button). A raised node passes over the others.
   function slide(node, from, raise = false) {
     if (reducedMotion()) return;
-    for (const running of node.getAnimations()) running.cancel();
+    for (const running of node.getAnimations())
+      if (running.id !== "pool") running.cancel();
     const to = node.getBoundingClientRect();
     const dx = from.left - to.left;
     const dy = from.top - to.top;
-    if (!dx && !dy) return;
-    const animation = node.animate(
-      [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }],
-      { duration: DURATION, easing: easing() },
-    );
-    if (!raise) return;
+    const scale = from.width && to.width ? from.width / to.width : 1;
+    if (!dx && !dy && Math.abs(scale - 1) < 0.001) return;
+    const animation = springAnimate(node, [
+      {
+        transform: `translate(${dx}px, ${dy}px) scale(${scale})`,
+        transformOrigin: "0 0",
+      },
+      { transform: "none", transformOrigin: "0 0" },
+    ]);
+    if (raise) raiseDuring(node, animation);
+  }
+  /// Draws `node` over the others, lifted, while `animation` runs.
+  function raiseDuring(node, animation) {
+    if (!animation) return;
     node.classList.add("reorder-raised");
     const lower = () => node.classList.remove("reorder-raised");
     animation.addEventListener("finish", lower);
@@ -303,5 +323,5 @@
     return { get active() { return !!gesture?.dragging; } };
   }
 
-  return { attach, slide, targetAt, movedToward, edgeScrollDelta, spring, springEasing };
+  return { attach, slide, springAnimate, raiseDuring, targetAt, movedToward, edgeScrollDelta, spring, springEasing };
 });

@@ -1257,10 +1257,58 @@ html:not(.macos) .select-menu {
   pointer-events: none !important;
 }
 
-/* A newly activated card rising to the top passes over the others. */
+/* Cards leaving the page (removed, or a pool switched away) animate out
+   in a layer clipped to it. */
+.page-layer {
+  position: fixed;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.page-layer > * {
+  position: absolute;
+  margin: 0;
+}
+
+/* Switching between full cards and collapsed rows (morph.js): each card is a
+   box clipping its old and new forms, over its own background or the
+   collapsed list's, which it merges into. Both keep the cards' brightness. */
+.morph-box {
+  overflow: hidden;
+}
+
+.morph-bg,
+.morph-sheet {
+  border-radius: 8px;
+  background: var(--block);
+  box-shadow: 0 0 0 0.5px var(--block-border), var(--block-shadow);
+}
+
+
+.morph-copy {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  margin: 0;
+  box-sizing: border-box;
+  background: none !important;
+  box-shadow: none !important;
+}
+
+.morph-tint {
+  position: absolute;
+  padding: 0;
+}
+
+/* A card rising to the top or dropping into place passes over the others,
+   lifted and opaque as a dragged one. */
 .reorder-raised {
   position: relative;
   z-index: 1;
+  border-radius: 8px;
+  background: linear-gradient(var(--block), var(--block)), var(--window);
+  box-shadow: 0 0 0 0.5px var(--block-border), 0 8px 28px rgba(0, 0, 0, 0.18);
 }
 
 :root.is-reordering,

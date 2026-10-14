@@ -146,7 +146,7 @@ async function openProviderImport() {
   if (controller.importing) return;
   controller.importing = true;
   syncButtons();
-  await action(async () => {
+  await droppingNewCards($("import-open"), () => action(async () => {
     const settings = await invoke("configuration");
     const providers = settings.sub2APIProvider.providers;
     if (!providers.length) {
@@ -171,7 +171,7 @@ async function openProviderImport() {
     }
     if (failures.length) throw new Error(failures.join("\n"));
     notice(tr("accounts.notice.sub2api_imported_format", count));
-  });
+  }));
   controller.importing = false;
   syncButtons();
 }
@@ -253,7 +253,12 @@ function addCodexProvider() {
 }
 /// Adds an account, signs one in again, or authorizes a pending workspace,
 /// waiting for the browser sign-in in a dialog that can cancel it.
-async function signIn(workspace = null, kind = "add", pending = null) {
+function signIn(workspace = null, kind = "add", pending = null) {
+  // A pending workspace's account comes out of the pending list.
+  const origin = pending ? $("pending-workspaces") : $("add-account");
+  return droppingNewCards(origin, () => signInOnce(workspace, kind, pending));
+}
+async function signInOnce(workspace, kind, pending) {
   try {
     const labels = await accountsController.login(
       workspace,
@@ -287,7 +292,10 @@ function cancelSignIn() {
 $("add-account").onclick = () =>
   accountsController.adding ? cancelSignIn() : signIn();
 /// Imports through Swift's isImporting state; a cancelled picker is silent.
-async function importAccounts(task, key) {
+function importAccounts(task, key) {
+  return droppingNewCards($("import-open"), () => importAccountsOnce(task, key));
+}
+async function importAccountsOnce(task, key) {
   try {
     const labels = await task();
     if (labels?.length) notice(tr(key, labels.join(", ")));
@@ -1100,12 +1108,12 @@ async function syncClaudeSub2api() {
   if (controller.importing) return;
   controller.importing = true;
   syncButtons();
-  await action(async () => {
+  await droppingNewCards($("import-open"), () => action(async () => {
     const count = await invoke("claude_sync_sub2api");
     // The cards' providers, as the sync left them.
     await loadClaudeProviders();
     notice(tr("accounts.notice.sub2api_imported_format", count));
-  });
+  }));
   controller.importing = false;
   syncButtons();
 }

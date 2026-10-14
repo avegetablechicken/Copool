@@ -391,8 +391,20 @@ document.addEventListener("contextmenu", (event) => {
     event.preventDefault();
 });
 let renderedAccountsState;
-// The pool, mode and current card last rendered, to see an activation.
-let renderedActivation = null;
+// The pool, mode and current card last rendered, to animate what changed.
+let renderedLayout = null;
+// The button an import or sign-in was started from, while it runs: its new
+// cards drop from there into place.
+let dropOrigin = null;
+/// Cards new while `task` runs drop from `origin` rather than fade in.
+async function droppingNewCards(origin, task) {
+  dropOrigin = origin;
+  try {
+    return await task();
+  } finally {
+    if (dropOrigin === origin) dropOrigin = null;
+  }
+}
 /// The provider of a Sub2api card, from its id (`sub2api-<provider>-<n>`,
 /// `claude-sub2api-<provider>-<n>`): cards synced since the provider list
 /// was last read still group with their provider.
@@ -630,6 +642,7 @@ function accountCard(account, grouped = false) {
       accountControls(account, full, view, grouped),
     );
     if (!grouped) row.dataset.reorderHandle = "";
+    row.dataset.cardId = account.id;
     return row;
   }
   const card = el(
@@ -639,6 +652,7 @@ function accountCard(account, grouped = false) {
       : `block account${account.isCurrent ? " current" : ""}`,
   );
   card.dataset.plan = view.plan;
+  card.dataset.cardId = account.id;
   const head = el("div", "block-head");
   // The CURRENT tag alone marks the active account, as in the SwiftUI card.
   const name = el("div", "account-name");
@@ -782,14 +796,13 @@ function renderAccounts(accounts) {
   accounts = P.visibleAccounts(accounts);
   const list = $("accounts");
   list.className = collapsed ? "account-list compact block flush" : "account-list";
-  const before = new Map(
-    [...list.children]
-      .filter((node) => node.dataset.reorderId)
-      .map((node) => [node.dataset.reorderId, node.getBoundingClientRect()]),
+  // Switching between full and collapsed, the cards' parts are measured too.
+  const before = captureLayout(
+    list,
+    renderedLayout?.pool === pool && renderedLayout.collapsed !== collapsed,
   );
   list.replaceChildren();
   if (!accounts.length) {
-    renderedActivation = null;
     list.className = "account-list block";
     const empty = el("div", "empty");
     empty.append(
@@ -805,6 +818,7 @@ function renderAccounts(accounts) {
       ),
     );
     list.append(empty);
+    animateLayout(list, before, null);
     return;
   }
   const entries = P.orderEntries(
@@ -825,26 +839,227 @@ function renderAccounts(accounts) {
     list.append(node);
   }
   alignMeters(list);
-  // A newly activated card rises to the top as a dragged card moves, and
-  // the cards it passes make way.
   const current = entries.find(entryIsCurrent);
-  const activation = { pool, collapsed, current: current && entryKey(current) };
-  if (
-    activation.current &&
-    renderedActivation?.pool === pool &&
-    renderedActivation.collapsed === collapsed &&
-    renderedActivation.current !== activation.current
-  )
-    for (const node of list.children) {
-      const from = before.get(node.dataset.reorderId);
-      if (from)
-        window.CopoolReorder.slide(
-          node,
-          from,
-          node.dataset.reorderId === activation.current,
-        );
+  animateLayout(list, before, current ? entryKey(current) : null);
+}
+/// Where each card was before a render: entries by key, every card id and,
+/// for a change of mode, each card's shared parts and the list's rect.
+function captureLayout(list, withParts = false) {
+  const entries = new Map();
+  for (const node of list.children)
+    if (node.dataset.reorderId)
+      entries.set(node.dataset.reorderId, {
+        node,
+        rect: node.getBoundingClientRect(),
+        measure: withParts ? window.CopoolMorph.measure(node) : null,
+      });
+  const cards = new Set(
+    [...list.querySelectorAll("[data-card-id]")].map((n) => n.dataset.cardId),
+  );
+  return { entries, cards, listRect: list.getBoundingClientRect() };
+}
+/// Animates what a render changed, with the drag spring: cards slide to
+/// their new places (a newly activated one rising over the others), new
+/// cards drop in after an import or sign-in and fade in otherwise, and
+/// removed ones fade where they were while the cards below close up. A new
+/// mode fades in; a new pool slides in on its own.
+function animateLayout(list, before, current) {
+  const previous = renderedLayout;
+  renderedLayout = { pool, collapsed, current };
+  if (!previous || previous.pool !== pool) return;
+  const R = window.CopoolReorder;
+  if (previous.collapsed !== collapsed) {
+    morphMode(list, before);
+    return;
+  }
+  const activated = current !== null && previous.current !== current;
+  const appear = (node) => {
+    const from = dropOrigin?.isConnected && dropOrigin.getBoundingClientRect();
+    if (from?.width) {
+      // Out of the button, as wide as it, growing as it falls into place
+      // over the cards it passes.
+      const to = node.getBoundingClientRect();
+      const width = Math.min(to.width, Math.max(to.width * 0.1, from.width));
+      R.slide(
+        node,
+        { left: from.left + (from.width - width) / 2, top: from.top, width },
+        true,
+      );
+    } else
+      R.springAnimate(node, [
+        { opacity: 0, transform: "scale(0.98)" },
+        { opacity: 1, transform: "none" },
+      ]);
+  };
+  const kept = new Set();
+  for (const node of list.children) {
+    const key = node.dataset.reorderId;
+    if (!key) continue;
+    const old = before.entries.get(key);
+    if (!old) {
+      appear(node);
+      continue;
     }
-  renderedActivation = activation;
+    kept.add(key);
+    // A card still rising or dropping keeps passing over the others.
+    R.slide(
+      node,
+      old.rect,
+      (activated && key === current) || old.node.classList.contains("reorder-raised"),
+    );
+    // An account joining a provider's group arrives inside it.
+    for (const member of node.querySelectorAll("[data-card-id]"))
+      if (!before.cards.has(member.dataset.cardId)) appear(member);
+  }
+  const gone = [...before.entries]
+    .filter(([key]) => !kept.has(key))
+    .map(([, value]) => value);
+  if (gone.length) fadeOut(list, gone);
+}
+/// A layer over the accounts page, clipped to it, for copies of cards that
+/// leave it.
+function pageLayer(className) {
+  const frame = $("accounts-page").getBoundingClientRect();
+  const layer = el("div", `page-layer ${className}`);
+  // To the window's bottom, so the layer grows with a panel fitted taller.
+  Object.assign(layer.style, {
+    left: `${frame.left}px`,
+    top: `${frame.top}px`,
+    width: `${frame.width}px`,
+    bottom: "0",
+  });
+  const place = (node, rect) => {
+    Object.assign(node.style, {
+      left: `${rect.left - frame.left}px`,
+      top: `${rect.top - frame.top}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+    });
+    node.inert = true;
+    layer.append(node);
+  };
+  return { layer, frame, place };
+}
+// The cards changing between full and collapsed, shown in place of the list.
+let modeMorph = null;
+// While cards morph, the panel follows them instead of their final layout.
+let holdFit = false;
+// Each card starts changing this long after the one above it; collapsing
+// runs quicker than expanding.
+const MORPH_STAGGER = 22;
+const MORPH_DURATION = { collapse: 340, expand: 420 };
+/// Between full cards and collapsed rows, with continuity (morph.js): the
+/// cards stay one contiguous stack as each changes in turn, their names,
+/// plans, usage and controls travel to their places in the other form, and
+/// the cards' backgrounds merge into the collapsed list's, or split from it.
+function morphMode(list, before) {
+  modeMorph?.finish();
+  const M = window.CopoolMorph;
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const { layer, frame } = pageLayer("mode-morph");
+  // The list's shared column widths, inherited by every copy.
+  for (const name of list.style)
+    if (name.startsWith("--"))
+      layer.style.setProperty(name, list.style.getPropertyValue(name));
+  const items = [];
+  for (const node of list.children) {
+    const old = before.entries.get(node.dataset.reorderId);
+    if (!old?.measure) continue;
+    for (const running of old.node.getAnimations()) running.cancel();
+    old.node.classList.remove("reorder-raised");
+    items.push({
+      source: { node: old.node, measure: old.measure },
+      target: { node: node.cloneNode(true), measure: M.measure(node) },
+    });
+  }
+  if (!items.length) return;
+  // The collapsed list's background, which the cards merge into.
+  const sheet = el("div", "morph-sheet");
+  const rect = collapsed ? list.getBoundingClientRect() : before.listRect;
+  Object.assign(sheet.style, {
+    left: `${rect.left - frame.left}px`,
+    top: `${rect.top - frame.top}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+  });
+  layer.append(sheet);
+  document.body.append(layer);
+  // The panel's height follows the cards' as they change: the page above
+  // the list, the stack's bottom, and the collapsed list's padding below its
+  // last row growing in or out with that row.
+  const section = $("accounts-page");
+  const style = getComputedStyle(section);
+  const chrome =
+    document.querySelector(".top").offsetHeight +
+    parseFloat(style.paddingTop) +
+    parseFloat(style.paddingBottom) -
+    section.firstElementChild.getBoundingClientRect().top;
+  const lastItem = items[items.length - 1];
+  const pad = (listRect, itemRect) =>
+    Math.max(0, listRect.bottom - (itemRect.top + itemRect.height));
+  const padFrom = pad(before.listRect, lastItem.source.measure.rect);
+  const padTo = pad(list.getBoundingClientRect(), lastItem.target.measure.rect);
+  const follow = (frames) => {
+    const { e, rect } = frames[frames.length - 1];
+    const bottom = rect.top + rect.height + padFrom + (padTo - padFrom) * e;
+    const height = Math.ceil(chrome + bottom);
+    if (Math.abs(height - fittedHeight) > 1) {
+      fittedHeight = height;
+      invoke("fit_panel", { height }).catch(() => {});
+    }
+  };
+  holdFit = true;
+  const run = M.run({
+    layer,
+    frame,
+    items,
+    sheet,
+    collapsing: collapsed,
+    duration: MORPH_DURATION[collapsed ? "collapse" : "expand"],
+    stagger: MORPH_STAGGER,
+    radius: collapsed ? { source: 8, target: 0 } : { source: 0, target: 8 },
+    onFrame: follow,
+  });
+  list.style.opacity = "0";
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    run.stop();
+    if (modeMorph === morph) modeMorph = null;
+    list.style.removeProperty("opacity");
+    layer.remove();
+    if (holdFit) {
+      holdFit = false;
+      queueFit();
+    }
+  };
+  const morph = { finish };
+  modeMorph = morph;
+  run.done.then(finish);
+}
+/// Fades removed cards out where they were.
+function fadeOut(list, gone) {
+  const R = window.CopoolReorder;
+  const { layer, place } = pageLayer("card-exit");
+  for (const { node, rect } of gone) {
+    for (const running of node.getAnimations()) running.cancel();
+    node.classList.remove("reorder-raised");
+    // The list's shared column widths, which the card leaves behind.
+    for (const name of list.style)
+      if (name.startsWith("--"))
+        node.style.setProperty(name, list.style.getPropertyValue(name));
+    place(node, rect);
+  }
+  document.body.append(layer);
+  const animations = [...layer.children].map((node) =>
+    R.springAnimate(node, [
+      { opacity: 1, transform: "none" },
+      { opacity: 0, transform: "scale(0.98)" },
+    ]),
+  );
+  if (!animations[0]) return layer.remove();
+  Promise.allSettled(animations.map((a) => a.finished)).then(() => layer.remove());
 }
 /// Dragging the cards, as in OpenQuota; the order is kept per pool.
 window.CopoolReorder.attach($("accounts"), {
@@ -1045,6 +1260,53 @@ document.querySelectorAll(".disclosure").forEach((button) =>
   ),
 );
 /// Shows the Codex or the Claude pool; each keeps its own controller state.
+// The pool buttons' order, left to right, for the way the cards slide.
+const POOLS = ["codex", "claude"];
+let poolExit = null;
+/// The pool's cards: the pending workspaces and the account list.
+const poolBlocks = () => [$("pending-workspaces"), $("accounts")];
+/// Slides copies of the shown pool's cards out toward `direction` (−1 left,
+/// 1 right), clipped to the page, while the real ones are replaced.
+function slidePoolOut(direction) {
+  poolExit?.remove();
+  poolExit = null;
+  const { layer, frame, place } = pageLayer("pool-exit");
+  for (const block of poolBlocks()) {
+    if (!block.childElementCount) continue;
+    const rect = block.getBoundingClientRect();
+    const copy = block.cloneNode(true);
+    for (const node of [copy, ...copy.querySelectorAll("[id]")])
+      node.removeAttribute("id");
+    place(copy, rect);
+  }
+  if (!layer.childElementCount) return;
+  document.body.append(layer);
+  const animations = [...layer.children].map((copy) =>
+    window.CopoolReorder.springAnimate(copy, [
+      { transform: "none", opacity: 1 },
+      { transform: `translateX(${direction * frame.width}px)`, opacity: 0 },
+    ]),
+  );
+  if (!animations[0]) return layer.remove();
+  poolExit = layer;
+  Promise.allSettled(animations.map((a) => a.finished)).then(() => {
+    layer.remove();
+    if (poolExit === layer) poolExit = null;
+  });
+}
+/// Slides the new pool's cards in from the other side.
+function slidePoolIn(direction) {
+  const width = $("accounts-page").clientWidth;
+  for (const block of poolBlocks()) {
+    for (const running of block.getAnimations())
+      if (running.id === "pool") running.cancel();
+    const animation = window.CopoolReorder.springAnimate(block, [
+      { transform: `translateX(${-direction * width}px)`, opacity: 0 },
+      { transform: "none", opacity: 1 },
+    ]);
+    if (animation) animation.id = "pool";
+  }
+}
 function showPool(next) {
   if (next !== "codex" && next !== "claude") return;
   document
@@ -1053,6 +1315,9 @@ function showPool(next) {
       button.setAttribute("aria-selected", String(button.dataset.pool === next)),
     );
   if (next === pool) return;
+  // To the pool on the right, the cards leave to the left; and back.
+  const direction = POOLS.indexOf(next) > POOLS.indexOf(pool) ? -1 : 1;
+  slidePoolOut(direction);
   pool = next;
   localStorage.setItem("copool.pool", pool);
   closeMenu();
@@ -1060,6 +1325,7 @@ function showPool(next) {
   accountsCache = accountsController.accounts;
   renderAccounts(accountsCache);
   renderPendingWorkspaces();
+  slidePoolIn(direction);
   syncButtons();
   refreshView().catch((error) => notice(error, true));
 }
@@ -1500,9 +1766,10 @@ setInterval(() => {
 let fitFrame = 0;
 let fittedHeight = 0;
 function queueFit() {
-  if (fitFrame) return;
+  if (fitFrame || holdFit) return;
   fitFrame = requestAnimationFrame(() => {
     fitFrame = 0;
+    if (holdFit) return;
     const section = document.querySelector("main>section:not([hidden])");
     const page = section?.firstElementChild;
     if (!page) return;
