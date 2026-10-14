@@ -1863,6 +1863,7 @@ window.__TAURI__.event
 window.__TAURI__.event
   .listen("panel-backdrop", ({ payload }) => {
     const root = document.documentElement;
+    root.classList.toggle("composited", payload.composited);
     root.style.setProperty("--backdrop-size", `${payload.width}px ${payload.height}px`);
     root.style.setProperty("--backdrop-position", `${-payload.x}px ${-payload.y}px`);
     if (payload.image === null) return;

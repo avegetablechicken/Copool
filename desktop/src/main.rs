@@ -530,6 +530,8 @@ fn hide_panel(app: tauri::AppHandle) {
     panel::hide(&app);
 }
 fn main() {
+    #[cfg(target_os = "linux")]
+    appearance::enable_compositing();
     let app = tauri::Builder::default()
         .on_window_event(panel::on_window_event)
         .manage(panel::PanelState::default())

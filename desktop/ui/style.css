@@ -998,6 +998,26 @@ html.frosted .select-menu {
   }
 }
 
+/* When WebKitGTK composites, it blurs what is behind the menu itself, the
+   panel with its content, as on macOS. It drops the whole backdrop filter
+   when that includes brightness(). */
+html.linux.composited .select-menu {
+  --menu-sheen: rgba(255, 255, 255, 0.55);
+  --menu-tint: rgba(255, 255, 255, 0.42);
+  background:
+    linear-gradient(to bottom, var(--menu-sheen), transparent 45%),
+    var(--menu-tint);
+  -webkit-backdrop-filter: blur(22px) saturate(2.2);
+  backdrop-filter: blur(22px) saturate(2.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  html.linux.composited .select-menu {
+    --menu-sheen: rgba(255, 255, 255, 0.12);
+    --menu-tint: rgba(36, 36, 40, 0.42);
+  }
+}
+
 .select-menu button {
   display: block;
   width: 100%;
