@@ -20,6 +20,7 @@ python3 scripts/build_rust_desktop.py > /tmp/copool-app-bundle-build.log 2>&1
 - Test with `python3 scripts/test_rust.py` (formatting, `cargo test -p copool-core --locked`, UI syntax and `desktop/tests`, the standalone daemon), or the individual commands; build with `cargo build -p copool-desktop --locked`.
 - The core and packaged daemon share Rust sources in `resources/proxyd-src/src`. After modifying these sources, also check the standalone daemon with `cargo check --manifest-path resources/proxyd-src/proxyd/Cargo.toml --locked`.
 - Localized strings live in `resources/locales/*.lproj/Localizable.strings`; regenerate `desktop/ui/locales.js` with `python3 scripts/sync_rust_locales.py` after editing them.
+- The app icon's source is the Icon Composer document `desktop/icons/Copool.icon`; regenerate the bundled PNG, ICNS and ICO and the README's `Copool.png` with `python3 scripts/build_app_icon.py` (macOS with Xcode) after editing it or the background stops in that script.
 - Use temporary `COPOOL_DATA_DIR` and `COPOOL_CODEX_AUTH_FILE` paths for interactive smoke tests. Never import or switch the user's real credentials as part of testing.
 - Keep limitations and platform validation status current in `docs/rust-cross-platform.md`.
 
