@@ -51,7 +51,6 @@ impl Paths {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Preferences {
-    pub refresh_seconds: u64,
     pub auto_switch: bool,
     pub auto_start_proxy: bool,
     pub proxy_port: u16,
@@ -83,7 +82,6 @@ pub struct AccountOrder {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            refresh_seconds: 10,
             auto_switch: false,
             auto_start_proxy: false,
             proxy_port: 8787,
@@ -139,11 +137,6 @@ type SwitchEffect = Arc<
 impl Preferences {
     fn from_settings(settings: crate::settings::Settings) -> Result<Self> {
         let p = Preferences {
-            refresh_seconds: settings
-                .extra
-                .get("refreshSeconds")
-                .and_then(Value::as_u64)
-                .unwrap_or(10),
             auto_switch: settings.auto_smart_switch,
             auto_start_proxy: settings.auto_start_api_proxy,
             proxy_port: settings.proxy_configuration["preferredPortText"]
@@ -195,6 +188,8 @@ pub struct Application {
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
     pub(crate) changes: Arc<std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
     pub(crate) claude: crate::claude::State,
+    /// Seconds until the next background refresh, adapted to usage changes.
+    pub(crate) refresh_interval: std::sync::atomic::AtomicU64,
 }
 pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
@@ -251,6 +246,7 @@ impl Application {
             refreshing: Default::default(),
             changes: Arc::new(std::sync::RwLock::new(None)),
             claude: Default::default(),
+            refresh_interval: crate::refresh_policy::REFRESH_INTERVAL.as_secs().into(),
         };
         app.migrate_provider_credentials()?;
         app.preferences()?;
@@ -388,7 +384,15 @@ impl Application {
                 // later call: keep a copy and fall back to the settings.
                 let legacy = fs::read(&old)
                     .map_err(|e| e.to_string())
-                    .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+                    .and_then(|bytes| {
+                        let mut value: Value =
+                            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                        // The fixed refresh interval is no longer a preference.
+                        if let Some(object) = value.as_object_mut() {
+                            object.remove("refreshSeconds");
+                        }
+                        serde_json::from_value(value).map_err(|e| e.to_string())
+                    })
                     .and_then(|legacy| validate_preferences(&legacy).map(|()| legacy));
                 match legacy {
                     Ok(legacy) => Self::project_preferences(&mut settings, &legacy),
@@ -427,8 +431,8 @@ impl Application {
         s.restart_editor_targets = p.restart_editor_targets.clone();
         s.extra
             .insert("requestNewAccounts".into(), p.request_new_accounts.into());
-        s.extra
-            .insert("refreshSeconds".into(), p.refresh_seconds.into());
+        // The adaptive background refresh replaced the fixed interval.
+        s.extra.remove("refreshSeconds");
         s.extra.insert(
             "accountOrder".into(),
             serde_json::to_value(&p.account_order).unwrap_or_default(),
@@ -1194,21 +1198,57 @@ impl Application {
             let _ = self.start_proxy().await;
         }
         // Refresh the whole pool at launch; the UI shows the stored values
-        // meanwhile and updates each card as its refresh lands.
+        // meanwhile and updates each card as its refresh lands. The interval
+        // then adapts as OpenQuota's does.
         let mut tick = 0u64;
-        let _ = tokio::join!(self.refresh_recurring(tick), async {
-            let _ = self.claude_authorize_at_startup().await;
-            self.claude_refresh_recurring(tick).await
-        });
+        let mut unchanged = 0u8;
         loop {
-            let seconds = self.preferences().map(|p| p.refresh_seconds).unwrap_or(10);
-            tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+            let interval = self.background_round(tick, &mut unchanged).await;
+            tokio::time::sleep(interval).await;
             tick = tick.wrapping_add(1);
+        }
+    }
+    /// One background refresh of both pools; returns the interval until the
+    /// next, from whether it changed any card's usage.
+    pub(crate) async fn background_round(
+        &self,
+        tick: u64,
+        unchanged: &mut u8,
+    ) -> std::time::Duration {
+        let before = self.usage_values().await;
+        if tick == 0 {
+            let _ = tokio::join!(self.refresh_recurring(tick), async {
+                let _ = self.claude_authorize_at_startup().await;
+                self.claude_refresh_recurring(tick).await
+            });
+        } else {
             let _ = tokio::join!(
                 self.refresh_recurring(tick),
                 self.claude_refresh_recurring(tick)
             );
         }
+        let changed = crate::refresh_policy::usage_changed(&before, &self.usage_values().await);
+        let interval = crate::refresh_policy::refresh_interval_for(
+            self.refresh_interval(),
+            changed,
+            unchanged,
+        );
+        self.refresh_interval
+            .store(interval.as_secs(), std::sync::atomic::Ordering::Relaxed);
+        interval
+    }
+    /// The interval until the next background refresh.
+    pub(crate) fn refresh_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.refresh_interval
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+    /// Every card's usage, both pools, as the background refresh compares it.
+    async fn usage_values(&self) -> std::collections::BTreeMap<String, Value> {
+        let mut cards = self.accounts().await.unwrap_or_default();
+        cards.extend(self.claude_usage_cards().unwrap_or_default());
+        crate::refresh_policy::usage_values(&cards)
     }
 }
 fn validate_preferences(p: &Preferences) -> Result<()> {
@@ -1222,9 +1262,6 @@ fn validate_preferences(p: &Preferences) -> Result<()> {
     .contains(&p.locale.as_str())
     {
         return Err("Unsupported locale".into());
-    }
-    if !(10..=86400).contains(&p.refresh_seconds) {
-        return Err("Refresh interval must be 10–86400 seconds".into());
     }
     if p.proxy_port == 0 {
         return Err("Proxy port must be 1–65535".into());
@@ -1598,12 +1635,59 @@ mod tests {
         );
     }
     #[test]
+    fn the_fixed_refresh_interval_is_dropped_from_old_preferences_and_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        // Early Rust preferences still migrate with their interval present.
+        fs::write(
+            data.join("preferences.json"),
+            r#"{"refreshSeconds": 10, "autoSwitch": true, "proxyPort": 9999}"#,
+        )
+        .unwrap();
+        let app = Application::open(Paths {
+            data_dir: data.clone(),
+            codex_auth: dir.path().join("codex/auth.json"),
+        })
+        .unwrap();
+        let preferences = app.preferences().unwrap();
+        assert!(preferences.auto_switch);
+        assert_eq!(preferences.proxy_port, 9999);
+        assert!(!fs::read_dir(&data).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("preferences.corrupt-")));
+        assert!(serde_json::to_value(&preferences)
+            .unwrap()
+            .get("refreshSeconds")
+            .is_none());
+        // Settings that still carry it lose it once saved.
+        let mut settings = app.configuration().unwrap();
+        settings.extra.insert("refreshSeconds".into(), 10.into());
+        app.persist_configuration(&settings).unwrap();
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(app.save_preferences(app.preferences().unwrap()))
+            .unwrap();
+        assert!(app
+            .configuration()
+            .unwrap()
+            .extra
+            .get("refreshSeconds")
+            .is_none());
+        assert_eq!(
+            app.refresh_interval(),
+            crate::refresh_policy::REFRESH_INTERVAL
+        );
+    }
+    #[test]
     fn exclusive_instance_and_invalid_settings() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
         assert!(Application::open(app.paths.clone()).is_err());
         assert!(validate_preferences(&Preferences {
-            refresh_seconds: 0,
+            proxy_port: 0,
             ..Default::default()
         })
         .is_err());

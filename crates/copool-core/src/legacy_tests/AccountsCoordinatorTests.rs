@@ -57,9 +57,80 @@ fn testAccountsUsageRefreshPlanningUsesActiveThenFullRecurringTicks() {
     assert_eq!(recurring_ids(6, &a), None);
 }
 #[test]
-fn testBackgroundRefreshPolicyForMacUsesTenSecondActiveUsageRefresh() {
-    assert_eq!(Preferences::default().refresh_seconds, 10);
+fn testBackgroundRefreshPolicyStartsAtTheAdaptiveFiveMinuteInterval() {
+    let (_dir, app) = fixture();
+    assert_eq!(
+        app.refresh_interval(),
+        crate::refresh_policy::REFRESH_INTERVAL
+    );
 }
+#[test]
+fn testBackgroundRefreshIntervalAdaptsAsOpenQuota() {
+    use std::time::Duration;
+    let (five, one) = (Duration::from_secs(300), Duration::from_secs(60));
+    assert_eq!((REFRESH_INTERVAL, FAST_REFRESH_INTERVAL), (five, one));
+    let mut unchanged = 0;
+    // Without a change the interval stays at five minutes.
+    for _ in 0..3 {
+        assert_eq!(refresh_interval_for(five, false, &mut unchanged), five);
+        assert_eq!(unchanged, 0);
+    }
+    // A change speeds it up, from either interval.
+    assert_eq!(refresh_interval_for(five, true, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(one, true, &mut unchanged), one);
+    // Two unchanged one-minute rounds slow it down again...
+    assert_eq!(refresh_interval_for(one, false, &mut unchanged), one);
+    assert_eq!(unchanged, 1);
+    assert_eq!(refresh_interval_for(one, false, &mut unchanged), five);
+    assert_eq!(unchanged, 0);
+    // ...counted anew after each change.
+    assert_eq!(refresh_interval_for(five, true, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(one, false, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(one, true, &mut unchanged), one);
+    assert_eq!(unchanged, 0);
+    assert_eq!(refresh_interval_for(one, false, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(one, false, &mut unchanged), five);
+    // An interval other than one minute (a fresh start) counts as five.
+    assert_eq!(
+        refresh_interval_for(Duration::from_secs(10), false, &mut unchanged),
+        five
+    );
+}
+#[test]
+fn testBackgroundRefreshComparesUsageWithoutFetchTimes() {
+    let cards = |hour: f64, fetched: i64| {
+        let mut a = account("acct", 40., hour, true);
+        a.usage.as_mut().unwrap().fetched_at = fetched;
+        let mut b = account("acct-empty", 0., 0., false);
+        b.usage = None;
+        usage_values(&[a, b])
+    };
+    let before = cards(25., 1);
+    assert_eq!(before.len(), 1);
+    assert!(before["acct"].get("fetchedAt").is_none());
+    // A new fetch time alone is no change.
+    assert!(!usage_changed(&before, &cards(25., 2)));
+    assert!(usage_changed(&before, &cards(26., 2)));
+    let mut reset = before.clone();
+    reset.get_mut("acct").unwrap()["fiveHour"]["resetAt"] = json!(1_800_000_000);
+    assert!(usage_changed(&before, &reset));
+    let mut credits = before.clone();
+    credits.get_mut("acct").unwrap()["credits"] =
+        json!({"hasCredits": true, "unlimited": false, "balance": "5"});
+    assert!(usage_changed(&before, &credits));
+    // A card with usage for the first time is a change; one without any
+    // window or credits, or one losing its usage, is not.
+    let empty = Default::default();
+    assert!(usage_changed(&empty, &before));
+    let mut blank = std::collections::BTreeMap::new();
+    blank.insert(
+        "acct".to_string(),
+        json!({"fiveHour": null, "oneWeek": null, "credits": null, "planType": "pro"}),
+    );
+    assert!(!usage_changed(&empty, &blank));
+    assert!(!usage_changed(&before, &empty));
+}
+
 #[tokio::test]
 async fn testSwitchAccountWritesCurrentAccountIDToStore() {
     let (_dir, app) = fixture();

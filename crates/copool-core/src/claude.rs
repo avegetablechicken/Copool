@@ -32,9 +32,6 @@ const USER_AGENT: &str = "claude-code/2.1.69";
 const USAGE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
 const SIGN_IN_EXPIRED: &str = "error.accounts.sign_in_expired";
 const TOKEN_REFRESH_RATE_LIMITED: &str = "Claude token refresh failed: HTTP 429";
-/// The usage endpoint limits requests far below Claude Code's own: background
-/// refreshes ask it at most this often per account.
-const BACKGROUND_USAGE_SECONDS: i64 = 300;
 /// The pause after a first HTTP 429, doubled for each following one up to
 /// the longest; a longer `Retry-After` is honored up to six hours.
 const RATE_LIMIT_PAUSE: i64 = 300;
@@ -1203,6 +1200,16 @@ impl Application {
         }
         Ok(())
     }
+    /// The pool's cards as stored, without reading Claude Code's login.
+    pub(crate) fn claude_usage_cards(&self) -> Result<Vec<AccountSummary>> {
+        let store = self.claude_load()?;
+        Ok(store
+            .accounts
+            .iter()
+            .map(|a| a.summary(false))
+            .chain(sub2api::summaries(&store, None))
+            .collect())
+    }
     /// The Claude pool, following the login Claude Code uses.
     pub async fn claude_accounts(&self) -> Result<Vec<AccountSummary>> {
         let location = self.claude_location();
@@ -2024,11 +2031,11 @@ impl Application {
         if accounts.is_empty() {
             return Ok(());
         }
-        // Accounts asked within the interval wait, whatever the refresh period.
+        // As OpenQuota, an account asked within the current interval (by a
+        // manual refresh, say) waits for the next round.
         let now = now_unix_seconds();
-        let due = |a: &&AccountSummary| {
-            !sub2api::is_card(&a.id) && now - a.updated_at >= BACKGROUND_USAGE_SECONDS
-        };
+        let interval = self.refresh_interval().as_secs() as i64;
+        let due = |a: &&AccountSummary| !sub2api::is_card(&a.id) && now - a.updated_at >= interval;
         let ids: Vec<String> = match crate::refresh_policy::recurring_ids(tick, &accounts) {
             None => accounts.iter().filter(due).map(|a| a.id.clone()).collect(),
             Some(ids) => accounts
@@ -2218,6 +2225,7 @@ mod tests {
         assert_eq!(fake.prepaid_requests.lock().unwrap().len(), 2);
     }
 
+    const REFRESH_SECONDS: i64 = crate::refresh_policy::REFRESH_INTERVAL.as_secs() as i64;
     /// Moves every account's last request this many seconds back.
     fn age(app: &Application, seconds: i64) {
         let mut store = app.claude_load().unwrap();
@@ -2355,7 +2363,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_refreshes_ask_each_account_at_most_every_five_minutes() {
+    async fn background_rounds_adapt_their_interval_to_usage_changes() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        assert_eq!(usages(&fake).len(), 1);
+        let (five, one) = (Duration::from_secs(300), Duration::from_secs(60));
+        let usage = |hour: u32| (200, json!({"five_hour": {"utilization": hour}}));
+        let mut unchanged = 0;
+        // Asked at import: the first round waits, and nothing changed.
+        assert_eq!(app.background_round(0, &mut unchanged).await, five);
+        assert_eq!(usages(&fake).len(), 1);
+        fake.usage.lock().unwrap().push(usage(25));
+        age(&app, 300);
+        assert_eq!(app.background_round(1, &mut unchanged).await, one);
+        assert_eq!(app.refresh_interval(), one);
+        assert_eq!(usages(&fake).len(), 2);
+        // At one minute, an account asked under a minute ago waits...
+        age(&app, 45);
+        assert_eq!(app.background_round(2, &mut unchanged).await, one);
+        assert_eq!(usages(&fake).len(), 2);
+        // ...and the second unchanged round slows down again.
+        fake.usage.lock().unwrap().push(usage(25));
+        age(&app, 60);
+        assert_eq!(app.background_round(3, &mut unchanged).await, five);
+        assert_eq!(usages(&fake).len(), 3);
+        assert_eq!(app.refresh_interval(), five);
+        // At five minutes, a minute-old request is not due.
+        age(&app, 60);
+        assert_eq!(app.background_round(4, &mut unchanged).await, five);
+        assert_eq!(usages(&fake).len(), 3);
+        // A change while slow speeds up at once.
+        fake.usage.lock().unwrap().push(usage(30));
+        age(&app, 300);
+        assert_eq!(app.background_round(6, &mut unchanged).await, one);
+        assert_eq!(usages(&fake).len(), 4);
+        // A rate limit is no change in usage.
+        fake.usage.lock().unwrap().push((429, Value::Null));
+        age(&app, 60);
+        assert_eq!(app.background_round(7, &mut unchanged).await, one);
+        assert_eq!(unchanged, 1);
+        assert_eq!(usages(&fake).len(), 5);
+    }
+
+    #[tokio::test]
+    async fn background_refreshes_skip_accounts_asked_within_the_interval() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
         sign_in(&location, "bob", LATER);
@@ -2368,11 +2422,11 @@ mod tests {
             app.claude_refresh_recurring(tick).await.unwrap();
         }
         assert_eq!(usages(&fake).len(), 2);
-        age(&app, BACKGROUND_USAGE_SECONDS - 5);
+        age(&app, REFRESH_SECONDS - 5);
         app.claude_refresh_recurring(0).await.unwrap();
         assert_eq!(usages(&fake).len(), 2);
         // Once due, a tick between full ones asks only the current account...
-        age(&app, BACKGROUND_USAGE_SECONDS);
+        age(&app, REFRESH_SECONDS);
         app.claude_refresh_recurring(1).await.unwrap();
         assert_eq!(usages(&fake)[2..], ["alice-access"]);
         app.claude_refresh_recurring(2).await.unwrap();
@@ -2417,7 +2471,7 @@ mod tests {
             "Claude usage request failed: HTTP 429 Rate limited; retry paused for 5 minutes"
         );
         assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), error);
-        age(&app, BACKGROUND_USAGE_SECONDS);
+        age(&app, REFRESH_SECONDS);
         assert!(app.claude_refresh_recurring(0).await.is_err());
         assert_eq!(fake.usage.lock().unwrap().len(), 1);
         let mut store = app.claude_load().unwrap();
@@ -2460,7 +2514,7 @@ mod tests {
             app.set_claude_network(fake.clone());
             assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), paused);
             assert!(app.claude_refresh(None).await.is_err());
-            age(&app, BACKGROUND_USAGE_SECONDS);
+            age(&app, REFRESH_SECONDS);
             assert!(app.claude_refresh_recurring(0).await.is_err());
             assert_eq!(fake.refreshed.lock().unwrap().len(), 1);
             assert_eq!(fake.usage_tokens.lock().unwrap().len(), usage_calls);
