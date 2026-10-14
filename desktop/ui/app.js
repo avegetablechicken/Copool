@@ -348,9 +348,9 @@ function usageWindow(view, title, tone) {
   fill.style.width = `${metrics.fillScale * 100}%`;
   fill.style.minWidth = `${metrics.grooveHeight}px`;
   track.append(fill);
-  const [primary, secondary] = remaining
-    ? ["accounts.window.remaining_format", "accounts.window.used_format"]
-    : ["accounts.window.used_format", "accounts.window.remaining_format"];
+  const primary = remaining
+    ? "accounts.window.remaining_format"
+    : "accounts.window.used_format";
   const reset =
     view.available && view.reset !== "--"
       ? tr("accounts.window.reset_at_format", view.reset)
@@ -366,13 +366,7 @@ function usageWindow(view, title, tone) {
         ? tr(primary, `${view.primaryPercent}%`)
         : tr("accounts.window.no_data"),
     ),
-    el(
-      "span",
-      "usage-reset",
-      view.available
-        ? `${tr(secondary, `${view.secondaryPercent}%`)} · ${reset}`
-        : reset,
-    ),
+    el("span", "usage-reset", reset),
   );
   return row;
 }
