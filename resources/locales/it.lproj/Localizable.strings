@@ -135,6 +135,8 @@
 "accounts.window.reset_at_format" = "Reset alle: %@";
 "accounts.window.no_data" = "Nessun dato";
 "accounts.window.reset_unavailable" = "Reset non disponibile";
+"accounts.window.resets_in_format" = "Reset tra %@";
+"accounts.window.resets_soon" = "Reset a breve";
 "accounts.compact.used" = "USATO";
 "accounts.notice.imported_format" = "Account importato: %@";
 "accounts.notice.imported_new_format" = "Nuovo account importato: %@";

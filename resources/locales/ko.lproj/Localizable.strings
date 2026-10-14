@@ -135,6 +135,8 @@
 "accounts.window.reset_at_format" = "재설정 시각: %@";
 "accounts.window.no_data" = "데이터 없음";
 "accounts.window.reset_unavailable" = "재설정 시각을 알 수 없음";
+"accounts.window.resets_in_format" = "%@ 후 재설정";
+"accounts.window.resets_soon" = "곧 재설정";
 "accounts.compact.used" = "사용";
 "accounts.notice.imported_format" = "계정을 가져왔습니다: %@";
 "accounts.notice.imported_new_format" = "새 계정을 가져왔습니다: %@";

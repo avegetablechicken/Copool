@@ -1209,6 +1209,17 @@ html.linux.composited .select-menu {
   text-overflow: ellipsis;
 }
 
+/* A known reset time toggles between the time and the time left. */
+button.usage-reset {
+  justify-self: start;
+  max-width: 100%;
+  text-align: left;
+}
+
+button.usage-reset:hover {
+  color: var(--label);
+}
+
 /* Only a window without data keeps the faint reset line. */
 .usage.no-data .usage-reset {
   color: var(--tertiary);

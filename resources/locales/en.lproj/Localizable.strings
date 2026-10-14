@@ -146,6 +146,8 @@
 "accounts.window.reset_at_format" = "Reset at: %@";
 "accounts.window.no_data" = "No data";
 "accounts.window.reset_unavailable" = "Reset unavailable";
+"accounts.window.resets_in_format" = "Resets in %@";
+"accounts.window.resets_soon" = "Resets soon";
 "accounts.compact.used" = "USED";
 "accounts.notice.imported_format" = "Account imported: %@";
 "accounts.notice.imported_new_format" = "New account imported: %@";

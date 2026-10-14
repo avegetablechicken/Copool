@@ -135,6 +135,8 @@
 "accounts.window.reset_at_format" = "Reset op: %@";
 "accounts.window.no_data" = "Geen gegevens";
 "accounts.window.reset_unavailable" = "Reset niet beschikbaar";
+"accounts.window.resets_in_format" = "Reset over %@";
+"accounts.window.resets_soon" = "Reset binnenkort";
 "accounts.compact.used" = "GEBRUIKT";
 "accounts.notice.imported_format" = "Account geïmporteerd: %@";
 "accounts.notice.imported_new_format" = "Nieuw account geïmporteerd: %@";

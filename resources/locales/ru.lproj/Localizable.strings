@@ -135,6 +135,8 @@
 "accounts.window.reset_at_format" = "Сброс: %@";
 "accounts.window.no_data" = "Нет данных";
 "accounts.window.reset_unavailable" = "Время сброса недоступно";
+"accounts.window.resets_in_format" = "Сброс через %@";
+"accounts.window.resets_soon" = "Скоро сброс";
 "accounts.compact.used" = "ИСПОЛЬЗОВАНО";
 "accounts.notice.imported_format" = "Аккаунт импортирован: %@";
 "accounts.notice.imported_new_format" = "Новый аккаунт импортирован: %@";

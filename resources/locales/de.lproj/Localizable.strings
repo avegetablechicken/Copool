@@ -135,6 +135,8 @@
 "accounts.window.reset_at_format" = "Zurückgesetzt um: %@";
 "accounts.window.no_data" = "Keine Daten";
 "accounts.window.reset_unavailable" = "Zurücksetzung nicht verfügbar";
+"accounts.window.resets_in_format" = "Zurücksetzung in %@";
+"accounts.window.resets_soon" = "Zurücksetzung in Kürze";
 "accounts.compact.used" = "VERBRAUCHT";
 "accounts.notice.imported_format" = "Konto importiert: %@";
 "accounts.notice.imported_new_format" = "Neues Konto importiert: %@";

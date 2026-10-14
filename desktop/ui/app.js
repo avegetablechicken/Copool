@@ -20,6 +20,12 @@ let nativeIcons = {};
 let iconFrame = 0;
 // The account pool on the accounts page: Codex or Claude Code.
 let pool = localStorage.getItem("copool.pool") === "claude" ? "claude" : "codex";
+// Reset times as the date and time or as the time left, as OpenQuota toggles
+// them by clicking either.
+let resetDisplay =
+  localStorage.getItem("copool.resetDisplay") === "countdown"
+    ? "countdown"
+    : "exact";
 const CLAUDE_COMMANDS = {
   accounts: "claude_accounts",
   import_current: "claude_import_current",
@@ -324,6 +330,22 @@ const METER_HEIGHT = 4; // .meter in style.css
 function usageMode() {
   return preferences?.usageDisplay || "used";
 }
+/// A window's reset time in `mode`: the date and time, or the time left.
+function resetLabel(view, mode) {
+  if (!view.available || view.resetAt == null)
+    return tr("accounts.window.reset_unavailable");
+  if (mode === "exact")
+    return tr("accounts.window.reset_at_format", view.reset);
+  const countdown = P.resetCountdown(view.resetAt, Date.now() / 1000, locale);
+  return countdown.soon
+    ? tr("accounts.window.resets_soon")
+    : tr("accounts.window.resets_in_format", countdown.remaining);
+}
+function toggleResetDisplay() {
+  resetDisplay = resetDisplay === "countdown" ? "exact" : "countdown";
+  localStorage.setItem("copool.resetDisplay", resetDisplay);
+  renderAccounts(accountsCache);
+}
 function usageWindow(view, title, tone) {
   const remaining = usageMode() === "remaining";
   const used = remaining ? view.secondaryPercent : view.primaryPercent;
@@ -351,10 +373,20 @@ function usageWindow(view, title, tone) {
   const primary = remaining
     ? "accounts.window.remaining_format"
     : "accounts.window.used_format";
-  const reset =
-    view.available && view.reset !== "--"
-      ? tr("accounts.window.reset_at_format", view.reset)
-      : tr("accounts.window.reset_unavailable");
+  const known = view.available && view.resetAt != null;
+  // A known reset time switches between both forms and shows the other one
+  // on hover, as in OpenQuota.
+  const reset = known
+    ? button("", null, "usage-reset", toggleResetDisplay)
+    : el("span", "usage-reset");
+  reset.textContent = resetLabel(view, resetDisplay);
+  if (known)
+    reset.addEventListener("mouseenter", () => {
+      reset.title = resetLabel(
+        view,
+        resetDisplay === "countdown" ? "exact" : "countdown",
+      );
+    });
   const row = el("div", `usage ${tone}${view.available ? "" : " no-data"}`);
   row.append(
     el("span", "usage-label", title),
@@ -366,7 +398,7 @@ function usageWindow(view, title, tone) {
         ? tr(primary, `${view.primaryPercent}%`)
         : tr("accounts.window.no_data"),
     ),
-    el("span", "usage-reset", reset),
+    reset,
   );
   return row;
 }
@@ -769,6 +801,14 @@ function renderAccounts(accounts) {
     accounts,
     // Relative times change without new data.
     accounts.map(tokenLabel),
+    resetDisplay,
+    resetDisplay === "countdown" &&
+      accounts.map((account) => {
+        const view = P.card(account, false, "used", String);
+        return [view.fiveHour, view.oneWeek].map((w) =>
+          resetLabel(w, "countdown"),
+        );
+      }),
     collapsed,
     locale,
     preferences?.usageDisplay,

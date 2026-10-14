@@ -135,6 +135,8 @@
 "accounts.window.reset_at_format" = "リセット時刻: %@";
 "accounts.window.no_data" = "データなし";
 "accounts.window.reset_unavailable" = "リセット時刻は不明";
+"accounts.window.resets_in_format" = "%@後にリセット";
+"accounts.window.resets_soon" = "まもなくリセット";
 "accounts.compact.used" = "USED";
 "accounts.notice.imported_format" = "アカウントを取り込みました: %@";
 "accounts.notice.imported_new_format" = "新しいアカウントを取り込みました: %@";

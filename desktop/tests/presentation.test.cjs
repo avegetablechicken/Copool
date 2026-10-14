@@ -300,6 +300,23 @@ test("token expiry shows the largest whole unit left, or expired", () => {
   assert.equal(left(6 * 86400, "zh-Hans"), "6天");
   assert.equal(left(5 * 3600, "zh_CN"), "5小时");
 });
+test("A reset counts down as OpenQuota shows it, soon within five minutes", () => {
+  const now = 1_800_000_000;
+  assert.equal(P.resetCountdown(null, now), null);
+  assert.equal(P.resetCountdown(undefined, now), null);
+  const left = (seconds, locale) => P.resetCountdown(now + seconds, now, locale);
+  for (const seconds of [-60, 0, 300])
+    assert.deepEqual(left(seconds), { soon: true, remaining: null });
+  assert.equal(left(301).remaining, "6m");
+  assert.equal(left(3600).remaining, "1h");
+  assert.equal(left(3 * 3600 + 19 * 60 + 1).remaining, "3h 20m");
+  assert.equal(left(2 * 86400 + 3 * 3600).remaining, "2d 3h");
+  assert.equal(left(86400).remaining, "1d 0h");
+  assert.equal(left(3 * 3600 + 20 * 60, "zh-Hans").remaining, "3小时20分钟");
+  const view = P.card({ usage: { fiveHour: { usedPercent: 1, resetAt: now } } });
+  assert.equal(view.fiveHour.resetAt, now);
+  assert.equal(view.oneWeek.resetAt, null);
+});
 test("A provider's cards gather where its first card stands", () => {
   // A provider with a single card (q) keeps an ordinary card.
   const cards = ["a", "p1", "b", "q1", "p2"].map((id) => ({ id }));

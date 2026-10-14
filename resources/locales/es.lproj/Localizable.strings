@@ -135,6 +135,8 @@
 "accounts.window.reset_at_format" = "Reinicio: %@";
 "accounts.window.no_data" = "Sin datos";
 "accounts.window.reset_unavailable" = "Reinicio no disponible";
+"accounts.window.resets_in_format" = "Reinicio en %@";
+"accounts.window.resets_soon" = "Reinicio en breve";
 "accounts.compact.used" = "USADO";
 "accounts.notice.imported_format" = "Cuenta importada: %@";
 "accounts.notice.imported_new_format" = "Nueva cuenta importada: %@";

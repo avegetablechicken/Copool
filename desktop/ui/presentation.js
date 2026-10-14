@@ -119,6 +119,39 @@
       }).format(amount),
     };
   }
+  /// Time left until a reset as OpenQuota shows it: days and hours, hours
+  /// and minutes, or minutes (rounded up), localized; soon within five
+  /// minutes or once past; null without a reset time.
+  function resetCountdown(epoch, now, locale = "en") {
+    if (!Number.isFinite(epoch)) return null;
+    const seconds = epoch - now;
+    if (seconds <= 5 * 60) return { soon: true, remaining: null };
+    const minutes = Math.ceil(seconds / 60),
+      days = Math.floor(minutes / 1440),
+      hours = Math.floor((minutes % 1440) / 60),
+      rest = minutes % 60,
+      language = resolveLocale(locale);
+    const parts = (
+      days > 0
+        ? [["day", days], ["hour", hours]]
+        : hours > 0
+          ? [["hour", hours], ["minute", rest]].filter(([, n], i) => !i || n)
+          : [["minute", rest]]
+    ).map(([unit, amount]) =>
+      new Intl.NumberFormat(language, {
+        style: "unit",
+        unit,
+        unitDisplay: "narrow",
+      }).format(amount),
+    );
+    return {
+      soon: false,
+      remaining: new Intl.ListFormat(language, {
+        type: "unit",
+        style: "narrow",
+      }).format(parts),
+    };
+  }
   function windowPresentation(
     window,
     mode = "used",
@@ -133,6 +166,7 @@
       primaryPercent: mode === "remaining" ? 100 - used : used,
       secondaryPercent: mode === "remaining" ? used : 100 - used,
       reset: window?.resetAt != null ? formatDate(window.resetAt) : "--",
+      resetAt: window?.resetAt ?? null,
     };
   }
   function card(account, collapsed = false, mode = "used", formatDate) {
@@ -549,6 +583,7 @@
     windowPresentation,
     formatReset,
     tokenExpiry,
+    resetCountdown,
     card,
     actions,
     collapsedInteraction,
