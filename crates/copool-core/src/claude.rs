@@ -32,6 +32,19 @@ const USER_AGENT: &str = "claude-code/2.1.69";
 const USAGE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
 const SIGN_IN_EXPIRED: &str = "error.accounts.sign_in_expired";
 const TOKEN_REFRESH_RATE_LIMITED: &str = "Claude token refresh failed: HTTP 429";
+/// The usage endpoint limits requests far below Claude Code's own: background
+/// refreshes ask it at most this often per account.
+const BACKGROUND_USAGE_SECONDS: i64 = 300;
+/// The pause after a first HTTP 429, doubled for each following one up to
+/// the longest; a longer `Retry-After` is honored up to six hours.
+const RATE_LIMIT_PAUSE: i64 = 300;
+const RATE_LIMIT_LONGEST_PAUSE: i64 = 3600;
+const RETRY_AFTER_LONGEST: i64 = 6 * 3600;
+fn rate_limit_pause(count: u32, retry_after: Option<u64>) -> i64 {
+    let doubled = RATE_LIMIT_PAUSE << count.saturating_sub(1).min(8);
+    let requested = retry_after.map_or(0, |s| s.min(RETRY_AFTER_LONGEST as u64) as i64);
+    doubled.min(RATE_LIMIT_LONGEST_PAUSE).max(requested)
+}
 
 /// Where Claude Code keeps its login.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -215,9 +228,11 @@ fn settings_are_official(location: &Location) -> bool {
         .is_ok_and(|settings| provider_config::overrides(&settings).is_empty())
 }
 
+type UsageResponse = (u16, Value, Option<u64>);
 pub(crate) trait Network: Send + Sync {
-    /// The HTTP status and body of the OAuth usage endpoint.
-    fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)>;
+    /// The HTTP status and body of the OAuth usage endpoint, with the seconds
+    /// of a `Retry-After` header.
+    fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, UsageResponse>;
     /// A token response for a refresh token.
     fn refresh<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Value>;
     fn profile<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Value>;
@@ -250,7 +265,7 @@ fn request_error(error: reqwest::Error) -> String {
     parts.join(" -> ")
 }
 impl Network for Http {
-    fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
+    fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, UsageResponse> {
         Box::pin(async move {
             let response = client(proxy)?
                 .get(USAGE_URL)
@@ -262,7 +277,13 @@ impl Network for Http {
                 .await
                 .map_err(request_error)?;
             let status = response.status().as_u16();
-            Ok((status, response.json().await.unwrap_or(Value::Null)))
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse().ok());
+            let body = response.json().await.unwrap_or(Value::Null);
+            Ok((status, body, retry_after))
         })
     }
     fn refresh<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Value> {
@@ -394,6 +415,9 @@ struct Stored {
     /// A local backoff after the usage or token endpoint returns HTTP 429.
     #[serde(default)]
     usage_retry_at: Option<i64>,
+    /// Consecutive HTTP 429 responses, each doubling the pause.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    rate_limits: u32,
     /// Newly imported; nothing goes upstream for it until a manual refresh.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     first_request_pending: bool,
@@ -510,6 +534,9 @@ fn identity(account: &Value) -> Option<String> {
         "{account_id}|{}",
         text(&account["organizationUuid"]).unwrap_or_default()
     ))
+}
+fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 const MAX_ALTERNATES: usize = 3;
 const MAX_REJECTED: usize = 16;
@@ -1249,6 +1276,7 @@ impl Application {
                     usage: None,
                     usage_error: None,
                     usage_retry_at: None,
+                    rate_limits: 0,
                     first_request_pending: defer,
                     alternates: Vec::new(),
                     rejected: Vec::new(),
@@ -1646,6 +1674,7 @@ impl Application {
         let mut in_live;
         let mut profiled = None;
         let mut rate_limited = false;
+        let mut retry_after = None;
         let mut reloads = 0;
         let mut live_sync = Ok(());
         let result = loop {
@@ -1710,14 +1739,15 @@ impl Application {
                     profiled = Some(named);
                 }
                 let token = text(&oauth["accessToken"]).unwrap_or_default();
-                let (mut status, mut body) = network.usage(&token, proxy).await?;
+                let (mut status, mut body, mut after) = network.usage(&token, proxy).await?;
                 if status == 401 {
                     let tokens = refresh(&oauth).await?;
                     apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                     renewed = true;
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
-                    (status, body) = network.usage(&token, proxy).await?;
+                    (status, body, after) = network.usage(&token, proxy).await?;
                 }
+                retry_after = after.filter(|_| status == 429);
                 // An account added without its profile learns its plan here,
                 // through its own proxy.
                 if (200..=299).contains(&status)
@@ -1863,9 +1893,26 @@ impl Application {
         }
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
+        // Each HTTP 429 in a row pauses longer; any other answer starts over.
+        let rate_limits = match (rate_limited, &result) {
+            (true, _) => store
+                .accounts
+                .iter()
+                .find(|a| a.id == id)
+                .map_or(account.rate_limits, |a| a.rate_limits)
+                .saturating_add(1),
+            (false, Ok(_)) => 0,
+            (false, Err(_)) => account.rate_limits,
+        };
+        let pause = rate_limited.then(|| rate_limit_pause(rate_limits, retry_after));
+        let result = result.map_err(|error| match pause {
+            Some(pause) => format!("{error}; retry paused for {} minutes", (pause + 59) / 60),
+            None => error,
+        });
         if let Some(target) = store.accounts.iter_mut().find(|a| a.id == id) {
             target.updated_at = now_unix_seconds();
-            target.usage_retry_at = rate_limited.then(|| now_unix_seconds() + 300);
+            target.usage_retry_at = pause.map(|pause| now_unix_seconds() + pause);
+            target.rate_limits = rate_limits;
             match &result {
                 Ok(usage) => {
                     target.usage = Some(usage.clone());
@@ -1977,13 +2024,26 @@ impl Application {
         if accounts.is_empty() {
             return Ok(());
         }
-        let ids = crate::refresh_policy::recurring_ids(tick, &accounts);
+        // Accounts asked within the interval wait, whatever the refresh period.
+        let now = now_unix_seconds();
+        let due = |a: &&AccountSummary| {
+            !sub2api::is_card(&a.id) && now - a.updated_at >= BACKGROUND_USAGE_SECONDS
+        };
+        let ids: Vec<String> = match crate::refresh_policy::recurring_ids(tick, &accounts) {
+            None => accounts.iter().filter(due).map(|a| a.id.clone()).collect(),
+            Some(ids) => accounts
+                .iter()
+                .filter(due)
+                .filter(|a| ids.contains(&a.id))
+                .map(|a| a.id.clone())
+                .collect(),
+        };
         let cards: Vec<String> = accounts
             .iter()
             .filter(|a| a.is_current && sub2api::is_card(&a.id))
             .map(|a| a.id.clone())
             .collect();
-        self.claude_refresh_scoped(ids, Some(&cards)).await
+        self.claude_refresh_scoped(Some(ids), Some(&cards)).await
     }
     /// The Codex pool's automatic switch rules, over the Claude accounts.
     async fn claude_auto_switch_if_needed(&self) -> Result<Option<String>> {
@@ -2158,6 +2218,179 @@ mod tests {
         assert_eq!(fake.prepaid_requests.lock().unwrap().len(), 2);
     }
 
+    /// Moves every account's last request this many seconds back.
+    fn age(app: &Application, seconds: i64) {
+        let mut store = app.claude_load().unwrap();
+        for account in &mut store.accounts {
+            account.updated_at = now_unix_seconds() - seconds;
+        }
+        app.claude_save(&store).unwrap();
+    }
+    /// Ends a rate limit pause without forgetting how many came before.
+    fn end_pause(app: &Application) {
+        let mut store = app.claude_load().unwrap();
+        store.accounts[0].usage_retry_at = Some(now_unix_seconds() - 1);
+        app.claude_save(&store).unwrap();
+    }
+
+    #[test]
+    fn rate_limit_pauses_double_up_to_an_hour_and_honor_a_longer_retry_after() {
+        let pauses: Vec<i64> = (1..=7).map(|n| rate_limit_pause(n, None)).collect();
+        assert_eq!(pauses, [300, 600, 1200, 2400, 3600, 3600, 3600]);
+        assert_eq!(rate_limit_pause(u32::MAX, None), 3600);
+        assert_eq!(rate_limit_pause(0, None), 300);
+        // Retry-After: 0 or shorter than the backoff does not shorten it.
+        assert_eq!(rate_limit_pause(1, Some(0)), 300);
+        assert_eq!(rate_limit_pause(3, Some(60)), 1200);
+        assert_eq!(rate_limit_pause(1, Some(5400)), 5400);
+        assert_eq!(rate_limit_pause(1, Some(u64::MAX)), 6 * 3600);
+    }
+
+    #[tokio::test]
+    async fn consecutive_rate_limits_pause_longer_until_usage_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        let stored = || app.claude_load().unwrap().accounts[0].clone();
+        let usage = stored().usage.unwrap();
+        for (count, minutes) in [(1, 5), (2, 10), (3, 20), (4, 40), (5, 60), (6, 60)] {
+            fake.usage
+                .lock()
+                .unwrap()
+                .push((429, json!({"error":{"message":"Rate limited"}})));
+            let before = now_unix_seconds();
+            let error = app.claude_refresh_usage(&id).await.unwrap_err();
+            assert_eq!(
+                error,
+                format!("Claude usage request failed: HTTP 429 Rate limited; retry paused for {minutes} minutes")
+            );
+            let account = stored();
+            assert_eq!(account.rate_limits, count);
+            let until = account.usage_retry_at.unwrap();
+            assert!((before + minutes * 60..=now_unix_seconds() + minutes * 60).contains(&until));
+            // The last usage stays on the card with the error beside it.
+            assert_eq!(
+                serde_json::to_value(&account.usage).unwrap(),
+                serde_json::to_value(Some(&usage)).unwrap()
+            );
+            assert_eq!(account.usage_error.as_deref(), Some(error.as_str()));
+            // While paused, nothing is requested.
+            let requests = usages(&fake).len();
+            assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), error);
+            assert_eq!(usages(&fake).len(), requests);
+            end_pause(&app);
+        }
+        app.claude_refresh_usage(&id).await.unwrap();
+        let account = stored();
+        assert_eq!(account.rate_limits, 0);
+        assert_eq!(account.usage_retry_at, None);
+        assert_eq!(account.usage_error, None);
+        // The count is gone from the store once it is back to zero.
+        let saved = fs::read_to_string(app.claude_store_path()).unwrap();
+        assert!(!saved.contains("rateLimits"));
+        // A first rate limit after a success pauses briefly again.
+        fake.usage.lock().unwrap().push((429, Value::Null));
+        app.claude_refresh_usage(&id).await.unwrap_err();
+        assert_eq!(stored().rate_limits, 1);
+    }
+
+    #[tokio::test]
+    async fn other_failures_keep_the_rate_limit_count_without_pausing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        for _ in 0..2 {
+            fake.usage.lock().unwrap().push((429, Value::Null));
+            app.claude_refresh_usage(&id).await.unwrap_err();
+            end_pause(&app);
+        }
+        fake.usage.lock().unwrap().push((500, Value::Null));
+        assert_eq!(
+            app.claude_refresh_usage(&id).await.unwrap_err(),
+            "Claude usage request failed: HTTP 500"
+        );
+        let account = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(account.rate_limits, 2);
+        assert_eq!(account.usage_retry_at, None);
+        fake.usage.lock().unwrap().push((429, Value::Null));
+        assert!(app
+            .claude_refresh_usage(&id)
+            .await
+            .unwrap_err()
+            .ends_with("retry paused for 20 minutes"));
+    }
+
+    #[tokio::test]
+    async fn a_longer_retry_after_sets_the_pause() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        for (retry_after, minutes) in [(Some(5400), 90), (Some(0), 10), (None, 20)] {
+            *fake.usage_retry_after.lock().unwrap() = retry_after;
+            fake.usage.lock().unwrap().push((429, Value::Null));
+            let before = now_unix_seconds();
+            let error = app.claude_refresh_usage(&id).await.unwrap_err();
+            assert!(
+                error.ends_with(&format!("retry paused for {minutes} minutes")),
+                "{error}"
+            );
+            let until = app.claude_load().unwrap().accounts[0]
+                .usage_retry_at
+                .unwrap();
+            assert!((before + minutes * 60..=now_unix_seconds() + minutes * 60).contains(&until));
+            end_pause(&app);
+        }
+        // A Retry-After on a successful response sets no pause.
+        *fake.usage_retry_after.lock().unwrap() = Some(9999);
+        app.claude_refresh_usage(&id).await.unwrap();
+        let account = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(account.usage_retry_at, None);
+        assert_eq!(account.rate_limits, 0);
+    }
+
+    #[tokio::test]
+    async fn background_refreshes_ask_each_account_at_most_every_five_minutes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        assert_eq!(usages(&fake), ["bob-access", "alice-access"]);
+        // Every tick, full or not, skips accounts asked within the interval.
+        for tick in 0..12 {
+            app.claude_refresh_recurring(tick).await.unwrap();
+        }
+        assert_eq!(usages(&fake).len(), 2);
+        age(&app, BACKGROUND_USAGE_SECONDS - 5);
+        app.claude_refresh_recurring(0).await.unwrap();
+        assert_eq!(usages(&fake).len(), 2);
+        // Once due, a tick between full ones asks only the current account...
+        age(&app, BACKGROUND_USAGE_SECONDS);
+        app.claude_refresh_recurring(1).await.unwrap();
+        assert_eq!(usages(&fake)[2..], ["alice-access"]);
+        app.claude_refresh_recurring(2).await.unwrap();
+        assert_eq!(usages(&fake).len(), 3);
+        // ...and a full tick only those still due.
+        app.claude_refresh_recurring(6).await.unwrap();
+        assert_eq!(usages(&fake)[3..], ["bob-access"]);
+        // A manual refresh is not held back by the interval.
+        app.claude_refresh(None).await.unwrap();
+        let mut manual = usages(&fake)[4..].to_vec();
+        manual.sort();
+        assert_eq!(manual, ["alice-access", "bob-access"]);
+        app.claude_refresh_usage(&app.claude_load().unwrap().accounts[0].id)
+            .await
+            .unwrap();
+        assert_eq!(usages(&fake).len(), 7);
+    }
+
     #[tokio::test]
     async fn usage_rate_limits_pause_manual_and_background_refresh_until_backoff_expires() {
         let dir = tempfile::tempdir().unwrap();
@@ -2179,7 +2412,12 @@ mod tests {
             .lock()
             .unwrap()
             .push((200, json!({"five_hour":{"utilization":42}})));
+        assert_eq!(
+            error,
+            "Claude usage request failed: HTTP 429 Rate limited; retry paused for 5 minutes"
+        );
         assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), error);
+        age(&app, BACKGROUND_USAGE_SECONDS);
         assert!(app.claude_refresh_recurring(0).await.is_err());
         assert_eq!(fake.usage.lock().unwrap().len(), 1);
         let mut store = app.claude_load().unwrap();
@@ -2207,10 +2445,8 @@ mod tests {
             }
             *fake.refresh_error.lock().unwrap() = Some(TOKEN_REFRESH_RATE_LIMITED.into());
             let before = now_unix_seconds();
-            assert_eq!(
-                app.claude_refresh_usage(&id).await.unwrap_err(),
-                TOKEN_REFRESH_RATE_LIMITED
-            );
+            let paused = format!("{TOKEN_REFRESH_RATE_LIMITED}; retry paused for 5 minutes");
+            assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), paused);
             let stored = app.claude_load().unwrap();
             let retry_at = stored.accounts[0].usage_retry_at.unwrap();
             assert!((before + 300..=now_unix_seconds() + 300).contains(&retry_at));
@@ -2222,11 +2458,9 @@ mod tests {
             drop(app);
             let (app, _, _) = waiting_app(&dir);
             app.set_claude_network(fake.clone());
-            assert_eq!(
-                app.claude_refresh_usage(&id).await.unwrap_err(),
-                TOKEN_REFRESH_RATE_LIMITED
-            );
+            assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), paused);
             assert!(app.claude_refresh(None).await.is_err());
+            age(&app, BACKGROUND_USAGE_SECONDS);
             assert!(app.claude_refresh_recurring(0).await.is_err());
             assert_eq!(fake.refreshed.lock().unwrap().len(), 1);
             assert_eq!(fake.usage_tokens.lock().unwrap().len(), usage_calls);
@@ -2300,6 +2534,7 @@ mod tests {
     #[derive(Default)]
     pub(super) struct Fake {
         usage: Mutex<Vec<(u16, Value)>>,
+        usage_retry_after: Mutex<Option<u64>>,
         refreshed: Mutex<Vec<String>>,
         profile_proxies: Mutex<Vec<String>>,
         usage_tokens: Mutex<Vec<String>>,
@@ -2311,7 +2546,7 @@ mod tests {
         prepaid_requests: Mutex<Vec<(String, String)>>,
     }
     impl Network for Fake {
-        fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
+        fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, UsageResponse> {
             Box::pin(async move {
                 self.usage_tokens.lock().unwrap().push(token.into());
                 self.usage_proxies.lock().unwrap().push(proxy.into());
@@ -2321,14 +2556,15 @@ mod tests {
                 }
                 drop(hooks);
                 let mut queued = self.usage.lock().unwrap();
-                Ok(if queued.is_empty() {
+                let (status, body) = if queued.is_empty() {
                     (
                         200,
                         json!({"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00Z"},"seven_day":{"utilization":"40.5","resets_at":null}}),
                     )
                 } else {
                     queued.remove(0)
-                })
+                };
+                Ok((status, body, *self.usage_retry_after.lock().unwrap()))
             })
         }
         fn refresh<'a>(&'a self, token: &'a str, _: &'a str) -> Response<'a, Value> {
@@ -2698,6 +2934,7 @@ mod tests {
             usage: None,
             usage_error: Some(SIGN_IN_EXPIRED.into()),
             usage_retry_at: None,
+            rate_limits: 0,
             first_request_pending: false,
             alternates: Vec::new(),
             rejected: Vec::new(),
