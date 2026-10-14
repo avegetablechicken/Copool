@@ -30,6 +30,9 @@ const USER_AGENT: &str = "claude-code/2.1.69";
 // User-Agent; others read `eligible: false` with the rest of the usage intact.
 // This is the earliest version that receives them.
 const USAGE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
+/// How long usage is asked as `claude-code/…` through a proxy after the
+/// usage endpoint refused `claude-cli/…` there.
+const CLI_REFUSAL_SECONDS: i64 = 3600;
 const SIGN_IN_EXPIRED: &str = "error.accounts.sign_in_expired";
 const TOKEN_REFRESH_RATE_LIMITED: &str = "Claude token refresh failed: HTTP 429";
 /// The pause after a first HTTP 429, doubled for each following one up to
@@ -229,7 +232,12 @@ type UsageResponse = (u16, Value, Option<u64>);
 pub(crate) trait Network: Send + Sync {
     /// The HTTP status and body of the OAuth usage endpoint, with the seconds
     /// of a `Retry-After` header.
-    fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, UsageResponse>;
+    fn usage<'a>(
+        &'a self,
+        token: &'a str,
+        agent: &'a str,
+        proxy: &'a str,
+    ) -> Response<'a, UsageResponse>;
     /// A token response for a refresh token, asking again for `scope`.
     fn refresh<'a>(
         &'a self,
@@ -267,11 +275,16 @@ fn request_error(error: reqwest::Error) -> String {
     parts.join(" -> ")
 }
 impl Network for Http {
-    fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, UsageResponse> {
+    fn usage<'a>(
+        &'a self,
+        token: &'a str,
+        agent: &'a str,
+        proxy: &'a str,
+    ) -> Response<'a, UsageResponse> {
         Box::pin(async move {
             let response = client(proxy)?
                 .get(USAGE_URL)
-                .header(reqwest::header::USER_AGENT, USAGE_USER_AGENT)
+                .header(reqwest::header::USER_AGENT, agent)
                 .bearer_auth(token.trim())
                 .header("Accept", "application/json")
                 .header("anthropic-beta", "oauth-2025-04-20")
@@ -406,6 +419,8 @@ fn refresh_scope(oauth: &Value) -> String {
 pub(crate) struct State {
     location: std::sync::RwLock<Location>,
     network: std::sync::RwLock<Arc<dyn Network>>,
+    /// Until when each proxy asks for usage as `claude-code/…`.
+    cli_refused: std::sync::Mutex<std::collections::HashMap<String, i64>>,
     lock: tokio::sync::Mutex<()>,
     operations: tokio::sync::Mutex<()>,
 }
@@ -416,6 +431,7 @@ impl Default for State {
                 Location::discover().unwrap_or_else(|_| Location::files(".claude".into())),
             ),
             network: std::sync::RwLock::new(Arc::new(Http)),
+            cli_refused: Default::default(),
             lock: Default::default(),
             operations: Default::default(),
         }
@@ -1792,13 +1808,14 @@ impl Application {
                     profiled = Some(named);
                 }
                 let token = text(&oauth["accessToken"]).unwrap_or_default();
-                let (mut status, mut body, mut after) = network.usage(&token, proxy).await?;
+                let (mut status, mut body, mut after) =
+                    self.claude_usage(&*network, &token, proxy).await?;
                 if status == 401 {
                     let tokens = refresh(&oauth).await?;
                     apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                     renewed = true;
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
-                    (status, body, after) = network.usage(&token, proxy).await?;
+                    (status, body, after) = self.claude_usage(&*network, &token, proxy).await?;
                 }
                 retry_after = after.filter(|_| status == 429);
                 // An account added without its profile learns its plan here,
@@ -2012,6 +2029,37 @@ impl Application {
             self.claude_save(&store)?;
         }
         result.map(|_| ()).and(live_sync)
+    }
+    /// Asks for usage as Claude Code 2.1.280 (`claude-cli/…`), which the
+    /// banked resets need. The endpoint at times refuses that agent outright,
+    /// with HTTP 429 before reading the token; usage is then asked as
+    /// `claude-code/…` at once, and through that proxy for the next hour.
+    async fn claude_usage(
+        &self,
+        network: &dyn Network,
+        token: &str,
+        proxy: &str,
+    ) -> Result<UsageResponse> {
+        let now = now_unix_seconds();
+        let refused = self
+            .claude
+            .cli_refused
+            .lock()
+            .unwrap()
+            .get(proxy)
+            .is_some_and(|until| *until > now);
+        if !refused {
+            let response = network.usage(token, USAGE_USER_AGENT, proxy).await?;
+            if response.0 != 429 {
+                return Ok(response);
+            }
+            self.claude
+                .cli_refused
+                .lock()
+                .unwrap()
+                .insert(proxy.to_owned(), now + CLI_REFUSAL_SECONDS);
+        }
+        network.usage(token, USER_AGENT, proxy).await
     }
     /// A manual refresh lets new accounts contact upstream: one account, or
     /// all of them without an id.
@@ -2272,6 +2320,15 @@ mod tests {
     }
 
     const REFRESH_SECONDS: i64 = crate::refresh_policy::REFRESH_INTERVAL.as_secs() as i64;
+    /// Usage is asked as `claude-code/…` only, as after the endpoint
+    /// refused `claude-cli/…`: each HTTP 429 is then a real rate limit.
+    fn refuse_cli(app: &Application) {
+        app.claude
+            .cli_refused
+            .lock()
+            .unwrap()
+            .insert(String::new(), i64::MAX);
+    }
     /// Moves every account's last request this many seconds back.
     fn age(app: &Application, seconds: i64) {
         let mut store = app.claude_load().unwrap();
@@ -2304,6 +2361,7 @@ mod tests {
     async fn consecutive_rate_limits_pause_longer_until_usage_succeeds() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
+        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
@@ -2354,6 +2412,7 @@ mod tests {
     async fn other_failures_keep_the_rate_limit_count_without_pausing() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
+        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
@@ -2382,6 +2441,7 @@ mod tests {
     async fn a_longer_retry_after_sets_the_pause() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
+        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
@@ -2413,6 +2473,7 @@ mod tests {
         use std::time::Duration;
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
+        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         assert_eq!(usages(&fake).len(), 1);
@@ -2495,6 +2556,7 @@ mod tests {
     async fn usage_rate_limits_pause_manual_and_background_refresh_until_backoff_expires() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
+        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_accounts().await.unwrap()[0].id.clone();
@@ -2827,6 +2889,130 @@ mod tests {
         assert_eq!(error, SIGN_IN_EXPIRED);
     }
 
+    fn agents(fake: &Fake) -> Vec<String> {
+        fake.usage_agents.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn usage_is_asked_as_claude_code_while_claude_cli_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        let (cli, code) = (USAGE_USER_AGENT, USER_AGENT);
+        assert_eq!(agents(&fake), [cli]);
+        // Refused as claude-cli, the same refresh asks as claude-code.
+        fake.usage
+            .lock()
+            .unwrap()
+            .push((429, json!({"error": {"type": "rate_limit_error"}})));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(agents(&fake)[1..], [cli, code]);
+        let account = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!(account.usage_error, None);
+        assert_eq!(account.rate_limits, 0);
+        assert_eq!(account.usage_retry_at, None);
+        // Through that proxy, only claude-code is asked for the next hour...
+        let until = app.claude.cli_refused.lock().unwrap()[""];
+        assert!((now_unix_seconds() + 3590..=now_unix_seconds() + 3600).contains(&until));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(agents(&fake)[3..], [code]);
+        // ...and claude-cli again after it.
+        app.claude
+            .cli_refused
+            .lock()
+            .unwrap()
+            .insert(String::new(), now_unix_seconds() - 1);
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(agents(&fake)[4..], [cli]);
+        // Any other answer to claude-cli is final.
+        fake.usage.lock().unwrap().push((500, Value::Null));
+        assert!(app.claude_refresh_usage(&id).await.is_err());
+        assert_eq!(agents(&fake)[5..], [cli]);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_holds_only_for_its_proxy_and_both_refusals_are_a_rate_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = |user: &str| {
+            app.claude_load()
+                .unwrap()
+                .accounts
+                .into_iter()
+                .find(|a| a.label == format!("{user}@example.com"))
+                .unwrap()
+                .id
+        };
+        app.claude_save_account_proxy(&id("alice"), "http://127.0.0.1:7001")
+            .await
+            .unwrap();
+        app.claude_save_account_proxy(&id("bob"), "http://127.0.0.1:7002")
+            .await
+            .unwrap();
+        let (cli, code) = (USAGE_USER_AGENT, USER_AGENT);
+        let start = agents(&fake).len();
+        fake.usage.lock().unwrap().push((429, Value::Null));
+        app.claude_refresh_usage(&id("alice")).await.unwrap();
+        app.claude_refresh_usage(&id("bob")).await.unwrap();
+        assert_eq!(agents(&fake)[start..], [cli, code, cli]);
+        assert_eq!(
+            fake.usage_proxies.lock().unwrap()[start..],
+            [
+                "http://127.0.0.1:7001",
+                "http://127.0.0.1:7001",
+                "http://127.0.0.1:7002"
+            ]
+        );
+        // Refused both ways: a rate limit, counted and paused once.
+        fake.usage.lock().unwrap().push((429, Value::Null));
+        fake.usage
+            .lock()
+            .unwrap()
+            .push((429, json!({"error": {"message": "Rate limited"}})));
+        *fake.usage_retry_after.lock().unwrap() = Some(5400);
+        let error = app.claude_refresh_usage(&id("bob")).await.unwrap_err();
+        assert_eq!(agents(&fake)[start + 3..], [cli, code]);
+        assert_eq!(
+            error,
+            "Claude usage request failed: HTTP 429 Rate limited; retry paused for 90 minutes"
+        );
+        let bob = app
+            .claude_load()
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|a| a.id == id("bob"))
+            .unwrap();
+        assert_eq!(bob.rate_limits, 1);
+    }
+
+    #[tokio::test]
+    async fn the_usage_retry_after_a_renewal_falls_back_as_well() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        fake.usage.lock().unwrap().push((429, Value::Null));
+        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(
+            agents(&fake),
+            [USAGE_USER_AGENT, USAGE_USER_AGENT, USER_AGENT]
+        );
+        assert_eq!(
+            usages(&fake),
+            ["alice-access", "fresh-access", "fresh-access"]
+        );
+    }
+
     #[derive(Default)]
     pub(super) struct Fake {
         usage: Mutex<Vec<(u16, Value)>>,
@@ -2835,6 +3021,7 @@ mod tests {
         refresh_scopes: Mutex<Vec<String>>,
         profile_proxies: Mutex<Vec<String>>,
         usage_tokens: Mutex<Vec<String>>,
+        usage_agents: Mutex<Vec<String>>,
         usage_proxies: Mutex<Vec<String>>,
         usage_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
@@ -2843,9 +3030,15 @@ mod tests {
         prepaid_requests: Mutex<Vec<(String, String)>>,
     }
     impl Network for Fake {
-        fn usage<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, UsageResponse> {
+        fn usage<'a>(
+            &'a self,
+            token: &'a str,
+            agent: &'a str,
+            proxy: &'a str,
+        ) -> Response<'a, UsageResponse> {
             Box::pin(async move {
                 self.usage_tokens.lock().unwrap().push(token.into());
+                self.usage_agents.lock().unwrap().push(agent.into());
                 self.usage_proxies.lock().unwrap().push(proxy.into());
                 let mut hooks = self.usage_hooks.lock().unwrap();
                 if !hooks.is_empty() {
