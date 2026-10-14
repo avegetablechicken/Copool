@@ -205,6 +205,8 @@ fn layout(w: &WebviewWindow, panel: &PanelState) {
     } else {
         w.set_position(tauri::PhysicalPosition::new(x, y))
     };
+    #[cfg(target_os = "linux")]
+    crate::backdrop::update(w, &m, x, y);
 }
 
 pub fn on_window_event(w: &tauri::Window, event: &WindowEvent) {

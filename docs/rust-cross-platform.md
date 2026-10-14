@@ -67,7 +67,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 - 本地 OpenAI 兼容代理：`/v1/models`、`/v1/responses`、`/v1/chat/completions`、SSE、模型映射、失败重试与代理请求中的 OAuth 刷新。
 - 代理密钥生成/轮换、回环监听、启动/停止、打开应用时自动启动代理的设置。
 - 界面采用 Coport（`../coding-agent-proxy/gui/ui`）风格：360 点宽的状态栏菜单式面板（启动时隐藏；点击状态栏图标在图标下方弹出，再次点击、失去焦点或 Esc 收起；高度随内容，最多屏幕高度的 85%；定位逻辑与 Coport 共用 `desktop/src/placement.rs`），顶部为应用名与文字链接（代理 · 设置 · 退出），子页面以“‹ 账号”返回（macOS ⌘[）；内容为带标题的浅色块、11 点系统字体、小号按钮/开关/下拉框和单色细进度条。展开时每个账号一个块，折叠时为对齐的单行列表；账号代理通过卡片上的地球按钮编辑，卡片没有右键菜单。导入菜单为 Coport 式面板内菜单（原生 Liquid Glass 材质）；此前已无入口的粘贴 auth.json / Refresh Token 导入对话框已移除，Refresh Token 导入的后端命令随后也已删除。此分支不再追求与 SwiftUI 布局逐项一致。
-- macOS 使用原生 Popover 材质（圆角 12 点）、透明 WebView 和系统语义色；Windows/Linux 使用对应的静态主题后备。
+- macOS 使用原生 Popover 材质（圆角 12 点）、透明 WebView 和系统语义色；Windows 使用静态主题后备。Linux 的合成器不向应用提供窗口背后模糊，面板改用 GNOME 当前壁纸模拟毛玻璃（`desktop/src/backdrop.rs`）：读取 `org.gnome.desktop.background`（GNOME 42 起深色样式用 `picture-uri-dark`），按面板所在显示器以 zoom（stretched 为拉伸，其余选项近似为 zoom）缩放到 1/4 逻辑分辨率，三次盒式模糊并提高饱和度，界面按窗口在显示器上的位置对齐并叠加浅/深色着色，圆角 12 点；面板内菜单以同一背景加更浓的着色呈现。壁纸或显示器变化时重新生成。其他窗口不会透过面板显示；无法读取设置或壁纸（如 XML 幻灯片壁纸）时使用 `primary-color` 纯色，仍失败则保留不透明后备。WebKitGTK 本机测试中 `backdrop-filter` 不产生模糊，因此菜单不依赖它。
 - macOS 字体保留 WebKit 系统字体的自动光学字号，不强制写入 `opsz` 数值。
 - macOS 图标由本机 AppKit 按准确逻辑尺寸生成 SF Symbols 的 1×/2×/3×资源；菜单栏使用原版 figure.pool.swim 模板符号。其他平台保留矢量图标与原应用图标资源。
 - 原版 11 种语言文案由 scripts/sync_rust_locales.py 同步，不另建翻译副本。
@@ -250,3 +250,5 @@ macOS 上 366 项核心测试、Rust 格式及 diff 检查通过，新增回归�
 - 上升或下落途中的卡片使用与拖动浮起时相同的不透明背景和阴影；动画进行中又发生重绘时，从当前的视觉位置接着动画。
 
 验证：`python3 scripts/test_rust.py` 通过（391 项核心测试、137 项前端测试，其中新增变形的首尾位置、过程中无空隙或重叠、曲线不回弹三项）。在 headless Chrome 中用桩数据逐项测量了位置和透明度随时间的变化：删除后下方两张卡片约 300ms 内上移补位，被删卡片的副本同时淡出，浮层随后移除；导入的卡片从内容区上方落到目标位置并轻微回弹，下方卡片下移让位；后台出现的卡片淡入；两张卡片排名互换时交叉滑动；在用 Swift 编写的 WKWebView 测试窗口中（透明叠在 NSVisualEffectView 上，宽 360px，按 `fit_panel` 实际调整窗口高度）测量：折叠和展开各两轮约 58fps，除首轮预热的一帧 35ms 外最长帧 18ms，面板高度随卡片逐帧收缩或增大；在 headless Chrome 中逐帧截图确认每一帧卡片首尾相接、共享元素向目标位置移动，结束后不留浮层或内联样式；新卡片分别从导入、添加按钮处以按钮宽度出发落到目标位置；切换池时新旧卡片按方向滑动，结束后不留浮层，也没有重复的 id。未在 Tauri GUI 中实机查看，未打包。
+
+2026-10-14（Linux 毛玻璃面板）：新增上述基于壁纸的 Linux 面板背景，PNG 经 `panel_backdrop` 命令以原始字节传给界面，再转为 data URL（CSP 的 img-src 不含 blob:）。验证在 Ubuntu 20.04（GNOME 3.36、X11、2 倍缩放，WebKitGTK 2.50.4）上进行：382 项核心测试、9 项桌面测试（新增模糊与 `primary-color` 解析）、137 项前端测试、UI 语法与 rustfmt 检查通过；独立 daemon 的离线检查因本机缓存缺少 `iri-string` 未能运行，本次未改动 daemon 源码。使用临时数据目录和私有 D-Bus 会话启动调试构建，截图确认浅色/深色面板及导入菜单的效果。KDE、Wayland、多显示器与其他壁纸选项未实机验证；macOS/Windows 行为不变，未在这两个平台运行。
