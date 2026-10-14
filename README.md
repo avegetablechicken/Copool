@@ -8,6 +8,11 @@ Copool is a cross-platform desktop app (macOS, Windows, Linux) that manages Code
 
 Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管理 Codex/ChatGPT 与 Claude Code 账号池、按用量智能切换，以及本地/远程 API 代理工作流。采用 Rust 核心与 Tauri 2 外壳。
 
+<p align="center">
+  <img src="./docs/demo-light.gif" alt="Copool main panel in light mode: collapsing and expanding the cards, switching between the Codex and Claude pools, dragging a card to reorder it, and activating a Sub2api provider" width="380" />
+  <img src="./docs/demo-dark.gif" alt="Copool main panel in dark mode: collapsing and expanding the cards, switching between the Codex and Claude pools, dragging a card to reorder it, and activating a Sub2api provider" width="380" />
+</p>
+
 ## Features / 功能
 
 - Two account pools, Codex and Claude Code, switched by the colored icons beside the app name (⌘1 / ⌘2)
