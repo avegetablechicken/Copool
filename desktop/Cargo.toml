@@ -25,4 +25,5 @@ objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSS
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSFontDescriptor", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gdk-pixbuf = "0.18"
+base64 = "0.22"
+gdk = "0.18"

@@ -88,7 +88,8 @@ pub fn show(app: &AppHandle, anchor: Option<Rect>) {
     let Some(w) = window(app) else {
         return;
     };
-    layout(&w, &panel);
+    let hidden = !w.is_visible().unwrap_or(false);
+    layout(&w, &panel, hidden);
     let _ = w.show();
     let _ = w.set_focus();
     let _ = w.emit("panel-shown", ());
@@ -129,7 +130,7 @@ pub fn fit(app: &AppHandle, height: f64) {
     let panel = state(app);
     *panel.content_height.lock().unwrap() = Some(height);
     if let Some(w) = window(app) {
-        layout(&w, &panel);
+        layout(&w, &panel, false);
     }
 }
 
@@ -172,8 +173,9 @@ fn bounds(m: &Monitor) -> Rect {
     }
 }
 
-/// Sizes and positions the window on the monitor holding the anchor.
-fn layout(w: &WebviewWindow, panel: &PanelState) {
+/// Sizes and positions the window on the monitor holding the anchor; with
+/// `appearing`, before the hidden panel is shown.
+fn layout(w: &WebviewWindow, panel: &PanelState, appearing: bool) {
     let anchor = *panel.anchor.lock().unwrap();
     let monitor = anchor
         .and_then(|a| {
@@ -206,7 +208,13 @@ fn layout(w: &WebviewWindow, panel: &PanelState) {
         w.set_position(tauri::PhysicalPosition::new(x, y))
     };
     #[cfg(target_os = "linux")]
-    crate::backdrop::update(w, &m, x, y);
+    if appearing {
+        crate::backdrop::capture(w, &m, x, y, WIDTH * unit);
+    } else {
+        crate::backdrop::follow(w, x, y);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = appearing;
 }
 
 pub fn on_window_event(w: &tauri::Window, event: &WindowEvent) {

@@ -529,15 +529,6 @@ fn fit_panel(app: tauri::AppHandle, height: f64) {
 fn hide_panel(app: tauri::AppHandle) {
     panel::hide(&app);
 }
-/// The panel's frosted backdrop as PNG (Linux).
-#[tauri::command]
-fn panel_backdrop() -> Result<tauri::ipc::Response, String> {
-    #[cfg(target_os = "linux")]
-    if let Some(png) = backdrop::png() {
-        return Ok(tauri::ipc::Response::new(png.to_vec()));
-    }
-    Err("No panel backdrop".into())
-}
 fn main() {
     let app = tauri::Builder::default()
         .on_window_event(panel::on_window_event)
@@ -664,7 +655,6 @@ fn main() {
             dismiss_workspace,
             fit_panel,
             hide_panel,
-            panel_backdrop,
             claude_accounts,
             claude_import_current,
             claude_import_account_file,

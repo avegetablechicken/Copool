@@ -1,6 +1,4 @@
 "use strict";
-if (navigator.userAgent.includes("Mac"))
-  document.documentElement.classList.add("macos");
 const $ = (id) => document.getElementById(id);
 const invoke = (command, args = {}) =>
   window.__TAURI__.core.invoke(command, args);
@@ -1813,30 +1811,17 @@ window.__TAURI__.event
   })
   .catch((error) => notice(error, true));
 
-// Linux has no system material behind the panel: the backend renders the
-// wallpaper under it, blurred, and reports where the window lies on it.
-let backdropVersion = 0;
-// A data URL, as the content security policy admits for images.
-const pngDataUrl = (bytes) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(new Blob([new Uint8Array(bytes)], { type: "image/png" }));
-  });
+// Linux has no system material behind the panel: the backend sends the screen
+// under it, blurred, and where the window lies on it. `image` is null when
+// unchanged and empty without a backdrop.
 window.__TAURI__.event
-  .listen("panel-backdrop", async ({ payload }) => {
+  .listen("panel-backdrop", ({ payload }) => {
     const root = document.documentElement;
     root.style.setProperty("--backdrop-size", `${payload.width}px ${payload.height}px`);
     root.style.setProperty("--backdrop-position", `${-payload.x}px ${-payload.y}px`);
-    if (payload.version === backdropVersion) return;
-    backdropVersion = payload.version;
-    const url = payload.version
-      ? await invoke("panel_backdrop").then(pngDataUrl).catch(() => null)
-      : null;
-    if (backdropVersion !== payload.version) return;
-    root.style.setProperty("--backdrop-image", url ? `url("${url}")` : "none");
-    root.classList.toggle("frosted", Boolean(url));
+    if (payload.image === null) return;
+    root.style.setProperty("--backdrop-image", payload.image ? `url("${payload.image}")` : "none");
+    root.classList.toggle("frosted", Boolean(payload.image));
   })
   .catch((error) => notice(error, true));
 

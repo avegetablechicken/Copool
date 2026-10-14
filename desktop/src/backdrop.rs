@@ -1,26 +1,33 @@
 //! A frosted backdrop for the panel on Linux, standing in for the macOS
 //! popover material: GNOME's compositor offers applications no blur of what
-//! lies behind a window. The backdrop is the desktop wallpaper as GNOME draws
-//! it on the panel's monitor, blurred and saturated; the web UI aligns it with
-//! the window and tints it. Other windows under the panel do not show through.
+//! lies behind a window. Before the panel appears, the screen under it is
+//! read (X11), blurred and saturated; the web UI aligns it with the window and
+//! tints it. It is a snapshot: what changes behind the open panel is not
+//! followed. Where the screen cannot be read (Wayland), the wallpaper as GNOME
+//! draws it on the panel's monitor stands in for it.
 
-use gdk_pixbuf::{gio, glib, prelude::*, Colorspace, Pixbuf};
-use serde::Serialize;
-use std::{
-    sync::{Arc, Mutex},
-    time::SystemTime,
+use base64::Engine;
+use gdk::{
+    gdk_pixbuf::{Colorspace, InterpType, Pixbuf},
+    gio, glib,
+    prelude::*,
 };
+use serde::Serialize;
+use std::{sync::Mutex, time::SystemTime};
 use tauri::{Emitter, Monitor, WebviewWindow};
 
-/// The backdrop has this fraction of the monitor's logical resolution; the
-/// blur hides the upscaling.
+/// The backdrop has this fraction of the logical resolution; the blur hides
+/// the upscaling.
 const DOWNSCALE: f64 = 4.0;
 /// Box blur radius in backdrop pixels. Three passes approximate a Gaussian of
 /// about 30 logical points, like the macOS popover material.
 const BLUR_RADIUS: usize = 6;
 const SATURATION: f32 = 1.6;
+/// Logical points read beside the panel, so that the blur near its edges
+/// draws on what lies there.
+const MARGIN: f64 = 80.0;
 
-/// What the backdrop is rendered from; a change renders it again.
+/// What a wallpaper backdrop is rendered from; a change renders it again.
 #[derive(Clone, Debug, PartialEq)]
 struct Source {
     uri: String,
@@ -31,111 +38,138 @@ struct Source {
     height: i32,
 }
 
-/// The window's place on its monitor in logical points. `version` names the
-/// rendered backdrop, 0 when there is none.
-#[derive(Clone, Copy, Default, Serialize)]
-struct Geometry {
+/// A rectangle in physical desktop pixels, with its monitor's scale.
+#[derive(Clone, Copy, Default)]
+struct Area {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    scale: f64,
+}
+
+impl Area {
+    fn of(monitor: &Monitor) -> Area {
+        let (p, s) = (monitor.position(), monitor.size());
+        Area {
+            x: p.x as f64,
+            y: p.y as f64,
+            w: s.width as f64,
+            h: s.height as f64,
+            scale: monitor.scale_factor(),
+        }
+    }
+
+    /// The backdrop's size in pixels.
+    fn pixels(&self) -> (usize, usize) {
+        let n = |v: f64| (v / self.scale / DOWNSCALE).round().max(1.0) as usize;
+        (n(self.w), n(self.h))
+    }
+}
+
+/// The backdrop's rectangle relative to the window, in logical points, and
+/// the backdrop as a PNG data URL when it changed ("" for none).
+#[derive(Clone, Serialize)]
+struct Payload {
     x: f64,
     y: f64,
     width: f64,
     height: f64,
-    version: u64,
+    image: Option<String>,
 }
 
 struct Cache {
-    source: Option<Source>,
-    rendering: Option<Source>,
-    png: Option<Arc<Vec<u8>>>,
-    version: u64,
-    geometry: Geometry,
-}
-
-impl Cache {
-    /// The version the UI is told, 0 without a rendered backdrop.
-    fn version(&self) -> u64 {
-        if self.png.is_some() {
-            self.version
-        } else {
-            0
-        }
-    }
+    /// Where the backdrop lies.
+    area: Area,
+    /// Set while the backdrop shows the wallpaper rendered from this source.
+    wallpaper: Option<Option<Source>>,
 }
 
 static CACHE: Mutex<Cache> = Mutex::new(Cache {
-    source: None,
-    rendering: None,
-    png: None,
-    version: 0,
-    geometry: Geometry {
+    area: Area {
         x: 0.0,
         y: 0.0,
-        width: 0.0,
-        height: 0.0,
-        version: 0,
+        w: 0.0,
+        h: 0.0,
+        scale: 0.0,
     },
+    wallpaper: None,
 });
 
-/// The rendered backdrop as PNG.
-pub fn png() -> Option<Arc<Vec<u8>>> {
-    CACHE.lock().unwrap().png.clone()
+/// Renders the backdrop for a panel about to appear at physical `(x, y)` on
+/// `monitor`, `width` pixels wide; the panel must not be on screen yet.
+pub fn capture(w: &WebviewWindow, monitor: &Monitor, x: f64, y: f64, width: f64) {
+    let screen = Area::of(monitor);
+    let margin = MARGIN * screen.scale;
+    let left = (x - margin).max(screen.x);
+    let right = (x + width + margin).min(screen.x + screen.w);
+    let column = Area {
+        x: left,
+        w: right - left,
+        ..screen
+    };
+    let mut cache = CACHE.lock().unwrap();
+    let image = if let Some(png) = grab(&column).and_then(frost) {
+        cache.area = column;
+        cache.wallpaper = None;
+        Some(png)
+    } else {
+        let (pw, ph) = screen.pixels();
+        let source = Source::current(pw as i32, ph as i32);
+        if cache.wallpaper.as_ref() == Some(&source) {
+            None
+        } else {
+            cache.area = screen;
+            let png = source.as_ref().and_then(wallpaper).and_then(frost);
+            cache.wallpaper = Some(source);
+            Some(png.unwrap_or_default())
+        }
+    };
+    emit(w, &cache.area, x, y, image);
 }
 
-/// Tells the UI where the window at physical `(x, y)` lies on `monitor`,
-/// rendering the backdrop first when the wallpaper or monitor changed.
-pub fn update(w: &WebviewWindow, monitor: &Monitor, x: f64, y: f64) {
-    let scale = monitor.scale_factor();
-    let (position, size) = (monitor.position(), monitor.size());
-    let (width, height) = (size.width as f64 / scale, size.height as f64 / scale);
-    let geometry = Geometry {
-        x: (x - position.x as f64) / scale,
-        y: (y - position.y as f64) / scale,
-        width,
-        height,
-        version: 0,
-    };
-    let source = Source::current(
-        (width / DOWNSCALE).round().max(1.0) as i32,
-        (height / DOWNSCALE).round().max(1.0) as i32,
-    );
-    let mut cache = CACHE.lock().unwrap();
-    cache.geometry = geometry;
-    if source == cache.source {
-        let version = cache.version();
-        drop(cache);
-        let _ = w.emit(
-            "panel-backdrop",
-            Geometry {
-                version,
-                ..geometry
-            },
-        );
-        return;
+/// Keeps the backdrop aligned with the panel moved to physical `(x, y)`.
+pub fn follow(w: &WebviewWindow, x: f64, y: f64) {
+    let area = CACHE.lock().unwrap().area;
+    if area.scale > 0.0 {
+        emit(w, &area, x, y, None);
     }
-    // A render under way emits the latest geometry when it finishes.
-    if source == cache.rendering {
-        return;
-    }
-    cache.rendering = source.clone();
-    drop(cache);
-    let w = w.clone();
-    std::thread::spawn(move || {
-        let png = source.as_ref().and_then(render);
-        let mut cache = CACHE.lock().unwrap();
-        if cache.rendering != source {
-            return;
-        }
-        cache.rendering = None;
-        cache.source = source;
-        cache.version += 1;
-        cache.png = png.map(Arc::new);
-        let version = cache.version();
-        let geometry = Geometry {
-            version,
-            ..cache.geometry
-        };
-        drop(cache);
-        let _ = w.emit("panel-backdrop", geometry);
+}
+
+fn emit(w: &WebviewWindow, area: &Area, x: f64, y: f64, png: Option<Vec<u8>>) {
+    let image = png.map(|png| match png.is_empty() {
+        true => String::new(),
+        false => format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png)
+        ),
     });
+    let _ = w.emit(
+        "panel-backdrop",
+        Payload {
+            x: (x - area.x) / area.scale,
+            y: (y - area.y) / area.scale,
+            width: area.w / area.scale,
+            height: area.h / area.scale,
+            image,
+        },
+    );
+}
+
+/// The screen in `area` at backdrop resolution, as X11 lets any client read it.
+fn grab(area: &Area) -> Option<(Vec<f32>, usize, usize)> {
+    let display = gdk::Display::default()?;
+    if display.type_().name() != "GdkX11Display" {
+        return None;
+    }
+    let root = gdk::Screen::default()?.root_window()?;
+    // The root window counts in pixels of GDK's scale.
+    let s = root.scale_factor() as f64;
+    let at = |v: f64| (v / s).round() as i32;
+    let full = root.pixbuf(at(area.x), at(area.y), at(area.w), at(area.h))?;
+    let (w, h) = area.pixels();
+    let small = full.scale_simple(w as i32, h as i32, InterpType::Bilinear)?;
+    Some((pixels(&small), w, h))
 }
 
 fn settings(schema: &str) -> Option<gio::Settings> {
@@ -267,12 +301,18 @@ fn box_pass(src: &[f32], dst: &mut [f32], w: usize, h: usize, horizontal: bool) 
     }
 }
 
-fn render(source: &Source) -> Option<Vec<u8>> {
+/// The wallpaper, or GNOME's background color without one, at backdrop resolution.
+fn wallpaper(source: &Source) -> Option<(Vec<f32>, usize, usize)> {
     let (w, h) = (source.width as usize, source.height as usize);
-    let mut rgb = match picture(source) {
+    let rgb = match picture(source) {
         Some(pixbuf) => pixels(&pixbuf),
         None => solid(&source.color, w, h)?,
     };
+    Some((rgb, w, h))
+}
+
+/// Blurs and saturates an image into a PNG.
+fn frost((mut rgb, w, h): (Vec<f32>, usize, usize)) -> Option<Vec<u8>> {
     let mut scratch = vec![0.0; rgb.len()];
     for _ in 0..3 {
         box_pass(&rgb, &mut scratch, w, h, true);
