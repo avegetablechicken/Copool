@@ -137,6 +137,10 @@ async fn save_account_proxy(app: State<'_, App>, id: String, value: String) -> R
     app.save_account_proxy(&id, &value).await
 }
 #[tauri::command]
+async fn set_renewal(app: State<'_, App>, id: String, renewal: String) -> Result<(), String> {
+    app.set_renewal(&id, &renewal).await
+}
+#[tauri::command]
 fn configuration(app: State<'_, App>) -> Result<copool_core::settings::Settings, String> {
     app.configuration()
 }
@@ -267,6 +271,14 @@ async fn claude_save_account_proxy(
     value: String,
 ) -> Result<(), String> {
     app.claude_save_account_proxy(&id, &value).await
+}
+#[tauri::command]
+async fn claude_set_renewal(
+    app: State<'_, App>,
+    id: String,
+    renewal: String,
+) -> Result<(), String> {
+    app.claude_set_renewal(&id, &renewal).await
 }
 #[tauri::command]
 fn claude_sub2api_providers(
@@ -646,6 +658,7 @@ fn main() {
             quit_app,
             native_icons::native_symbols,
             save_account_proxy,
+            set_renewal,
             configuration,
             provider_definitions,
             current_provider,
@@ -679,6 +692,7 @@ fn main() {
             claude_smart_switch,
             claude_refresh_usage,
             claude_save_account_proxy,
+            claude_set_renewal,
             claude_sub2api_providers,
             claude_save_sub2api_provider,
             claude_remove_sub2api_provider,

@@ -1122,3 +1122,71 @@ async fn testRefreshUsageKeepsAuthSwitchedOutsideCopool() {
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(current["tokens"]["access_token"], "refreshed-test-only");
 }
+#[tokio::test]
+async fn testTokenRenewalChoiceHoldsBackOrAllowsOneRenewal() {
+    let (_dir, app, network) = super::network_fixture::fixture();
+    let mut a = stored("a", "a", "account-1");
+    a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1})).into();
+    save_fixture(&app, json!({"accounts":[a]}));
+    let calls = || {
+        network
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|v| v.0.clone())
+            .collect::<Vec<_>>()
+    };
+    let saved = || {
+        crate::repository::load_accounts(&app.paths.store())
+            .unwrap()
+            .accounts[0]
+            .clone()
+    };
+    // Without a choice, always.
+    assert_eq!(
+        app.accounts().await.unwrap()[0].renewal.as_deref(),
+        Some("always")
+    );
+    assert!(saved().extra.get("renewal").is_none());
+    // Never: the expired login is reported, not renewed.
+    app.set_renewal("a", "never").await.unwrap();
+    let _ = app.refresh_usage("a").await;
+    assert!(calls().is_empty());
+    assert_eq!(
+        saved().usage_error.as_deref(),
+        Some(crate::models::RENEWAL_OFF)
+    );
+    assert_eq!(
+        app.accounts().await.unwrap()[0].renewal.as_deref(),
+        Some("never")
+    );
+    // Once: renewed, then never.
+    app.set_renewal("a", "once").await.unwrap();
+    app.refresh_usage("a").await.unwrap();
+    assert_eq!(calls(), ["refresh", "usage"]);
+    assert_eq!(
+        saved().auth_json["tokens"]["access_token"],
+        "refreshed-test-only"
+    );
+    assert_eq!(saved().extra["renewal"], "never");
+    assert_eq!(
+        app.accounts().await.unwrap()[0].renewal.as_deref(),
+        Some("never")
+    );
+    // Refused as expired by usage, it is not renewed again.
+    *network.usage_error.lock().unwrap() = Some("Provided authentication token is expired".into());
+    let _ = app.refresh_usage("a").await;
+    assert_eq!(calls(), ["refresh", "usage", "usage"]);
+    assert_eq!(
+        saved().usage_error.as_deref(),
+        Some(crate::models::RENEWAL_OFF)
+    );
+    // Always renews again; unknown choices and accounts are refused.
+    app.set_renewal("a", "always").await.unwrap();
+    let _ = app.refresh_usage("a").await;
+    assert_eq!(calls()[3..], ["usage", "refresh", "usage"]);
+    assert_eq!(saved().extra["renewal"], "always");
+    assert!(app.set_renewal("a", "sometimes").await.is_err());
+    assert!(app.set_renewal("missing", "never").await.is_err());
+}

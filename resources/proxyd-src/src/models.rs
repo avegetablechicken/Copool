@@ -101,6 +101,10 @@ pub struct AccountSummary {
     /// When the access token expires (Unix seconds); a later usage refresh
     /// renews it. None without a readable expiry.
     pub token_expires_at: Option<i64>,
+    /// Whether the Claude pool renews the account's tokens, as in effect:
+    /// "never", "once" or "always". None for other accounts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub renewal: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -410,7 +414,27 @@ pub(crate) struct AppSettingsPatch {
     pub(crate) locale: Option<AppLocale>,
 }
 
+/// Whether Copool renews an account's tokens. Without a choice it always
+/// does; "once" turns into "never" after a renewal.
+pub(crate) const RENEWALS: [&str; 3] = ["never", "once", "always"];
+pub(crate) const RENEWAL_OFF: &str = "Token renewal is off for this account";
 impl StoredAccount {
+    pub(crate) fn renewal(&self) -> &'static str {
+        let chosen = self.extra.get("renewal").and_then(Value::as_str);
+        RENEWALS
+            .into_iter()
+            .find(|choice| Some(*choice) == chosen)
+            .unwrap_or("always")
+    }
+    pub(crate) fn renews(&self) -> bool {
+        self.renewal() != "never"
+    }
+    /// After a renewal: a single one allowed is used.
+    pub(crate) fn renewed(&mut self) {
+        if self.renewal() == "once" {
+            self.extra.insert("renewal".into(), "never".into());
+        }
+    }
     /// Newly imported and not yet released by a manual refresh: no request
     /// goes upstream for it until then.
     pub(crate) fn awaiting_first_request(&self) -> bool {
@@ -463,6 +487,7 @@ impl StoredAccount {
             awaiting_first_request: self.awaiting_first_request(),
             token_expires_at: crate::auth::access_token_expiry(&self.auth_json)
                 .and_then(displayed_expiry),
+            renewal: None,
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),

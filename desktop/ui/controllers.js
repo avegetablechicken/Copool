@@ -336,6 +336,12 @@
       await this.load();
       this.onMutation();
     }
+    /// Claude only: "never", "once" or "always".
+    async setRenewal(id, renewal) {
+      await this.invoke("set_renewal", { id, renewal });
+      await this.load();
+      this.onMutation();
+    }
     importDocument(content) {
       return this.runImport(() => this.invoke("import_json", { content }));
     }

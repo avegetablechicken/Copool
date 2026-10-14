@@ -88,14 +88,24 @@ pub(crate) struct FetchFailure {
     pub message: String,
 }
 
+/// Usage for a login, renewing it first when it has expired, or once after
+/// usage refuses it as expired; never when `renews` is false.
 pub(crate) async fn fetch(
     network: &dyn AccountNetwork,
     original: &Value,
     proxy: &str,
     now: i64,
+    renews: bool,
 ) -> Result<(Value, UsageSnapshot), FetchFailure> {
     let mut auth = original.clone();
+    let held_back = |auth: Value| FetchFailure {
+        auth,
+        message: crate::models::RENEWAL_OFF.into(),
+    };
     let expired = crate::auth::access_token_expiry(&auth).is_some_and(|exp| exp <= now);
+    if expired && !renews {
+        return Err(held_back(auth));
+    }
     if expired {
         auth = match network.refresh(&auth, proxy).await {
             Ok(refreshed) => refreshed,
@@ -104,6 +114,7 @@ pub(crate) async fn fetch(
     }
     match network.usage(&auth, proxy).await {
         Ok(usage) => Ok((auth, usage)),
+        Err(error) if expired_error(&error) && !renews => Err(held_back(auth)),
         Err(error) if expired_error(&error) => {
             auth = match network.refresh(&auth, proxy).await {
                 Ok(refreshed) => refreshed,

@@ -461,6 +461,10 @@
 "error.sub2api.proxy_invalid" = "ポートを含む有効な HTTP、HTTPS、SOCKS5 プロキシ URL を入力してください（ユーザー名・パスワードは指定できません）。";
 
 "accounts.proxy.title" = "アカウントのプロキシ";
+"accounts.renewal.title" = "トークンの更新";
+"accounts.renewal.never" = "更新しない";
+"accounts.renewal.once" = "1 回だけ更新";
+"accounts.renewal.always" = "常に更新";
 "accounts.proxy.provider_help" = "HTTP、HTTPS、SOCKS5 に対応。空欄の場合は Provider のプロキシ設定を使用します。";
 "accounts.proxy.unsupported" = "このネットワークサービスはアカウント別のプロキシに対応していません。";
 

@@ -536,6 +536,7 @@ impl Application {
             .map(|a| {
                 let mut summary = a.to_summary(None);
                 summary.is_current = selected.as_ref().is_some_and(|id| *id == a.id);
+                summary.renewal = Some(a.renewal().into());
                 // Codex renews the login it uses in auth.json; until a refresh
                 // adopts it, that token's expiry is the one in effect.
                 if let Some(live) = live.as_ref().filter(|l| newer_login(l, &a.auth_json)) {
@@ -737,6 +738,22 @@ impl Application {
         account.proxy_url = proxy_url.trim().to_string();
         self.persist_accounts(&saved)
     }
+    /// Sets whether Copool renews an account's tokens: "never", "once" (then
+    /// never) or "always".
+    pub async fn set_renewal(&self, id: &str, renewal: &str) -> Result<()> {
+        if !crate::models::RENEWALS.contains(&renewal) {
+            return Err(format!("Unknown token renewal: {renewal}"));
+        }
+        let _lock = self.state.store_lock.lock().await;
+        let mut saved = store::load_store_from_path(&self.paths.store())?;
+        let account = saved
+            .accounts
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or("Account not found")?;
+        account.extra.insert("renewal".into(), renewal.into());
+        self.persist_accounts(&saved)
+    }
     pub async fn delete_account(&self, id: &str) -> Result<()> {
         if let Some((provider, account)) = self.cached_provider_account(id)? {
             let _op = self.operations.lock().await;
@@ -910,8 +927,14 @@ impl Application {
             auth_json,
             &self.account_proxy(&account.proxy_url)?,
             now_unix_seconds(),
+            account.renews(),
         )
         .await;
+        let renewed = match &result {
+            Ok((auth, _)) | Err(crate::account_network::FetchFailure { auth, .. }) => {
+                auth != auth_json
+            }
+        };
         let _lock = self.state.store_lock.lock().await;
         let mut saved = store::load_store_from_path(&self.paths.store())?;
         let current = saved.extra.get("currentAccountId").and_then(Value::as_str) == Some(id);
@@ -921,6 +944,9 @@ impl Application {
             target
                 .extra
                 .insert("usageStateUpdatedAt".into(), target.updated_at.into());
+            if renewed {
+                target.renewed();
+            }
             match &result {
                 Ok((auth, value)) => {
                     target.usage = Some(value.clone());

@@ -471,6 +471,10 @@
 "error.sub2api.proxy_invalid" = "Enter a valid HTTP, HTTPS or SOCKS5 proxy URL with a port (no username or password).";
 
 "accounts.proxy.title" = "Account proxy";
+"accounts.renewal.title" = "Token renewal";
+"accounts.renewal.never" = "Never renew";
+"accounts.renewal.once" = "Renew once";
+"accounts.renewal.always" = "Always renew";
 "accounts.proxy.provider_help" = "HTTP, HTTPS or SOCKS5. Leave blank to inherit the Provider proxy.";
 "accounts.proxy.unsupported" = "This network service does not support an account proxy.";
 

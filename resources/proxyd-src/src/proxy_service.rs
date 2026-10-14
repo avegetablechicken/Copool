@@ -163,6 +163,8 @@ struct ProxyCandidate {
     plan_type: Option<String>,
     added_at: i64,
     usage: Option<UsageSnapshot>,
+    /// The account's renewal choice allows renewing its tokens.
+    renews: bool,
 }
 
 #[derive(Clone)]
@@ -1812,7 +1814,9 @@ fn account_to_proxy_candidate(account: StoredAccount) -> Option<ProxyCandidate> 
     } else {
         extract_auth(&account.auth_json).ok()?
     };
+    let renews = account.renews();
     Some(ProxyCandidate {
+        renews,
         is_preferred_current: false,
         id: account.id,
         label: account.label,
@@ -2126,6 +2130,9 @@ async fn refresh_proxy_candidate_auth(
     storage: &ProxyStorageContext,
     candidate: &ProxyCandidate,
 ) -> Result<ProxyCandidate, String> {
+    if !candidate.renews {
+        return Err(crate::models::RENEWAL_OFF.into());
+    }
     let refreshed_auth_json =
         refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?;
     // A login renewed elsewhere in the meantime is the one to retry with.
@@ -2141,6 +2148,7 @@ async fn refresh_proxy_candidate_auth(
         .map_err(|error| format!("刷新后解析账号登录态失败: {error}"))?;
 
     Ok(ProxyCandidate {
+        renews: candidate.renews,
         is_preferred_current: candidate.is_preferred_current,
         id: candidate.id.clone(),
         label: candidate.label.clone(),
@@ -2176,6 +2184,7 @@ async fn persist_refreshed_candidate_auth(
         }
         account.auth_json = refreshed_auth_json.clone();
         account.updated_at = now_unix_seconds();
+        account.renewed();
     }
 
     save_store_to_path(&store_path, &store)?;
@@ -3435,7 +3444,8 @@ mod tests {
     use super::DEFAULT_PROXY_REQUEST_BODY_LIMIT_BYTES;
     use super::MODELS;
     use super::{
-        new_proxy_storage_context, persist_candidate_usage_result, persist_refreshed_candidate_auth,
+        new_proxy_storage_context, persist_candidate_usage_result,
+        persist_refreshed_candidate_auth, refresh_proxy_candidate_auth,
     };
     use crate::models::UsageSnapshot;
     use crate::models::UsageWindow;
@@ -4263,6 +4273,71 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
     }
 
     #[tokio::test]
+    async fn the_renewal_choice_holds_back_or_spends_a_proxy_renewal() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        // Turned off, a candidate is not renewed: no request is made.
+        let mut candidate = make_proxy_candidate("bob", "team", None, None, 1);
+        candidate.renews = false;
+        assert_eq!(
+            refresh_proxy_candidate_auth(&storage, &candidate)
+                .await
+                .err()
+                .as_deref(),
+            Some(crate::models::RENEWAL_OFF)
+        );
+        // A renewal made through the proxy spends a single one allowed.
+        let account = |id: &str, renewal: Option<&str>| {
+            let mut value = json!({"id":id,"label":id,"accountId":"team","authJson":{"tokens":{"access_token":id,"id_token":"test","account_id":"team"}},"addedAt":1,"updatedAt":1});
+            if let Some(renewal) = renewal {
+                value["renewal"] = renewal.into();
+            }
+            value
+        };
+        let saved = serde_json::from_value(json!({"accounts":[
+            account("once", Some("once")),
+            account("always", Some("always")),
+            account("default", None),
+        ]}))
+        .unwrap();
+        let path = account_store_path_from_data_dir(dir.path());
+        save_store_to_path(&path, &saved).unwrap();
+        for id in ["once", "always", "default"] {
+            let from = account(id, None)["authJson"].clone();
+            persist_refreshed_candidate_auth(&storage, id, &from, &json!({"updated": id}))
+                .await
+                .unwrap();
+        }
+        let saved = load_store_from_path(&path).unwrap();
+        let renewals: Vec<_> = saved
+            .accounts
+            .iter()
+            .map(|a| (a.renewal(), a.extra.get("renewal").cloned()))
+            .collect();
+        assert_eq!(
+            renewals,
+            [
+                ("never", Some(json!("never"))),
+                ("always", Some(json!("always"))),
+                ("always", None),
+            ]
+        );
+        let candidates: Vec<_> = saved
+            .accounts
+            .into_iter()
+            .map(|a| (a.renewal(), a.renews()))
+            .collect();
+        assert_eq!(
+            candidates,
+            [("never", false), ("always", true), ("always", true)]
+        );
+    }
+
+    #[tokio::test]
     async fn a_late_renewal_keeps_the_login_stored_since() {
         let dir = tempfile::tempdir().unwrap();
         let storage = new_proxy_storage_context(
@@ -4372,6 +4447,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         added_at: i64,
     ) -> ProxyCandidate {
         ProxyCandidate {
+            renews: true,
             is_preferred_current: false,
             id: id.to_string(),
             label: id.to_string(),

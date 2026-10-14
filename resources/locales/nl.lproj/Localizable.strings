@@ -443,6 +443,10 @@
 "error.sub2api.proxy_invalid" = "Voer een geldige HTTP-, HTTPS- of SOCKS5-proxy-URL met poort in (zonder gebruikersnaam of wachtwoord).";
 
 "accounts.proxy.title" = "Accountproxy";
+"accounts.renewal.title" = "Tokenvernieuwing";
+"accounts.renewal.never" = "Nooit vernieuwen";
+"accounts.renewal.once" = "Eén keer vernieuwen";
+"accounts.renewal.always" = "Altijd vernieuwen";
 "accounts.proxy.provider_help" = "HTTP, HTTPS of SOCKS5. Laat leeg om de proxy van de Provider te gebruiken.";
 "accounts.proxy.unsupported" = "Deze netwerkdienst ondersteunt geen accountproxy.";
 

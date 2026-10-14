@@ -629,6 +629,9 @@ struct Stored {
     /// so Claude Code renewing that login rotates it away.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     in_live: bool,
+    /// The user's choice of whether to renew the tokens; none for the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    renewal: Option<Renewal>,
 }
 impl Stored {
     fn is_rejected(&self, oauth: &Value) -> bool {
@@ -697,6 +700,7 @@ impl Stored {
             is_current: current,
             awaiting_first_request: self.first_request_pending,
             token_expires_at: crate::models::displayed_expiry(expires_at(&self.oauth) / 1000),
+            renewal: Some(Renewal::of(self.renewal).as_str().into()),
         }
     }
 }
@@ -707,6 +711,35 @@ struct Live {
     document: Value,
     account: Option<Value>,
     held: Held,
+}
+/// Whether Copool renews an account's tokens; without a choice, always.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Renewal {
+    Never,
+    /// Once, then never.
+    Once,
+    Always,
+}
+impl Renewal {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "never" => Ok(Self::Never),
+            "once" => Ok(Self::Once),
+            "always" => Ok(Self::Always),
+            _ => Err(format!("Unknown token renewal: {value}")),
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::Once => "once",
+            Self::Always => "always",
+        }
+    }
+    fn of(choice: Option<Self>) -> Self {
+        choice.unwrap_or(Self::Always)
+    }
 }
 /// Where a login was read: the Keychain item, or the file Claude Code reads
 /// while the item is missing.
@@ -1348,6 +1381,7 @@ fn changed_live_oauth(
 }
 
 const CREDENTIALS_CHANGED: &str = "Claude credentials changed during refresh; retry usage";
+use crate::models::RENEWAL_OFF;
 /// Claude refused a refresh token; shown as an expired sign-in.
 const REFRESH_REJECTED: &str = "Claude rejected the refresh token";
 /// Renewing rotates the refresh token: the login Claude Code may be using is
@@ -1583,7 +1617,8 @@ impl Application {
             .accounts
             .iter()
             .map(|a| {
-                a.summary(official && store.current_account_id.as_deref() == Some(a.id.as_str()))
+                let current = store.current_account_id.as_deref() == Some(a.id.as_str());
+                a.summary(official && current)
             })
             .chain(sub2api::summaries(&store, provider))
             .collect();
@@ -1639,6 +1674,7 @@ impl Application {
                     alternates: Vec::new(),
                     rejected: Vec::new(),
                     in_live: current,
+                    renewal: None,
                 });
                 (id, defer)
             }
@@ -2022,6 +2058,9 @@ impl Application {
         if !holds_tokens(&account) {
             return Err(VAULT_LOCKED.into());
         }
+        // Renewal off: an expired account is reported, never renewed, and
+        // nothing is written back to Claude Code.
+        let held_back = (Renewal::of(account.renewal) == Renewal::Never).then_some(RENEWAL_OFF);
         if account
             .usage_retry_at
             .is_some_and(|until| until > now_unix_seconds())
@@ -2045,6 +2084,7 @@ impl Application {
         let mut rejected: Vec<String> = Vec::new();
         // `oauth` came from a token response, which proves it.
         let mut renewed = false;
+        let mut renewals = 0;
         // `oauth` is what Claude Code's login holds.
         let mut in_live;
         let mut profiled = None;
@@ -2075,6 +2115,9 @@ impl Application {
                         {
                             return Err(CREDENTIALS_CHANGED.into());
                         }
+                        if let Some(reason) = held_back {
+                            return Err(reason.into());
+                        }
                         let token = token.ok_or(REFRESH_REJECTED)?;
                         match network.refresh(&token, &scope, proxy).await {
                             Err(error) if error == SIGN_IN_EXPIRED => Err(REFRESH_REJECTED.into()),
@@ -2087,6 +2130,7 @@ impl Application {
                     let tokens = refresh(&oauth).await?;
                     apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                     renewed = true;
+                    renewals += 1;
                 }
                 // An account imported without its name is probed first, through
                 // its own proxy.
@@ -2097,6 +2141,7 @@ impl Application {
                             let tokens = refresh(&oauth).await?;
                             apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                             renewed = true;
+                            renewals += 1;
                             let token = text(&oauth["accessToken"]).unwrap_or_default();
                             network.profile(&token, proxy).await
                         }
@@ -2121,6 +2166,7 @@ impl Application {
                     let tokens = refresh(&oauth).await?;
                     apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                     renewed = true;
+                    renewals += 1;
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
                     (status, body, after) = self.claude_usage(&*network, &token, proxy).await?;
                 }
@@ -2248,6 +2294,7 @@ impl Application {
                         .chain(&account.rejected)
                         .any(|print| fingerprint(current).as_ref() == Some(print));
                     if same_account
+                        && held_back.is_none()
                         && same_oauth_generation(old, current)
                         && (dead || !same_oauth_generation(&oauth, &account.oauth))
                         && !same_oauth_generation(&oauth, current)
@@ -2311,6 +2358,10 @@ impl Application {
                 .cloned()
                 .collect();
             target.alternates = alternates;
+            // A single renewal allowed has been used.
+            if renewals > 0 && target.renewal == Some(Renewal::Once) {
+                target.renewal = Some(Renewal::Never);
+            }
             if oauth != account.oauth {
                 let previous = std::mem::replace(&mut target.oauth, oauth);
                 if !same_login(&previous, &account.oauth) {
@@ -2371,6 +2422,20 @@ impl Application {
                 .insert(proxy.to_owned(), now + CLI_REFUSAL_SECONDS);
         }
         network.usage(token, USER_AGENT, proxy).await
+    }
+    /// Sets whether Copool renews an account's tokens: "never", "once" (then
+    /// never) or "always".
+    pub async fn claude_set_renewal(&self, id: &str, renewal: &str) -> Result<()> {
+        let renewal = Renewal::parse(renewal)?;
+        let _lock = self.claude.lock.lock().await;
+        let mut store = self.claude_load()?;
+        let account = store
+            .accounts
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or("Account not found")?;
+        account.renewal = Some(renewal);
+        self.claude_save(&store)
     }
     /// A manual refresh lets new accounts contact upstream: one account, or
     /// all of them without an id.
@@ -3687,6 +3752,167 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_login_claude_code_reads_from_its_file_is_renewed_back_into_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = file_login_app(&dir);
+        sign_in(&location, "alice", 1);
+        app.claude_import_current().await.unwrap();
+        let alice = app.claude_load().unwrap().accounts[0].id.clone();
+        app.claude_release_new_accounts(Some(&alice)).await.unwrap();
+        // By default renewed, and the renewal goes back to the file it was
+        // read from, never to a new Keychain item.
+        app.claude_refresh_usage(&alice).await.unwrap();
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
+        assert_eq!(live_access(&location), "fresh-access");
+        let document: Value =
+            serde_json::from_slice(&fs::read(location.credentials_file()).unwrap()).unwrap();
+        assert_eq!(document["mcpOAuth"]["kept"], true);
+        // Renewal turned off: the file is followed, not renewed nor written.
+        app.claude_set_renewal(&alice, "never").await.unwrap();
+        external_update(location.clone(), "alice", "alice-synced")();
+        let synced = fs::read(location.credentials_file()).unwrap();
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        assert_eq!(
+            app.claude_refresh_usage(&alice).await.unwrap_err(),
+            RENEWAL_OFF
+        );
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
+        assert_eq!(fs::read(location.credentials_file()).unwrap(), synced);
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["accessToken"],
+            "alice-synced"
+        );
+    }
+
+    /// A pool whose current login Claude Code reads from its file, with
+    /// Copool's tokens in memory.
+    fn file_login_app(dir: &tempfile::TempDir) -> (Application, Location, Arc<Fake>) {
+        let (app, files, fake) = waiting_app(dir);
+        let location = Location {
+            keychain: Some(format!(
+                "io.github.copool.rust.test-absent-{}",
+                std::process::id()
+            )),
+            ..files
+        };
+        app.set_claude_location(location.clone());
+        app.set_claude_vault(Arc::new(MemoryVault::default()));
+        (app, location, fake)
+    }
+    async fn renewals(app: &Application) -> Vec<(String, Option<String>)> {
+        app.claude_accounts()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.label, a.renewal))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_renewal_choice_holds_back_overrides_or_allows_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = file_login_app(&dir);
+        sign_in(&location, "alice", 1);
+        app.claude_import_current().await.unwrap();
+        let (bob, account) = login("bob", 1);
+        app.claude_import_json(&export(&bob, &account))
+            .await
+            .unwrap();
+        app.claude_release_new_accounts(None).await.unwrap();
+        let id = |user: &str| {
+            app.claude_load()
+                .unwrap()
+                .accounts
+                .into_iter()
+                .find(|a| a.label == format!("{user}@example.com"))
+                .unwrap()
+                .id
+        };
+        let (alice, bob) = (id("alice"), id("bob"));
+        // By default every account, the file login included, is renewed.
+        let mut cards = renewals(&app).await;
+        cards.sort();
+        assert_eq!(
+            cards,
+            [
+                ("alice@example.com".to_string(), Some("always".to_string())),
+                ("bob@example.com".to_string(), Some("always".to_string())),
+            ]
+        );
+        // Never: an expired account is reported, not renewed.
+        app.claude_set_renewal(&bob, "never").await.unwrap();
+        assert_eq!(
+            app.claude_refresh_usage(&bob).await.unwrap_err(),
+            RENEWAL_OFF
+        );
+        assert!(refreshes(&fake).is_empty());
+        // Once: renewed once, then never again.
+        app.claude_set_renewal(&bob, "once").await.unwrap();
+        let card = |label: &str, cards: Vec<(String, Option<String>)>| {
+            cards.into_iter().find(|c| c.0 == label).unwrap().1
+        };
+        assert_eq!(
+            card("bob@example.com", renewals(&app).await).as_deref(),
+            Some("once")
+        );
+        app.claude_refresh_usage(&bob).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-refresh"]);
+        assert_eq!(
+            card("bob@example.com", renewals(&app).await).as_deref(),
+            Some("never")
+        );
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        assert_eq!(
+            app.claude_refresh_usage(&bob).await.unwrap_err(),
+            RENEWAL_OFF
+        );
+        assert_eq!(refreshes(&fake), ["bob-refresh"]);
+        // Always, chosen or by default, renews the file login into its file.
+        app.claude_set_renewal(&alice, "always").await.unwrap();
+        app.claude_refresh_usage(&alice).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-refresh", "alice-refresh"]);
+        assert_eq!(live_access(&location), "fresh-access");
+        assert_eq!(
+            card("alice@example.com", renewals(&app).await).as_deref(),
+            Some("always")
+        );
+        // The choice is stored; an unknown one or account is refused.
+        let saved: Value = serde_json::from_str(&store_text(&app)).unwrap();
+        let choices: Vec<_> = saved["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["renewal"].clone())
+            .collect();
+        assert!(choices.contains(&json!("always")) && choices.contains(&json!("never")));
+        assert!(app.claude_set_renewal(&bob, "sometimes").await.is_err());
+        assert!(app.claude_set_renewal("missing", "always").await.is_err());
+    }
+
+    #[test]
+    fn renewal_choices_read_and_default_as_shown() {
+        for (text, choice) in [
+            ("never", Renewal::Never),
+            ("once", Renewal::Once),
+            ("always", Renewal::Always),
+        ] {
+            assert_eq!(Renewal::parse(text), Ok(choice));
+            assert_eq!(choice.as_str(), text);
+            assert_eq!(serde_json::to_value(choice).unwrap(), json!(text));
+            assert_eq!(Renewal::of(Some(choice)), choice);
+        }
+        assert_eq!(Renewal::of(None), Renewal::Always);
+        assert!(Renewal::parse("Never").is_err());
+        let legacy = json!({"id": "a", "label": "a", "oauth": {}, "account": {}, "addedAt": 1, "updatedAt": 1});
+        let stored: Stored = serde_json::from_value(legacy).unwrap();
+        assert_eq!(stored.renewal, None);
+        assert!(serde_json::to_value(&stored)
+            .unwrap()
+            .get("renewal")
+            .is_none());
+    }
+
+    #[tokio::test]
     async fn background_work_never_asks_for_keychain_access() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Arc::new(MemoryVault::default());
@@ -4155,6 +4381,7 @@ mod tests {
             alternates: Vec::new(),
             rejected: Vec::new(),
             in_live: false,
+            renewal: None,
         };
         let generation = |refresh: &str, expires: i64| {
             let (mut oauth, _) = login("alice", expires);

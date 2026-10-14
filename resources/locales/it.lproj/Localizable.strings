@@ -443,6 +443,10 @@
 "error.sub2api.proxy_invalid" = "Inserisci un URL proxy HTTP, HTTPS o SOCKS5 valido con porta (senza nome utente o password).";
 
 "accounts.proxy.title" = "Proxy dell’account";
+"accounts.renewal.title" = "Rinnovo del token";
+"accounts.renewal.never" = "Non rinnovare mai";
+"accounts.renewal.once" = "Rinnova una volta";
+"accounts.renewal.always" = "Rinnova sempre";
 "accounts.proxy.provider_help" = "HTTP, HTTPS o SOCKS5. Lascia vuoto per usare il proxy del Provider.";
 "accounts.proxy.unsupported" = "Questo servizio di rete non supporta un proxy per account.";
 

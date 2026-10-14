@@ -32,6 +32,7 @@ const CLAUDE_COMMANDS = {
   import_account_file: "claude_import_account_file",
   delete_account: "claude_delete_account",
   save_account_proxy: "claude_save_account_proxy",
+  set_renewal: "claude_set_renewal",
   refresh_usage: "claude_refresh_usage",
   refresh_provider: "claude_refresh_provider",
   switch_account: "claude_switch_account",
@@ -57,6 +58,8 @@ const ICONS = {
     '<circle cx="11" cy="11" r="8.7"/><ellipse cx="11" cy="11" rx="4" ry="8.7" transform="rotate(-23 11 11)"/><path d="M3.4 6.8c3.5 3.7 8.8 6.5 16.1 7.2M4 16c4.9-.4 10-3 13.9-8.3"/>',
   plus: '<path d="M11 3v16M3 11h16"/>',
   refresh: '<path d="M18 8a8 8 0 1 0 .4 6M18 3v5h-5"/>',
+  renewal:
+    '<path d="M18.6 12.5A7.7 7.7 0 1 1 16.3 5.4M17 2.4v3.8h-3.8"/><path d="M11 7.2V11l2.6 1.8"/>',
   "chevron-up": '<path d="m5 14 6-6 6 6"/>',
   "chevron-down": '<path d="m5 8 6 6 6-6"/>',
   trash: '<path d="M3 5h16M8 5V3h6v2M5 5l1 15h10l1-15M9 8v9M13 8v9"/>',
@@ -501,8 +504,41 @@ function accountManagement(account, group = null, title = null) {
   });
   remove.title = tr("common.remove");
   remove.setAttribute("aria-label", `${tr("common.remove")} ${name}`);
+  // An account's token renewal; a provider renews its own accounts.
+  if (account.renewal && !group) actions.append(renewalButton(account));
   actions.append(proxyButton, remove);
   return actions;
+}
+const RENEWALS = ["never", "once", "always"];
+/// A Claude or Codex account's token renewal; shown, as the proxy button,
+/// only on the focused card.
+function renewalButton(account) {
+  const trigger = button("", "renewal", "icon-btn card-renewal", () => {
+    if (openMenu?.trigger === trigger) {
+      closeMenu(true);
+      return;
+    }
+    showMenu(
+      trigger,
+      RENEWALS.map((choice) => ({
+        label: tr(`accounts.renewal.${choice}`),
+        selected: account.renewal === choice,
+        run: () => {
+          if (account.renewal !== choice)
+            action(() => accountsController.setRenewal(account.id, choice));
+        },
+      })),
+    );
+  });
+  // Its tooltip tells how long the access token has left.
+  trigger.title = tokenLabel(account) || tr("accounts.renewal.title");
+  trigger.setAttribute(
+    "aria-label",
+    `${tr("accounts.renewal.title")} ${account.email || account.label}: ${trigger.title}`,
+  );
+  trigger.setAttribute("aria-haspopup", "menu");
+  trigger.setAttribute("aria-expanded", "false");
+  return trigger;
 }
 /// Usage warning, refresh and switch, at the card's bottom right as in the
 /// SwiftUI card, clear of long account names. A provider's card keeps only
@@ -585,8 +621,7 @@ function accountTags(account, view, grouped = false) {
     tags.append(el("span", "tag bad", tr("accounts.card.status.deactivated")));
   return tags;
 }
-/// The access token's remaining time, for the card footer; renewal happens
-/// on the first usage refresh after it expires.
+/// The access token's remaining time, shown by the renewal button.
 function tokenLabel(account) {
   const expiry = P.tokenExpiry(
     account.tokenExpiresAt,
@@ -704,15 +739,6 @@ function accountCard(account, grouped = false) {
       resets ?? "--",
     )}`,
   );
-  const token = tokenLabel(account);
-  if (token) {
-    const expiry = el("span", "account-token", token);
-    expiry.title = tr(
-      "accounts.card.token_expires.help",
-      P.formatReset(account.tokenExpiresAt, locale),
-    );
-    footerText.append(" · ", expiry);
-  }
   footer.append(footerText, accountControls(account, full, view, grouped));
   card.append(
     // A provider's account without a plan tag has no tag row to show.
@@ -1384,12 +1410,15 @@ function showMenu(trigger, items) {
   closeMenu();
   const menu = el("div", "select-menu action-menu");
   menu.setAttribute("role", "menu");
+  // Choices show a check mark on the current one, as a native menu.
+  const choices = items.some((item) => "selected" in item);
+  menu.classList.toggle("choices", choices);
   for (const item of items) {
     const option = el("button", "", item.label);
     if (item.icon) option.prepend(item.icon);
     option.type = "button";
-    option.setAttribute("role", "menuitem");
-    if (item.selected) option.setAttribute("aria-checked", "true");
+    option.setAttribute("role", choices ? "menuitemradio" : "menuitem");
+    if (choices) option.setAttribute("aria-checked", item.selected ? "true" : "false");
     option.onclick = () => {
       closeMenu(true);
       item.run();

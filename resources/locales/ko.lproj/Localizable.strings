@@ -461,6 +461,10 @@
 "error.sub2api.proxy_invalid" = "포트가 포함된 유효한 HTTP, HTTPS 또는 SOCKS5 프록시 URL을 입력하세요(사용자 이름과 비밀번호 제외).";
 
 "accounts.proxy.title" = "계정 프록시";
+"accounts.renewal.title" = "토큰 갱신";
+"accounts.renewal.never" = "갱신 안 함";
+"accounts.renewal.once" = "한 번만 갱신";
+"accounts.renewal.always" = "항상 갱신";
 "accounts.proxy.provider_help" = "HTTP, HTTPS 또는 SOCKS5를 지원합니다. 비워 두면 Provider 프록시 설정을 사용합니다.";
 "accounts.proxy.unsupported" = "이 네트워크 서비스는 계정 프록시를 지원하지 않습니다.";
 

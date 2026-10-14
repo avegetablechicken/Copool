@@ -657,13 +657,17 @@ main > section {
 }
 
 /* Keep the slot and keyboard access while hiding the idle proxy control. */
-.account .card-proxy {
+.account .card-proxy,
+.account .card-renewal {
   opacity: 0;
   pointer-events: none;
 }
 
 .account:hover .card-proxy,
-.account:focus-within .card-proxy {
+.account:focus-within .card-proxy,
+.account:hover .card-renewal,
+.account:focus-within .card-renewal,
+.card-renewal[aria-expanded="true"] {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1038,6 +1042,18 @@ html.linux.composited .select-menu {
   min-width: 150px;
 }
 
+/* A menu of choices checks the current one, as a native menu does. */
+.select-menu.choices button {
+  position: relative;
+  padding-left: 22px;
+}
+
+.select-menu.choices button[aria-checked="true"]::before {
+  content: "✓";
+  position: absolute;
+  left: 8px;
+}
+
 /* ---------------------------------------------------------------- accounts */
 
 .toolbar {
@@ -1268,11 +1284,6 @@ button.usage-reset:hover {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-/* The token time wraps as a whole, never mid-phrase. */
-.account-token {
-  white-space: nowrap;
 }
 
 .account-footer .block-aside {

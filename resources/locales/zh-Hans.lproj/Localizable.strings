@@ -471,6 +471,10 @@
 "error.sub2api.proxy_invalid" = "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址和端口（不含用户名或密码）。";
 
 "accounts.proxy.title" = "账号代理";
+"accounts.renewal.title" = "令牌续期";
+"accounts.renewal.never" = "永不续期";
+"accounts.renewal.once" = "续期一次";
+"accounts.renewal.always" = "始终续期";
 "accounts.proxy.provider_help" = "支持 HTTP、HTTPS 或 SOCKS5；留空继承 Provider 的代理设置。";
 "accounts.proxy.unsupported" = "此网络服务不支持账号代理。";
 

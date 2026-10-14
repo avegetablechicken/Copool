@@ -443,6 +443,10 @@
 "error.sub2api.proxy_invalid" = "請輸入有效的 HTTP、HTTPS 或 SOCKS5 代理位址和連接埠（不含使用者名稱或密碼）。";
 
 "accounts.proxy.title" = "帳號代理";
+"accounts.renewal.title" = "權杖續期";
+"accounts.renewal.never" = "永不續期";
+"accounts.renewal.once" = "續期一次";
+"accounts.renewal.always" = "始終續期";
 "accounts.proxy.provider_help" = "支援 HTTP、HTTPS 或 SOCKS5；留空繼承 Provider 的代理設定。";
 "accounts.proxy.unsupported" = "此網路服務不支援帳號代理。";
 

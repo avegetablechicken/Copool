@@ -32,6 +32,7 @@ impl Application {
                     &document,
                     &proxy,
                     now_unix_seconds(),
+                    existing.is_none_or(|a| a.renews()),
                 )
                 .await,
             )
