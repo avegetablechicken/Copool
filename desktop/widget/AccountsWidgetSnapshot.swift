@@ -3,12 +3,34 @@ import SwiftUI
 import WidgetKit
 
 enum AccountsWidgetConfiguration {
-    static let kind = "CopoolAccountsWidget"
     /// The app group the build signed the widget for, from its Info.plist.
     static let appGroupIdentifier = (Bundle.main.object(forInfoDictionaryKey: "CopoolAppGroup") as? String)
         .flatMap { $0.isEmpty ? nil : $0 }
-    static let snapshotFilename = "accounts-widget-snapshot.json"
     static let usageProgressDisplayModeDefaultsKey = "accountsWidgetUsageProgressDisplayMode"
+}
+
+/// A widget the app publishes; each has its own kind and snapshot, as the app names them.
+enum AccountsWidgetVariant: Sendable {
+    case codex
+    case claude
+    /// Both pools.
+    case all
+
+    var kind: String {
+        switch self {
+        case .codex: "CopoolCodexAccountsWidget"
+        case .claude: "CopoolClaudeAccountsWidget"
+        case .all: "CopoolAccountsWidget"
+        }
+    }
+
+    var snapshotFilename: String {
+        switch self {
+        case .codex: "codex-accounts-widget-snapshot.json"
+        case .claude: "claude-accounts-widget-snapshot.json"
+        case .all: "accounts-widget-snapshot.json"
+        }
+    }
 }
 
 enum AccountsWidgetUsageProgressDisplayMode: String, Codable, Equatable, Sendable {
@@ -128,6 +150,16 @@ enum AccountsWidgetTagPaletteResolver {
                 fill: AccountsWidgetResolvedColor(red: 0.87, green: 0.89, blue: 0.94, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.34, green: 0.39, blue: 0.50, opacity: 1)
             )
+        case (let plan, .dark) where plan.hasPrefix("MAX"):
+            return AccountsWidgetTagPalette(
+                fill: AccountsWidgetResolvedColor(red: 0.42, green: 0.24, blue: 0.19, opacity: 1),
+                text: AccountsWidgetResolvedColor(red: 1.00, green: 0.64, blue: 0.50, opacity: 1)
+            )
+        case (let plan, _) where plan.hasPrefix("MAX"):
+            return AccountsWidgetTagPalette(
+                fill: AccountsWidgetResolvedColor(red: 0.97, green: 0.84, blue: 0.78, opacity: 1),
+                text: AccountsWidgetResolvedColor(red: 0.76, green: 0.36, blue: 0.22, opacity: 1)
+            )
         case ("ENTERPRISE", .dark), ("BUSINESS", .dark):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.22, green: 0.27, blue: 0.46, opacity: 1),
@@ -147,6 +179,29 @@ enum AccountsWidgetTagPaletteResolver {
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.71, green: 0.90, blue: 0.94, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.00, green: 0.55, blue: 0.65, opacity: 1)
+            )
+        }
+    }
+
+    /// The pool tag on the widget showing both pools, neutral beside the plan's color.
+    static func poolTagPalette(
+        for colorScheme: ColorScheme,
+        renderingMode: WidgetRenderingMode
+    ) -> AccountsWidgetTagPalette {
+        guard renderingMode == .fullColor else {
+            return .accentedContrast
+        }
+
+        switch colorScheme {
+        case .dark:
+            return AccountsWidgetTagPalette(
+                fill: AccountsWidgetResolvedColor(red: 1.00, green: 1.00, blue: 1.00, opacity: 0.14),
+                text: AccountsWidgetResolvedColor(red: 1.00, green: 1.00, blue: 1.00, opacity: 0.78)
+            )
+        default:
+            return AccountsWidgetTagPalette(
+                fill: AccountsWidgetResolvedColor(red: 0.12, green: 0.16, blue: 0.22, opacity: 0.10),
+                text: AccountsWidgetResolvedColor(red: 0.33, green: 0.39, blue: 0.48, opacity: 1)
             )
         }
     }
@@ -176,6 +231,8 @@ enum AccountsWidgetTagPaletteResolver {
 
 struct AccountsWidgetCardSnapshot: Codable, Equatable, Sendable, Identifiable {
     var id: String
+    /// The card's pool, on the widget showing both.
+    var poolLabel: String?
     var planLabel: String
     var workspaceLabel: String?
     var accountLabel: String
@@ -193,6 +250,7 @@ struct AccountsWidgetWindowSnapshot: Codable, Equatable, Sendable {
 
 struct AccountsWidgetRowSnapshot: Codable, Equatable, Sendable, Identifiable {
     var id: String
+    var poolLabel: String?
     var planLabel: String
     var workspaceLabel: String?
     var accountLabel: String

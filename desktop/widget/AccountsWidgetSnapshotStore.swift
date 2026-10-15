@@ -8,16 +8,21 @@ struct AccountsWidgetSnapshotStore: @unchecked Sendable {
 
     init(
         fileManager: FileManager = .default,
-        snapshotURLProvider: @escaping @Sendable () -> URL? = {
+        snapshotURLProvider: @escaping @Sendable () -> URL?
+    ) {
+        self.fileManager = fileManager
+        self.snapshotURLProvider = snapshotURLProvider
+    }
+
+    init(variant: AccountsWidgetVariant) {
+        let filename = variant.snapshotFilename
+        self.init {
             AccountsWidgetConfiguration.appGroupIdentifier
                 .flatMap {
                     FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0)
                 }?
-                .appendingPathComponent(AccountsWidgetConfiguration.snapshotFilename, isDirectory: false)
+                .appendingPathComponent(filename, isDirectory: false)
         }
-    ) {
-        self.fileManager = fileManager
-        self.snapshotURLProvider = snapshotURLProvider
     }
 
     func load() -> AccountsWidgetSnapshot {

@@ -5,19 +5,49 @@ import WidgetKit
 struct CopoolWidgets: WidgetBundle {
     var body: some Widget {
         CopoolAccountsWidget()
+        CopoolCodexAccountsWidget()
+        CopoolClaudeAccountsWidget()
     }
 }
 
 struct CopoolAccountsWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(
-            kind: AccountsWidgetConfiguration.kind,
-            provider: AccountsWidgetTimelineProvider()
+            kind: AccountsWidgetVariant.all.kind,
+            provider: AccountsWidgetTimelineProvider(variant: .all)
         ) { entry in
             AccountsWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("Copool Accounts")
-        .description("See the current account and remaining quota at a glance.")
+        .description("See the current Codex and Claude accounts and remaining quota at a glance.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
+struct CopoolCodexAccountsWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(
+            kind: AccountsWidgetVariant.codex.kind,
+            provider: AccountsWidgetTimelineProvider(variant: .codex)
+        ) { entry in
+            AccountsWidgetEntryView(entry: entry)
+        }
+        .configurationDisplayName("Copool Codex Accounts")
+        .description("See the current Codex account and remaining quota at a glance.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
+struct CopoolClaudeAccountsWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(
+            kind: AccountsWidgetVariant.claude.kind,
+            provider: AccountsWidgetTimelineProvider(variant: .claude)
+        ) { entry in
+            AccountsWidgetEntryView(entry: entry)
+        }
+        .configurationDisplayName("Copool Claude Accounts")
+        .description("See the current Claude account and remaining quota at a glance.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -28,7 +58,13 @@ struct AccountsWidgetEntry: TimelineEntry {
 }
 
 struct AccountsWidgetTimelineProvider: TimelineProvider {
-    private let store = AccountsWidgetSnapshotStore()
+    let variant: AccountsWidgetVariant
+    private let store: AccountsWidgetSnapshotStore
+
+    init(variant: AccountsWidgetVariant) {
+        self.variant = variant
+        store = AccountsWidgetSnapshotStore(variant: variant)
+    }
 
     func placeholder(in context: Context) -> AccountsWidgetEntry {
         AccountsWidgetEntry(date: .now, snapshot: sampleSnapshot)
@@ -59,14 +95,28 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
         )
     }
 
+    /// The sample's pool and plan tags for the current card, the next and the two rows.
+    private var samplePools: [String?] {
+        variant == .all ? ["CODEX", "CLAUDE", "CLAUDE", "CODEX"] : [nil, nil, nil, nil]
+    }
+
+    private var samplePlans: [String] {
+        switch variant {
+        case .codex: ["TEAM", "PRO", "TEAM", "PLUS"]
+        case .claude: ["MAX 20X", "PRO", "TEAM", "MAX 5X"]
+        case .all: ["TEAM", "MAX 20X", "MAX 20X", "PLUS"]
+        }
+    }
+
     private var sampleSnapshot: AccountsWidgetSnapshot {
         AccountsWidgetSnapshot(
             generatedAt: Int64(Date().timeIntervalSince1970),
             usageProgressDisplayMode: .used,
             currentCard: AccountsWidgetCardSnapshot(
                 id: "current",
-                planLabel: "TEAM",
-                workspaceLabel: "workspace",
+                poolLabel: samplePools[0],
+                planLabel: samplePlans[0],
+                workspaceLabel: variant == .claude ? nil : "workspace",
                 accountLabel: "current_account",
                 fiveHour: AccountsWidgetWindowSnapshot(
                     title: "5h",
@@ -85,7 +135,8 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
             ),
             secondaryCard: AccountsWidgetCardSnapshot(
                 id: "next",
-                planLabel: "PRO",
+                poolLabel: samplePools[1],
+                planLabel: samplePlans[1],
                 workspaceLabel: nil,
                 accountLabel: "next_account",
                 fiveHour: AccountsWidgetWindowSnapshot(
@@ -106,8 +157,9 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
             rows: [
                 AccountsWidgetRowSnapshot(
                     id: "row-1",
-                    planLabel: "TEAM",
-                    workspaceLabel: "abcdefg",
+                    poolLabel: samplePools[2],
+                    planLabel: samplePlans[2],
+                    workspaceLabel: variant == .all ? nil : "abcdefg",
                     accountLabel: "account_name",
                     fiveHour: AccountsWidgetWindowSnapshot(
                         title: "5h",
@@ -126,7 +178,8 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 ),
                 AccountsWidgetRowSnapshot(
                     id: "row-2",
-                    planLabel: "PLUS",
+                    poolLabel: samplePools[3],
+                    planLabel: samplePlans[3],
                     workspaceLabel: nil,
                     accountLabel: "plus_account",
                     fiveHour: AccountsWidgetWindowSnapshot(

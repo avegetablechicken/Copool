@@ -413,6 +413,7 @@ private struct AccountsWidgetLargeView: View {
             groups.append(
                 AccountsWidgetLargeGroup(
                     id: current.id,
+                    poolLabel: current.poolLabel,
                     planLabel: current.planLabel,
                     workspaceLabel: current.workspaceLabel,
                     accountLabel: current.accountLabel,
@@ -426,6 +427,7 @@ private struct AccountsWidgetLargeView: View {
             contentsOf: rows.map {
                 AccountsWidgetLargeGroup(
                     id: $0.id,
+                    poolLabel: $0.poolLabel,
                     planLabel: $0.planLabel,
                     workspaceLabel: $0.workspaceLabel,
                     accountLabel: $0.accountLabel,
@@ -469,6 +471,13 @@ private struct AccountsWidgetCompactCardContent: View {
         )
     }
 
+    private var poolTagPalette: AccountsWidgetTagPalette {
+        AccountsWidgetTagPaletteResolver.poolTagPalette(
+            for: colorScheme,
+            renderingMode: renderingMode
+        )
+    }
+
     private var accountTagPalette: AccountsWidgetTagPalette {
         AccountsWidgetTagPaletteResolver.accountTagPalette(
             for: colorScheme,
@@ -503,15 +512,33 @@ private struct AccountsWidgetCompactCardContent: View {
             let ringSubtitleFontSize = min(max(ringSize * 0.085, 8), 10)
 
             VStack(alignment: .leading, spacing: groupSpacing) {
-                AccountsWidgetTag(
-                    text: card.planLabel,
-                    backgroundColor: planTagPalette.fill.color,
-                    foregroundColor: planTagPalette.text.color,
-                    font: Font.system(size: tagFontSize, weight: .bold, design: .rounded),
-                    horizontalPadding: tagHorizontalPadding,
-                    verticalPadding: tagVerticalPadding
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // A Claude account shows no plan until its plan is known.
+                if card.poolLabel != nil || !card.planLabel.isEmpty {
+                    HStack(spacing: 4) {
+                        if let poolLabel = card.poolLabel {
+                            AccountsWidgetTag(
+                                text: poolLabel,
+                                backgroundColor: poolTagPalette.fill.color,
+                                foregroundColor: poolTagPalette.text.color,
+                                font: Font.system(size: tagFontSize, weight: .bold, design: .rounded),
+                                horizontalPadding: tagHorizontalPadding,
+                                verticalPadding: tagVerticalPadding
+                            )
+                        }
+
+                        if !card.planLabel.isEmpty {
+                            AccountsWidgetTag(
+                                text: card.planLabel,
+                                backgroundColor: planTagPalette.fill.color,
+                                foregroundColor: planTagPalette.text.color,
+                                font: Font.system(size: tagFontSize, weight: .bold, design: .rounded),
+                                horizontalPadding: tagHorizontalPadding,
+                                verticalPadding: tagVerticalPadding
+                            )
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 if let workspaceLabel {
                     AccountsWidgetTag(
@@ -665,6 +692,7 @@ private struct AccountsWidgetCompactRing: View {
 
 private struct AccountsWidgetLargeGroup: Identifiable {
     let id: String
+    let poolLabel: String?
     let planLabel: String
     let workspaceLabel: String?
     let accountLabel: String
@@ -709,6 +737,13 @@ private struct AccountsWidgetLargeGroupView: View {
         )
     }
 
+    private var poolTagPalette: AccountsWidgetTagPalette {
+        AccountsWidgetTagPaletteResolver.poolTagPalette(
+            for: colorScheme,
+            renderingMode: renderingMode
+        )
+    }
+
     private var accountTagPalette: AccountsWidgetTagPalette {
         AccountsWidgetTagPaletteResolver.accountTagPalette(
             for: colorScheme,
@@ -719,14 +754,27 @@ private struct AccountsWidgetLargeGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: topRowSpacing) {
             HStack(spacing: 4) {
-                AccountsWidgetTag(
-                    text: group.planLabel,
-                    backgroundColor: planTagPalette.fill.color,
-                    foregroundColor: planTagPalette.text.color,
-                    font: .system(size: tagFontSize, weight: .bold, design: .rounded),
-                    horizontalPadding: tagHorizontalPadding,
-                    verticalPadding: tagVerticalPadding
-                )
+                if let poolLabel = group.poolLabel {
+                    AccountsWidgetTag(
+                        text: poolLabel,
+                        backgroundColor: poolTagPalette.fill.color,
+                        foregroundColor: poolTagPalette.text.color,
+                        font: .system(size: tagFontSize, weight: .bold, design: .rounded),
+                        horizontalPadding: tagHorizontalPadding,
+                        verticalPadding: tagVerticalPadding
+                    )
+                }
+
+                if !group.planLabel.isEmpty {
+                    AccountsWidgetTag(
+                        text: group.planLabel,
+                        backgroundColor: planTagPalette.fill.color,
+                        foregroundColor: planTagPalette.text.color,
+                        font: .system(size: tagFontSize, weight: .bold, design: .rounded),
+                        horizontalPadding: tagHorizontalPadding,
+                        verticalPadding: tagVerticalPadding
+                    )
+                }
 
                 if let workspaceLabel = group.workspaceLabel {
                     AccountsWidgetTag(

@@ -19,6 +19,7 @@ fn testSaveWritesSnapshotToExplicitURL() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("nested/accounts-widget.json");
     let s = build(
+        Pool::Codex,
         &[super::account("current", 30., 20., true)],
         "remaining",
         Some(0),
@@ -32,15 +33,14 @@ fn testSaveWritesSnapshotToExplicitURL() {
 fn testWriterUsesExplicitUsageProgressDisplayModeOverride() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("accounts-widget.json");
-    write(
-        &path,
+    let s = Widget::Codex.build(
         &[super::account("current", 40., 25., true)],
+        &[],
         "remaining",
         Some(0),
         1,
-        |_| {},
-    )
-    .unwrap();
+    );
+    write(Widget::Codex, &path, &s, |_| {}).unwrap();
     assert_eq!(load(&path).usage_progress_display_mode, "remaining");
 }
 #[test]
@@ -48,19 +48,19 @@ fn testWriterReloadsCurrentWidgetKindAfterSave() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("accounts-widget.json");
     let mut reloaded = None;
-    write(
-        &path,
+    let s = build(
+        Pool::Claude,
         &[super::account("current", 40., 25., true)],
         "used",
         Some(0),
         1,
-        |kind| {
-            assert!(path.is_file());
-            reloaded = Some(kind.to_owned());
-        },
-    )
+    );
+    write(Widget::Claude, &path, &s, |kind| {
+        assert!(path.is_file());
+        reloaded = Some(kind.to_owned());
+    })
     .unwrap();
-    assert_eq!(reloaded.as_deref(), Some(KIND));
+    assert_eq!(reloaded.as_deref(), Some(Widget::Claude.kind()));
 }
 #[test]
 fn testSnapshotCarriesOwnDisplayModeForWidgetRendering() {
@@ -82,4 +82,15 @@ fn testPlanTagPaletteKeepsFullColorPaletteOutsideAccentedMode() {
     let p = plan_palette("PRO", false, false);
     assert_eq!(p.fill, [0.98, 0.82, 0.63, 1.]);
     assert_eq!(p.text, [0.78, 0.42, 0.03, 1.]);
+}
+#[test]
+fn testPlanTagPaletteGivesClaudeMaxPlansTheirOwnColor() {
+    assert_eq!(
+        plan_palette("MAX 5X", false, false),
+        plan_palette("MAX", false, false)
+    );
+    assert_ne!(
+        plan_palette("MAX 5X", true, false),
+        plan_palette("TEAM", true, false)
+    );
 }

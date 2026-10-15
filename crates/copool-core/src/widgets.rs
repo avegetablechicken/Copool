@@ -2,13 +2,67 @@
 use crate::{
     models::{AccountSummary, UsageWindow},
     persistence::write_json,
-    ranking::sort_for_display,
+    ranking::{remaining_score, sort_for_display},
 };
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub const KIND: &str = "CopoolAccountsWidget";
+/// An account pool; its cards follow the app's tags for that pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pool {
+    Codex,
+    Claude,
+}
+impl Pool {
+    /// The tag naming the pool on a card of the widget showing both.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Codex => "CODEX",
+            Self::Claude => "CLAUDE",
+        }
+    }
+}
+/// A widget the app publishes; each has its own WidgetKit kind and snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Widget {
+    Codex,
+    Claude,
+    /// Both pools.
+    All,
+}
+impl Widget {
+    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::All];
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Codex => "CopoolCodexAccountsWidget",
+            Self::Claude => "CopoolClaudeAccountsWidget",
+            Self::All => "CopoolAccountsWidget",
+        }
+    }
+    /// The snapshot's name in the data directory and the app group container.
+    pub fn filename(self) -> &'static str {
+        match self {
+            Self::Codex => "codex-accounts-widget-snapshot.json",
+            Self::Claude => "claude-accounts-widget-snapshot.json",
+            Self::All => "accounts-widget-snapshot.json",
+        }
+    }
+    pub fn build(
+        self,
+        codex: &[AccountSummary],
+        claude: &[AccountSummary],
+        mode: &str,
+        offset_seconds: Option<i32>,
+        now: i64,
+    ) -> Snapshot {
+        match self {
+            Self::Codex => build(Pool::Codex, codex, mode, offset_seconds, now),
+            Self::Claude => build(Pool::Claude, claude, mode, offset_seconds, now),
+            Self::All => build_all(codex, claude, mode, offset_seconds, now),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowSnapshot {
@@ -22,6 +76,9 @@ pub struct WindowSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct CardSnapshot {
     pub id: String,
+    /// The card's pool, on the widget showing both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_label: Option<String>,
     pub plan_label: String,
     pub workspace_label: Option<String>,
     pub account_label: String,
@@ -88,34 +145,71 @@ fn window(title: &str, window: Option<&UsageWindow>, offset: Option<i32>) -> Win
         reset_text: reset,
     }
 }
-fn card(account: &AccountSummary, offset: Option<i32>) -> CardSnapshot {
+/// Codex treats an unknown plan as Team.
+fn codex_plan(raw: Option<String>) -> String {
+    let raw = raw.unwrap_or_else(|| "TEAM".into());
+    if ["PRO", "PLUS", "FREE", "TEAM", "BUSINESS", "ENTERPRISE"].contains(&raw.as_str()) {
+        raw
+    } else {
+        "TEAM".into()
+    }
+}
+/// As the app's plan tag: Claude shows none until its plan is known, and Max
+/// plans keep their usage multiplier ("MAX 20X").
+fn claude_plan(raw: Option<String>) -> String {
+    let Some(raw) = raw else {
+        return String::new();
+    };
+    let max = raw.strip_prefix("MAX").is_some_and(|rest| {
+        rest.is_empty()
+            || rest
+                .strip_prefix(' ')
+                .and_then(|r| r.strip_suffix('X'))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    });
+    if max || ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE"].contains(&raw.as_str()) {
+        raw
+    } else {
+        "TEAM".into()
+    }
+}
+fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapshot {
     let raw = account
         .usage
         .as_ref()
         .and_then(|u| u.plan_type.as_ref())
         .filter(|s| !s.trim().is_empty())
-        .or(account.plan_type.as_ref())
-        .map(|s| s.trim().to_uppercase())
-        .unwrap_or_else(|| "TEAM".into());
-    let plan = if ["PRO", "PLUS", "FREE", "TEAM", "BUSINESS", "ENTERPRISE"].contains(&raw.as_str())
-    {
-        raw
-    } else {
-        "TEAM".into()
+        .or(account.plan_type.as_ref().filter(|s| !s.trim().is_empty()))
+        .map(|s| s.trim().to_uppercase());
+    let (plan, workspace, name) = match pool {
+        Pool::Codex => (
+            codex_plan(raw),
+            account.team_name.clone(),
+            account.email.as_deref().unwrap_or(&account.account_id),
+        ),
+        Pool::Claude => {
+            let plan = claude_plan(raw);
+            // Every Claude login names an organization; as the app, only a
+            // shared plan's, or the provider's source, is shown.
+            let workspace = account.source_tag.clone().or_else(|| {
+                ["TEAM", "BUSINESS", "ENTERPRISE"]
+                    .contains(&plan.as_str())
+                    .then(|| account.team_name.clone())
+                    .flatten()
+            });
+            (
+                plan,
+                workspace,
+                account.email.as_deref().unwrap_or(&account.label),
+            )
+        }
     };
-    let label = account
-        .email
-        .as_deref()
-        .unwrap_or(&account.account_id)
-        .trim()
-        .split('@')
-        .next()
-        .unwrap_or_default()
-        .to_owned();
+    let label = name.trim().split('@').next().unwrap_or_default().to_owned();
     CardSnapshot {
         id: account.id.clone(),
+        pool_label: None,
         plan_label: plan,
-        workspace_label: account.team_name.clone(),
+        workspace_label: workspace,
         account_label: label,
         five_hour: window(
             "5h",
@@ -129,7 +223,24 @@ fn card(account: &AccountSummary, offset: Option<i32>) -> CardSnapshot {
         ),
     }
 }
+/// The first card is the current one, the next the secondary; the large
+/// widget lists up to four after the current.
+fn snapshot(cards: Vec<CardSnapshot>, mode: &str, now: i64) -> Snapshot {
+    let mut cards = cards.into_iter();
+    let Some(current) = cards.next() else {
+        return Snapshot::default();
+    };
+    let rows: Vec<_> = cards.take(4).collect();
+    Snapshot {
+        generated_at: now,
+        usage_progress_display_mode: normalized_mode(mode).into(),
+        current_card: Some(current),
+        secondary_card: rows.first().cloned(),
+        rows,
+    }
+}
 pub fn build(
+    pool: Pool,
     accounts: &[AccountSummary],
     mode: &str,
     offset_seconds: Option<i32>,
@@ -137,21 +248,44 @@ pub fn build(
 ) -> Snapshot {
     let mut accounts = accounts.to_vec();
     sort_for_display(&mut accounts);
-    if accounts.is_empty() {
-        return Snapshot::default();
+    let cards = accounts
+        .iter()
+        .map(|a| card(pool, a, offset_seconds))
+        .collect();
+    snapshot(cards, mode, now)
+}
+/// Both pools: each pool's first card (its current account) leads, Codex's
+/// before Claude's, then the other accounts by remaining quota.
+pub fn build_all(
+    codex: &[AccountSummary],
+    claude: &[AccountSummary],
+    mode: &str,
+    offset_seconds: Option<i32>,
+    now: i64,
+) -> Snapshot {
+    let mut leading = vec![];
+    let mut others = vec![];
+    for (pool, accounts) in [(Pool::Codex, codex), (Pool::Claude, claude)] {
+        let mut accounts = accounts.to_vec();
+        sort_for_display(&mut accounts);
+        let mut accounts = accounts.into_iter().map(|a| (pool, a));
+        leading.extend(accounts.next());
+        others.extend(accounts);
     }
-    Snapshot {
-        generated_at: now,
-        usage_progress_display_mode: normalized_mode(mode).into(),
-        current_card: Some(card(&accounts[0], offset_seconds)),
-        secondary_card: accounts.get(1).map(|a| card(a, offset_seconds)),
-        rows: accounts
-            .iter()
-            .skip(1)
-            .take(4)
-            .map(|a| card(a, offset_seconds))
-            .collect(),
-    }
+    others.sort_by(|(_, a), (_, b)| {
+        remaining_score(b)
+            .total_cmp(&remaining_score(a))
+            .then(a.added_at.cmp(&b.added_at))
+    });
+    let cards = leading
+        .into_iter()
+        .chain(others)
+        .map(|(pool, a)| CardSnapshot {
+            pool_label: Some(pool.label().into()),
+            ..card(pool, &a, offset_seconds)
+        })
+        .collect();
+    snapshot(cards, mode, now)
 }
 pub fn load(path: &Path) -> Snapshot {
     std::fs::read(path)
@@ -173,16 +307,13 @@ pub fn save_display_mode(path: &Path, mode: &str) -> Result<(), String> {
     write_json(path, &normalized_mode(mode))
 }
 pub fn write(
+    widget: Widget,
     path: &Path,
-    accounts: &[AccountSummary],
-    mode: &str,
-    offset_seconds: Option<i32>,
-    now: i64,
+    snapshot: &Snapshot,
     reload: impl FnOnce(&str),
 ) -> Result<(), String> {
-    let snapshot = build(accounts, mode, offset_seconds, now);
-    save(path, &snapshot)?;
-    reload(KIND);
+    save(path, snapshot)?;
+    reload(widget.kind());
     Ok(())
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -204,6 +335,8 @@ pub fn plan_palette(plan: &str, dark: bool, monochrome: bool) -> Palette {
         ("PLUS", false) => ([0.97, 0.78, 0.88, 1.], [0.70, 0.19, 0.44, 1.]),
         ("FREE", true) => ([0.24, 0.28, 0.37, 1.], [0.84, 0.88, 0.95, 1.]),
         ("FREE", false) => ([0.87, 0.89, 0.94, 1.], [0.34, 0.39, 0.50, 1.]),
+        (max, true) if max.starts_with("MAX") => ([0.42, 0.24, 0.19, 1.], [1., 0.64, 0.50, 1.]),
+        (max, false) if max.starts_with("MAX") => ([0.97, 0.84, 0.78, 1.], [0.76, 0.36, 0.22, 1.]),
         ("BUSINESS" | "ENTERPRISE", true) => ([0.22, 0.27, 0.46, 1.], [0.70, 0.77, 1., 1.]),
         ("BUSINESS" | "ENTERPRISE", false) => ([0.81, 0.85, 0.98, 1.], [0.24, 0.35, 0.69, 1.]),
         (_, true) => ([0.16, 0.35, 0.42, 1.], [0.19, 0.86, 0.93, 1.]),
