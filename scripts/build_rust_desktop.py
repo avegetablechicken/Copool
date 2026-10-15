@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import macos_signing
@@ -54,7 +55,7 @@ def find_bundle(profile, target):
     return bundles[0]
 
 
-def sign_and_verify(app):
+def sign_and_verify(app, build):
     """Signs the widget, then the app; both read their app group from Info.plist."""
     sha1, team = macos_signing.identity()
     group = macos_signing.app_group(team)
@@ -70,6 +71,13 @@ def sign_and_verify(app):
                                 capture_output=True, text=True, check=True).stdout.strip()
     run(['file', app / 'Contents/MacOS' / executable])
     run(['plutil', '-extract', 'CFBundleShortVersionString', 'raw', plist])
+    for bundle in (app, widget):
+        if not bundle.exists():
+            continue
+        version = subprocess.run(['plutil', '-extract', 'CFBundleVersion', 'raw', bundle / 'Contents/Info.plist'],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        if version != build:
+            raise SystemExit(f'{bundle.name} has build {version}, expected {build}')
     return team, group
 
 
@@ -96,20 +104,24 @@ def main():
         print(f'Executable: {ROOT / "target" / (args.target or "") / profile / name}')
         return
 
+    # Each build has its own build number (CFBundleVersion), shared by the app
+    # and the widget: macOS keeps an extension's list of widgets until its
+    # version changes, so widgets added or renamed since would not appear.
+    build = time.strftime('%Y%m%d%H%M%S', time.gmtime())
     # The CLI embeds desktop/ui, runs the WidgetKit pre-bundle hook and
     # writes Info.plist; signing is done locally afterwards.
-    command = [*tauri_cli(), 'build', '--bundles', 'app', '--no-sign', '--ci',
-               '--config', json.dumps({'bundle': {'active': True}})]
+    config = {'bundle': {'active': True, 'macOS': {'bundleVersion': build}}}
+    command = [*tauri_cli(), 'build', '--bundles', 'app', '--no-sign', '--ci', '--config', json.dumps(config)]
     if args.debug:
         command.append('--debug')
     if args.target:
         command += ['--target', args.target]
-    run(command + ['--', '--locked'], cwd=DESKTOP)
+    run(command + ['--', '--locked'], cwd=DESKTOP, env={**os.environ, 'COPOOL_BUNDLE_VERSION': build})
 
     app = find_bundle(profile, args.target)
-    team, group = sign_and_verify(app)
+    team, group = sign_and_verify(app, build)
     signature = f'signed for team {team}' if team else 'ad-hoc signed'
-    print(f'Copool.app ({signature}, app group {group}, not notarized): {app}')
+    print(f'Copool.app (build {build}, {signature}, app group {group}, not notarized): {app}')
 
 
 if __name__ == '__main__':
