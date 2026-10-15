@@ -24,6 +24,10 @@ pub(crate) trait Vault: Send + Sync {
     /// The stored text; none before anything was stored.
     fn read(&self, access: KeychainAccess) -> Result<Option<String>>;
     fn write(&self, text: &str, access: KeychainAccess) -> Result<()>;
+    /// Gives an item created under an earlier name the current one.
+    fn rename(&self, _access: KeychainAccess) -> Result<()> {
+        Ok(())
+    }
 }
 
 const VERSION: u64 = 2;
@@ -96,6 +100,8 @@ impl Item {
         self.ask.store(read.is_ok(), Ordering::Relaxed);
         let doc = read?;
         *cache = Some(doc.clone());
+        // Once allowed, renaming asks for nothing more; it may fail silently.
+        let _ = self.store.rename(KeychainAccess::Background);
         Ok(doc)
     }
     /// The document, read once.
@@ -254,6 +260,11 @@ mod macos {
         fn write(&self, text: &str, access: KeychainAccess) -> Result<()> {
             keychain::write_private(SERVICE, ACCOUNT, LABEL, text.as_bytes(), access)
         }
+        /// The item was named "Copool Claude accounts" while it held only
+        /// the Claude pool's tokens.
+        fn rename(&self, access: KeychainAccess) -> Result<()> {
+            keychain::relabel_private(SERVICE, ACCOUNT, LABEL, access)
+        }
     }
 
     /// The items `SystemSecrets` kept, one per secret.
@@ -285,6 +296,7 @@ pub(crate) mod tests {
         pub(crate) text: Mutex<Option<String>>,
         pub(crate) refuse: AtomicBool,
         pub(crate) reads: Mutex<Vec<KeychainAccess>>,
+        pub(crate) renames: Mutex<Vec<KeychainAccess>>,
     }
     impl Vault for Memory {
         fn read(&self, access: KeychainAccess) -> Result<Option<String>> {
@@ -296,6 +308,10 @@ pub(crate) mod tests {
         }
         fn write(&self, text: &str, _: KeychainAccess) -> Result<()> {
             *self.text.lock().unwrap() = Some(text.into());
+            Ok(())
+        }
+        fn rename(&self, access: KeychainAccess) -> Result<()> {
+            self.renames.lock().unwrap().push(access);
             Ok(())
         }
     }
@@ -368,6 +384,11 @@ pub(crate) mod tests {
         assert_eq!(secrets.get("a").unwrap(), None);
         assert_eq!(secrets.get("b").unwrap(), None);
         assert_eq!(*memory.reads.lock().unwrap(), [KeychainAccess::Interactive]);
+        // The item allowed, its old name is replaced without asking again.
+        assert_eq!(
+            *memory.renames.lock().unwrap(),
+            [KeychainAccess::Background]
+        );
         // Once refused, background reads stop asking until an explicit action.
         let memory = Arc::new(Memory::default());
         memory.refuse.store(true, Ordering::Relaxed);
@@ -381,6 +402,7 @@ pub(crate) mod tests {
             *memory.reads.lock().unwrap(),
             [Interactive, Background, Interactive]
         );
+        assert!(memory.renames.lock().unwrap().is_empty());
         memory.refuse.store(false, Ordering::Relaxed);
         item.authorize().unwrap();
         assert_eq!(secrets.get("a").unwrap(), None);

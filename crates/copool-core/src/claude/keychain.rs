@@ -11,7 +11,7 @@ use security_framework::{
     passwords::{self, PasswordOptions},
 };
 use security_framework_sys::{
-    item::{kSecAttrAccount, kSecUseAuthenticationUI, kSecValueData},
+    item::{kSecAttrAccount, kSecAttrLabel, kSecUseAuthenticationUI, kSecValueData},
     keychain_item::{SecItemDelete, SecItemUpdate},
 };
 use serde_json::Value;
@@ -196,6 +196,35 @@ pub(crate) fn write_private(
     passwords::set_generic_password_options(bytes, created)
         .map_err(|error| format!("Could not create Copool's Keychain item: {error}"))
 }
+/// Gives an item of Copool's own the name the Keychain shows; only that
+/// attribute changes.
+#[allow(deprecated)]
+pub(crate) fn relabel_private(
+    service: &str,
+    account: &str,
+    label: &str,
+    access: KeychainAccess,
+) -> Result<()> {
+    let query = options(service, Some(account), access);
+    let query = CFDictionary::from_CFType_pairs(&query.query);
+    let attributes = CFDictionary::from_CFType_pairs(&[(
+        unsafe { CFString::wrap_under_get_rule(kSecAttrLabel) },
+        CFString::new(label).into_CFType(),
+    )]);
+    // SAFETY: Both owned dictionaries remain alive for the Security call.
+    match unsafe {
+        SecItemUpdate(
+            query.as_concrete_TypeRef(),
+            attributes.as_concrete_TypeRef(),
+        )
+    } {
+        0 | -25300 => Ok(()),
+        code => Err(format!(
+            "Could not rename Copool's Keychain item: {}",
+            Error::from_code(code)
+        )),
+    }
+}
 /// Removes an item of Copool's own; none is no error.
 #[allow(deprecated)]
 pub(crate) fn delete_private(service: &str, account: &str, access: KeychainAccess) -> Result<()> {
@@ -355,6 +384,28 @@ mod tests {
                 KeychainAccess::Background,
             )
             .unwrap();
+            assert_eq!(
+                read_private(&service, account, KeychainAccess::Background),
+                Ok(Some(b"second".to_vec()))
+            );
+            // Renaming changes the label and nothing else.
+            relabel_private(
+                &service,
+                account,
+                "Copool renamed",
+                KeychainAccess::Background,
+            )
+            .unwrap();
+            use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+            let found = ItemSearchOptions::new()
+                .class(ItemClass::generic_password())
+                .service(&service)
+                .load_attributes(true)
+                .limit(Limit::All)
+                .search()
+                .unwrap();
+            let label = found[0].simplify_dict().unwrap().remove("labl");
+            assert_eq!(label.as_deref(), Some("Copool renamed"));
             assert_eq!(
                 read_private(&service, account, KeychainAccess::Background),
                 Ok(Some(b"second".to_vec()))
