@@ -200,21 +200,57 @@ fn layout(w: &WebviewWindow, panel: &PanelState, appearing: bool) {
         .unwrap()
         .unwrap_or(DEFAULT_HEIGHT)
         .clamp(MIN_HEIGHT, max_height);
-    let _ = w.set_size(tauri::LogicalSize::new(WIDTH, height));
-    let (x, y) = placement::place(anchor, (WIDTH * unit, height * unit), screen, unit);
-    let _ = if IN_POINTS {
-        w.set_position(tauri::LogicalPosition::new(x, y))
+    // X11 compositors show a resized window before WebKitGTK has repainted
+    // it, which flashes the panel blank, so on Linux the window keeps its
+    // largest height and the panel takes the part of it that it fits.
+    let window_height = if cfg!(target_os = "linux") {
+        max_height
     } else {
-        w.set_position(tauri::PhysicalPosition::new(x, y))
+        height
+    };
+    let _ = w.set_size(tauri::LogicalSize::new(WIDTH, window_height));
+    let (x, y) = placement::place(anchor, (WIDTH * unit, height * unit), screen, unit);
+    // The window holds the panel and stays on the screen.
+    let top = y
+        .min(screen.y + screen.h - window_height * unit)
+        .max(screen.y);
+    let _ = if IN_POINTS {
+        w.set_position(tauri::LogicalPosition::new(x, top))
+    } else {
+        w.set_position(tauri::PhysicalPosition::new(x, top))
     };
     #[cfg(target_os = "linux")]
-    if appearing {
-        crate::backdrop::capture(w, &m, x, y, WIDTH * unit);
-    } else {
-        crate::backdrop::follow(w, x, y);
+    {
+        if appearing {
+            crate::backdrop::capture(w, &m, x, top, WIDTH * unit);
+        } else {
+            crate::backdrop::follow(w, x, top);
+        }
+        frame(w, (y - top) / unit, height);
     }
     #[cfg(not(target_os = "linux"))]
     let _ = appearing;
+}
+
+/// Where the panel lies in its window, in logical points.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, serde::Serialize)]
+struct Frame {
+    top: f64,
+    height: f64,
+}
+
+/// Draws the panel `height` tall at `top` within its window; clicks on the
+/// rest of the window reach what lies under it.
+#[cfg(target_os = "linux")]
+fn frame(w: &WebviewWindow, top: f64, height: f64) {
+    use gdk::cairo::{RectangleInt, Region};
+    use gtk::prelude::WidgetExt;
+    if let Some(window) = w.gtk_window().ok().and_then(|gtk| gtk.window()) {
+        let rect = RectangleInt::new(0, top.round() as i32, WIDTH as i32, height.ceil() as i32);
+        window.input_shape_combine_region(&Region::create_rectangle(&rect), 0, 0);
+    }
+    let _ = w.emit("panel-frame", Frame { top, height });
 }
 
 pub fn on_window_event(w: &tauri::Window, event: &WindowEvent) {

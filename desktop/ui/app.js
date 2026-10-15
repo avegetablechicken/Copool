@@ -1012,12 +1012,12 @@ function animateLayout(list, before, current) {
 function pageLayer(className) {
   const frame = $("accounts-page").getBoundingClientRect();
   const layer = el("div", `page-layer ${className}`);
-  // To the window's bottom, so the layer grows with a panel fitted taller.
+  // To the panel's bottom, so the layer grows with a panel fitted taller.
   Object.assign(layer.style, {
     left: `${frame.left}px`,
     top: `${frame.top}px`,
     width: `${frame.width}px`,
-    bottom: "0",
+    bottom: "var(--panel-below)",
   });
   const place = (node, rect) => {
     Object.assign(node.style, {
@@ -1465,15 +1465,16 @@ function showMenu(trigger, items) {
   document.body.append(menu);
   // Below the trigger, or above it when the panel is too short; kept inside.
   const bounds = trigger.getBoundingClientRect();
+  const panel = document.querySelector(".panel").getBoundingClientRect();
   const left = Math.min(bounds.left, innerWidth - menu.offsetWidth - 8);
   const below = bounds.bottom + 4;
   const top =
-    below + menu.offsetHeight <= innerHeight - 8
+    below + menu.offsetHeight <= panel.bottom - 8
       ? below
-      : Math.max(8, bounds.top - menu.offsetHeight - 4);
+      : Math.max(panel.top + 8, bounds.top - menu.offsetHeight - 4);
   menu.style.left = `${Math.max(8, left)}px`;
   menu.style.top = `${top}px`;
-  menu.style.maxHeight = `${innerHeight - top - 8}px`;
+  menu.style.maxHeight = `${panel.bottom - top - 8}px`;
   trigger.setAttribute("aria-expanded", "true");
   openMenu = { menu, trigger };
   (
@@ -1913,6 +1914,8 @@ function queueFit() {
   if (fitFrame || holdFit) return;
   fitFrame = requestAnimationFrame(() => {
     fitFrame = 0;
+    const dialog = document.querySelector("dialog[open]");
+    document.documentElement.classList.toggle("modal", Boolean(dialog));
     if (holdFit) return;
     const section = document.querySelector("main>section:not([hidden])");
     const page = section?.firstElementChild;
@@ -1923,7 +1926,6 @@ function queueFit() {
       page.offsetHeight +
       parseFloat(style.paddingTop) +
       parseFloat(style.paddingBottom);
-    const dialog = document.querySelector("dialog[open]");
     if (dialog) height = Math.max(height, dialog.offsetHeight + 40);
     height = Math.ceil(height);
     if (Math.abs(height - fittedHeight) > 1) {
@@ -1954,6 +1956,15 @@ window.__TAURI__.event
     queueFit();
     if (!document.querySelector("dialog[open]"))
       refreshView().catch((error) => notice(error, true));
+  })
+  .catch((error) => notice(error, true));
+
+// Where the panel lies in its window on Linux, which keeps one height.
+window.__TAURI__.event
+  .listen("panel-frame", ({ payload }) => {
+    const root = document.documentElement.style;
+    root.setProperty("--panel-top", `${payload.top}px`);
+    root.setProperty("--panel-height", `${payload.height}px`);
   })
   .catch((error) => notice(error, true));
 

@@ -571,7 +571,9 @@ fn main() {
         .manage(WorkspaceRefreshState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            panel::show(app, None)
+            // Called on a D-Bus thread; showing the panel uses GTK.
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || panel::show(&handle, None));
         }))
         .setup(|app| {
             appearance::configure(app)?;

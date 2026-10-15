@@ -195,10 +195,19 @@ p {
 
 /* ------------------------------------------------------------------- panel */
 
+/* On Linux the window keeps its largest height and the backend places the
+   panel within it (panel.rs); elsewhere the panel is the whole window. */
+:root {
+  --panel-top: 0px;
+  --panel-height: 100vh;
+  --panel-below: calc(100vh - var(--panel-top) - var(--panel-height));
+}
+
 .panel {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: var(--panel-height);
+  margin-top: var(--panel-top);
   overflow: hidden;
   background: var(--window);
 }
@@ -225,7 +234,7 @@ html.frosted {
 .frosted .panel {
   background:
     linear-gradient(var(--glass-tint), var(--glass-tint)),
-    var(--backdrop-image) var(--backdrop-position) / var(--backdrop-size) no-repeat,
+    var(--backdrop-image) var(--backdrop-position) / var(--backdrop-size) no-repeat fixed,
     var(--window);
   box-shadow: inset 0 0 0 0.5px var(--glass-rim);
 }
@@ -1865,6 +1874,30 @@ dialog::backdrop {
   background: rgba(0, 0, 0, 0.12);
 }
 
+/* Centered in the panel, which on Linux is only a part of the window; there
+   the panel itself dims, as the rest of the window is not shown. */
+dialog {
+  top: var(--panel-top);
+  bottom: var(--panel-below);
+}
+
+.linux dialog::backdrop {
+  background: transparent;
+}
+
+.linux.modal .panel::after {
+  content: "";
+  position: fixed;
+  z-index: 50;
+  left: 0;
+  right: 0;
+  top: var(--panel-top);
+  height: var(--panel-height);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+}
+
 dialog form {
   display: flex;
   flex-direction: column;
@@ -1910,7 +1943,7 @@ dialog > .dialog-actions {
   z-index: 40;
   left: 15px;
   right: 15px;
-  bottom: 14px;
+  bottom: calc(14px + var(--panel-below));
   display: flex;
   align-items: flex-start;
   gap: 7px;
