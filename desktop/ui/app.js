@@ -1002,10 +1002,12 @@ function pageLayer(className) {
 let modeMorph = null;
 // While cards morph, the panel follows them instead of their final layout.
 let holdFit = false;
-// Each card starts changing this long after the one above it; collapsing
-// runs quicker than expanding.
-const MORPH_STAGGER = 22;
-const MORPH_DURATION = { collapse: 340, expand: 420 };
+// Each card starts changing this long after the one above it, the delays
+// together never exceeding MORPH_STAGGER_SPAN; collapsing runs quicker than
+// expanding.
+const MORPH_STAGGER = 8;
+const MORPH_STAGGER_SPAN = 30;
+const MORPH_DURATION = { collapse: 100, expand: 120 };
 /// Between full cards and collapsed rows, with continuity (morph.js): the
 /// cards stay one contiguous stack as each changes in turn, their names,
 /// plans, usage and controls travel to their places in the other form, and
@@ -1074,7 +1076,7 @@ function morphMode(list, before) {
     sheet,
     collapsing: collapsed,
     duration: MORPH_DURATION[collapsed ? "collapse" : "expand"],
-    stagger: MORPH_STAGGER,
+    stagger: Math.min(MORPH_STAGGER, MORPH_STAGGER_SPAN / Math.max(1, items.length - 1)),
     radius: collapsed ? { source: 8, target: 0 } : { source: 0, target: 8 },
     onFrame: follow,
   });
