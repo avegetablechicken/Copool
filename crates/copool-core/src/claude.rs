@@ -733,6 +733,7 @@ impl Stored {
             awaiting_first_request: self.first_request_pending,
             token_expires_at: crate::models::displayed_expiry(expires_at(&self.oauth) / 1000),
             renewal: Some(Renewal::of(self.renewal).as_str().into()),
+            next_refresh_at: None,
         }
     }
 }
@@ -1727,6 +1728,24 @@ impl Application {
             .chain(sub2api::summaries(&store, provider))
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
+        if let Some(schedule) = self.refresh_schedule() {
+            let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
+            for card in &mut summaries {
+                // As `claude_refresh_recurring`: Sub2api cards of the provider
+                // in use every round; an account once its interval has passed
+                // since it was last asked, and no rate limit pause holds it.
+                card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
+                    None => card.is_current.then(|| schedule.next_refresh_at(true, 0)),
+                    Some(account) if account.first_request_pending => None,
+                    Some(account) => {
+                        let every = every_round.as_deref() == Some(card.id.as_str());
+                        let due = account.updated_at + schedule.interval;
+                        let not_before = due.max(account.usage_retry_at.unwrap_or_default());
+                        Some(schedule.next_refresh_at(every, not_before))
+                    }
+                };
+            }
+        }
         Ok(summaries)
     }
     /// Adds or updates an account; a new one waits for a manual refresh when
@@ -3030,6 +3049,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(usages(&fake).len(), 7);
+    }
+
+    #[tokio::test]
+    async fn cards_show_when_the_background_refresh_asks_for_them_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _fake) = app(&dir).await;
+        for name in ["carol", "bob", "alice"] {
+            sign_in(&location, name, LATER);
+            app.claude_import_current().await.unwrap();
+        }
+        let id = |name: &str| {
+            let store = app.claude_load().unwrap();
+            let email = format!("{name}@example.com");
+            let account = store
+                .accounts
+                .iter()
+                .find(|a| text(&a.account["emailAddress"]).as_deref() == Some(email.as_str()));
+            account.unwrap().id.clone()
+        };
+        let (alice, bob, carol) = (id("alice"), id("bob"), id("carol"));
+        // Nothing is scheduled before the first background round, which
+        // asks no one: every account was asked at import.
+        let next = |accounts: &[AccountSummary], id: &str| {
+            accounts
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap()
+                .next_refresh_at
+        };
+        let accounts = app.claude_accounts().await.unwrap();
+        assert_eq!(next(&accounts, &alice), None);
+        app.background_round(1, &mut 0).await;
+        let schedule = app.refresh_schedule().unwrap();
+        assert_eq!((schedule.tick, schedule.interval), (2, REFRESH_SECONDS));
+        // A rate limit pause holds Bob past the next full round; Carol waits
+        // for a manual refresh.
+        let mut store = app.claude_load().unwrap();
+        for account in &mut store.accounts {
+            if account.id == bob {
+                account.usage_retry_at = Some(schedule.at + 5 * REFRESH_SECONDS + 10);
+            } else if account.id == carol {
+                account.first_request_pending = true;
+            }
+        }
+        app.claude_save(&store).unwrap();
+        let accounts = app.claude_accounts().await.unwrap();
+        // The current account every round once its interval has passed; the
+        // others on full rounds (ticks 6, 12, ...).
+        assert_eq!(next(&accounts, &alice), Some(schedule.at));
+        assert_eq!(
+            next(&accounts, &bob),
+            Some(schedule.at + 10 * REFRESH_SECONDS)
+        );
+        assert_eq!(next(&accounts, &carol), None);
     }
 
     #[tokio::test]

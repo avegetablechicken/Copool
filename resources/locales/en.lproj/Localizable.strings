@@ -475,6 +475,8 @@
 "accounts.renewal.never" = "Never renew";
 "accounts.renewal.once" = "Renew once";
 "accounts.renewal.always" = "Always renew";
+"accounts.refresh.next_format" = "Next automatic refresh in %@";
+"accounts.refresh.next_due" = "Automatic refresh due now";
 "accounts.proxy.provider_help" = "HTTP, HTTPS or SOCKS5. Leave blank to inherit the Provider proxy.";
 "accounts.proxy.unsupported" = "This network service does not support an account proxy.";
 

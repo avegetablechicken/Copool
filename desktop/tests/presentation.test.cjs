@@ -300,6 +300,22 @@ test("token expiry shows the largest whole unit left, or expired", () => {
   assert.equal(left(6 * 86400, "zh-Hans"), "6天");
   assert.equal(left(5 * 3600, "zh_CN"), "5小时");
 });
+test("The next automatic refresh counts down to the second, due once reached", () => {
+  const now = 1_800_000_000;
+  assert.equal(P.refreshCountdown(null, now), null);
+  assert.equal(P.refreshCountdown(undefined, now), null);
+  const left = (seconds, locale) => P.refreshCountdown(now + seconds, now, locale);
+  for (const seconds of [-60, 0, -0.5])
+    assert.deepEqual(left(seconds), { due: true, remaining: null });
+  assert.equal(left(0.2).remaining, "1s");
+  assert.equal(left(45).remaining, "45s");
+  assert.equal(left(60).remaining, "1m");
+  assert.equal(left(61).remaining, "2m");
+  assert.equal(left(30 * 60).remaining, "30m");
+  assert.equal(left(3600).remaining, "1h");
+  assert.equal(left(3600 + 19 * 60 + 1).remaining, "1h 20m");
+  assert.equal(left(4 * 60 + 30, "zh-Hans").remaining, "5分钟");
+});
 test("A reset counts down as OpenQuota shows it, soon within five minutes", () => {
   const now = 1_800_000_000;
   assert.equal(P.resetCountdown(null, now), null);

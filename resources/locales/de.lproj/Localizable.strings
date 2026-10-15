@@ -447,6 +447,8 @@
 "accounts.renewal.never" = "Nie erneuern";
 "accounts.renewal.once" = "Einmal erneuern";
 "accounts.renewal.always" = "Immer erneuern";
+"accounts.refresh.next_format" = "Nächste automatische Aktualisierung in %@";
+"accounts.refresh.next_due" = "Automatische Aktualisierung steht an";
 "accounts.proxy.provider_help" = "HTTP, HTTPS oder SOCKS5. Leer lassen, um den Provider-Proxy zu verwenden.";
 "accounts.proxy.unsupported" = "Dieser Netzwerkdienst unterstützt keinen Konto-Proxy.";
 

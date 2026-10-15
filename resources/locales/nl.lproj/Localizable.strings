@@ -447,6 +447,8 @@
 "accounts.renewal.never" = "Nooit vernieuwen";
 "accounts.renewal.once" = "Eén keer vernieuwen";
 "accounts.renewal.always" = "Altijd vernieuwen";
+"accounts.refresh.next_format" = "Volgende automatische vernieuwing over %@";
+"accounts.refresh.next_due" = "Automatische vernieuwing volgt zo";
 "accounts.proxy.provider_help" = "HTTP, HTTPS of SOCKS5. Laat leeg om de proxy van de Provider te gebruiken.";
 "accounts.proxy.unsupported" = "Deze netwerkdienst ondersteunt geen accountproxy.";
 

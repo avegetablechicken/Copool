@@ -152,6 +152,39 @@
       }).format(parts),
     };
   }
+  /// Time until the next automatic refresh: hours and minutes, minutes
+  /// (rounded up), or seconds under a minute, localized; due once reached;
+  /// null without one.
+  function refreshCountdown(epoch, now, locale = "en") {
+    if (!Number.isFinite(epoch)) return null;
+    const seconds = Math.ceil(epoch - now);
+    if (seconds <= 0) return { due: true, remaining: null };
+    const minutes = Math.ceil(seconds / 60),
+      language = resolveLocale(locale);
+    const parts = (
+      seconds < 60
+        ? [["second", seconds]]
+        : minutes >= 60
+          ? [
+              ["hour", Math.floor(minutes / 60)],
+              ["minute", minutes % 60],
+            ].filter(([, n], i) => !i || n)
+          : [["minute", minutes]]
+    ).map(([unit, amount]) =>
+      new Intl.NumberFormat(language, {
+        style: "unit",
+        unit,
+        unitDisplay: "narrow",
+      }).format(amount),
+    );
+    return {
+      due: false,
+      remaining: new Intl.ListFormat(language, {
+        type: "unit",
+        style: "narrow",
+      }).format(parts),
+    };
+  }
   function windowPresentation(
     window,
     mode = "used",
@@ -583,6 +616,7 @@
     windowPresentation,
     formatReset,
     tokenExpiry,
+    refreshCountdown,
     resetCountdown,
     card,
     actions,

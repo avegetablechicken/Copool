@@ -71,6 +71,7 @@ impl Account {
             awaiting_first_request: false,
             token_expires_at: None,
             renewal: None,
+            next_refresh_at: None,
             available: self.status.eq_ignore_ascii_case("active"),
             proxy_url: self.proxy_url.clone().unwrap_or_default(),
         }

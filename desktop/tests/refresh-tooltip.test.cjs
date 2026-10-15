@@ -1,0 +1,51 @@
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const P = require("../ui/presentation.js");
+
+const source = fs.readFileSync(path.join(__dirname, "../ui/app.js"), "utf8");
+const body = (name) => {
+  const start = source.indexOf(`function ${name}(`);
+  return source.slice(start, source.indexOf("\n}\n", start) + 3);
+};
+function load() {
+  const context = {
+    P,
+    locale: "en",
+    tr: (key, ...args) => (args.length ? `${key}:${args.join(",")}` : key),
+  };
+  vm.createContext(context);
+  vm.runInContext(body("nextRefreshAt") + body("refreshTooltip"), context);
+  return context;
+}
+
+test("A refresh button tells how long until its next automatic refresh", () => {
+  const { refreshTooltip } = load();
+  const button = {};
+  let at = null;
+  refreshTooltip(button, "Refresh", () => at);
+  assert.equal(button.title, "Refresh");
+  // Worked out again as the pointer enters, not when the card rendered.
+  at = Date.now() / 1000 + 90;
+  button.onpointerenter();
+  assert.equal(button.title, "Refresh\naccounts.refresh.next_format:2m");
+  at = Date.now() / 1000 - 1;
+  button.onpointerenter();
+  assert.equal(button.title, "Refresh\naccounts.refresh.next_due");
+});
+
+test("The pool and a provider count from their first card due", () => {
+  const { nextRefreshAt } = load();
+  assert.equal(nextRefreshAt([]), null);
+  assert.equal(nextRefreshAt([{}, { nextRefreshAt: null }]), null);
+  assert.equal(
+    nextRefreshAt([{ nextRefreshAt: 300 }, {}, { nextRefreshAt: 120 }]),
+    120,
+  );
+  // The toolbar, each card and each provider's shared button use it.
+  assert.match(body("renderToolbar"), /refreshTooltip\(\$\("refresh-all"\)[\s\S]*nextRefreshAt\(accountsCache\)/);
+  assert.match(source, /refreshTooltip\(refresh, tr\("common\.refresh_usage"\), \(\) => account\.nextRefreshAt\)/);
+  assert.match(body("providerControls"), /nextRefreshAt\(group\.accounts\)/);
+});

@@ -447,6 +447,8 @@
 "accounts.renewal.never" = "Не обновлять";
 "accounts.renewal.once" = "Обновить один раз";
 "accounts.renewal.always" = "Всегда обновлять";
+"accounts.refresh.next_format" = "Следующее автообновление через %@";
+"accounts.refresh.next_due" = "Автообновление вот-вот начнётся";
 "accounts.proxy.provider_help" = "HTTP, HTTPS или SOCKS5. Оставьте пустым для использования прокси Provider.";
 "accounts.proxy.unsupported" = "Эта сетевая служба не поддерживает прокси аккаунта.";
 

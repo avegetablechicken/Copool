@@ -243,7 +243,10 @@ function renderToolbar() {
   $("smart-switch").title = $("smart-switch").textContent;
   $("smart-switch").disabled = !smartSwitch.enabled || !accountsCache.length;
   label($("refresh-all"), "common.refresh_usage");
-  $("refresh-all").title = withShortcut($("refresh-all").title, "r");
+  // The pool's next automatic refresh is that of its first card due.
+  refreshTooltip($("refresh-all"), withShortcut($("refresh-all").title, "r"), () =>
+    nextRefreshAt(accountsCache),
+  );
   $("refresh-all").disabled = !refresh.enabled;
   $("refresh-all").classList.toggle("spinning", Boolean(refresh.spinning));
   setIcon($("collapse-all"), SYMBOL_ICONS[collapse.symbol]);
@@ -581,8 +584,8 @@ function accountControls(account, full, view, grouped = false) {
   const refresh = button("", "refresh", "icon-btn card-refresh", () =>
     refreshUsage(account.id),
   );
-  refresh.title = tr("common.refresh_usage");
-  refresh.setAttribute("aria-label", `${refresh.title} ${full}`);
+  refresh.setAttribute("aria-label", `${tr("common.refresh_usage")} ${full}`);
+  refreshTooltip(refresh, tr("common.refresh_usage"), () => account.nextRefreshAt);
   refresh.classList.toggle("spinning", refreshing);
   actions.append(refresh);
   if (!account.isCurrent) {
@@ -634,6 +637,29 @@ function tokenLabel(account) {
     ? tr("accounts.card.token_expired")
     : tr("accounts.card.token_expires_format", expiry.remaining);
 }
+/// The earliest automatic refresh of these cards (Unix seconds), or null.
+function nextRefreshAt(accounts) {
+  const times = accounts
+    .map((account) => account.nextRefreshAt)
+    .filter(Number.isFinite);
+  return times.length ? Math.min(...times) : null;
+}
+/// A refresh button's tooltip, followed by how long until the automatic
+/// refresh at `nextAt()`; worked out again as the pointer enters.
+function refreshTooltip(target, base, nextAt) {
+  const update = () => {
+    const next = P.refreshCountdown(nextAt(), Date.now() / 1000, locale);
+    target.title = !next
+      ? base
+      : `${base}\n${
+          next.due
+            ? tr("accounts.refresh.next_due")
+            : tr("accounts.refresh.next_format", next.remaining)
+        }`;
+  };
+  update();
+  target.onpointerenter = update;
+}
 /// Refresh and switch for a whole Sub2api provider, which its cards share:
 /// switching to any of them selects the provider.
 function providerControls(group, title, current) {
@@ -642,8 +668,10 @@ function providerControls(group, title, current) {
   const refresh = button("", "refresh", "icon-btn card-refresh", () =>
     refreshProvider(group),
   );
-  refresh.title = tr("common.refresh_usage");
-  refresh.setAttribute("aria-label", `${refresh.title} ${title}`);
+  refresh.setAttribute("aria-label", `${tr("common.refresh_usage")} ${title}`);
+  refreshTooltip(refresh, tr("common.refresh_usage"), () =>
+    nextRefreshAt(group.accounts),
+  );
   refresh.classList.toggle(
     "spinning",
     ids.some(

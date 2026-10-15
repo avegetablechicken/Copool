@@ -105,6 +105,11 @@ pub struct AccountSummary {
     /// "never", "once" or "always". None for other accounts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub renewal: Option<String>,
+    /// When the background refresh next asks for the account's usage (Unix
+    /// seconds), should its interval stay as it is. None for an account it
+    /// leaves to manual refreshes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_refresh_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -488,6 +493,7 @@ impl StoredAccount {
             token_expires_at: crate::auth::access_token_expiry(&self.auth_json)
                 .and_then(displayed_expiry),
             renewal: None,
+            next_refresh_at: None,
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),

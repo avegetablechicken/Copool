@@ -475,6 +475,8 @@
 "accounts.renewal.never" = "永不续期";
 "accounts.renewal.once" = "续期一次";
 "accounts.renewal.always" = "始终续期";
+"accounts.refresh.next_format" = "%@后自动刷新";
+"accounts.refresh.next_due" = "即将自动刷新";
 "accounts.proxy.provider_help" = "支持 HTTP、HTTPS 或 SOCKS5；留空继承 Provider 的代理设置。";
 "accounts.proxy.unsupported" = "此网络服务不支持账号代理。";
 

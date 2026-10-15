@@ -190,6 +190,8 @@ pub struct Application {
     pub(crate) claude: crate::claude::State,
     /// Seconds until the next background refresh, adapted to usage changes.
     pub(crate) refresh_interval: std::sync::atomic::AtomicU64,
+    /// The next background round; none before the first starts.
+    refresh_schedule: std::sync::Mutex<Option<crate::refresh_policy::Schedule>>,
 }
 pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
@@ -247,6 +249,7 @@ impl Application {
             changes: Arc::new(std::sync::RwLock::new(None)),
             claude: Default::default(),
             refresh_interval: crate::refresh_policy::REFRESH_INTERVAL.as_secs().into(),
+            refresh_schedule: Default::default(),
         };
         app.migrate_provider_credentials()?;
         app.preferences()?;
@@ -569,6 +572,20 @@ impl Application {
             }
         }
         crate::ranking::sort_for_display(&mut summaries);
+        if let Some(schedule) = self.refresh_schedule() {
+            let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
+            for card in &mut summaries {
+                // Sub2api cards refresh with their provider while it is in use.
+                card.next_refresh_at = if card.source_tag.as_deref() == Some("SUB2API") {
+                    card.is_current.then(|| schedule.next_refresh_at(true, 0))
+                } else if card.awaiting_first_request {
+                    None
+                } else {
+                    let every = every_round.as_deref() == Some(card.id.as_str());
+                    Some(schedule.next_refresh_at(every, 0))
+                };
+            }
+        }
         Ok(summaries)
     }
     pub async fn import_current(&self) -> Result<usize> {
@@ -1241,6 +1258,15 @@ impl Application {
         tick: u64,
         unchanged: &mut u8,
     ) -> std::time::Duration {
+        let schedule = |at, tick| {
+            *self.refresh_schedule.lock().unwrap() = Some(crate::refresh_policy::Schedule {
+                at,
+                tick,
+                interval: self.refresh_interval().as_secs() as i64,
+            });
+        };
+        // This round is due now until it ends.
+        schedule(now_unix_seconds(), tick);
         let before = self.usage_values().await;
         if tick == 0 {
             let _ = tokio::join!(self.refresh_recurring(tick), async {
@@ -1261,7 +1287,16 @@ impl Application {
         );
         self.refresh_interval
             .store(interval.as_secs(), std::sync::atomic::Ordering::Relaxed);
+        schedule(
+            now_unix_seconds() + interval.as_secs() as i64,
+            tick.wrapping_add(1),
+        );
+        // Cards show when they refresh next.
+        self.publish();
         interval
+    }
+    pub(crate) fn refresh_schedule(&self) -> Option<crate::refresh_policy::Schedule> {
+        *self.refresh_schedule.lock().unwrap()
     }
     /// The interval until the next background refresh.
     pub(crate) fn refresh_interval(&self) -> std::time::Duration {
@@ -1549,6 +1584,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(network.calls.lock().unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn cards_show_when_the_background_refresh_asks_for_them_next() {
+        let (_dir, app, _network) = crate::legacy_tests::network_fixture::waiting_fixture();
+        app.import_json(
+            &json!([document("alice"), document("bob"), document("carol")]).to_string(),
+        )
+        .await
+        .unwrap();
+        let accounts = app.accounts().await.unwrap();
+        // Nothing is scheduled before the first background round.
+        assert!(accounts.iter().all(|a| a.next_refresh_at.is_none()));
+        let id = |name: &str| {
+            let email = format!("{name}@example.com");
+            accounts
+                .iter()
+                .find(|a| a.email.as_deref() == Some(email.as_str()))
+                .unwrap()
+                .id
+                .clone()
+        };
+        for name in ["alice", "bob"] {
+            app.release_new_accounts(Some(&id(name))).await.unwrap();
+        }
+        app.switch_account(&id("alice")).await.unwrap();
+        *app.refresh_schedule.lock().unwrap() = Some(crate::refresh_policy::Schedule {
+            at: 1_000,
+            tick: 2,
+            interval: 300,
+        });
+        let accounts = app.accounts().await.unwrap();
+        let next = |name: &str| {
+            accounts
+                .iter()
+                .find(|a| a.id == id(name))
+                .unwrap()
+                .next_refresh_at
+        };
+        // The current card every round, the others on the next full round
+        // (tick 6), and a new account only on a manual refresh.
+        assert_eq!(next("alice"), Some(1_000));
+        assert_eq!(next("bob"), Some(2_200));
+        assert_eq!(next("carol"), None);
     }
     #[tokio::test]
     async fn shared_workspace_keeps_principals_distinct_and_switch_is_exact() {
