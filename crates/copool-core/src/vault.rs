@@ -1,8 +1,7 @@
 //! Copool's own Keychain item on macOS. One item holds the secrets Copool
 //! keeps, so that a build with a new ad-hoc signature asks for access once:
 //! the Claude pool's tokens, and the passwords and keys of Sub2api providers,
-//! remote servers and the Cloudflare tunnel, which each had an item of their
-//! own before and move into it as they are first read.
+//! remote servers and the Cloudflare tunnel.
 use crate::credentials::SecretStore;
 use serde_json::{json, Value};
 use std::sync::{
@@ -24,10 +23,6 @@ pub(crate) trait Vault: Send + Sync {
     /// The stored text; none before anything was stored.
     fn read(&self, access: KeychainAccess) -> Result<Option<String>>;
     fn write(&self, text: &str, access: KeychainAccess) -> Result<()>;
-    /// Gives an item created under an earlier name the current one.
-    fn rename(&self, _access: KeychainAccess) -> Result<()> {
-        Ok(())
-    }
 }
 
 const VERSION: u64 = 2;
@@ -37,20 +32,15 @@ const CLAUDE: &str = "claude";
 const SECRETS: &str = "secrets";
 const NOT_COPOOLS: &str = "Copool's Keychain item holds something other than Copool's secrets";
 
-/// The item's sections by name. An item written before there were sections
-/// holds the Claude pool's tokens alone.
+/// The item's sections by name. Contents of another version are never
+/// written over.
 fn document(text: Option<String>) -> Result<Value> {
     let Some(text) = text else {
         return Ok(json!({ "version": VERSION }));
     };
-    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) else {
-        return Err(NOT_COPOOLS.into());
-    };
-    match map.get("version") {
-        None => Ok(json!({ "version": VERSION, CLAUDE: map })),
-        Some(version) if version.as_u64() == Some(VERSION) => Ok(Value::Object(map)),
-        // Never written over by a build that does not know its sections.
-        Some(_) => Err("Copool's Keychain item was written by a newer Copool".into()),
+    match serde_json::from_str::<Value>(&text) {
+        Ok(doc) if doc["version"].as_u64() == Some(VERSION) => Ok(doc),
+        _ => Err(NOT_COPOOLS.into()),
     }
 }
 
@@ -100,8 +90,6 @@ impl Item {
         self.ask.store(read.is_ok(), Ordering::Relaxed);
         let doc = read?;
         *cache = Some(doc.clone());
-        // Once allowed, renaming asks for nothing more; it may fail silently.
-        let _ = self.store.rename(KeychainAccess::Background);
         Ok(doc)
     }
     /// The document, read once.
@@ -185,67 +173,45 @@ impl Vault for Section {
     }
 }
 
-/// Secrets kept, one Keychain item each, before they joined the item.
-pub(crate) trait Legacy: Send + Sync {
-    fn get(&self, id: &str, access: KeychainAccess) -> Result<Option<String>>;
-    fn remove(&self, id: &str, access: KeychainAccess) -> Result<()>;
-}
-
 /// `SecretStore` over the item's secrets.
 pub(crate) struct ItemSecrets {
     item: Arc<Item>,
-    legacy: Arc<dyn Legacy>,
 }
 impl ItemSecrets {
-    pub(crate) fn new(item: Arc<Item>, legacy: Arc<dyn Legacy>) -> Self {
-        Self { item, legacy }
+    pub(crate) fn new(item: Arc<Item>) -> Self {
+        Self { item }
     }
 }
 impl SecretStore for ItemSecrets {
     fn get(&self, id: &str) -> Result<Option<String>> {
-        if let Some(value) = self.item.cached()?[SECRETS].get(id).and_then(Value::as_str) {
-            return Ok(Some(value.into()));
-        }
-        // A secret from before the item moves into it, then leaves its own.
-        let access = self.item.access();
-        let Some(value) = self.legacy.get(id, access)? else {
-            return Ok(None);
-        };
-        if self
-            .item
-            .update(access, |doc| doc[SECRETS][id] = value.as_str().into())
-            .is_ok()
-        {
-            let _ = self.legacy.remove(id, KeychainAccess::Background);
-        }
-        Ok(Some(value))
+        Ok(self.item.cached()?[SECRETS]
+            .get(id)
+            .and_then(Value::as_str)
+            .map(str::to_owned))
     }
     fn set(&self, id: &str, password: &str) -> Result<()> {
         self.item.update(KeychainAccess::Interactive, |doc| {
             doc[SECRETS][id] = password.into()
-        })?;
-        let _ = self.legacy.remove(id, KeychainAccess::Background);
-        Ok(())
+        })
     }
     fn remove(&self, id: &str) -> Result<()> {
         self.item.update(KeychainAccess::Interactive, |doc| {
             if let Some(secrets) = doc[SECRETS].as_object_mut() {
                 secrets.remove(id);
             }
-        })?;
-        let _ = self.legacy.remove(id, KeychainAccess::Background);
-        Ok(())
+        })
     }
 }
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::{KeychainAccess, Legacy, Result, Vault};
+    use super::{KeychainAccess, Result, Vault};
     use crate::claude::keychain;
 
     const SERVICE: &str = "io.github.copool.rust.claude";
     const ACCOUNT: &str = "accounts";
-    const LABEL: &str = "Copool";
+    /// The app's bundle identifier.
+    const LABEL: &str = "io.github.copool.rust";
 
     /// The item in the user's Keychain.
     pub(crate) struct KeychainVault;
@@ -260,35 +226,14 @@ mod macos {
         fn write(&self, text: &str, access: KeychainAccess) -> Result<()> {
             keychain::write_private(SERVICE, ACCOUNT, LABEL, text.as_bytes(), access)
         }
-        /// The item was named "Copool Claude accounts" while it held only
-        /// the Claude pool's tokens.
-        fn rename(&self, access: KeychainAccess) -> Result<()> {
-            keychain::relabel_private(SERVICE, ACCOUNT, LABEL, access)
-        }
-    }
-
-    /// The items `SystemSecrets` kept, one per secret.
-    pub(crate) struct LegacyKeychain;
-    impl Legacy for LegacyKeychain {
-        fn get(&self, id: &str, access: KeychainAccess) -> Result<Option<String>> {
-            keychain::read_private(crate::credentials::SERVICE, id, access)?
-                .map(|bytes| {
-                    String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 credential".into())
-                })
-                .transpose()
-        }
-        fn remove(&self, id: &str, access: KeychainAccess) -> Result<()> {
-            keychain::delete_private(crate::credentials::SERVICE, id, access)
-        }
     }
 }
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{KeychainVault, LegacyKeychain};
+pub(crate) use macos::KeychainVault;
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     /// The item in memory, recording how each read asked.
     #[derive(Default)]
@@ -296,7 +241,6 @@ pub(crate) mod tests {
         pub(crate) text: Mutex<Option<String>>,
         pub(crate) refuse: AtomicBool,
         pub(crate) reads: Mutex<Vec<KeychainAccess>>,
-        pub(crate) renames: Mutex<Vec<KeychainAccess>>,
     }
     impl Vault for Memory {
         fn read(&self, access: KeychainAccess) -> Result<Option<String>> {
@@ -310,21 +254,6 @@ pub(crate) mod tests {
             *self.text.lock().unwrap() = Some(text.into());
             Ok(())
         }
-        fn rename(&self, access: KeychainAccess) -> Result<()> {
-            self.renames.lock().unwrap().push(access);
-            Ok(())
-        }
-    }
-    #[derive(Default)]
-    struct OldItems(Mutex<HashMap<String, String>>);
-    impl Legacy for OldItems {
-        fn get(&self, id: &str, _: KeychainAccess) -> Result<Option<String>> {
-            Ok(self.0.lock().unwrap().get(id).cloned())
-        }
-        fn remove(&self, id: &str, _: KeychainAccess) -> Result<()> {
-            self.0.lock().unwrap().remove(id);
-            Ok(())
-        }
     }
     fn stored(memory: &Memory) -> Value {
         serde_json::from_str(memory.text.lock().unwrap().as_deref().unwrap()).unwrap()
@@ -333,11 +262,11 @@ pub(crate) mod tests {
     #[test]
     fn the_claude_tokens_and_other_secrets_share_the_item() {
         let memory = Arc::new(Memory::default());
-        // An item from before the sections: the Claude pool's tokens alone.
-        *memory.text.lock().unwrap() = Some(r#"{"a":{"accessToken":"t"}}"#.into());
+        *memory.text.lock().unwrap() =
+            Some(r#"{"version":2,"claude":{"a":{"accessToken":"t"}}}"#.into());
         let item = Item::new(memory.clone());
         let claude = Section::claude(item.clone());
-        let secrets = ItemSecrets::new(item.clone(), Arc::new(OldItems::default()));
+        let secrets = ItemSecrets::new(item.clone());
         assert_eq!(
             claude.read(KeychainAccess::Background).unwrap().as_deref(),
             Some(r#"{"a":{"accessToken":"t"}}"#)
@@ -362,38 +291,31 @@ pub(crate) mod tests {
         secrets.remove("provider").unwrap();
         assert_eq!(secrets.get("provider").unwrap(), None);
         assert_eq!(stored(&memory)["secrets"], json!({}));
-        // Unknown contents are never written over.
-        *memory.text.lock().unwrap() = Some("[1]".into());
-        let item = Item::new(memory.clone());
-        assert!(ItemSecrets::new(item, Arc::new(OldItems::default()))
-            .set("x", "y")
-            .is_err());
-        *memory.text.lock().unwrap() = Some(r#"{"version":3}"#.into());
-        let item = Item::new(memory.clone());
-        assert!(Section::claude(item)
-            .read(KeychainAccess::Background)
-            .is_err());
+        // Contents of another version, or not Copool's, are never written over.
+        for text in ["[1]", r#"{"a":{"accessToken":"t"}}"#, r#"{"version":3}"#] {
+            *memory.text.lock().unwrap() = Some(text.into());
+            let item = Item::new(memory.clone());
+            assert!(ItemSecrets::new(item.clone()).set("x", "y").is_err());
+            assert!(Section::claude(item)
+                .read(KeychainAccess::Background)
+                .is_err());
+            assert_eq!(memory.text.lock().unwrap().as_deref(), Some(text));
+        }
     }
 
     #[test]
     fn secrets_are_read_once_and_asked_for_until_refused() {
         let memory = Arc::new(Memory::default());
-        let item = Item::new(memory.clone());
-        let secrets = ItemSecrets::new(item.clone(), Arc::new(OldItems::default()));
+        let secrets = ItemSecrets::new(Item::new(memory.clone()));
         // The first read may ask; the others use what it read.
         assert_eq!(secrets.get("a").unwrap(), None);
         assert_eq!(secrets.get("b").unwrap(), None);
         assert_eq!(*memory.reads.lock().unwrap(), [KeychainAccess::Interactive]);
-        // The item allowed, its old name is replaced without asking again.
-        assert_eq!(
-            *memory.renames.lock().unwrap(),
-            [KeychainAccess::Background]
-        );
         // Once refused, background reads stop asking until an explicit action.
         let memory = Arc::new(Memory::default());
         memory.refuse.store(true, Ordering::Relaxed);
         let item = Item::new(memory.clone());
-        let secrets = ItemSecrets::new(item.clone(), Arc::new(OldItems::default()));
+        let secrets = ItemSecrets::new(item.clone());
         assert!(secrets.get("a").is_err());
         assert!(secrets.get("a").is_err());
         assert!(item.authorize().is_err());
@@ -402,7 +324,6 @@ pub(crate) mod tests {
             *memory.reads.lock().unwrap(),
             [Interactive, Background, Interactive]
         );
-        assert!(memory.renames.lock().unwrap().is_empty());
         memory.refuse.store(false, Ordering::Relaxed);
         item.authorize().unwrap();
         assert_eq!(secrets.get("a").unwrap(), None);
@@ -410,33 +331,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_secret_kept_on_its_own_moves_into_the_item() {
-        let memory = Arc::new(Memory::default());
-        let old = Arc::new(OldItems::default());
-        old.0
-            .lock()
-            .unwrap()
-            .insert("ssh-key:1".into(), "key".into());
-        let secrets = ItemSecrets::new(Item::new(memory.clone()), old.clone());
-        assert_eq!(secrets.get("ssh-key:1").unwrap().as_deref(), Some("key"));
-        assert!(old.0.lock().unwrap().is_empty());
-        assert_eq!(stored(&memory)["secrets"], json!({"ssh-key:1": "key"}));
-        assert_eq!(secrets.get("ssh-key:1").unwrap().as_deref(), Some("key"));
-        // Setting or removing a secret also removes its old item.
-        old.0.lock().unwrap().insert("p".into(), "old".into());
-        secrets.set("p", "new").unwrap();
-        assert!(old.0.lock().unwrap().is_empty());
-        old.0.lock().unwrap().insert("q".into(), "old".into());
-        secrets.remove("q").unwrap();
-        assert!(old.0.lock().unwrap().is_empty());
-        assert_eq!(secrets.get("q").unwrap(), None);
-    }
-
-    #[test]
     fn a_write_edits_the_item_as_it_is_now_not_as_cached() {
         let memory = Arc::new(Memory::default());
-        let item = Item::new(memory.clone());
-        let secrets = ItemSecrets::new(item.clone(), Arc::new(OldItems::default()));
+        let secrets = ItemSecrets::new(Item::new(memory.clone()));
         assert_eq!(secrets.get("a").unwrap(), None);
         // Another Copool renews the Claude pool's tokens meanwhile.
         *memory.text.lock().unwrap() =
@@ -460,8 +357,7 @@ pub(crate) mod tests {
             }
         }
         let lossy = Arc::new(Lossy(Memory::default()));
-        let item = Item::new(lossy.clone());
-        let secrets = ItemSecrets::new(item, Arc::new(OldItems::default()));
+        let secrets = ItemSecrets::new(Item::new(lossy.clone()));
         assert!(secrets.set("a", "b").is_err());
         // The next read goes to the Keychain again.
         assert_eq!(secrets.get("a").unwrap(), None);

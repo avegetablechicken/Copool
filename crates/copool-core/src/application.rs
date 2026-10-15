@@ -219,10 +219,7 @@ impl Application {
         #[cfg(target_os = "macos")]
         {
             let item = crate::vault::Item::new(Arc::new(crate::vault::KeychainVault));
-            let secrets = crate::vault::ItemSecrets::new(
-                item.clone(),
-                Arc::new(crate::vault::LegacyKeychain),
-            );
+            let secrets = crate::vault::ItemSecrets::new(item.clone());
             Self::open_inner(paths, Arc::new(secrets), Some(item))
         }
         #[cfg(not(target_os = "macos"))]

@@ -81,9 +81,6 @@ fn gateway(url: &str) -> String {
 fn password_secret(id: &str) -> String {
     format!("claude-sub2api-password:{id}")
 }
-fn api_key_secret(id: &str) -> String {
-    format!("claude-sub2api-key:{id}")
-}
 pub(super) fn is_card(id: &str) -> bool {
     id.starts_with(CARD_PREFIX)
 }
@@ -210,8 +207,7 @@ impl Application {
             store.providers.retain(|p| p.id != id);
             self.claude_save(&store)?;
         }
-        self.secrets.remove(&password_secret(id))?;
-        self.secrets.remove(&api_key_secret(id))
+        self.secrets.remove(&password_secret(id))
     }
     fn claude_sub2api_connection(&self, p: &Provider) -> Result<sub2api::Connection> {
         let source = settings_source::load(&self.claude_location(), &p.name, &p.settings_path)?;
