@@ -70,5 +70,6 @@ test("the card footer no longer shows the token expiry; the renewal button does"
   const card = source.slice(source.indexOf("function accountCard("));
   assert(!card.slice(0, card.indexOf("\nfunction ")).includes("tokenLabel("));
   const button = source.slice(source.indexOf("function renewalButton("));
-  assert.match(button.slice(0, button.indexOf("\n}\n")), /trigger\.title = tokenLabel\(account\)/);
+  assert.match(button.slice(0, button.indexOf("\n}\n")), /trigger\.title = tokenLabel\(account\) \|\| tr\("accounts\.renewal\.title"\);/);
 });
+

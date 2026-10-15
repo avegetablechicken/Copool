@@ -530,7 +530,8 @@ function renewalButton(account) {
       })),
     );
   });
-  // Its tooltip tells how long the access token has left.
+  // Its tooltip tells how long the access token has left; a token problem
+  // shows as the card's usage error, as in the SwiftUI card.
   trigger.title = tokenLabel(account) || tr("accounts.renewal.title");
   trigger.setAttribute(
     "aria-label",

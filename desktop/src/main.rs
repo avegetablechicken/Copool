@@ -258,6 +258,8 @@ async fn claude_smart_switch(app: State<'_, App>) -> Result<SmartSwitchOutcome, 
 }
 #[tauri::command]
 async fn claude_refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), String> {
+    // A manual refresh may ask for the pool's Keychain item a startup missed.
+    let _ = app.claude_authorize().await;
     app.claude_release_new_accounts(id.as_deref()).await?;
     match id {
         Some(id) => app.claude_refresh_usage(&id).await,
