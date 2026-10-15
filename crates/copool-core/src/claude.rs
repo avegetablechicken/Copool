@@ -469,44 +469,13 @@ fn refresh_scope(oauth: &Value) -> String {
     }
 }
 
-/// Keeps the pool's tokens apart from `claude-accounts.json`. On macOS, as
-/// Claude Code keeps its login, they are in a Keychain item of Copool's own;
-/// the store then holds everything but the tokens.
-trait Vault: Send + Sync {
-    /// The stored text; none before anything was stored.
-    fn read(&self, access: KeychainAccess) -> Result<Option<String>>;
-    fn write(&self, text: &str, access: KeychainAccess) -> Result<()>;
-}
+// The pool's tokens are kept apart from `claude-accounts.json`. On macOS, as
+// Claude Code keeps its login, they are in Copool's own Keychain item (see
+// `crate::vault`); the store then holds everything but the tokens.
+use crate::vault::{KeychainAccess, Vault};
 /// Each account's tokens and alternate generations, by account id.
 type Secrets = serde_json::Map<String, Value>;
 const SECRET_KEYS: [&str; 2] = ["accessToken", "refreshToken"];
-#[cfg(target_os = "macos")]
-struct KeychainVault;
-#[cfg(target_os = "macos")]
-impl Vault for KeychainVault {
-    fn read(&self, access: KeychainAccess) -> Result<Option<String>> {
-        keychain::read_private(VAULT_SERVICE, VAULT_ACCOUNT, access)?
-            .map(|bytes| {
-                String::from_utf8(bytes).map_err(|_| "Invalid Copool Keychain item".into())
-            })
-            .transpose()
-    }
-    fn write(&self, text: &str, access: KeychainAccess) -> Result<()> {
-        keychain::write_private(
-            VAULT_SERVICE,
-            VAULT_ACCOUNT,
-            VAULT_LABEL,
-            text.as_bytes(),
-            access,
-        )
-    }
-}
-#[cfg(target_os = "macos")]
-const VAULT_SERVICE: &str = "io.github.copool.rust.claude";
-#[cfg(target_os = "macos")]
-const VAULT_ACCOUNT: &str = "accounts";
-#[cfg(target_os = "macos")]
-const VAULT_LABEL: &str = "Copool Claude accounts";
 const VAULT_LOCKED: &str =
     "Copool cannot read the account's tokens from its Keychain item; refresh, or reopen Copool, and allow access";
 /// The vault's text as a map; none when it is not one, so that it is never
@@ -1189,14 +1158,8 @@ fn set_member(document: &str, key: &str, value: &Value) -> Result<String> {
     ))
 }
 
-/// Recurring synchronization stays silent; startup and explicit actions may authorize.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KeychainAccess {
-    Background,
-    Interactive,
-}
 #[cfg(target_os = "macos")]
-mod keychain;
+pub(crate) mod keychain;
 
 async fn read_live(location: &Location) -> Result<Option<Live>> {
     read_live_with_access(location, KeychainAccess::Background).await
@@ -1565,7 +1528,10 @@ impl Application {
     /// Lets a user action ask for the vault's Keychain item when background
     /// work could not read it, as after a build changed Copool's signature.
     pub async fn claude_authorize(&self) -> Result<()> {
-        self.claude_unlock().await
+        self.claude_unlock().await?;
+        // The item holds the providers' passwords as well; read once already
+        // when the pool's tokens are there.
+        self.authorize_keychain().await
     }
     /// Reads the vault once, allowing the Keychain to ask the user, and
     /// moves tokens still in the store into it. Startup and user actions do
@@ -1607,9 +1573,9 @@ impl Application {
         if let Some(vault) = self.claude.vault.read().unwrap().clone() {
             return Some(vault);
         }
-        #[cfg(target_os = "macos")]
         if uses_keychain_vault(&self.claude_location()) {
-            return Some(Arc::new(KeychainVault));
+            let item = self.keychain.clone()?;
+            return Some(Arc::new(crate::vault::Section::claude(item)));
         }
         None
     }

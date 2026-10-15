@@ -52,6 +52,7 @@ pub mod workspaces;
 
 pub mod credentials;
 pub mod sub2api;
+mod vault;
 
 mod providers;
 

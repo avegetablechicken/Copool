@@ -77,6 +77,9 @@ async fn update_account(
 }
 #[tauri::command]
 async fn refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), String> {
+    // A manual refresh may ask for Copool's Keychain item, which holds the
+    // providers' passwords, when a request was refused before.
+    let _ = app.authorize_keychain().await;
     // A manual refresh is what lets a new account contact upstream.
     app.release_new_accounts(id.as_deref()).await?;
     match id {
@@ -170,6 +173,7 @@ async fn remove_provider(app: State<'_, App>, id: String) -> Result<(), String> 
 }
 #[tauri::command]
 async fn refresh_provider(app: State<'_, App>, id: String, sync: bool) -> Result<usize, String> {
+    let _ = app.authorize_keychain().await;
     app.refresh_provider(&id, sync).await
 }
 #[tauri::command]
@@ -306,10 +310,12 @@ async fn claude_remove_sub2api_provider(app: State<'_, App>, id: String) -> Resu
 }
 #[tauri::command]
 async fn claude_refresh_provider(app: State<'_, App>, id: String) -> Result<(), String> {
+    let _ = app.authorize_keychain().await;
     app.claude_refresh_sub2api_provider(&id).await
 }
 #[tauri::command]
 async fn claude_sync_sub2api(app: State<'_, App>) -> Result<usize, String> {
+    let _ = app.authorize_keychain().await;
     app.claude_sync_sub2api().await
 }
 #[tauri::command]
@@ -433,6 +439,10 @@ async fn remote_action(
     id: String,
     action: String,
 ) -> Result<serde_json::Value, String> {
+    // Status loads with the tab; the other actions are the user's.
+    if action != "status" {
+        let _ = app.authorize_keychain().await;
+    }
     app.remote_action(&id, &action, handle.path().resource_dir().ok())
         .await
 }
@@ -465,6 +475,8 @@ async fn tunnel_action(
                 return Err("Enable public access first".into());
             }
             app.save_tunnel_configuration(&config).await?;
+            let _ = app.authorize_keychain().await;
+            let config = app.with_tunnel_token(config)?;
             return tunnel
                 .start(
                     &app.paths.data_dir,

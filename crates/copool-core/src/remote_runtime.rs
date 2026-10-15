@@ -1,7 +1,6 @@
 //! SSH transport for the same deployment plans used by the original app.
 use crate::{
     application::Application,
-    credentials::{SecretStore, SystemSecrets},
     deployment,
     models::{RemoteAuthMode, RemoteServerConfig},
     remote,
@@ -53,7 +52,6 @@ async fn ssh(
             .private_key
             .take()
             .filter(|s| !s.is_empty())
-            .or(SystemSecrets.get(&format!("ssh-key:{}", server.id))?)
             .ok_or("Private key is empty")?;
         let mut file = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
         file.write_all(content.as_bytes())
@@ -68,7 +66,6 @@ async fn ssh(
             .password
             .take()
             .filter(|s| !s.is_empty())
-            .or(SystemSecrets.get(&format!("ssh-password:{}", server.id))?)
             .ok_or("SSH password is empty")?;
         args.retain(|s| s != "BatchMode=yes");
         // Remove the now-orphaned -o before -- or -i.
@@ -216,7 +213,7 @@ impl Application {
         action: &str,
         resources: Option<PathBuf>,
     ) -> Result<Value, String> {
-        let server: RemoteServerConfig = serde_json::from_value(
+        let mut server: RemoteServerConfig = serde_json::from_value(
             self.configuration()?
                 .remote_servers
                 .into_iter()
@@ -225,6 +222,18 @@ impl Application {
         )
         .map_err(|e| e.to_string())?;
         validate(&server)?;
+        // The saved password or key, which the settings never hold.
+        match server.auth_mode {
+            RemoteAuthMode::Password if server.password.as_deref().unwrap_or("").is_empty() => {
+                server.password = self.secrets.get(&format!("ssh-password:{id}"))?;
+            }
+            RemoteAuthMode::KeyContent
+                if server.private_key.as_deref().unwrap_or("").is_empty() =>
+            {
+                server.private_key = self.secrets.get(&format!("ssh-key:{id}"))?;
+            }
+            _ => {}
+        }
         let unit = remote::service_name(id);
         match action {
             "status" => status(&server, &unit).await,

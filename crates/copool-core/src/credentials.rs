@@ -4,7 +4,8 @@ pub trait SecretStore: Send + Sync {
     fn set(&self, id: &str, password: &str) -> Result<(), String>;
     fn remove(&self, id: &str) -> Result<(), String>;
 }
-const SERVICE: &str = "io.github.copool.rust.sub2api";
+/// The service of the items `SystemSecrets` keeps, one per secret.
+pub(crate) const SERVICE: &str = "io.github.copool.rust.sub2api";
 #[cfg(not(target_os = "macos"))]
 fn with_entry<T: Send + 'static>(
     id: &str,

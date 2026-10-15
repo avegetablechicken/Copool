@@ -170,7 +170,7 @@ fn update_item(
 /// An item of Copool's own. Copool creates it, so only Copool reads it
 /// without asking; after a build changes Copool's signature, the user is asked
 /// again, which background access never does.
-pub(super) fn read_private(
+pub(crate) fn read_private(
     service: &str,
     account: &str,
     access: KeychainAccess,
@@ -181,7 +181,7 @@ pub(super) fn read_private(
         Err(error) => Err(format!("Copool Keychain access failed: {error}")),
     }
 }
-pub(super) fn write_private(
+pub(crate) fn write_private(
     service: &str,
     account: &str,
     label: &str,
@@ -195,6 +195,20 @@ pub(super) fn write_private(
     created.set_label(label);
     passwords::set_generic_password_options(bytes, created)
         .map_err(|error| format!("Could not create Copool's Keychain item: {error}"))
+}
+/// Removes an item of Copool's own; none is no error.
+#[allow(deprecated)]
+pub(crate) fn delete_private(service: &str, account: &str, access: KeychainAccess) -> Result<()> {
+    let query = options(service, Some(account), access);
+    let query = CFDictionary::from_CFType_pairs(&query.query);
+    // SAFETY: The owned dictionary remains alive for the Security call.
+    match unsafe { SecItemDelete(query.as_concrete_TypeRef()) } {
+        0 | -25300 => Ok(()),
+        code => Err(format!(
+            "Could not remove Copool's Keychain item: {}",
+            Error::from_code(code)
+        )),
+    }
 }
 fn value_attributes(bytes: &[u8]) -> CFDictionary<CFString, core_foundation::base::CFType> {
     CFDictionary::from_CFType_pairs(&[(

@@ -81,6 +81,19 @@ impl Application {
             serde_json::to_value(&config).map_err(|e| e.to_string())?;
         self.persist_configuration(&settings)
     }
+    /// The configuration with its saved API token, which the settings never
+    /// hold, for starting a named tunnel.
+    pub fn with_tunnel_token(
+        &self,
+        mut config: crate::tunnel::Configuration,
+    ) -> Result<crate::tunnel::Configuration, String> {
+        if config.tunnel_mode == "named" && config.api_token.is_empty() {
+            if let Some(token) = self.secrets.get("cloudflare-api-token")? {
+                config.api_token = token;
+            }
+        }
+        Ok(config)
+    }
     fn has_cloudflare_token(&self) -> bool {
         self.secrets
             .get("cloudflare-api-token")

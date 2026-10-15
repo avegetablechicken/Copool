@@ -178,6 +178,9 @@ impl Preferences {
 pub struct Application {
     pub paths: Paths,
     pub(crate) secrets: Arc<dyn crate::credentials::SecretStore>,
+    /// Copool's own Keychain item, holding `secrets` and the Claude pool's
+    /// tokens; none off macOS and for injected secrets.
+    pub(crate) keychain: Option<Arc<crate::vault::Item>>,
     pub(crate) network: Arc<dyn crate::account_network::AccountNetwork>,
     pub(crate) state: AppState,
     pub(crate) operations: Mutex<()>,
@@ -213,11 +216,28 @@ impl Drop for RefreshGuard<'_> {
 }
 impl Application {
     pub fn open(paths: Paths) -> Result<Self> {
-        Self::open_with_secrets(paths, Arc::new(crate::credentials::SystemSecrets))
+        #[cfg(target_os = "macos")]
+        {
+            let item = crate::vault::Item::new(Arc::new(crate::vault::KeychainVault));
+            let secrets = crate::vault::ItemSecrets::new(
+                item.clone(),
+                Arc::new(crate::vault::LegacyKeychain),
+            );
+            Self::open_inner(paths, Arc::new(secrets), Some(item))
+        }
+        #[cfg(not(target_os = "macos"))]
+        Self::open_inner(paths, Arc::new(crate::credentials::SystemSecrets), None)
     }
     pub fn open_with_secrets(
         paths: Paths,
         secrets: Arc<dyn crate::credentials::SecretStore>,
+    ) -> Result<Self> {
+        Self::open_inner(paths, secrets, None)
+    }
+    fn open_inner(
+        paths: Paths,
+        secrets: Arc<dyn crate::credentials::SecretStore>,
+        keychain: Option<Arc<crate::vault::Item>>,
     ) -> Result<Self> {
         // Upstream accounts without a proxy of their own use the system's.
         crate::utils::set_system_proxy(crate::system_proxy::for_url);
@@ -239,6 +259,7 @@ impl Application {
         let app = Self {
             paths,
             secrets,
+            keychain,
             network,
             state: AppState::default(),
             operations: Mutex::new(()),
@@ -254,6 +275,17 @@ impl Application {
         app.migrate_provider_credentials()?;
         app.preferences()?;
         Ok(app)
+    }
+    /// Lets an explicit action ask for Copool's Keychain item, which a
+    /// refused request stopped background reads from doing; reads it unless
+    /// read already.
+    pub async fn authorize_keychain(&self) -> Result<()> {
+        let Some(item) = self.keychain.clone() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || item.authorize())
+            .await
+            .map_err(|e| e.to_string())?
     }
     pub fn refresh_activity(&self) -> Vec<String> {
         self.refreshing.lock().unwrap().keys().cloned().collect()

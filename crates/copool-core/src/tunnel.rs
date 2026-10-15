@@ -1,8 +1,5 @@
 //! cloudflared process lifecycle and Cloudflare named-tunnel API.
-use crate::{
-    credentials::{SecretStore, SystemSecrets},
-    platform,
-};
+use crate::platform;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -174,13 +171,11 @@ impl Tunnel {
                     return Err("Invalid Cloudflare account or zone ID".into());
                 }
             }
-            let token = if !config.api_token.is_empty() {
-                config.api_token.clone()
-            } else {
-                SystemSecrets
-                    .get("cloudflare-api-token")?
-                    .ok_or("Cloudflare API token is missing")?
-            };
+            // The caller supplies the saved token (`Application::with_tunnel_token`).
+            if config.api_token.is_empty() {
+                return Err("Cloudflare API token is missing".into());
+            }
+            let token = config.api_token.clone();
             let client = reqwest::Client::new();
             let created=api(&client,&token,reqwest::Method::POST,&format!("/accounts/{}/cfd_tunnel",config.account_id),Some(json!({"name":format!("copool-{}",uuid::Uuid::new_v4()),"config_src":"cloudflare"}))).await?;
             let id = created["id"]
