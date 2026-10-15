@@ -4,7 +4,9 @@ import WidgetKit
 
 enum AccountsWidgetConfiguration {
     static let kind = "CopoolAccountsWidget"
-    static let appGroupIdentifier = "group.io.github.copool.rust"
+    /// The app group the build signed the widget for, from its Info.plist.
+    static let appGroupIdentifier = (Bundle.main.object(forInfoDictionaryKey: "CopoolAppGroup") as? String)
+        .flatMap { $0.isEmpty ? nil : $0 }
     static let snapshotFilename = "accounts-widget-snapshot.json"
     static let usageProgressDisplayModeDefaultsKey = "accountsWidgetUsageProgressDisplayMode"
 }
@@ -19,7 +21,7 @@ struct AccountsWidgetDisplayModeStore: Sendable {
 
     init(
         defaultsProvider: @escaping @Sendable () -> UserDefaults? = {
-            UserDefaults(suiteName: AccountsWidgetConfiguration.appGroupIdentifier)
+            AccountsWidgetConfiguration.appGroupIdentifier.flatMap { UserDefaults(suiteName: $0) }
         }
     ) {
         self.defaultsProvider = defaultsProvider

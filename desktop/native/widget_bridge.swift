@@ -7,8 +7,9 @@ public func copoolPublishWidget(_ bytes: UnsafePointer<UInt8>?, _ length: Int) -
     guard let bytes, length > 0, length <= 1_048_576 else { return 1 }
     let data = Data(bytes: bytes, count: length)
     guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return 2 }
-    let group = "group.io.github.copool.rust"
-    guard let folder = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return 3 }
+    // The build records the app group it signed the app for.
+    guard let group = Bundle.main.object(forInfoDictionaryKey: "CopoolAppGroup") as? String, !group.isEmpty,
+          let folder = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return 3 }
     do {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try data.write(to: folder.appendingPathComponent("accounts-widget-snapshot.json"), options: .atomic)

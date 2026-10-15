@@ -9,10 +9,10 @@ struct AccountsWidgetSnapshotStore: @unchecked Sendable {
     init(
         fileManager: FileManager = .default,
         snapshotURLProvider: @escaping @Sendable () -> URL? = {
-            FileManager.default
-                .containerURL(
-                    forSecurityApplicationGroupIdentifier: AccountsWidgetConfiguration.appGroupIdentifier
-                )?
+            AccountsWidgetConfiguration.appGroupIdentifier
+                .flatMap {
+                    FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0)
+                }?
                 .appendingPathComponent(AccountsWidgetConfiguration.snapshotFilename, isDirectory: false)
         }
     ) {

@@ -10,10 +10,10 @@ Copool is a Rust/Tauri desktop app: `crates/copool-core` (accounts, usage, proxy
 python3 scripts/build_rust_desktop.py > /tmp/copool-app-bundle-build.log 2>&1
 ```
 
-- On macOS this checks the UI, builds a Release `Copool.app` with the Tauri CLI (its pre-bundle hook builds the WidgetKit extension from `desktop/widget/CopoolWidgets.xcodeproj`), signs the widget and then the app ad hoc with the entitlements in `desktop/native`, and verifies the signature, architecture and version. Elsewhere it builds the executable only.
+- On macOS this checks the UI, builds a Release `Copool.app` with the Tauri CLI (its pre-bundle hook builds the WidgetKit extension from `desktop/widget/CopoolWidgets.xcodeproj`), signs the widget and then the app with the entitlements in `desktop/native`, and verifies the signature, architecture and version. Signing uses the Apple Development certificate in the login keychain and the app group `<Team ID>.io.github.copool.rust`, else ad hoc with `group.io.github.copool.rust` (`scripts/macos_signing.py`; `COPOOL_SIGN_IDENTITY` overrides, `-` for ad hoc); the build's final line reports which. Elsewhere it builds the executable only.
 - Xcode and the Tauri CLI may require execution outside the sandbox to access system build services and caches; use the execution tool's approval mechanism when needed.
 - Wait for a successful exit before delivering; on failure, inspect `/tmp/copool-app-bundle-build.log`. Deliver `target/release/bundle/macos/Copool.app` as a clickable absolute path, and report the verified architectures and version instead of assuming them.
-- This is a locally ad-hoc-signed build, not a notarized distribution release. An ordinary build does not include installing, launching, replacing an installed app, committing, uploading, or publishing. Perform those only when requested.
+- This is a locally signed build, not a notarized distribution release. An ordinary build does not include installing, launching, replacing an installed app, committing, uploading, or publishing. Perform those only when requested.
 
 ## Development
 

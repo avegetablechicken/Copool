@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Build the Rust/Tauri desktop app; on macOS, an ad-hoc-signed Copool.app.
+"""Build the Rust/Tauri desktop app; on macOS, a locally signed Copool.app.
 
-Not a distribution release: no Developer ID signing, notarization or upload.
+Signed with the Apple Development certificate in the login keychain, else ad
+hoc (see macos_signing.py). Not a distribution release: no Developer ID
+signing, notarization or upload.
 """
 import argparse
 import json
@@ -10,6 +12,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import macos_signing
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / 'desktop'
@@ -51,16 +55,22 @@ def find_bundle(profile, target):
 
 
 def sign_and_verify(app):
+    """Signs the widget, then the app; both read their app group from Info.plist."""
+    sha1, team = macos_signing.identity()
+    group = macos_signing.app_group(team)
     widget = app / 'Contents/PlugIns/CopoolWidgetsMac.appex'
-    if widget.exists():
-        run(['codesign', '--force', '--sign', '-', '--entitlements', DESKTOP / 'native/widget.entitlements', widget])
-    run(['codesign', '--force', '--sign', '-', '--entitlements', DESKTOP / 'native/app.entitlements', app])
+    for bundle, name in ((widget, 'widget'), (app, 'app')):
+        if not bundle.exists():
+            continue
+        run(['plutil', '-replace', macos_signing.APP_GROUP_KEY, '-string', group, bundle / 'Contents/Info.plist'])
+        macos_signing.sign(bundle, name, sha1, group, run=run)
     run(['codesign', '--verify', '--deep', '--strict', '--verbose=2', app])
     plist = app / 'Contents/Info.plist'
     executable = subprocess.run(['plutil', '-extract', 'CFBundleExecutable', 'raw', plist],
                                 capture_output=True, text=True, check=True).stdout.strip()
     run(['file', app / 'Contents/MacOS' / executable])
     run(['plutil', '-extract', 'CFBundleShortVersionString', 'raw', plist])
+    return team, group
 
 
 def main():
@@ -97,8 +107,9 @@ def main():
     run(command + ['--', '--locked'], cwd=DESKTOP)
 
     app = find_bundle(profile, args.target)
-    sign_and_verify(app)
-    print(f'Copool.app (ad-hoc signed, not notarized): {app}')
+    team, group = sign_and_verify(app)
+    signature = f'signed for team {team}' if team else 'ad-hoc signed'
+    print(f'Copool.app ({signature}, app group {group}, not notarized): {app}')
 
 
 if __name__ == '__main__':
