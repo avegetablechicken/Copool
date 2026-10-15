@@ -5,7 +5,10 @@ const path = require("node:path");
 const vm = require("node:vm");
 const P = require("../ui/presentation.js");
 
-const source = fs.readFileSync(path.join(__dirname, "../ui/app.js"), "utf8");
+// Windows checkouts may end lines with CRLF; the slices below look for LF.
+const source = fs
+  .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
+  .replace(/\r\n/g, "\n");
 const body = (name) => {
   const start = source.indexOf(`function ${name}(`);
   return source.slice(start, source.indexOf("\n}\n", start) + 3);

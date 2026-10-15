@@ -6,7 +6,10 @@ const vm = require("node:vm");
 const { Accounts } = require("../ui/controllers.js");
 
 // The application's pool routing with the real accounts controller.
-const source = fs.readFileSync(path.join(__dirname, "../ui/app.js"), "utf8");
+// Windows checkouts may end lines with CRLF; the slices below look for LF.
+const source = fs
+  .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
+  .replace(/\r\n/g, "\n");
 function fixture(target) {
   const calls = [];
   let renewal = "always";
