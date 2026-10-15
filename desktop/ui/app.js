@@ -1601,23 +1601,28 @@ if (document.documentElement.classList.contains("linux")) {
 }
 // WebKitGTK and WebView2 draw a `title` as the desktop's own tooltip, in its
 // theme rather than the panel's: an in-panel one in the menus' look replaces
-// it there. The owner's title moves to `data-tooltip` while the pointer is on
-// it, so that the native one never shows, and comes back as it leaves.
+// it there. While the pointer is on an element, its title and every
+// ancestor's move to `data-tooltip`, so that no native one shows, not even an
+// ancestor's in its place; they come back as it leaves.
 if (!document.documentElement.classList.contains("macos")) {
   const tip = el("div", "tooltip");
   tip.setAttribute("aria-hidden", "true");
   document.body.append(tip);
   let owner = null;
+  let held = [];
   let timer;
-  const claim = (node) => {
-    const text = node.getAttribute("title");
-    if (text === null) return;
-    node.dataset.tooltip = text;
-    node.removeAttribute("title");
+  const hold = (node) => {
+    for (; node instanceof Element; node = node.parentElement) {
+      const text = node.getAttribute("title");
+      if (text === null) continue;
+      node.dataset.tooltip = text;
+      node.removeAttribute("title");
+      if (!held.includes(node)) held.push(node);
+    }
   };
   // A title set while the pointer is on its owner, as a refresh button's is.
   new MutationObserver(() => {
-    if (owner?.hasAttribute("title")) claim(owner);
+    if (owner) hold(owner);
   }).observe(document.body, {
     subtree: true,
     attributes: true,
@@ -1626,10 +1631,12 @@ if (!document.documentElement.classList.contains("macos")) {
   const hide = () => {
     clearTimeout(timer);
     tip.classList.remove("shown");
-    if (!owner) return;
-    if (!owner.hasAttribute("title")) owner.title = owner.dataset.tooltip;
-    delete owner.dataset.tooltip;
+    for (const node of held) {
+      if (!node.hasAttribute("title")) node.title = node.dataset.tooltip;
+      delete node.dataset.tooltip;
+    }
     owner = null;
+    held = [];
   };
   // Below its owner, or above it near the panel's bottom; kept inside.
   const show = () => {
@@ -1654,7 +1661,7 @@ if (!document.documentElement.classList.contains("macos")) {
     hide();
     if (!node || !node.getAttribute("title")) return;
     owner = node;
-    claim(node);
+    hold(node);
     timer = setTimeout(show, 600);
   });
   document.addEventListener("pointerout", (event) => {
