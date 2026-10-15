@@ -170,3 +170,17 @@ fn singlePoolWidgetsCarryNoPoolTag() {
     );
     assert_eq!(s.current_card.unwrap().pool_label, None);
 }
+#[test]
+fn aWindowWithoutUsageShowsNoDataRatherThanExhausted() {
+    let mut a = account("current", true, "current@example.com", 10., 20.);
+    a.usage.as_mut().unwrap().five_hour = None;
+    let s = build(Pool::Codex, &[a], "remaining", Some(0), 100);
+    let card = s.current_card.unwrap();
+    assert!(!card.five_hour.available);
+    assert_eq!(card.five_hour.progress_fraction, 0.);
+    assert_eq!(card.five_hour.used_text, "--");
+    assert_eq!(card.five_hour.remaining_text, "--");
+    assert_eq!(card.five_hour.reset_text, "--");
+    assert!(card.one_week.available);
+    assert_eq!(card.one_week.used_text, "20%");
+}

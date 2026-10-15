@@ -67,6 +67,8 @@ impl Widget {
 #[serde(rename_all = "camelCase")]
 pub struct WindowSnapshot {
     pub title: String,
+    /// Whether the window has usage; one without shows no data.
+    pub available: bool,
     pub progress_fraction: f64,
     pub used_text: String,
     pub remaining_text: String,
@@ -123,13 +125,22 @@ fn zone_offset(offset: Option<i32>, date: DateTime<chrono::Utc>) -> FixedOffset 
     });
     FixedOffset::east_opt(seconds).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())
 }
+/// As the app's usage rows: a window without usage (e.g. no five-hour limit)
+/// shows no data, neither used nor remaining, and no reset.
 fn window(title: &str, window: Option<&UsageWindow>, offset: Option<i32>) -> WindowSnapshot {
-    let used = window
-        .map(|w| w.used_percent)
-        .unwrap_or(100.)
-        .clamp(0., 100.);
+    let Some(window) = window.filter(|w| w.used_percent.is_finite()) else {
+        return WindowSnapshot {
+            title: title.into(),
+            available: false,
+            progress_fraction: 0.,
+            used_text: "--".into(),
+            remaining_text: "--".into(),
+            reset_text: "--".into(),
+        };
+    };
+    let used = window.used_percent.clamp(0., 100.);
     let reset = window
-        .and_then(|w| w.reset_at)
+        .reset_at
         .and_then(|stamp| DateTime::from_timestamp(stamp, 0))
         .map(|date| {
             date.with_timezone(&zone_offset(offset, date))
@@ -139,6 +150,7 @@ fn window(title: &str, window: Option<&UsageWindow>, offset: Option<i32>) -> Win
         .unwrap_or_else(|| "--".into());
     WindowSnapshot {
         title: title.into(),
+        available: true,
         progress_fraction: used / 100.,
         used_text: format!("{}%", used.round()),
         remaining_text: format!("{}%", 100. - used.round()),

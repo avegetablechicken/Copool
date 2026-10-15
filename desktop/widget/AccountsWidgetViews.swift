@@ -22,6 +22,16 @@ private enum AccountsWidgetStyle {
         }
     }
 
+    /// Text of a window without usage, as `--tertiary` in the app.
+    static func tertiaryTextColor(for colorScheme: ColorScheme) -> Color {
+        switch colorScheme {
+        case .dark:
+            Color.white.opacity(0.38)
+        default:
+            Color(red: 0.33, green: 0.39, blue: 0.48, opacity: 0.62)
+        }
+    }
+
     static func dividerColor(for colorScheme: ColorScheme) -> Color {
         switch colorScheme {
         case .dark:
@@ -564,6 +574,7 @@ private struct AccountsWidgetCompactCardContent: View {
 
                 HStack(spacing: ringSpacing) {
                     AccountsWidgetCompactRing(
+                        available: card.fiveHour.available,
                         valueText: displayText(for: card.fiveHour),
                         subtitleText: card.fiveHour.title,
                         progress: displayProgress(for: card.fiveHour),
@@ -576,6 +587,7 @@ private struct AccountsWidgetCompactCardContent: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     AccountsWidgetCompactRing(
+                        available: card.oneWeek.available,
                         valueText: displayText(for: card.oneWeek),
                         subtitleText: card.oneWeek.title,
                         progress: displayProgress(for: card.oneWeek),
@@ -600,7 +612,8 @@ private struct AccountsWidgetCompactCardContent: View {
     }
 
     private func displayProgress(for window: AccountsWidgetWindowSnapshot) -> Double {
-        usageProgressDisplayMode == .remaining ? max(0, 1 - window.progressFraction) : window.progressFraction
+        guard window.available else { return 0 }
+        return usageProgressDisplayMode == .remaining ? max(0, 1 - window.progressFraction) : window.progressFraction
     }
 }
 
@@ -650,6 +663,7 @@ private struct AccountsWidgetMediumDivider: View {
 
 private struct AccountsWidgetCompactRing: View {
     @Environment(\.colorScheme) private var colorScheme
+    let available: Bool
     let valueText: String
     let subtitleText: String
     let progress: Double
@@ -677,7 +691,11 @@ private struct AccountsWidgetCompactRing: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                    .foregroundStyle(AccountsWidgetStyle.primaryTextColor(for: colorScheme))
+                    .foregroundStyle(
+                        available
+                            ? AccountsWidgetStyle.primaryTextColor(for: colorScheme)
+                            : AccountsWidgetStyle.secondaryTextColor(for: colorScheme)
+                    )
                 Text(subtitleText)
                     .font(.system(size: subtitleFontSize, weight: .semibold, design: .rounded))
                     .lineLimit(1)
@@ -854,6 +872,11 @@ private struct AccountsWidgetLargeMetric: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                 }
+                .foregroundStyle(
+                    window.available
+                        ? AccountsWidgetStyle.secondaryTextColor(for: colorScheme)
+                        : AccountsWidgetStyle.tertiaryTextColor(for: colorScheme)
+                )
 
                 Spacer(minLength: 0)
 
@@ -870,7 +893,8 @@ private struct AccountsWidgetLargeMetric: View {
     }
 
     private var displayProgress: Double {
-        usageProgressDisplayMode == .remaining ? max(0, 1 - window.progressFraction) : window.progressFraction
+        guard window.available else { return 0 }
+        return usageProgressDisplayMode == .remaining ? max(0, 1 - window.progressFraction) : window.progressFraction
     }
 
     private var displayText: String {

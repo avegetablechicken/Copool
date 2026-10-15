@@ -242,6 +242,8 @@ struct AccountsWidgetCardSnapshot: Codable, Equatable, Sendable, Identifiable {
 
 struct AccountsWidgetWindowSnapshot: Codable, Equatable, Sendable {
     var title: String
+    /// Whether the window has usage; one without shows no data, as in the app.
+    var available: Bool
     var progressFraction: Double
     var usedText: String
     var remainingText: String

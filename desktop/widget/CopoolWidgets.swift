@@ -120,6 +120,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 accountLabel: "current_account",
                 fiveHour: AccountsWidgetWindowSnapshot(
                     title: "5h",
+                    available: true,
                     progressFraction: 0.42,
                     usedText: "42%",
                     remainingText: "58%",
@@ -127,6 +128,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 ),
                 oneWeek: AccountsWidgetWindowSnapshot(
                     title: "1w",
+                    available: true,
                     progressFraction: 0.18,
                     usedText: "18%",
                     remainingText: "82%",
@@ -141,6 +143,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 accountLabel: "next_account",
                 fiveHour: AccountsWidgetWindowSnapshot(
                     title: "5h",
+                    available: true,
                     progressFraction: 0.55,
                     usedText: "55%",
                     remainingText: "45%",
@@ -148,6 +151,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 ),
                 oneWeek: AccountsWidgetWindowSnapshot(
                     title: "1w",
+                    available: true,
                     progressFraction: 0.31,
                     usedText: "31%",
                     remainingText: "69%",
@@ -163,6 +167,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     accountLabel: "account_name",
                     fiveHour: AccountsWidgetWindowSnapshot(
                         title: "5h",
+                        available: true,
                         progressFraction: 0.50,
                         usedText: "50%",
                         remainingText: "50%",
@@ -170,6 +175,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     ),
                     oneWeek: AccountsWidgetWindowSnapshot(
                         title: "1w",
+                        available: true,
                         progressFraction: 0.02,
                         usedText: "2%",
                         remainingText: "98%",
@@ -184,6 +190,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     accountLabel: "plus_account",
                     fiveHour: AccountsWidgetWindowSnapshot(
                         title: "5h",
+                        available: true,
                         progressFraction: 0.18,
                         usedText: "18%",
                         remainingText: "82%",
@@ -191,6 +198,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     ),
                     oneWeek: AccountsWidgetWindowSnapshot(
                         title: "1w",
+                        available: true,
                         progressFraction: 0.36,
                         usedText: "36%",
                         remainingText: "64%",
