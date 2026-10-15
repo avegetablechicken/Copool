@@ -259,8 +259,24 @@ main > section {
 /* ------------------------------------------------------------------ header */
 
 .top {
+  position: relative;
   flex: none;
   padding: 10px 15px 2px;
+}
+
+/* Turning between the accounts page and a subpage (showPage), the page and
+   header row left behind slide out over their container, clipped to it. */
+.paging {
+  overflow: clip;
+}
+
+.page-leaving {
+  position: absolute;
+  pointer-events: none;
+}
+
+main > section.page-leaving {
+  height: 100%;
 }
 
 .top-row {

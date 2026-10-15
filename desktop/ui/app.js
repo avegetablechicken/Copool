@@ -1304,7 +1304,76 @@ translate();
 $("notice-close").onclick = () => {
   $("notice").hidden = true;
 };
-function showPage(page) {
+// The pages' order, left to right, for the way they slide.
+const PAGES = ["accounts", "proxy", "settings"];
+// The latest page turn in each container, which tidies up when it ends.
+const pageTurns = new Map();
+/// Shows `to` in place of `from` like a navigation stack: `to` slides in
+/// from the side `direction` points to (1 right, −1 left) while `from`, held
+/// over their container until it is gone, slides out the other way. A turn
+/// caught midway continues from where its pages are.
+function turnPage(from, to, direction, animated = true) {
+  if (from === to) return;
+  const container = to.parentElement;
+  const turn = {};
+  pageTurns.set(container, turn);
+  const place = from.classList.contains("page-leaving")
+    ? null
+    : { top: from.offsetTop, left: from.offsetLeft, width: from.offsetWidth };
+  if (place)
+    Object.assign(from.style, {
+      top: `${place.top}px`,
+      left: `${place.left}px`,
+      width: `${place.width}px`,
+    });
+  from.classList.add("page-leaving");
+  to.classList.remove("page-leaving");
+  to.style.removeProperty("top");
+  to.style.removeProperty("left");
+  to.style.removeProperty("width");
+  to.hidden = false;
+  const end = () => {
+    if (pageTurns.get(container) !== turn) return;
+    pageTurns.delete(container);
+    container.classList.remove("paging");
+    for (const node of container.querySelectorAll(":scope>.page-leaving")) {
+      for (const running of node.getAnimations())
+        if (running.id === "page") running.cancel();
+      node.classList.remove("page-leaving");
+      node.style.removeProperty("top");
+      node.style.removeProperty("left");
+      node.style.removeProperty("width");
+      node.hidden = true;
+    }
+  };
+  if (!animated) return end();
+  const width = container.clientWidth;
+  const shown = { transform: "none", opacity: 1 };
+  const aside = (side) => ({
+    transform: `translateX(${side * width}px)`,
+    opacity: 0,
+  });
+  const slide = (node, start, finish) => {
+    const running = node.getAnimations().filter((a) => a.id === "page");
+    if (running.length) {
+      const now = getComputedStyle(node);
+      start = { transform: now.transform, opacity: Number(now.opacity) };
+      for (const animation of running) animation.cancel();
+    }
+    const animation = window.CopoolReorder.springAnimate(node, [start, finish]);
+    if (animation) animation.id = "page";
+    return animation;
+  };
+  container.classList.add("paging");
+  const animations = [
+    slide(from, shown, aside(-direction)),
+    slide(to, aside(direction), shown),
+  ];
+  if (!animations[0]) return end();
+  Promise.allSettled(animations.map((a) => a?.finished)).then(end);
+}
+function showPage(page, animated = true) {
+  const previous = selectedPage;
   selectedPage = page;
   // Entering the tab refreshes the local status; remote servers load once.
   if (selectedPage === "proxy")
@@ -1313,11 +1382,11 @@ function showPage(page) {
       .then(() => proxyController.loadRemoteStatuses())
       .catch((error) => notice(error, true));
   closeMenu();
-  document
-    .querySelectorAll("main>section")
-    .forEach(
-      (section) => (section.hidden = section.id !== `${selectedPage}-page`),
-    );
+  // Into a subpage the new page comes from the right; back, from the left.
+  const direction = PAGES.indexOf(page) > PAGES.indexOf(previous) ? 1 : -1;
+  const row = (name) => $(name === "accounts" ? "top-main" : "top-sub");
+  turnPage($(`${previous}-page`), $(`${page}-page`), direction, animated);
+  turnPage(row(previous), row(page), direction, animated);
   document
     .querySelectorAll("[data-page]")
     .forEach((link) =>
@@ -1326,8 +1395,6 @@ function showPage(page) {
         String(link.dataset.page === selectedPage),
       ),
     );
-  $("top-main").hidden = selectedPage !== "accounts";
-  $("top-sub").hidden = selectedPage === "accounts";
   $("page-title").textContent = tr(`tab.${selectedPage}`);
   // Widths measure as zero while the page is hidden.
   if (selectedPage === "accounts") alignMeters($("accounts"));
@@ -1917,7 +1984,9 @@ function queueFit() {
     const dialog = document.querySelector("dialog[open]");
     document.documentElement.classList.toggle("modal", Boolean(dialog));
     if (holdFit) return;
-    const section = document.querySelector("main>section:not([hidden])");
+    const section = document.querySelector(
+      "main>section:not([hidden], .page-leaving)",
+    );
     const page = section?.firstElementChild;
     if (!page) return;
     const style = getComputedStyle(section);
@@ -1951,7 +2020,7 @@ window.__TAURI__.event
 window.__TAURI__.event
   .listen("panel-shown", () => {
     if (panelHiddenAt && Date.now() - panelHiddenAt > PANEL_PAGE_TIMEOUT_MS)
-      showPage("accounts");
+      showPage("accounts", false);
     panelHiddenAt = null;
     queueFit();
     if (!document.querySelector("dialog[open]"))
