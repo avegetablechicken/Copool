@@ -84,6 +84,11 @@ async fn refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), St
         None => app.refresh_all().await,
     }
 }
+/// The next background refresh of the whole pool, for both pools.
+#[tauri::command]
+fn next_full_refresh_at(app: State<'_, App>) -> Option<i64> {
+    app.next_full_refresh_at()
+}
 #[tauri::command]
 async fn smart_switch(app: State<'_, App>) -> Result<SmartSwitchOutcome, String> {
     app.smart_switch().await
@@ -649,6 +654,7 @@ fn main() {
             switch_account,
             update_account,
             refresh_usage,
+            next_full_refresh_at,
             smart_switch,
             proxy_status,
             start_proxy,

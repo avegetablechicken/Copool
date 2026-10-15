@@ -1096,25 +1096,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recurring_refresh_leaves_providers_alone_while_the_login_is_in_use() {
+    async fn recurring_refresh_reaches_a_provider_not_in_use_only_on_full_rounds() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, _, _, _, _card, alice, secrets, requests) = pool_recording(dir.path()).await;
+        let (app, _, _, _, card, alice, secrets, requests) = pool_recording(dir.path()).await;
         let provider = app.claude_load().unwrap().providers[0].id.clone();
         assert_eq!(current(&app.claude_accounts().await.unwrap()), [alice]);
         secrets.clear_reads();
         requests.lock().unwrap().clear();
-        app.claude_refresh_recurring(0).await.unwrap();
-        // No provider is in use, so no password is read and none is contacted.
+        // No provider is in use: a round between full ones reads no password
+        // and contacts no provider...
+        app.claude_refresh_recurring(1).await.unwrap();
         assert!(secrets.reads().is_empty());
         assert!(requests.lock().unwrap().is_empty());
-        // The manual path still reads the password and refreshes the provider.
-        app.claude_refresh(None).await.unwrap();
+        // ...and a full round refreshes every provider.
+        app.claude_refresh_recurring(0).await.unwrap();
         assert_eq!(secrets.reads(), [password_secret(&provider)]);
         assert_eq!(logins(&requests), 1);
+        // Its card shows the next full round (tick 6).
+        app.set_refresh_schedule(crate::refresh_policy::Schedule {
+            at: 1_000,
+            tick: 2,
+            interval: 300,
+        });
+        let accounts = app.claude_accounts().await.unwrap();
+        assert_eq!(
+            accounts
+                .iter()
+                .find(|a| a.id == card)
+                .unwrap()
+                .next_refresh_at,
+            Some(2_200)
+        );
     }
 
     #[tokio::test]
-    async fn recurring_refresh_touches_only_the_provider_in_use() {
+    async fn rounds_between_full_ones_touch_only_the_provider_in_use() {
         let dir = tempfile::tempdir().unwrap();
         let (app, _, _, _, card, _, secrets, requests) = pool_recording(dir.path()).await;
         let (_, other_requests) = add_provider(&app, dir.path(), "other-secret").await;
@@ -1140,6 +1156,9 @@ mod tests {
         assert_eq!(secrets.reads(), [password_secret(&first)]);
         assert_eq!(logins(&requests), 2);
         assert!(other_requests.lock().unwrap().is_empty());
+        // A full round reaches the other provider too.
+        app.claude_refresh_recurring(6).await.unwrap();
+        assert_eq!(logins(&other_requests), 1);
     }
 
     #[tokio::test]

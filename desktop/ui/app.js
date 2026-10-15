@@ -12,6 +12,8 @@ let switchingId = null;
 // A card is being dragged: the list waits to render until it is dropped.
 let reorderingAccounts = false;
 let accountsCache = [];
+/// When the background refresh of the whole pool next starts (Unix seconds).
+let fullRefreshAt = null;
 let proxyCache = null;
 let preferences = null;
 let locale = "en";
@@ -243,9 +245,11 @@ function renderToolbar() {
   $("smart-switch").title = $("smart-switch").textContent;
   $("smart-switch").disabled = !smartSwitch.enabled || !accountsCache.length;
   label($("refresh-all"), "common.refresh_usage");
-  // The pool's next automatic refresh is that of its first card due.
-  refreshTooltip($("refresh-all"), withShortcut($("refresh-all").title, "r"), () =>
-    nextRefreshAt(accountsCache),
+  // The background refresh of the whole pool keeps its own schedule.
+  refreshTooltip(
+    $("refresh-all"),
+    withShortcut($("refresh-all").title, "r"),
+    () => fullRefreshAt,
   );
   $("refresh-all").disabled = !refresh.enabled;
   $("refresh-all").classList.toggle("spinning", Boolean(refresh.spinning));
@@ -1217,12 +1221,14 @@ function renderProxy() {
 }
 async function refreshView() {
   const controller = accountsController;
-  const [accounts, proxy] = await Promise.all([
+  const [accounts, proxy, fullRefresh] = await Promise.all([
     controller.load(),
     invoke("proxy_status"),
+    invoke("next_full_refresh_at"),
     refreshFeatureState(),
   ]);
   proxyCache = proxy;
+  fullRefreshAt = fullRefresh;
   // A pool switched during the load renders through its own refresh.
   if (controller === accountsController) {
     accountsCache = accounts;

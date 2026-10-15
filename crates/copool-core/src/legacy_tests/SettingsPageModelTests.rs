@@ -462,6 +462,67 @@ async fn testManualRefreshUpdatesAllSub2APIProvidersWithOfficialDefault() {
     );
 }
 #[tokio::test]
+async fn recurringRefreshReachesEveryProviderOnlyOnFullRounds() {
+    let (_dir, app, _) = fixture();
+    let first_calls = Arc::new(Mutex::new(vec![]));
+    let second_calls = Arc::new(Mutex::new(vec![]));
+    let first = upstream(Arc::new(Mutex::new(vec![42])), first_calls.clone()).await;
+    let second = upstream(Arc::new(Mutex::new(vec![7])), second_calls.clone()).await;
+    config(
+        &app,
+        &[("first", &first.base), ("second", &second.base)],
+        "first",
+    );
+    for (name, id) in [("first", 42), ("second", 7)] {
+        app.save_provider(provider(name)).await.unwrap();
+        let mut s = app.configuration().unwrap();
+        s.sub2_api_provider
+            .providers
+            .iter_mut()
+            .find(|p| p.provider_id == name)
+            .unwrap()
+            .imported_account_ids = vec![id];
+        app.persist_configuration(&s).unwrap();
+    }
+    let asked = |calls: &Arc<Mutex<Vec<String>>>, id: &str| {
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.ends_with(&format!("/{id}/quota")))
+            .count()
+    };
+    // A round between full ones refreshes only the provider in use...
+    app.refresh_recurring(1).await.unwrap();
+    assert_eq!(
+        (asked(&first_calls, "42"), asked(&second_calls, "7")),
+        (1, 0)
+    );
+    // ...and a full round every provider.
+    app.refresh_recurring(6).await.unwrap();
+    assert_eq!(
+        (asked(&first_calls, "42"), asked(&second_calls, "7")),
+        (2, 1)
+    );
+    // Their cards show it: the provider in use's next round, the other's
+    // next full round (tick 6).
+    app.set_refresh_schedule(crate::refresh_policy::Schedule {
+        at: 1_000,
+        tick: 2,
+        interval: 300,
+    });
+    let accounts = app.accounts().await.unwrap();
+    let next = |id: &str| {
+        accounts
+            .iter()
+            .find(|a| a.id == id)
+            .unwrap()
+            .next_refresh_at
+    };
+    assert_eq!(next("sub2api-first-42"), Some(1_000));
+    assert_eq!(next("sub2api-second-7"), Some(2_200));
+}
+#[tokio::test]
 async fn testAccountsPageSyncsConfiguredProviderWithoutConfirmation() {
     let (_dir, app, _) = fixture();
     let server = upstream(Arc::new(Mutex::new(vec![42])), Default::default()).await;

@@ -575,9 +575,10 @@ impl Application {
         if let Some(schedule) = self.refresh_schedule() {
             let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
             for card in &mut summaries {
-                // Sub2api cards refresh with their provider while it is in use.
+                // Sub2api cards refresh with their provider: every round while
+                // it is in use, else on full rounds.
                 card.next_refresh_at = if card.source_tag.as_deref() == Some("SUB2API") {
-                    card.is_current.then(|| schedule.next_refresh_at(true, 0))
+                    Some(schedule.next_refresh_at(card.is_current, 0))
                 } else if card.awaiting_first_request {
                     None
                 } else {
@@ -1209,24 +1210,30 @@ impl Application {
                     && ids.as_ref().is_none_or(|ids| ids.contains(&a.id))
             })
             .map(|account| self.refresh_usage(&account.id));
+        // Sub2api providers: the one in use every round, all of them on a
+        // round that refreshes the whole pool.
         let current = crate::codex_config::resolve_path(&self.codex_config_path());
-        let provider = self
+        let providers: Vec<String> = self
             .configuration()?
             .sub2_api_provider
-            .provider(&current.id)
-            .is_some()
-            .then_some(current.id);
-        let provider_refresh = async {
-            match &provider {
-                Some(id) => self.refresh_provider(id, false).await.map(|_| ()),
-                None => Ok(()),
-            }
-        };
-        let (accounts, provider) =
-            tokio::join!(futures_util::future::join_all(refreshes), provider_refresh);
+            .providers
+            .into_iter()
+            .map(|p| p.provider_id)
+            .filter(|id| ids.is_none() || id.eq_ignore_ascii_case(&current.id))
+            .collect();
+        let provider_refreshes = providers.iter().map(|id| async move {
+            self.refresh_provider(id, false)
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("{id}: {error}"))
+        });
+        let (accounts, providers) = tokio::join!(
+            futures_util::future::join_all(refreshes),
+            futures_util::future::join_all(provider_refreshes)
+        );
         let errors: Vec<String> = accounts
             .into_iter()
-            .chain([provider])
+            .chain(providers)
             .filter_map(Result::err)
             .collect();
         self.auto_switch_if_needed().await?;
@@ -1297,6 +1304,17 @@ impl Application {
     }
     pub(crate) fn refresh_schedule(&self) -> Option<crate::refresh_policy::Schedule> {
         *self.refresh_schedule.lock().unwrap()
+    }
+    /// When the next background round that refreshes the whole pool starts
+    /// (Unix seconds), should the interval stay as it is; none before the
+    /// first round.
+    pub fn next_full_refresh_at(&self) -> Option<i64> {
+        self.refresh_schedule()
+            .map(|schedule| schedule.next_refresh_at(false, 0))
+    }
+    #[cfg(test)]
+    pub(crate) fn set_refresh_schedule(&self, schedule: crate::refresh_policy::Schedule) {
+        *self.refresh_schedule.lock().unwrap() = Some(schedule);
     }
     /// The interval until the next background refresh.
     pub(crate) fn refresh_interval(&self) -> std::time::Duration {
@@ -1596,6 +1614,7 @@ mod tests {
         let accounts = app.accounts().await.unwrap();
         // Nothing is scheduled before the first background round.
         assert!(accounts.iter().all(|a| a.next_refresh_at.is_none()));
+        assert_eq!(app.next_full_refresh_at(), None);
         let id = |name: &str| {
             let email = format!("{name}@example.com");
             accounts
@@ -1609,7 +1628,7 @@ mod tests {
             app.release_new_accounts(Some(&id(name))).await.unwrap();
         }
         app.switch_account(&id("alice")).await.unwrap();
-        *app.refresh_schedule.lock().unwrap() = Some(crate::refresh_policy::Schedule {
+        app.set_refresh_schedule(crate::refresh_policy::Schedule {
             at: 1_000,
             tick: 2,
             interval: 300,
@@ -1627,6 +1646,8 @@ mod tests {
         assert_eq!(next("alice"), Some(1_000));
         assert_eq!(next("bob"), Some(2_200));
         assert_eq!(next("carol"), None);
+        // The refresh of the whole pool keeps its own schedule.
+        assert_eq!(app.next_full_refresh_at(), Some(2_200));
     }
     #[tokio::test]
     async fn shared_workspace_keeps_principals_distinct_and_switch_is_exact() {

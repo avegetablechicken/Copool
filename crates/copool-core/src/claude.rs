@@ -1731,11 +1731,12 @@ impl Application {
         if let Some(schedule) = self.refresh_schedule() {
             let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
             for card in &mut summaries {
-                // As `claude_refresh_recurring`: Sub2api cards of the provider
-                // in use every round; an account once its interval has passed
-                // since it was last asked, and no rate limit pause holds it.
+                // As `claude_refresh_recurring`: Sub2api cards every round while
+                // their provider is in use, else on full rounds; an account
+                // once its interval has passed since it was last asked, and no
+                // rate limit pause holds it.
                 card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
-                    None => card.is_current.then(|| schedule.next_refresh_at(true, 0)),
+                    None => Some(schedule.next_refresh_at(card.is_current, 0)),
                     Some(account) if account.first_request_pending => None,
                     Some(account) => {
                         let every = every_round.as_deref() == Some(card.id.as_str());
@@ -2616,9 +2617,8 @@ impl Application {
             Err(errors.join("\n"))
         }
     }
-    /// Like the Codex pool, an automatic tick touches only the provider in use:
-    /// its cards refresh on every tick, and other providers wait for an
-    /// explicit refresh.
+    /// Like the Codex pool, every tick refreshes the cards of the provider in
+    /// use, and a tick that refreshes the whole pool every provider.
     pub async fn claude_refresh_recurring(&self, tick: u64) -> Result<()> {
         let accounts = self.claude_accounts().await?;
         if accounts.is_empty() {
@@ -2629,21 +2629,22 @@ impl Application {
         let now = now_unix_seconds();
         let interval = self.refresh_interval().as_secs() as i64;
         let due = |a: &&AccountSummary| !sub2api::is_card(&a.id) && now - a.updated_at >= interval;
-        let ids: Vec<String> = match crate::refresh_policy::recurring_ids(tick, &accounts) {
-            None => accounts.iter().filter(due).map(|a| a.id.clone()).collect(),
-            Some(ids) => accounts
-                .iter()
-                .filter(due)
-                .filter(|a| ids.contains(&a.id))
-                .map(|a| a.id.clone())
-                .collect(),
-        };
-        let cards: Vec<String> = accounts
+        let round = crate::refresh_policy::recurring_ids(tick, &accounts);
+        let ids: Vec<String> = accounts
             .iter()
-            .filter(|a| a.is_current && sub2api::is_card(&a.id))
+            .filter(due)
+            .filter(|a| round.as_ref().is_none_or(|ids| ids.contains(&a.id)))
             .map(|a| a.id.clone())
             .collect();
-        self.claude_refresh_scoped(Some(ids), Some(&cards)).await
+        let cards: Option<Vec<String>> = round.is_some().then(|| {
+            accounts
+                .iter()
+                .filter(|a| a.is_current && sub2api::is_card(&a.id))
+                .map(|a| a.id.clone())
+                .collect()
+        });
+        self.claude_refresh_scoped(Some(ids), cards.as_deref())
+            .await
     }
     /// The Codex pool's automatic switch rules, over the Claude accounts.
     async fn claude_auto_switch_if_needed(&self) -> Result<Option<String>> {

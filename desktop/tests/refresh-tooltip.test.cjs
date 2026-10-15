@@ -36,7 +36,7 @@ test("A refresh button tells how long until its next automatic refresh", () => {
   assert.equal(button.title, "Refresh\naccounts.refresh.next_due");
 });
 
-test("The pool and a provider count from their first card due", () => {
+test("The toolbar follows the full refresh; a provider its first card due", () => {
   const { nextRefreshAt } = load();
   assert.equal(nextRefreshAt([]), null);
   assert.equal(nextRefreshAt([{}, { nextRefreshAt: null }]), null);
@@ -44,8 +44,9 @@ test("The pool and a provider count from their first card due", () => {
     nextRefreshAt([{ nextRefreshAt: 300 }, {}, { nextRefreshAt: 120 }]),
     120,
   );
-  // The toolbar, each card and each provider's shared button use it.
-  assert.match(body("renderToolbar"), /refreshTooltip\(\$\("refresh-all"\)[\s\S]*nextRefreshAt\(accountsCache\)/);
+  // The toolbar shows the background's own schedule, not the cards'.
+  assert.match(body("renderToolbar"), /refreshTooltip\([\s\S]*\$\("refresh-all"\)[\s\S]*\(\) => fullRefreshAt/);
+  assert.match(body("refreshView"), /invoke\("next_full_refresh_at"\)/);
   assert.match(source, /refreshTooltip\(refresh, tr\("common\.refresh_usage"\), \(\) => account\.nextRefreshAt\)/);
   assert.match(body("providerControls"), /nextRefreshAt\(group\.accounts\)/);
 });
