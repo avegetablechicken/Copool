@@ -1350,7 +1350,7 @@ impl Application {
     }
     pub fn claude_next_full_refresh_at(&self) -> Option<i64> {
         self.claude_refresh_schedule()
-            .map(|s| s.next_refresh_at(false, 0))
+            .map(|s| s.next_refresh_at(true, 0))
     }
     #[cfg(test)]
     pub(crate) fn set_claude_refresh_schedule(&self, schedule: crate::refresh_policy::Schedule) {

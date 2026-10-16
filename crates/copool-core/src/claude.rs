@@ -1695,20 +1695,16 @@ impl Application {
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.claude_refresh_schedule() {
-            let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
             for card in &mut summaries {
-                // As `claude_refresh_recurring`: Sub2api cards every round while
-                // their provider is in use, else on full rounds; an account
-                // once its interval has passed since it was last asked, and no
-                // rate limit pause holds it.
+                // Every round asks for all cards, subject to freshness and
+                // rate limit pauses for official accounts.
                 card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
-                    None => Some(schedule.next_refresh_at(card.is_current, 0)),
+                    None => Some(schedule.next_refresh_at(true, 0)),
                     Some(account) if account.first_request_pending => None,
                     Some(account) => {
-                        let every = every_round.as_deref() == Some(card.id.as_str());
                         let due = account.updated_at + schedule.interval;
                         let not_before = due.max(account.usage_retry_at.unwrap_or_default());
-                        Some(schedule.next_refresh_at(every, not_before))
+                        Some(schedule.next_refresh_at(true, not_before))
                     }
                 };
             }
@@ -2583,9 +2579,8 @@ impl Application {
             Err(errors.join("\n"))
         }
     }
-    /// Like the Codex pool, every tick refreshes the cards of the provider in
-    /// use, and a tick that refreshes the whole pool every provider.
-    pub async fn claude_refresh_recurring(&self, tick: u64) -> Result<()> {
+    /// Every adaptive round refreshes the whole pool, including inactive providers.
+    pub async fn claude_refresh_recurring(&self, _tick: u64) -> Result<()> {
         let accounts = self.claude_accounts().await?;
         if accounts.is_empty() {
             return Ok(());
@@ -2595,22 +2590,8 @@ impl Application {
         let now = now_unix_seconds();
         let interval = self.claude_refresh_interval().as_secs() as i64;
         let due = |a: &&AccountSummary| !sub2api::is_card(&a.id) && now - a.updated_at >= interval;
-        let round = crate::refresh_policy::recurring_ids(tick, &accounts);
-        let ids: Vec<String> = accounts
-            .iter()
-            .filter(due)
-            .filter(|a| round.as_ref().is_none_or(|ids| ids.contains(&a.id)))
-            .map(|a| a.id.clone())
-            .collect();
-        let cards: Option<Vec<String>> = round.is_some().then(|| {
-            accounts
-                .iter()
-                .filter(|a| a.is_current && sub2api::is_card(&a.id))
-                .map(|a| a.id.clone())
-                .collect()
-        });
-        self.claude_refresh_scoped(Some(ids), cards.as_deref())
-            .await
+        let ids: Vec<String> = accounts.iter().filter(due).map(|a| a.id.clone()).collect();
+        self.claude_refresh_scoped(Some(ids), None).await
     }
     /// The Codex pool's automatic switch rules, over the Claude accounts.
     async fn claude_auto_switch_if_needed(&self) -> Result<Option<String>> {
@@ -2994,7 +2975,7 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         assert_eq!(usages(&fake), ["bob-access", "alice-access"]);
-        // Every tick, full or not, skips accounts asked within the interval.
+        // Every round skips accounts asked within the interval.
         for tick in 0..12 {
             app.claude_refresh_recurring(tick).await.unwrap();
         }
@@ -3002,15 +2983,16 @@ mod tests {
         age(&app, REFRESH_SECONDS - 5);
         app.claude_refresh_recurring(0).await.unwrap();
         assert_eq!(usages(&fake).len(), 2);
-        // Once due, a tick between full ones asks only the current account...
+        // Once due, every round asks both current and inactive accounts.
         age(&app, REFRESH_SECONDS);
         app.claude_refresh_recurring(1).await.unwrap();
-        assert_eq!(usages(&fake)[2..], ["alice-access"]);
+        let mut refreshed = usages(&fake)[2..].to_vec();
+        refreshed.sort();
+        assert_eq!(refreshed, ["alice-access", "bob-access"]);
         app.claude_refresh_recurring(2).await.unwrap();
-        assert_eq!(usages(&fake).len(), 3);
-        // ...and a full tick only those still due.
+        assert_eq!(usages(&fake).len(), 4);
         app.claude_refresh_recurring(6).await.unwrap();
-        assert_eq!(usages(&fake)[3..], ["bob-access"]);
+        assert_eq!(usages(&fake).len(), 4);
         // A manual refresh is not held back by the interval.
         app.claude_refresh(None).await.unwrap();
         let mut manual = usages(&fake)[4..].to_vec();
@@ -3054,8 +3036,11 @@ mod tests {
         app.background_round(1, true).await;
         let schedule = app.claude_refresh_schedule().unwrap();
         assert_eq!((schedule.tick, schedule.interval), (2, REFRESH_SECONDS));
-        // A rate limit pause holds Bob past the next full round; Carol waits
-        // for a manual refresh.
+        // Inactive accounts have the same next round as the current one.
+        let accounts = app.claude_accounts().await.unwrap();
+        assert_eq!(next(&accounts, &bob), Some(schedule.at));
+        assert_eq!(app.claude_next_full_refresh_at(), Some(schedule.at));
+        // A rate limit pause holds Bob; Carol waits for a manual refresh.
         let mut store = app.claude_load().unwrap();
         for account in &mut store.accounts {
             if account.id == bob {
@@ -3066,12 +3051,11 @@ mod tests {
         }
         app.claude_save(&store).unwrap();
         let accounts = app.claude_accounts().await.unwrap();
-        // The current account every round once its interval has passed; the
-        // others on full rounds (ticks 6, 12, ...).
+        // Paused accounts return on the first round after their pause.
         assert_eq!(next(&accounts, &alice), Some(schedule.at));
         assert_eq!(
             next(&accounts, &bob),
-            Some(schedule.at + 10 * REFRESH_SECONDS)
+            Some(schedule.at + 6 * REFRESH_SECONDS)
         );
         assert_eq!(next(&accounts, &carol), None);
     }

@@ -1092,23 +1092,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recurring_refresh_reaches_a_provider_not_in_use_only_on_full_rounds() {
+    async fn recurring_refresh_reaches_an_inactive_provider_every_round() {
         let dir = tempfile::tempdir().unwrap();
         let (app, _, _, _, card, alice, secrets, requests) = pool_recording(dir.path()).await;
         let provider = app.claude_load().unwrap().providers[0].id.clone();
         assert_eq!(current(&app.claude_accounts().await.unwrap()), [alice]);
         secrets.clear_reads();
         requests.lock().unwrap().clear();
-        // No provider is in use: a round between full ones reads no password
-        // and contacts no provider...
+        // An inactive provider is included even on tick 1.
         app.claude_refresh_recurring(1).await.unwrap();
-        assert!(secrets.reads().is_empty());
-        assert!(requests.lock().unwrap().is_empty());
-        // ...and a full round refreshes every provider.
-        app.claude_refresh_recurring(0).await.unwrap();
         assert_eq!(secrets.reads(), [password_secret(&provider)]);
         assert_eq!(logins(&requests), 1);
-        // Its card shows the next full round (tick 6).
+        // Its card shows the very next round.
         app.set_claude_refresh_schedule(crate::refresh_policy::Schedule {
             at: 1_000,
             tick: 2,
@@ -1121,15 +1116,15 @@ mod tests {
                 .find(|a| a.id == card)
                 .unwrap()
                 .next_refresh_at,
-            Some(2_200)
+            Some(1_000)
         );
     }
 
     #[tokio::test]
-    async fn rounds_between_full_ones_touch_only_the_provider_in_use() {
+    async fn every_round_refreshes_active_and_inactive_providers() {
         let dir = tempfile::tempdir().unwrap();
         let (app, _, _, _, card, _, secrets, requests) = pool_recording(dir.path()).await;
-        let (_, other_requests) = add_provider(&app, dir.path(), "other-secret").await;
+        let (other, other_requests) = add_provider(&app, dir.path(), "other-secret").await;
         let first = app.claude_load().unwrap().providers[0].id.clone();
         // A second card of the in-use provider, on its own egress route.
         let mut store = app.claude_load().unwrap();
@@ -1146,14 +1141,14 @@ mod tests {
         secrets.clear_reads();
         requests.lock().unwrap().clear();
         other_requests.lock().unwrap().clear();
-        // An intermediate tick refreshes every card of the in-use provider:
-        // both routes are contacted, and the other provider stays untouched.
+        // Every round includes both routes and the inactive provider.
         app.claude_refresh_recurring(1).await.unwrap();
-        assert_eq!(secrets.reads(), [password_secret(&first)]);
+        let mut reads = secrets.reads();
+        reads.sort();
+        let mut expected = vec![password_secret(&first), password_secret(&other.id)];
+        expected.sort();
+        assert_eq!(reads, expected);
         assert_eq!(logins(&requests), 2);
-        assert!(other_requests.lock().unwrap().is_empty());
-        // A full round reaches the other provider too.
-        app.claude_refresh_recurring(6).await.unwrap();
         assert_eq!(logins(&other_requests), 1);
     }
 
