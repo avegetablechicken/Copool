@@ -549,8 +549,8 @@ function renewalButton(account) {
   return trigger;
 }
 /// Usage warning, refresh and switch, at the card's bottom right as in the
-/// SwiftUI card, clear of long account names. A provider's card keeps only
-/// its warning: its group refreshes and switches.
+/// SwiftUI card, clear of long account names. A provider's group carries
+/// its usage warnings, refresh and switch together.
 function accountControls(account, full, view, grouped = false) {
   const actions = el("span", "block-aside");
   const reauthenticate = P.needsReauthentication(
@@ -561,7 +561,7 @@ function accountControls(account, full, view, grouped = false) {
     accountsController.refreshingIds.has(account.id) ||
     accountsController.remoteRefreshingIds.has(account.id);
   // The usage error is hidden while the card refreshes, as in AccountCardView.
-  if (!collapsed && account.usageError && !refreshing) {
+  if (!grouped && !collapsed && account.usageError && !refreshing) {
     const warning = button("", "warning", "icon-btn error-indicator", () =>
       notice(account.usageError, true),
     );
@@ -669,6 +669,23 @@ function refreshTooltip(target, base, nextAt) {
 function providerControls(group, title, current) {
   const actions = el("span", "block-aside");
   const ids = group.accounts.map((a) => a.id);
+  const refreshing = ids.some(
+    (id) =>
+      accountsController.refreshingIds.has(id) ||
+      accountsController.remoteRefreshingIds.has(id),
+  );
+  if (!collapsed && !refreshing) {
+    const errors = [...new Set(group.accounts.map((a) => a.usageError).filter(Boolean))];
+    if (errors.length) {
+      const message = errors.join("\n");
+      const warning = button("", "warning", "icon-btn error-indicator", () =>
+        notice(message, true),
+      );
+      warning.title = message;
+      warning.setAttribute("aria-label", message);
+      actions.append(warning);
+    }
+  }
   const refresh = button("", "refresh", "icon-btn card-refresh", () =>
     refreshProvider(group),
   );
@@ -676,14 +693,7 @@ function providerControls(group, title, current) {
   refreshTooltip(refresh, tr("common.refresh_usage"), () =>
     nextRefreshAt(group.accounts),
   );
-  refresh.classList.toggle(
-    "spinning",
-    ids.some(
-      (id) =>
-        accountsController.refreshingIds.has(id) ||
-        accountsController.remoteRefreshingIds.has(id),
-    ),
-  );
+  refresh.classList.toggle("spinning", refreshing);
   actions.append(refresh);
   if (!current) {
     const target = switchTarget(group);
