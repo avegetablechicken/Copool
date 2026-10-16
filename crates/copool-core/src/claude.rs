@@ -1694,7 +1694,7 @@ impl Application {
             .chain(sub2api::summaries(&store, provider))
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
-        if let Some(schedule) = self.refresh_schedule() {
+        if let Some(schedule) = self.claude_refresh_schedule() {
             let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
             for card in &mut summaries {
                 // As `claude_refresh_recurring`: Sub2api cards every round while
@@ -2590,10 +2590,10 @@ impl Application {
         if accounts.is_empty() {
             return Ok(());
         }
-        // As OpenQuota, an account asked within the current interval (by a
+        // An account asked within the current adaptive interval (by a
         // manual refresh, say) waits for the next round.
         let now = now_unix_seconds();
-        let interval = self.refresh_interval().as_secs() as i64;
+        let interval = self.claude_refresh_interval().as_secs() as i64;
         let due = |a: &&AccountSummary| !sub2api::is_card(&a.id) && now - a.updated_at >= interval;
         let round = crate::refresh_policy::recurring_ids(tick, &accounts);
         let ids: Vec<String> = accounts
@@ -2785,7 +2785,7 @@ mod tests {
         assert_eq!(fake.prepaid_requests.lock().unwrap().len(), 2);
     }
 
-    const REFRESH_SECONDS: i64 = crate::refresh_policy::REFRESH_INTERVAL.as_secs() as i64;
+    const REFRESH_SECONDS: i64 = crate::refresh_policy::CLAUDE_REFRESH_INTERVAL.as_secs() as i64;
     /// Usage is asked as `claude-code/…` only, as after the endpoint
     /// refused `claude-cli/…`: each HTTP 429 is then a real rate limit.
     fn refuse_cli(app: &Application) {
@@ -2945,39 +2945,43 @@ mod tests {
         assert_eq!(usages(&fake).len(), 1);
         let (five, one) = (Duration::from_secs(300), Duration::from_secs(60));
         let usage = |hour: u32| (200, json!({"five_hour": {"utilization": hour}}));
-        let mut unchanged = 0;
+        // Codex runs independently and never requests Claude.
+        assert_eq!(app.background_round(0, false).await.as_secs(), 10);
+        let codex = app.refresh_schedule().unwrap();
         // Asked at import: the first round waits, and nothing changed.
-        assert_eq!(app.background_round(0, &mut unchanged).await, five);
+        assert_eq!(app.background_round(0, true).await, five);
         assert_eq!(usages(&fake).len(), 1);
         fake.usage.lock().unwrap().push(usage(25));
         age(&app, 300);
-        assert_eq!(app.background_round(1, &mut unchanged).await, one);
-        assert_eq!(app.refresh_interval(), one);
+        assert_eq!(app.background_round(1, true).await, one);
+        assert_eq!(app.claude_refresh_interval(), one);
         assert_eq!(usages(&fake).len(), 2);
         // At one minute, an account asked under a minute ago waits...
         age(&app, 45);
-        assert_eq!(app.background_round(2, &mut unchanged).await, one);
+        assert_eq!(app.background_round(2, true).await, one);
         assert_eq!(usages(&fake).len(), 2);
         // ...and the second unchanged round slows down again.
         fake.usage.lock().unwrap().push(usage(25));
         age(&app, 60);
-        assert_eq!(app.background_round(3, &mut unchanged).await, five);
+        assert_eq!(app.background_round(3, true).await, five);
         assert_eq!(usages(&fake).len(), 3);
-        assert_eq!(app.refresh_interval(), five);
+        assert_eq!(app.claude_refresh_interval(), five);
         // At five minutes, a minute-old request is not due.
         age(&app, 60);
-        assert_eq!(app.background_round(4, &mut unchanged).await, five);
+        assert_eq!(app.background_round(4, true).await, five);
         assert_eq!(usages(&fake).len(), 3);
         // A change while slow speeds up at once.
         fake.usage.lock().unwrap().push(usage(30));
         age(&app, 300);
-        assert_eq!(app.background_round(6, &mut unchanged).await, one);
+        assert_eq!(app.background_round(6, true).await, one);
         assert_eq!(usages(&fake).len(), 4);
         // A rate limit is no change in usage.
         fake.usage.lock().unwrap().push((429, Value::Null));
         age(&app, 60);
-        assert_eq!(app.background_round(7, &mut unchanged).await, one);
-        assert_eq!(unchanged, 1);
+        assert_eq!(app.background_round(7, true).await, one);
+        assert_eq!(app.refresh_schedule(), Some(codex));
+        assert_eq!(app.background_round(1, false).await.as_secs(), 10);
+        assert_eq!(app.claude_refresh_interval(), one);
         assert_eq!(usages(&fake).len(), 5);
     }
 
@@ -3047,8 +3051,8 @@ mod tests {
         };
         let accounts = app.claude_accounts().await.unwrap();
         assert_eq!(next(&accounts, &alice), None);
-        app.background_round(1, &mut 0).await;
-        let schedule = app.refresh_schedule().unwrap();
+        app.background_round(1, true).await;
+        let schedule = app.claude_refresh_schedule().unwrap();
         assert_eq!((schedule.tick, schedule.interval), (2, REFRESH_SECONDS));
         // A rate limit pause holds Bob past the next full round; Carol waits
         // for a manual refresh.
@@ -4153,8 +4157,7 @@ mod tests {
         drop(app);
         let (app, _, _) = vault_app(&dir, &vault);
         let start = vault.reads().len();
-        let mut unchanged = 0;
-        app.background_round(1, &mut unchanged).await;
+        app.background_round(1, true).await;
         app.claude_refresh(None).await.unwrap();
         app.claude_accounts().await.unwrap();
         assert!(vault.reads()[start..].iter().all(|a| *a == Background));

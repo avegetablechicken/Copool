@@ -191,10 +191,10 @@ pub struct Application {
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
     pub(crate) changes: Arc<std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
     pub(crate) claude: crate::claude::State,
-    /// Seconds until the next background refresh, adapted to usage changes.
-    pub(crate) refresh_interval: std::sync::atomic::AtomicU64,
     /// The next background round; none before the first starts.
     refresh_schedule: std::sync::Mutex<Option<crate::refresh_policy::Schedule>>,
+    claude_refresh_schedule: std::sync::Mutex<Option<crate::refresh_policy::Schedule>>,
+    claude_unchanged_rounds: std::sync::Mutex<u8>,
 }
 pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
@@ -266,7 +266,8 @@ impl Application {
             refreshing: Default::default(),
             changes: Arc::new(std::sync::RwLock::new(None)),
             claude: Default::default(),
-            refresh_interval: crate::refresh_policy::REFRESH_INTERVAL.as_secs().into(),
+            claude_refresh_schedule: Default::default(),
+            claude_unchanged_rounds: Default::default(),
             refresh_schedule: Default::default(),
         };
         app.migrate_provider_credentials()?;
@@ -463,7 +464,7 @@ impl Application {
         s.restart_editor_targets = p.restart_editor_targets.clone();
         s.extra
             .insert("requestNewAccounts".into(), p.request_new_accounts.into());
-        // The adaptive background refresh replaced the fixed interval.
+        // Pool-specific intervals replace the old shared preference.
         s.extra.remove("refreshSeconds");
         s.extra.insert(
             "accountOrder".into(),
@@ -1276,60 +1277,84 @@ impl Application {
         if self.preferences().is_ok_and(|p| p.auto_start_proxy) {
             let _ = self.start_proxy().await;
         }
-        // Refresh the whole pool at launch; the UI shows the stored values
-        // meanwhile and updates each card as its refresh lands. The interval
-        // then adapts as OpenQuota's does.
+        // Independent loops keep a slow provider from delaying the other pool.
+        tokio::join!(self.background_pool(false), self.background_pool(true));
+    }
+    async fn background_pool(&self, claude: bool) {
         let mut tick = 0u64;
-        let mut unchanged = 0u8;
         loop {
-            let interval = self.background_round(tick, &mut unchanged).await;
+            let interval = self.background_round(tick, claude).await;
             tokio::time::sleep(interval).await;
             tick = tick.wrapping_add(1);
         }
     }
-    /// One background refresh of both pools; returns the interval until the
-    /// next, from whether it changed any card's usage.
-    pub(crate) async fn background_round(
-        &self,
-        tick: u64,
-        unchanged: &mut u8,
-    ) -> std::time::Duration {
-        let schedule = |at, tick| {
-            *self.refresh_schedule.lock().unwrap() = Some(crate::refresh_policy::Schedule {
+    pub(crate) async fn background_round(&self, tick: u64, claude: bool) -> std::time::Duration {
+        let (interval, schedule) = if claude {
+            (
+                self.claude_refresh_interval(),
+                &self.claude_refresh_schedule,
+            )
+        } else {
+            (
+                crate::refresh_policy::CODEX_REFRESH_INTERVAL,
+                &self.refresh_schedule,
+            )
+        };
+        let set_schedule = |at, tick, interval: std::time::Duration| {
+            *schedule.lock().unwrap() = Some(crate::refresh_policy::Schedule {
                 at,
                 tick,
-                interval: self.refresh_interval().as_secs() as i64,
+                interval: interval.as_secs() as i64,
             });
         };
-        // This round is due now until it ends.
-        schedule(now_unix_seconds(), tick);
-        let before = self.usage_values().await;
-        if tick == 0 {
-            let _ = tokio::join!(self.refresh_recurring(tick), async {
-                let _ = self.claude_authorize_at_startup().await;
-                self.claude_refresh_recurring(tick).await
-            });
+        set_schedule(now_unix_seconds(), tick, interval);
+        let before = if claude {
+            crate::refresh_policy::usage_values(&self.claude_usage_cards().unwrap_or_default())
         } else {
-            let _ = tokio::join!(
-                self.refresh_recurring(tick),
-                self.claude_refresh_recurring(tick)
-            );
+            Default::default()
+        };
+        if claude {
+            if tick == 0 {
+                let _ = self.claude_authorize_at_startup().await;
+            }
+            let _ = self.claude_refresh_recurring(tick).await;
+        } else {
+            let _ = self.refresh_recurring(tick).await;
         }
-        let changed = crate::refresh_policy::usage_changed(&before, &self.usage_values().await);
-        let interval = crate::refresh_policy::refresh_interval_for(
-            self.refresh_interval(),
-            changed,
-            unchanged,
-        );
-        self.refresh_interval
-            .store(interval.as_secs(), std::sync::atomic::Ordering::Relaxed);
-        schedule(
+        let interval = if claude {
+            let after =
+                crate::refresh_policy::usage_values(&self.claude_usage_cards().unwrap_or_default());
+            crate::refresh_policy::refresh_interval_for(
+                interval,
+                crate::refresh_policy::usage_changed(&before, &after),
+                &mut self.claude_unchanged_rounds.lock().unwrap(),
+            )
+        } else {
+            interval
+        };
+        set_schedule(
             now_unix_seconds() + interval.as_secs() as i64,
             tick.wrapping_add(1),
+            interval,
         );
-        // Cards show when they refresh next.
         self.publish();
         interval
+    }
+    pub(crate) fn claude_refresh_interval(&self) -> std::time::Duration {
+        self.claude_refresh_schedule()
+            .map(|s| std::time::Duration::from_secs(s.interval as u64))
+            .unwrap_or(crate::refresh_policy::CLAUDE_REFRESH_INTERVAL)
+    }
+    pub(crate) fn claude_refresh_schedule(&self) -> Option<crate::refresh_policy::Schedule> {
+        *self.claude_refresh_schedule.lock().unwrap()
+    }
+    pub fn claude_next_full_refresh_at(&self) -> Option<i64> {
+        self.claude_refresh_schedule()
+            .map(|s| s.next_refresh_at(false, 0))
+    }
+    #[cfg(test)]
+    pub(crate) fn set_claude_refresh_schedule(&self, schedule: crate::refresh_policy::Schedule) {
+        *self.claude_refresh_schedule.lock().unwrap() = Some(schedule);
     }
     pub(crate) fn refresh_schedule(&self) -> Option<crate::refresh_policy::Schedule> {
         *self.refresh_schedule.lock().unwrap()
@@ -1344,19 +1369,6 @@ impl Application {
     #[cfg(test)]
     pub(crate) fn set_refresh_schedule(&self, schedule: crate::refresh_policy::Schedule) {
         *self.refresh_schedule.lock().unwrap() = Some(schedule);
-    }
-    /// The interval until the next background refresh.
-    pub(crate) fn refresh_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(
-            self.refresh_interval
-                .load(std::sync::atomic::Ordering::Relaxed),
-        )
-    }
-    /// Every card's usage, both pools, as the background refresh compares it.
-    async fn usage_values(&self) -> std::collections::BTreeMap<String, Value> {
-        let mut cards = self.accounts().await.unwrap_or_default();
-        cards.extend(self.claude_usage_cards().unwrap_or_default());
-        crate::refresh_policy::usage_values(&cards)
     }
 }
 fn validate_preferences(p: &Preferences) -> Result<()> {
@@ -1830,10 +1842,6 @@ mod tests {
             .extra
             .get("refreshSeconds")
             .is_none());
-        assert_eq!(
-            app.refresh_interval(),
-            crate::refresh_policy::REFRESH_INTERVAL
-        );
     }
     #[test]
     fn exclusive_instance_and_invalid_settings() {

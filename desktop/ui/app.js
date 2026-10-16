@@ -1224,13 +1224,13 @@ async function refreshView() {
   const [accounts, proxy, fullRefresh] = await Promise.all([
     controller.load(),
     invoke("proxy_status"),
-    invoke("next_full_refresh_at"),
+    invoke("next_full_refresh_at", { claude: pool === "claude" }),
     refreshFeatureState(),
   ]);
   proxyCache = proxy;
-  fullRefreshAt = fullRefresh;
   // A pool switched during the load renders through its own refresh.
   if (controller === accountsController) {
+    fullRefreshAt = fullRefresh;
     accountsCache = accounts;
     renderAccounts(accounts);
     await renderPendingWorkspaces();
@@ -1481,6 +1481,7 @@ function showPool(next) {
   const direction = POOLS.indexOf(next) > POOLS.indexOf(pool) ? -1 : 1;
   slidePoolOut(direction);
   pool = next;
+  fullRefreshAt = null;
   localStorage.setItem("copool.pool", pool);
   closeMenu();
   accountsController = poolControllers[pool];

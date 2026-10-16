@@ -49,7 +49,7 @@ test("The toolbar follows the full refresh; a provider its first card due", () =
   );
   // The toolbar shows the background's own schedule, not the cards'.
   assert.match(body("renderToolbar"), /refreshTooltip\([\s\S]*\$\("refresh-all"\)[\s\S]*\(\) => fullRefreshAt/);
-  assert.match(body("refreshView"), /invoke\("next_full_refresh_at"\)/);
+  assert.match(body("refreshView"), /invoke\("next_full_refresh_at", \{ claude: pool === "claude" \}\)/);
   assert.match(source, /refreshTooltip\(refresh, tr\("common\.refresh_usage"\), \(\) => account\.nextRefreshAt\)/);
   assert.match(body("providerControls"), /nextRefreshAt\(group\.accounts\)/);
 });

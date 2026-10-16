@@ -87,10 +87,14 @@ async fn refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), St
         None => app.refresh_all().await,
     }
 }
-/// The next background refresh of the whole pool, for both pools.
+/// The next background refresh of the selected pool.
 #[tauri::command]
-fn next_full_refresh_at(app: State<'_, App>) -> Option<i64> {
-    app.next_full_refresh_at()
+fn next_full_refresh_at(app: State<'_, App>, claude: Option<bool>) -> Option<i64> {
+    if claude.unwrap_or(false) {
+        app.claude_next_full_refresh_at()
+    } else {
+        app.next_full_refresh_at()
+    }
 }
 #[tauri::command]
 async fn smart_switch(app: State<'_, App>) -> Result<SmartSwitchOutcome, String> {

@@ -1109,7 +1109,7 @@ mod tests {
         assert_eq!(secrets.reads(), [password_secret(&provider)]);
         assert_eq!(logins(&requests), 1);
         // Its card shows the next full round (tick 6).
-        app.set_refresh_schedule(crate::refresh_policy::Schedule {
+        app.set_claude_refresh_schedule(crate::refresh_policy::Schedule {
             at: 1_000,
             tick: 2,
             interval: 300,

@@ -2,10 +2,8 @@ use crate::models::AccountSummary;
 use serde_json::Value;
 use std::{collections::BTreeMap, time::Duration};
 
-/// OpenQuota's adaptive update frequency: five minutes between background
-/// refreshes, one minute after a refresh that changed usage, and five again
-/// after two one-minute rounds without a change.
-pub(crate) const REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+pub(crate) const CODEX_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+pub(crate) const CLAUDE_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 pub(crate) const FAST_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const FAST_REFRESH_UNCHANGED_ROUNDS: u8 = 2;
 /// Background rounds from one that refreshes the whole pool to the next.
@@ -46,12 +44,12 @@ pub(crate) fn refresh_interval_for(
         FAST_REFRESH_INTERVAL
     } else if current_interval != FAST_REFRESH_INTERVAL {
         *unchanged_refreshes = 0;
-        REFRESH_INTERVAL
+        CLAUDE_REFRESH_INTERVAL
     } else {
         *unchanged_refreshes = unchanged_refreshes.saturating_add(1);
         if *unchanged_refreshes >= FAST_REFRESH_UNCHANGED_ROUNDS {
             *unchanged_refreshes = 0;
-            REFRESH_INTERVAL
+            CLAUDE_REFRESH_INTERVAL
         } else {
             FAST_REFRESH_INTERVAL
         }
@@ -136,6 +134,24 @@ pub(crate) fn round_card(accounts: &[AccountSummary]) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pool_intervals_schedule_current_and_idle_cards() {
+        for (interval, seconds, full_seconds) in [
+            (CODEX_REFRESH_INTERVAL, 10, 60),
+            (CLAUDE_REFRESH_INTERVAL, 300, 1800),
+            (FAST_REFRESH_INTERVAL, 60, 360),
+        ] {
+            assert_eq!(interval.as_secs(), seconds);
+            let schedule = Schedule {
+                at: 1_000 + seconds as i64,
+                tick: 1,
+                interval: seconds as i64,
+            };
+            assert_eq!(schedule.next_refresh_at(true, 0), 1_000 + seconds as i64);
+            assert_eq!(schedule.next_refresh_at(false, 0), 1_000 + full_seconds);
+        }
+    }
 
     #[test]
     fn the_next_refresh_is_the_next_round_or_the_next_full_one() {
