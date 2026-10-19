@@ -115,8 +115,10 @@ pub(crate) async fn fetch_usage_from_urls(
         {
             if response.status().is_success() {
                 if let Ok(value) = response.json::<serde_json::Value>().await {
-                    snapshot.remaining_reset_count =
-                        reset_count(&value).or(snapshot.remaining_reset_count);
+                    if let Some(count) = reset_count(&value) {
+                        snapshot.remaining_reset_count = Some(count);
+                        snapshot.reset_expiries = reset_expiries(&value);
+                    }
                 }
             }
         }
@@ -215,11 +217,10 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
         one_week.map(to_usage_window),
     );
 
+    let resets = payload.rate_limit_reset_credits.as_ref();
     UsageSnapshot {
-        remaining_reset_count: payload
-            .rate_limit_reset_credits
-            .as_ref()
-            .and_then(reset_count),
+        remaining_reset_count: resets.and_then(reset_count),
+        reset_expiries: resets.map(reset_expiries).unwrap_or_default(),
         fetched_at: now_unix_seconds(),
         plan_type: payload.plan_type,
         five_hour,
@@ -293,6 +294,26 @@ fn reset_count(value: &serde_json::Value) -> Option<i64> {
         .as_i64()
         .or_else(|| value.as_str().and_then(|s| s.parse::<i64>().ok()))
         .filter(|value| *value >= 0)
+}
+
+/// When each available reset credit expires, earliest first, as OpenQuota
+/// reads them: a credit without a status is available.
+fn reset_expiries(value: &serde_json::Value) -> Vec<i64> {
+    let mut expiries: Vec<i64> = value["credits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|credit| credit["status"].as_str().is_none_or(|s| s == "available"))
+        .filter_map(|credit| {
+            let at = &credit["expires_at"];
+            at.as_str()
+                .and_then(|text| chrono::DateTime::parse_from_rfc3339(text.trim()).ok())
+                .map(|date| date.timestamp())
+                .or_else(|| at.as_f64().filter(|s| s.is_finite()).map(|s| s as i64))
+        })
+        .collect();
+    expiries.sort_unstable();
+    expiries
 }
 
 pub(crate) fn debug_request_summary(request: &reqwest::Request) -> String {

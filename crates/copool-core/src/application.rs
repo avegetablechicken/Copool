@@ -1859,6 +1859,7 @@ mod tests {
         let mut account: StoredAccount = serde_json::from_value(json!({"id":"a", "label":"A", "accountId":"team", "authJson":document("a"), "addedAt":1, "updatedAt":1})).unwrap();
         account.usage = Some(UsageSnapshot {
             remaining_reset_count: None,
+            reset_expiries: Vec::new(),
             fetched_at: now_unix_seconds(),
             plan_type: None,
             five_hour: Some(UsageWindow {

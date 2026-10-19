@@ -38,6 +38,17 @@ async fn testDedicatedCountAndHeadersTakePrecedence() {
     assert_eq!(decoded.remaining_reset_count, Some(3));
 }
 #[tokio::test]
+async fn testAvailableCreditExpiriesAreSorted() {
+    let dedicated = r#"{"available_count":2,"credits":[
+        {"status":"available","expires_at":"2026-02-20T19:00:00Z"},
+        {"expires_at":1771608600},
+        {"status":"consumed","expires_at":"2026-02-20T16:10:00Z"}]}"#;
+    let embedded = r#"{"available_count":9,"credits":[{"expires_at":1}]}"#;
+    let usage = fetch(dedicated, embedded, 200).await;
+    assert_eq!(usage.reset_expiries, [1771608600, 1771614000]);
+    assert_eq!(fetch("{}", embedded, 404).await.reset_expiries, [1]);
+}
+#[tokio::test]
 async fn testUnavailableEndpointFallsBackToEmbeddedCount() {
     assert_eq!(
         fetch("{}", r#"{"available_count":"2"}"#, 404)

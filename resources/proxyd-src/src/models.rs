@@ -117,6 +117,10 @@ pub struct AccountSummary {
 pub struct UsageSnapshot {
     #[serde(default)]
     pub remaining_reset_count: Option<i64>,
+    /// When each remaining reset expires (Unix seconds), earliest first; only
+    /// those whose expiry upstream reports.
+    #[serde(default)]
+    pub reset_expiries: Vec<i64>,
     pub fetched_at: i64,
     pub plan_type: Option<String>,
     pub five_hour: Option<UsageWindow>,

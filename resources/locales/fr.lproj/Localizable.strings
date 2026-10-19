@@ -122,6 +122,7 @@
 "accounts.card.credits_format" = "Crédits : %@";
 "accounts.card.remaining_resets_format" = "Réinitialisations : %@";
 "accounts.card.resets_unavailable_format" = "Réinitialisations : %@";
+"accounts.card.reset_expires_format" = "Expire : %@";
 "accounts.card.token_expires_format" = "Jeton : %@";
 "accounts.card.token_expired" = "Jeton : expiré";
 "accounts.card.token_expires.help" = "Le jeton d'accès expire le %@ et est renouvelé automatiquement à la prochaine actualisation de l'utilisation.";

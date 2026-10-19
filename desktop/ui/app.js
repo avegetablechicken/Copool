@@ -775,13 +775,28 @@ function accountCard(account, grouped = false) {
   const footerText = el(
     "span",
     "account-footer-text",
-    `${tr("accounts.card.credits_format", credits)} · ${tr(
+    `${tr("accounts.card.credits_format", credits)} · `,
+  );
+  const resetCount = el(
+    "span",
+    "",
+    tr(
       resets !== null
         ? "accounts.card.remaining_resets_format"
         : "accounts.card.resets_unavailable_format",
       resets ?? "--",
-    )}`,
+    ),
   );
+  // Its tooltip lists when each remaining reset expires, as in OpenQuota.
+  const now = Date.now() / 1000;
+  const expiries = (account.usage?.resetExpiries ?? []).filter((at) => at > now);
+  if (resets && expiries.length)
+    resetCount.title = expiries
+      .map((at) =>
+        tr("accounts.card.reset_expires_format", P.formatReset(at, locale)),
+      )
+      .join("\n");
+  footerText.append(resetCount);
   footer.append(footerText, accountControls(account, full, view, grouped));
   card.append(
     // A provider's account without a plan tag has no tag row to show.

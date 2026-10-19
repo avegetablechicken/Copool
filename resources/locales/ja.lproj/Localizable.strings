@@ -122,6 +122,7 @@
 "accounts.card.credits_format" = "Credits: %@";
 "accounts.card.remaining_resets_format" = "リセット：%@";
 "accounts.card.resets_unavailable_format" = "リセット：%@";
+"accounts.card.reset_expires_format" = "有効期限：%@";
 "accounts.card.token_expires_format" = "トークン：残り %@";
 "accounts.card.token_expired" = "トークン：期限切れ";
 "accounts.card.token_expires.help" = "アクセストークンの有効期限：%@。期限切れ後は使用量の更新時に自動で再発行されます。";

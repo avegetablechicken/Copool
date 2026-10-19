@@ -122,6 +122,7 @@
 "accounts.card.credits_format" = "額度：%@";
 "accounts.card.remaining_resets_format" = "重設：%@ 次";
 "accounts.card.resets_unavailable_format" = "重設：%@";
+"accounts.card.reset_expires_format" = "到期時間：%@";
 "accounts.card.token_expires_format" = "權杖：%@後過期";
 "accounts.card.token_expired" = "權杖：已過期";
 "accounts.card.token_expires.help" = "存取權杖過期時間：%@，過期後重新整理用量時自動續期。";

@@ -122,6 +122,7 @@
 "accounts.card.credits_format" = "Credits: %@";
 "accounts.card.remaining_resets_format" = "Resets: %@";
 "accounts.card.resets_unavailable_format" = "Resets: %@";
+"accounts.card.reset_expires_format" = "Verloopt: %@";
 "accounts.card.token_expires_format" = "Token: %@";
 "accounts.card.token_expired" = "Token: verlopen";
 "accounts.card.token_expires.help" = "Het toegangstoken verloopt op %@ en wordt daarna automatisch vernieuwd bij de volgende gebruiksverversing.";

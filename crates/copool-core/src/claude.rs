@@ -920,8 +920,13 @@ fn usage_snapshot(body: &Value, plan: Option<String>, now: i64) -> Result<UsageS
                 reset_at: reset_at(&w["resets_at"]),
             })
     };
+    let (resets, reset_expiries) = banked_resets(&body["cedar_ember"], now)
+        .map_or((None, Vec::new()), |(count, expiries)| {
+            (Some(count), expiries)
+        });
     Ok(UsageSnapshot {
-        remaining_reset_count: banked_resets(&body["cedar_ember"], now),
+        remaining_reset_count: resets,
+        reset_expiries,
         fetched_at: now,
         plan_type: plan,
         five_hour: window("five_hour", 5 * 60 * 60),
@@ -980,21 +985,31 @@ fn extra_usage_credits(extra: &Value, prepaid: &Value) -> Option<CreditSnapshot>
 }
 /// The usage-limit resets the account has banked: what its unexpired grants
 /// have left, as claude.ai shows them. An ineligible block says nothing about
-/// the account, so it is unknown rather than zero. Grant ids, which spend a
-/// reset, are never read.
-fn banked_resets(block: &Value, now: i64) -> Option<i64> {
+/// the account, so it is unknown rather than zero. With the count come when
+/// its resets expire, earliest first: each reset a grant has left ends with
+/// it. Grant ids, which spend a reset, are never read.
+fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>)> {
     if block["eligible"].as_bool() != Some(true) {
         return None;
     }
     let grants = block["grants"].as_array()?;
-    Some(
-        grants
-            .iter()
-            .filter(|g| reset_at(&g["ends_at"]).is_none_or(|end| end > now))
-            .filter_map(|g| number(&g["resets_left"]))
-            .map(|left| left.max(0.0) as i64)
-            .sum(),
-    )
+    let (mut count, mut expiries) = (0, Vec::new());
+    for grant in grants {
+        let ends = reset_at(&grant["ends_at"]);
+        if ends.is_some_and(|end| end <= now) {
+            continue;
+        }
+        let Some(left) = number(&grant["resets_left"]).map(|left| left.max(0.0) as i64) else {
+            continue;
+        };
+        count += left;
+        expiries.extend(
+            ends.into_iter()
+                .flat_map(|end| std::iter::repeat_n(end, left as usize)),
+        );
+    }
+    expiries.sort_unstable();
+    Some((count, expiries))
 }
 /// Usage of a Claude account as Sub2api reports it. Sub2api reports an idle
 /// five-hour window as zero without a reset, which is no window at all.
@@ -2667,7 +2682,22 @@ mod tests {
             grant(2, "2026-11-01T00:00:00+00:00"),
             grant(-3, "2026-11-01T00:00:00+00:00"),
         ];
-        assert_eq!(usage(eligible(several)).remaining_reset_count, Some(3));
+        let several = usage(eligible(several));
+        assert_eq!(several.remaining_reset_count, Some(3));
+        let ends = |at: &str| {
+            chrono::DateTime::parse_from_rfc3339(at)
+                .unwrap()
+                .timestamp()
+        };
+        assert_eq!(
+            several.reset_expiries,
+            [
+                ends("2026-10-22T16:00:00Z"),
+                ends("2026-11-01T00:00:00Z"),
+                ends("2026-11-01T00:00:00Z")
+            ]
+        );
+        assert_eq!(live.reset_expiries, [ends("2026-10-22T16:00:00Z")]);
         // An ineligible caller, or a response without the block, is unknown.
         for block in [
             json!({"eligible":false,"ineligible_reason":"surface"}),

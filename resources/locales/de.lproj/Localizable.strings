@@ -122,6 +122,7 @@
 "accounts.card.credits_format" = "Guthaben: %@";
 "accounts.card.remaining_resets_format" = "Zurücksetzungen: %@";
 "accounts.card.resets_unavailable_format" = "Zurücksetzungen: %@";
+"accounts.card.reset_expires_format" = "Läuft ab: %@";
 "accounts.card.token_expires_format" = "Token: %@";
 "accounts.card.token_expired" = "Token: abgelaufen";
 "accounts.card.token_expires.help" = "Das Zugriffstoken läuft am %@ ab und wird danach bei der nächsten Nutzungsaktualisierung automatisch erneuert.";
