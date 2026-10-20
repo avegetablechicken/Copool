@@ -445,6 +445,9 @@
 
 "accounts.proxy.title" = "Konto-Proxy";
 "accounts.renewal.title" = "Token-Erneuerung";
+"accounts.card.say_hi" = "Hallo sagen";
+"accounts.card.say_hi.help" = "Claude Hallo sagen, um das 5-Stunden-Fenster jetzt zu starten";
+"accounts.notice.said_hi" = "Hallo gesagt; das 5-Stunden-Fenster hat begonnen";
 "accounts.renewal.never" = "Nie erneuern";
 "accounts.renewal.once" = "Einmal erneuern";
 "accounts.renewal.always" = "Immer erneuern";

@@ -259,6 +259,50 @@ impl Connection {
             errors,
         })
     }
+    async fn admin_token(&self, client: &reqwest::Client) -> Result<String, String> {
+        let login=payload(client.post(format!("{}/auth/login",self.admin_base)).json(&json!({"email":self.configuration.username,"password":self.configuration.password})).send().await.map_err(|e|e.to_string())?).await?;
+        login
+            .get("access_token")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                "The Sub2api login response did not include an administrator token.".into()
+            })
+    }
+    /// Sub2api's connection test of an account: a "hi" to `model` through
+    /// the account, answered as server-sent events.
+    pub async fn test_account(&self, id: i64, model: &str) -> Result<(), String> {
+        let client = self.client(&self.configuration.proxy_for(id))?;
+        let token = self.admin_token(&client).await?;
+        let response = client
+            .post(format!("{}/admin/accounts/{id}/test", self.admin_base))
+            .bearer_auth(token)
+            .json(&json!({"model_id": model}))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            return payload(response).await.map(|_| ());
+        }
+        let events = response.text().await.map_err(|e| e.to_string())?;
+        for event in events
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
+        {
+            match event["type"].as_str() {
+                Some("error") => {
+                    return Err(event["error"]
+                        .as_str()
+                        .unwrap_or("Sub2api account test failed")
+                        .to_owned())
+                }
+                Some("test_complete") if event["success"] == true => return Ok(()),
+                _ => {}
+            }
+        }
+        Err("Sub2api account test did not complete".into())
+    }
     async fn fetch_platform_accounts_via(
         &self,
         platform: Platform,
@@ -267,11 +311,7 @@ impl Connection {
         list_proxy: &str,
     ) -> Result<Vec<Account>, String> {
         let client = self.client(list_proxy)?;
-        let login=payload(client.post(format!("{}/auth/login",self.admin_base)).json(&json!({"email":self.configuration.username,"password":self.configuration.password})).send().await.map_err(|e|e.to_string())?).await?;
-        let token = login
-            .get("access_token")
-            .and_then(Value::as_str)
-            .ok_or("The Sub2api login response did not include an administrator token.")?;
+        let token = &self.admin_token(&client).await?;
         let mut items = Vec::new();
         let mut page = 1usize;
         loop {

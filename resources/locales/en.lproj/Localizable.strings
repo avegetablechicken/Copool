@@ -473,6 +473,9 @@
 
 "accounts.proxy.title" = "Account proxy";
 "accounts.renewal.title" = "Token renewal";
+"accounts.card.say_hi" = "Say hi";
+"accounts.card.say_hi.help" = "Say hi to Claude to start the 5-hour window now";
+"accounts.notice.said_hi" = "Said hi; the 5-hour window has started";
 "accounts.renewal.never" = "Never renew";
 "accounts.renewal.once" = "Renew once";
 "accounts.renewal.always" = "Always renew";

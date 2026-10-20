@@ -463,6 +463,9 @@
 
 "accounts.proxy.title" = "アカウントのプロキシ";
 "accounts.renewal.title" = "トークンの更新";
+"accounts.card.say_hi" = "Say hi";
+"accounts.card.say_hi.help" = "Claude に挨拶して 5 時間枠を今すぐ開始";
+"accounts.notice.said_hi" = "挨拶しました。5 時間枠が始まりました";
 "accounts.renewal.never" = "更新しない";
 "accounts.renewal.once" = "1 回だけ更新";
 "accounts.renewal.always" = "常に更新";

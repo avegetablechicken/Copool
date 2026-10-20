@@ -373,6 +373,16 @@ impl Application {
         self.claude_refresh_sub2api(&store.providers[i].id, Some(vec![account.id]))
             .await
     }
+    /// Says hi through Sub2api's connection test of the card's account, then
+    /// refreshes the card.
+    pub(super) async fn claude_say_hi_sub2api(&self, id: &str) -> Result<()> {
+        let store = self.claude_load()?;
+        let (i, account) = card(&store, id).ok_or("Account not found")?;
+        self.claude_sub2api_connection(&store.providers[i])?
+            .test_account(account.id, super::HELLO_MODEL)
+            .await?;
+        self.claude_refresh_sub2api_card(id).await
+    }
     /// Refreshes the providers of these cards, or every provider.
     pub(super) async fn claude_refresh_sub2api_cards(&self, ids: Option<&[String]>) -> Vec<String> {
         let Ok(store) = self.claude_load() else {
@@ -547,7 +557,7 @@ mod tests {
     }
     /// A Sub2api admin API with one Claude account, recording request paths.
     async fn server(requests: std::sync::Arc<Mutex<Vec<String>>>) -> String {
-        use axum::{extract::Request, routing::any, Json, Router};
+        use axum::{extract::Request, response::IntoResponse, routing::any, Json, Router};
         let router = Router::new().fallback(any(move |request: Request| {
             let requests = requests.clone();
             async move {
@@ -555,6 +565,19 @@ mod tests {
                 requests.lock().unwrap().push(uri.clone());
                 if !uri.starts_with("/api/v1/auth/login") {
                     assert_eq!(request.headers().get("authorization").unwrap(), "Bearer admin");
+                }
+                if uri.ends_with("/test") {
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let body: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(body["model_id"], crate::claude::HELLO_MODEL);
+                    return concat!(
+                        "data: {\"type\":\"test_start\",\"model\":\"claude\"}\n\n",
+                        "data: {\"type\":\"content\",\"text\":\"Hi\"}\n\n",
+                        "data: {\"type\":\"test_complete\",\"success\":true}\n\n",
+                    )
+                    .into_response();
                 }
                 let data = if uri.starts_with("/api/v1/auth/login") {
                     json!({"access_token": "admin"})
@@ -568,7 +591,7 @@ mod tests {
                            "seven_day": {"utilization": 34, "resets_at": "2099-01-01T00:00:00Z"},
                            "subscription_tier": "MAX"})
                 };
-                Json(json!({"code": 0, "data": data}))
+                Json(json!({"code": 0, "data": data})).into_response()
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -717,6 +740,22 @@ mod tests {
             .iter()
             .filter(|uri| uri.starts_with("/api/v1/auth/login"))
             .count()
+    }
+
+    #[tokio::test]
+    async fn a_card_says_hi_through_the_sub2api_account_test_and_refreshes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, _, card, _, _, requests) = pool_recording(dir.path()).await;
+        requests.lock().unwrap().clear();
+        app.claude_say_hi(&card).await.unwrap();
+        let requests = requests.lock().unwrap().clone();
+        let test = requests
+            .iter()
+            .position(|uri| uri == "/api/v1/admin/accounts/7/test")
+            .unwrap();
+        assert!(requests[test + 1..]
+            .iter()
+            .any(|uri| uri == "/api/v1/admin/accounts/7/usage"));
     }
 
     #[tokio::test]

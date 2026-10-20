@@ -445,6 +445,9 @@
 
 "accounts.proxy.title" = "Accountproxy";
 "accounts.renewal.title" = "Tokenvernieuwing";
+"accounts.card.say_hi" = "Hallo zeggen";
+"accounts.card.say_hi.help" = "Zeg hallo tegen Claude om het venster van 5 uur nu te starten";
+"accounts.notice.said_hi" = "Hallo gezegd; het venster van 5 uur is begonnen";
 "accounts.renewal.never" = "Nooit vernieuwen";
 "accounts.renewal.once" = "Eén keer vernieuwen";
 "accounts.renewal.always" = "Altijd vernieuwen";

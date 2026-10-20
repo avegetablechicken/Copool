@@ -473,6 +473,9 @@
 
 "accounts.proxy.title" = "账号代理";
 "accounts.renewal.title" = "令牌续期";
+"accounts.card.say_hi" = "Say hi";
+"accounts.card.say_hi.help" = "向 Claude 打个招呼，立即开始 5 小时计时";
+"accounts.notice.said_hi" = "已打招呼，5 小时计时已开始";
 "accounts.renewal.never" = "永不续期";
 "accounts.renewal.once" = "续期一次";
 "accounts.renewal.always" = "始终续期";

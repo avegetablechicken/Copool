@@ -445,6 +445,9 @@
 
 "accounts.proxy.title" = "Proxy du compte";
 "accounts.renewal.title" = "Renouvellement du jeton";
+"accounts.card.say_hi" = "Dire bonjour";
+"accounts.card.say_hi.help" = "Dire bonjour à Claude pour lancer la fenêtre de 5 heures maintenant";
+"accounts.notice.said_hi" = "Bonjour envoyé ; la fenêtre de 5 heures a commencé";
 "accounts.renewal.never" = "Ne jamais renouveler";
 "accounts.renewal.once" = "Renouveler une fois";
 "accounts.renewal.always" = "Toujours renouveler";

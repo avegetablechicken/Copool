@@ -445,6 +445,9 @@
 
 "accounts.proxy.title" = "Proxy de la cuenta";
 "accounts.renewal.title" = "Renovación del token";
+"accounts.card.say_hi" = "Saludar";
+"accounts.card.say_hi.help" = "Saluda a Claude para iniciar ya la ventana de 5 horas";
+"accounts.notice.said_hi" = "Saludo enviado; la ventana de 5 horas ha comenzado";
 "accounts.renewal.never" = "No renovar nunca";
 "accounts.renewal.once" = "Renovar una vez";
 "accounts.renewal.always" = "Renovar siempre";

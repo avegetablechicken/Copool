@@ -36,6 +36,7 @@ const CLAUDE_COMMANDS = {
   save_account_proxy: "claude_save_account_proxy",
   set_renewal: "claude_set_renewal",
   refresh_usage: "claude_refresh_usage",
+  say_hi: "claude_say_hi",
   refresh_provider: "claude_refresh_provider",
   switch_account: "claude_switch_account",
   smart_switch: "claude_smart_switch",
@@ -60,6 +61,7 @@ const ICONS = {
     '<circle cx="11" cy="11" r="8.7"/><ellipse cx="11" cy="11" rx="4" ry="8.7" transform="rotate(-23 11 11)"/><path d="M3.4 6.8c3.5 3.7 8.8 6.5 16.1 7.2M4 16c4.9-.4 10-3 13.9-8.3"/>',
   plus: '<path d="M11 3v16M3 11h16"/>',
   refresh: '<path d="M18 8a8 8 0 1 0 .4 6M18 3v5h-5"/>',
+  "say-hi": '<path d="M3 4h16v11H9l-4 4v-4H3Z"/>',
   renewal:
     '<path d="M18.6 12.5A7.7 7.7 0 1 1 16.3 5.4M17 2.4v3.8h-3.8"/><path d="M11 7.2V11l2.6 1.8"/>',
   "chevron-up": '<path d="m5 14 6-6 6 6"/>',
@@ -584,6 +586,8 @@ function accountControls(account, full, view, grouped = false) {
     actions.append(signInAgain);
     return actions;
   }
+  // A Claude card, a Sub2api provider's too, says hi to start its 5h window.
+  if (pool === "claude" && !collapsed) actions.append(sayHiButton(account, full));
   if (grouped) return actions;
   const refresh = button("", "refresh", "icon-btn card-refresh", () =>
     refreshUsage(account.id),
@@ -603,6 +607,23 @@ function accountControls(account, full, view, grouped = false) {
     actions.append(control);
   }
   return actions;
+}
+/// Says hi with the account, which starts its 5h window; shown, as the
+/// proxy button, only on the focused card.
+function sayHiButton(account, full) {
+  const control = button("", "say-hi", "icon-btn card-say-hi", () =>
+    accountsController
+      .sayHi(account.id)
+      .then((done) => done && notice(tr("accounts.notice.said_hi")))
+      .catch((error) => notice(error, true))
+      .finally(() => refreshView().catch((error) => notice(error, true))),
+  );
+  control.title = tr("accounts.card.say_hi.help");
+  control.setAttribute("aria-label", `${tr("accounts.card.say_hi")} ${full}`);
+  control.disabled =
+    accountsController.refreshingIds.has(account.id) ||
+    accountsController.remoteRefreshingIds.has(account.id);
+  return control;
 }
 /// The plan tag. Codex treats an unknown plan as Team; Claude shows none
 /// until its plan is known.

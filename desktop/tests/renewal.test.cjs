@@ -76,3 +76,18 @@ test("the card footer no longer shows the token expiry; the renewal button does"
   assert.match(button.slice(0, button.indexOf("\n}\n")), /trigger\.title = tokenLabel\(account\) \|\| tr\("accounts\.renewal\.title"\);/);
 });
 
+
+test("saying hi goes to the Claude pool, shows the card refreshing and reloads it", async () => {
+  const { model, calls } = fixture("claude");
+  let refreshing;
+  model.onUpdate = () => (refreshing ??= model.refreshingIds.has("a"));
+  assert.equal(await model.sayHi("a"), true);
+  assert.equal(refreshing, true);
+  assert.equal(model.refreshingIds.has("a"), false);
+  const at = calls.findIndex(([name]) => name === "claude_say_hi");
+  assert.deepEqual(calls[at], ["claude_say_hi", { id: "a" }]);
+  assert(calls.slice(at + 1).some(([name]) => name === "claude_accounts"), "the cards reload");
+  const locales = fs.readFileSync(path.join(__dirname, "../ui/locales.js"), "utf8");
+  for (const key of ["accounts.card.say_hi", "accounts.card.say_hi.help", "accounts.notice.said_hi"])
+    assert.equal(locales.split(`"${key}"`).length - 1, 11, `${key} in every locale`);
+});

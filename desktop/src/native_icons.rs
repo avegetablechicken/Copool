@@ -27,6 +27,7 @@ pub fn load() -> Result<NativeIcons, String> {
         ("reauthenticate", "person.crop.circle.badge.exclamationmark"),
         ("refresh", "arrow.clockwise"),
         ("renewal", "clock.arrow.circlepath"),
+        ("say-hi", "bubble.left"),
         ("chevron-up", "chevron.up"),
         ("chevron-down", "chevron.down"),
         ("chevron-left", "chevron.left"),

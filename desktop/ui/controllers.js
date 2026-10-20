@@ -210,6 +210,26 @@
         this.onUpdate();
       }
     }
+    /// Claude only: says hi with an account, which starts its five-hour
+    /// window, then refreshes it; the card shows as refreshing meanwhile.
+    async sayHi(id) {
+      if (
+        this.manualRefreshing ||
+        this.refreshingIds.has(id) ||
+        this.remoteRefreshingIds.has(id)
+      )
+        return false;
+      this.refreshingIds.add(id);
+      this.onUpdate();
+      try {
+        await this.invoke("say_hi", { id });
+        return true;
+      } finally {
+        await this.load().catch(() => {});
+        this.refreshingIds.delete(id);
+        this.onUpdate();
+      }
+    }
     /// Every card of one Sub2api provider in a single pass; only its cards
     /// show as refreshing.
     async refreshProvider(provider, ids) {

@@ -697,6 +697,20 @@ main > section.page-leaving {
   pointer-events: auto;
 }
 
+/* Say hi shows on the focused card; in a Sub2api provider, on its account. */
+.account .card-say-hi {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.account:not(.account-group):hover .card-say-hi,
+.account:not(.account-group):focus-within .card-say-hi,
+.account-member:hover .card-say-hi,
+.account-member:focus-within .card-say-hi {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .icon-btn.card-proxy.proxy-muted {
   color: var(--secondary);
 }

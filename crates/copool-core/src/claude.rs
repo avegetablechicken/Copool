@@ -24,6 +24,9 @@ pub use sub2api::Provider as Sub2ApiProvider;
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const ORGANIZATIONS_URL: &str = "https://api.anthropic.com/api/oauth/organizations";
+const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+/// The cheapest model, which a hello costs the least of the five-hour window.
+pub(crate) const HELLO_MODEL: &str = "claude-haiku-5-5";
 const USER_AGENT: &str = "claude-code/2.1.69";
 // The banked resets are returned only to Claude Code 2.1.280 or later, by its
 // User-Agent; others read `eligible: false` with the rest of the usage intact.
@@ -302,6 +305,8 @@ pub(crate) trait Network: Send + Sync {
     fn profile<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Value>;
     /// The organization's prepaid balance, which pays for extra usage.
     fn prepaid<'a>(&'a self, token: &'a str, org: &'a str, proxy: &'a str) -> Response<'a, Value>;
+    /// The HTTP status and body of a one-token "hi", as Claude Code says it.
+    fn hello<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)>;
 }
 struct Http;
 fn client(proxy: &str) -> Result<reqwest::Client> {
@@ -409,6 +414,30 @@ impl Network for Http {
                 ));
             }
             response.json().await.map_err(request_error)
+        })
+    }
+    fn hello<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
+        Box::pin(async move {
+            // A subscription login is served only Claude Code's requests.
+            let response = client(proxy)?
+                .post(MESSAGES_URL)
+                .bearer_auth(token.trim())
+                .header("Accept", "application/json")
+                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+                .header("anthropic-version", "2023-06-01")
+                .header("x-app", "cli")
+                .json(&json!({
+                    "model": HELLO_MODEL,
+                    "max_tokens": 1,
+                    "thinking": {"type": "disabled"},
+                    "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }))
+                .send()
+                .await
+                .map_err(request_error)?;
+            let status = response.status().as_u16();
+            Ok((status, response.json().await.unwrap_or(Value::Null)))
         })
     }
 }
@@ -2524,6 +2553,56 @@ impl Application {
         }
         network.usage(token, USER_AGENT, proxy).await
     }
+    /// Says hi with an account, through its proxy, so that its five-hour
+    /// window starts now, then refreshes its usage to show it. A login Claude
+    /// does not accept is renewed by that refresh, as its renewal allows, and
+    /// says hi once more. A Sub2api card says hi through Sub2api.
+    pub async fn claude_say_hi(&self, id: &str) -> Result<()> {
+        if sub2api::is_card(id) {
+            return self.claude_say_hi_sub2api(id).await;
+        }
+        let network = self.claude_network();
+        let mut renewed = false;
+        loop {
+            let account = {
+                let _lock = self.claude.lock.lock().await;
+                self.claude_load()?
+                    .accounts
+                    .into_iter()
+                    .find(|a| a.id == id)
+                    .ok_or("Account not found")?
+            };
+            if !holds_tokens(&account) {
+                return Err(self.claude_locked());
+            }
+            let expired = expires_at(&account.oauth) != 0
+                && expires_at(&account.oauth) <= (now_unix_seconds() + 60) * 1000;
+            let (status, body) = if expired {
+                (401, Value::Null)
+            } else {
+                let token = text(&account.oauth["accessToken"]).unwrap_or_default();
+                let proxy = self.account_proxy(&account.proxy_url)?;
+                network.hello(&token, &proxy).await?
+            };
+            match status {
+                200..=299 => break,
+                401 if !renewed => {
+                    renewed = true;
+                    self.claude_refresh_usage(id).await?;
+                }
+                401 => return Err(SIGN_IN_EXPIRED.into()),
+                _ => {
+                    let message = body["error"]["message"].as_str().unwrap_or_default();
+                    return Err(
+                        format!("Claude message request failed: HTTP {status} {message}")
+                            .trim()
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+        self.claude_refresh_usage(id).await
+    }
     /// Sets whether Copool renews an account's tokens: "never", "once" (then
     /// never) or "always".
     pub async fn claude_set_renewal(&self, id: &str, renewal: &str) -> Result<()> {
@@ -4217,6 +4296,8 @@ mod tests {
         refresh_response: Mutex<Option<Value>>,
         prepaid: Mutex<Option<Value>>,
         prepaid_requests: Mutex<Vec<(String, String)>>,
+        hellos: Mutex<Vec<(u16, Value)>>,
+        hello_requests: Mutex<Vec<(String, String)>>,
     }
     impl Network for Fake {
         fn usage<'a>(
@@ -4290,6 +4371,20 @@ mod tests {
                     .unwrap()
                     .clone()
                     .ok_or_else(|| "HTTP 403".to_string())
+            })
+        }
+        fn hello<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
+            Box::pin(async move {
+                self.hello_requests
+                    .lock()
+                    .unwrap()
+                    .push((token.into(), proxy.into()));
+                let mut queued = self.hellos.lock().unwrap();
+                Ok(if queued.is_empty() {
+                    (200, Value::Null)
+                } else {
+                    queued.remove(0)
+                })
             })
         }
     }
@@ -5464,6 +5559,51 @@ mod tests {
             }
         );
         assert_eq!(live_access(&location), "new-access");
+    }
+
+    #[tokio::test]
+    async fn saying_hi_goes_through_the_account_proxy_and_then_shows_the_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts.remove(0).id;
+        app.claude_save_account_proxy(&id, "socks5://127.0.0.1:7891")
+            .await
+            .unwrap();
+        let usages = fake.usage_tokens.lock().unwrap().len();
+        app.claude_say_hi(&id).await.unwrap();
+        assert_eq!(
+            *fake.hello_requests.lock().unwrap(),
+            vec![("alice-access".into(), "socks5://127.0.0.1:7891".into())]
+        );
+        assert_eq!(fake.usage_tokens.lock().unwrap().len(), usages + 1);
+
+        // A login Claude does not accept is renewed and says hi again.
+        fake.hello_requests.lock().unwrap().clear();
+        fake.hellos.lock().unwrap().push((401, Value::Null));
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        app.claude_say_hi(&id).await.unwrap();
+        let tokens: Vec<String> = fake
+            .hello_requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(token, _)| token.clone())
+            .collect();
+        assert_eq!(tokens, vec!["alice-access", "fresh-access"]);
+
+        // Other failures are reported without retrying.
+        fake.hello_requests.lock().unwrap().clear();
+        fake.hellos
+            .lock()
+            .unwrap()
+            .push((529, json!({"error": {"message": "Overloaded"}})));
+        assert_eq!(
+            app.claude_say_hi(&id).await.unwrap_err(),
+            "Claude message request failed: HTTP 529 Overloaded"
+        );
+        assert_eq!(fake.hello_requests.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
