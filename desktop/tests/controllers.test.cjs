@@ -10,7 +10,6 @@ const p = (id, extra = {}) => ({
   password: "",
   cachedAccounts: [],
   importedAccountIDs: [],
-  accountProxyURLs: {},
   ...extra,
 });
 legacy(
@@ -48,7 +47,6 @@ legacy(
           providerID: "one",
           cachedAccounts: [{ id: 42, usage: { fetchedAt: 10 } }],
           importedAccountIDs: [42],
-          accountProxyURLs: { 42: "http://127.0.0.1:8080" },
         }),
       ]),
     );
@@ -57,7 +55,6 @@ legacy(
     assert.equal(draft.username, "edited@example.test");
     assert.equal(draft.password, "unsaved-secret");
     assert.equal(draft.cachedAccounts[0].usage.fetchedAt, 10);
-    assert.equal(draft.accountProxyURLs[42], "http://127.0.0.1:8080");
   },
 );
 legacy(

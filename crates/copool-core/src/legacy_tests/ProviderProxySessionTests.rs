@@ -5,23 +5,6 @@ use std::sync::{
     Arc,
 };
 #[test]
-fn testPerAccountOverridesSurviveCacheReplacementAndProviderChanges() {
-    let mut p = Provider {
-        provider_id: "p".into(),
-        proxy_url: "http://127.0.0.1:8080".into(),
-        account_proxy_urls: [("42".into(), "socks5://127.0.0.1:1080".into())].into(),
-        imported_account_ids: vec![42, 43],
-        ..Default::default()
-    };
-    p.cached_accounts.clear();
-    p.proxy_url = "http://127.0.0.1:8081".into();
-    let decoded: Provider = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
-    assert_eq!(decoded.proxy_for(42), "socks5://127.0.0.1:1080");
-    assert_eq!(decoded.proxy_for(43), "http://127.0.0.1:8081");
-    p.account_proxy_urls.remove("42");
-    assert_eq!(p.proxy_for(42), p.proxy_url);
-}
-#[test]
 fn testLegacyConfigurationAndRoundTrip() {
     let p: Provider = serde_json::from_str("{}").unwrap();
     assert_eq!(p.proxy_url, "");
@@ -125,18 +108,16 @@ async fn testRequestsActuallyReachTheirSelectedHTTPProxy() {
 }
 
 #[test]
-fn testDirectOverrideSurvivesRoundTripAndDoesNotReuseProxySession() {
+fn testDirectSurvivesRoundTripAndDoesNotReuseProxySession() {
     let p = Provider {
-        proxy_url: "http://127.0.0.1:9".into(),
-        account_proxy_urls: [("42".into(), "direct://".into())].into(),
+        proxy_url: "direct://".into(),
         ..Default::default()
     };
     let decoded: Provider = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
-    assert_eq!(decoded.proxy_for(42), "direct://");
-    assert_eq!(decoded.proxy_for(43), p.proxy_url);
-    let fallback = Session::new(Options::default(), Some(p.proxy_url)).unwrap();
+    assert_eq!(decoded.proxy_url, "direct://");
+    let fallback = Session::new(Options::default(), Some("http://127.0.0.1:9".into())).unwrap();
     let pool = Sessions::default();
-    let direct = pool.session(&decoded.proxy_for(42), &fallback).unwrap();
+    let direct = pool.session(&decoded.proxy_url, &fallback).unwrap();
     assert!(!Arc::ptr_eq(&direct, &fallback));
     assert_eq!(direct.proxy_url.as_deref(), Some("direct://"));
     assert!(Arc::ptr_eq(

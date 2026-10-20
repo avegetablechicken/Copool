@@ -13,7 +13,6 @@ use crate::{
     utils::now_unix_seconds,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 const CARD_PREFIX: &str = "claude-sub2api-";
 
@@ -43,6 +42,8 @@ pub struct Provider {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub api_key: String,
     pub has_api_key: bool,
+    /// The proxy of every request for the provider and its accounts: blank
+    /// for the system settings, "direct://" for none.
     #[serde(rename = "proxyURL")]
     pub proxy_url: String,
     #[serde(rename = "allowInsecureTLS")]
@@ -50,8 +51,6 @@ pub struct Provider {
     #[serde(rename = "importedAccountIDs")]
     pub imported_account_ids: Vec<i64>,
     pub cached_accounts: Vec<Account>,
-    #[serde(rename = "accountProxyURLs")]
-    pub account_proxy_urls: BTreeMap<String, String>,
 }
 impl Provider {
     /// The Settings input showing this provider's settings.
@@ -105,11 +104,7 @@ pub(super) fn summaries(store: &Store, current: Option<&str>) -> Vec<AccountSumm
             // Sub2api names Claude accounts freely; the name stands in for an email.
             summary.email = summary.email.or_else(|| Some(a.name.clone()));
             summary.label = summary.email.clone().unwrap_or_default();
-            summary.proxy_url = p
-                .account_proxy_urls
-                .get(&a.id.to_string())
-                .cloned()
-                .unwrap_or_default();
+            summary.proxy_url = p.proxy_url.clone();
             result.push(summary);
         }
     }
@@ -179,7 +174,8 @@ impl Application {
         if let Some(old) = existing.map(|i| &store.providers[i]) {
             draft.imported_account_ids = old.imported_account_ids.clone();
             draft.cached_accounts = old.cached_accounts.clone();
-            draft.account_proxy_urls = old.account_proxy_urls.clone();
+            // The provider's card sets its proxy, not its settings.
+            draft.proxy_url = old.proxy_url.clone();
         }
         // Empty secrets keep the stored ones, as for the Codex providers.
         if !draft.password.is_empty() {
@@ -223,7 +219,6 @@ impl Application {
                 password,
                 allow_insecure_tls: p.allow_insecure_tls,
                 proxy_url: p.proxy_url.clone(),
-                account_proxy_urls: p.account_proxy_urls.clone(),
                 imported_account_ids: p.imported_account_ids.clone(),
                 cached_accounts: p
                     .cached_accounts
@@ -421,7 +416,6 @@ impl Application {
         let p = &mut store.providers[i];
         p.imported_account_ids.retain(|v| *v != account.id);
         p.cached_accounts.retain(|a| a.id != account.id);
-        p.account_proxy_urls.remove(&account.id.to_string());
         Ok(())
     }
     pub(super) fn claude_sub2api_card_proxy(
@@ -430,13 +424,8 @@ impl Application {
         id: &str,
         value: &str,
     ) -> Result<()> {
-        let (i, account) = card(store, id).ok_or("Account not found")?;
-        let proxies = &mut store.providers[i].account_proxy_urls;
-        if value.trim().is_empty() {
-            proxies.remove(&account.id.to_string());
-        } else {
-            proxies.insert(account.id.to_string(), value.trim().into());
-        }
+        let (i, _) = card(store, id).ok_or("Account not found")?;
+        store.providers[i].proxy_url = value.trim().into();
         Ok(())
     }
     /// Merges the provider's settings file over the official main settings,
@@ -759,7 +748,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn global_sub2api_refresh_batches_by_route_and_isolates_failures() {
+    async fn every_sub2api_request_goes_through_the_provider_proxy() {
         let unavailable = {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             format!("http://{}", listener.local_addr().unwrap())
@@ -768,24 +757,33 @@ mod tests {
         let (app, _, base, path, card, _) = pool(dir.path()).await;
         source_file(dir.path(), "http://sub2api.invalid", AUTH_TOKEN, "sk-team");
         assert!(path.exists());
+        // The card sets its provider's proxy; the default account proxy is not used.
         app.claude_save_account_proxy(&card, &base).await.unwrap();
-        let mut store = app.claude_load().unwrap();
-        let provider = &mut store.providers[0];
-        provider.proxy_url = unavailable.clone();
-        provider.cached_accounts[0].usage_error = Some("previous failure".into());
-        let mut broken = provider.cached_accounts[0].clone();
-        broken.id = 9;
-        provider.imported_account_ids.push(9);
-        provider.cached_accounts.push(broken);
-        app.claude_save(&store).unwrap();
+        assert_eq!(app.claude_load().unwrap().providers[0].proxy_url, base);
         let mut preferences = app.preferences().unwrap();
         preferences.account_proxy_url = unavailable.clone();
         app.save_preferences(preferences).await.unwrap();
+        let mut store = app.claude_load().unwrap();
+        let mut other = store.providers[0].cached_accounts[0].clone();
+        other.id = 9;
+        store.providers[0].imported_account_ids.push(9);
+        store.providers[0].cached_accounts.push(other);
+        app.claude_save(&store).unwrap();
+        app.claude_refresh(None).await.unwrap();
+        let accounts = app.claude_accounts().await.unwrap();
+        let card = accounts.iter().find(|a| a.id == card).unwrap();
+        assert_eq!(card.proxy_url, base);
+        assert!(card.usage_error.is_none());
+        let card = card.id.clone();
+        app.claude_save_account_proxy(&card, &unavailable)
+            .await
+            .unwrap();
         assert!(app.claude_refresh(None).await.is_err());
-        let store = app.claude_load().unwrap();
-        assert!(store.providers[0].cached_accounts[0].usage_error.is_none());
-        assert!(store.providers[0].cached_accounts[1].usage_error.is_some());
-        // The single-card and global paths both honor explicit direct mode.
+        assert!(app.claude_load().unwrap().providers[0]
+            .cached_accounts
+            .iter()
+            .all(|a| a.usage_error.is_some()));
+        // Explicit direct mode.
         source_file(dir.path(), &base, AUTH_TOKEN, "sk-team");
         app.claude_save_account_proxy(&card, "direct://")
             .await
@@ -1165,30 +1163,18 @@ mod tests {
         let (app, _, _, _, card, _, secrets, requests) = pool_recording(dir.path()).await;
         let (other, other_requests) = add_provider(&app, dir.path(), "other-secret").await;
         let first = app.claude_load().unwrap().providers[0].id.clone();
-        // A second card of the in-use provider, on its own egress route.
-        let mut store = app.claude_load().unwrap();
-        let extra = store.providers[0].card_id(9);
-        let mut account = store.providers[0].cached_accounts[0].clone();
-        account.id = 9;
-        store.providers[0].imported_account_ids.push(9);
-        store.providers[0].cached_accounts.push(account);
-        app.claude_save(&store).unwrap();
-        app.claude_save_account_proxy(&extra, "direct://")
-            .await
-            .unwrap();
         app.claude_switch_account(&card).await.unwrap();
         secrets.clear_reads();
         requests.lock().unwrap().clear();
         other_requests.lock().unwrap().clear();
-        // Every round includes both routes and the inactive provider.
+        // Every round includes the inactive provider.
         app.claude_refresh_recurring(1).await.unwrap();
         let mut reads = secrets.reads();
         reads.sort();
         let mut expected = vec![password_secret(&first), password_secret(&other.id)];
         expected.sort();
         assert_eq!(reads, expected);
-        assert_eq!(logins(&requests), 2);
-        assert_eq!(logins(&other_requests), 1);
+        assert_eq!((logins(&requests), logins(&other_requests)), (1, 1));
     }
 
     #[tokio::test]

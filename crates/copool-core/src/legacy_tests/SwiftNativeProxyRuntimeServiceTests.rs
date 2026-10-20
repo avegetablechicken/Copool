@@ -62,28 +62,6 @@ async fn testLoadCandidatesIncludesImportedSub2APIProviderUsingLoginShellFallbac
     );
 }
 #[tokio::test]
-async fn testImportedSub2APIAccountOverridesCreateIndependentProxyRoutes() {
-    let (_dir, app) = fixture();
-    let mut p = setup_provider(&app, "my", "https://sub2.test/v1", false);
-    p.proxy_url = "http://127.0.0.1:8080".into();
-    p.account_proxy_urls
-        .insert("43".into(), "socks5://127.0.0.1:1080".into());
-    let mut s = app.configuration().unwrap();
-    s.sub2_api_provider.upsert(p);
-    app.persist_configuration(&s).unwrap();
-    let candidates =
-        proxy_integration::candidates_with_keys(&app.paths, |_| Some("key".into())).unwrap();
-    assert_eq!(candidates.len(), 2);
-    assert_ne!(candidates[0].id, candidates[1].id);
-    assert_eq!(
-        candidates
-            .iter()
-            .map(|c| c.proxy_url.as_str())
-            .collect::<Vec<_>>(),
-        ["http://127.0.0.1:8080", "socks5://127.0.0.1:1080"]
-    );
-}
-#[tokio::test]
 async fn testLoadCandidatesIncludesSub2APIProviderFromProfileConfig() {
     let (_dir, app) = fixture();
     setup_provider(

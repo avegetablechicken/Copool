@@ -30,14 +30,8 @@
               saved.providerID.trim().toLowerCase(),
         );
         if (draft) {
-          for (const key of [
-            "cachedAccounts",
-            "importedAccountIDs",
-            "accountProxyURLs",
-          ])
-            draft[key] = structuredClone(
-              saved[key] || (key === "accountProxyURLs" ? {} : []),
-            );
+          for (const key of ["cachedAccounts", "importedAccountIDs"])
+            draft[key] = structuredClone(saved[key] || []);
         } else
           this.providers.set(saved.id, {
             ...structuredClone(saved),

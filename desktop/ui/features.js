@@ -246,7 +246,6 @@ function addCodexProvider() {
     adminBaseURL: "",
     importedAccountIDs: [],
     cachedAccounts: [],
-    accountProxyURLs: {},
     allowInsecureTLS: false,
   });
   renderProviders();

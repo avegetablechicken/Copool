@@ -386,7 +386,7 @@ async fn testCacheRefreshCannotOverwriteNewAccountProxy() {
             .sub2_api_provider
             .provider("p")
             .unwrap()
-            .proxy_for(42),
+            .proxy_url,
         "socks5://127.0.0.1:1080"
     );
     assert_eq!(
@@ -639,7 +639,7 @@ async fn sub2api_refresh_failure_marks_only_affected_cards_and_recovers() {
 }
 
 #[tokio::test]
-async fn global_sub2api_refresh_batches_by_route_and_isolates_failures() {
+async fn sub2api_requests_go_through_the_provider_proxy() {
     let unavailable = {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         format!("http://{}", listener.local_addr().unwrap())
@@ -652,15 +652,13 @@ async fn global_sub2api_refresh_batches_by_route_and_isolates_failures() {
     p.proxy_url = server.base.clone();
     app.save_provider(p).await.unwrap();
     app.refresh_provider("my", true).await.unwrap();
+    // Any card sets its provider's proxy; the default account proxy is not used.
+    app.save_account_proxy("sub2api-my-43", &unavailable)
+        .await
+        .unwrap();
     app.save_account_proxy("sub2api-my-42", &server.base)
         .await
         .unwrap();
-    app.save_account_proxy("sub2api-my-43", &server.base)
-        .await
-        .unwrap();
-    let mut settings = app.configuration().unwrap();
-    settings.sub2_api_provider.providers[0].proxy_url = unavailable.clone();
-    app.persist_configuration(&settings).unwrap();
     let mut preferences = app.preferences().unwrap();
     preferences.account_proxy_url = unavailable.clone();
     app.save_preferences(preferences).await.unwrap();
@@ -683,36 +681,22 @@ async fn global_sub2api_refresh_batches_by_route_and_isolates_failures() {
     );
     assert!(requests.iter().any(|p| p.ends_with("/42/quota")));
     assert!(requests.iter().any(|p| p.ends_with("/43/quota")));
-    assert!(app
-        .accounts()
-        .await
-        .unwrap()
+    let cards = app.accounts().await.unwrap();
+    assert!(cards
         .iter()
-        .all(|a| a.usage_error.is_none()));
-    // A broken card route must not prevent another card from refreshing.
+        .all(|a| a.proxy_url == server.base && a.usage_error.is_none()));
     app.save_account_proxy("sub2api-my-43", &unavailable)
         .await
         .unwrap();
     calls.lock().unwrap().clear();
     assert!(app.refresh_all().await.is_err());
-    assert!(calls
-        .lock()
+    assert!(calls.lock().unwrap().is_empty());
+    assert!(app
+        .accounts()
+        .await
         .unwrap()
         .iter()
-        .any(|p| p.ends_with("/42/quota")));
-    let cards = app.accounts().await.unwrap();
-    assert!(cards
-        .iter()
-        .find(|a| a.id == "sub2api-my-42")
-        .unwrap()
-        .usage_error
-        .is_none());
-    assert!(cards
-        .iter()
-        .find(|a| a.id == "sub2api-my-43")
-        .unwrap()
-        .usage_error
-        .is_some());
+        .all(|a| a.usage_error.is_some()));
 }
 #[tokio::test]
 async fn testSavedCloudflareTokenIsMarkedWithoutBeingReturned() {

@@ -12,10 +12,10 @@ pub struct Provider {
     pub password: String,
     #[serde(rename = "allowInsecureTLS")]
     pub allow_insecure_tls: bool,
+    /// The proxy of every request for the provider and its accounts: blank
+    /// for the system settings, "direct://" for none.
     #[serde(rename = "proxyURL")]
     pub proxy_url: String,
-    #[serde(rename = "accountProxyURLs")]
-    pub account_proxy_urls: BTreeMap<String, String>,
     #[serde(rename = "importedAccountIDs")]
     pub imported_account_ids: Vec<i64>,
     pub cached_accounts: Vec<Value>,
@@ -33,7 +33,6 @@ impl Default for Provider {
             password: String::new(),
             allow_insecure_tls: false,
             proxy_url: String::new(),
-            account_proxy_urls: BTreeMap::new(),
             imported_account_ids: vec![],
             cached_accounts: vec![],
             admin_base_url: String::new(),
@@ -58,16 +57,8 @@ impl Provider {
             .iter()
             .filter_map(|account| {
                 let id = account.get("id")?.as_i64()?;
-                if !value.imported_account_ids.contains(&id) || !seen.insert(id) {
-                    return None;
-                }
-                let mut account = account.clone();
-                if let Some(proxy) = value.account_proxy_urls.get(&id.to_string()) {
-                    account["proxyURL"] = proxy.clone().into();
-                } else if let Some(object) = account.as_object_mut() {
-                    object.remove("proxyURL");
-                }
-                Some(account)
+                (value.imported_account_ids.contains(&id) && seen.insert(id))
+                    .then(|| account.clone())
             })
             .collect();
         value
@@ -88,19 +79,11 @@ impl Provider {
             || !self.admin_base_url.trim().is_empty()
             || !self.legacy_admin_base_url.trim().is_empty()
     }
-    pub fn proxy_for(&self, id: i64) -> String {
-        self.account_proxy_urls
-            .get(&id.to_string())
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or(&self.proxy_url)
-            .trim()
-            .into()
-    }
 }
 impl Serialize for Provider {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let p = self.normalized();
-        json!({"id":p.id,"providerID":p.provider_id,"username":p.username,"allowInsecureTLS":p.allow_insecure_tls,"proxyURL":p.proxy_url,"accountProxyURLs":p.account_proxy_urls,"importedAccountIDs":p.imported_account_ids,"cachedAccounts":p.cached_accounts,"adminBaseURL":p.admin_base_url,"legacyAdminBaseURL":p.legacy_admin_base_url}).serialize(serializer)
+        json!({"id":p.id,"providerID":p.provider_id,"username":p.username,"allowInsecureTLS":p.allow_insecure_tls,"proxyURL":p.proxy_url,"importedAccountIDs":p.imported_account_ids,"cachedAccounts":p.cached_accounts,"adminBaseURL":p.admin_base_url,"legacyAdminBaseURL":p.legacy_admin_base_url}).serialize(serializer)
     }
 }
 #[derive(Clone, Debug, Default, PartialEq)]

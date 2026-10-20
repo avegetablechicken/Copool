@@ -6,8 +6,6 @@ const P = window.CopoolPresentation;
 let collapsed = false;
 let selectedPage = "accounts";
 let editingAccount = null;
-// The cards the proxy dialog saves to: one, or all of a provider's.
-let editingIds = [];
 let switchingId = null;
 // A card is being dragged: the list waits to render until it is dropped.
 let reorderingAccounts = false;
@@ -466,17 +464,26 @@ function providerTitle(account) {
     "Sub2api"
   );
 }
-function accountUsesExplicitProxy(account) {
+/// The proxy an account's requests go through: its own, which for a Sub2api
+/// card is its provider's, else the default account proxy; blank for the
+/// system settings, "direct://" for none.
+function accountProxy(account) {
   let proxy = (account.proxyUrl || "").trim();
-  if (!proxy && account.sourceTag === "SUB2API")
-    proxy = (accountProvider(account)?.proxyURL || "").trim();
   if (account.sourceTag !== "SUB2API")
     proxy ||= (preferences?.accountProxyUrl || "").trim();
+  return proxy;
+}
+function accountUsesExplicitProxy(account) {
+  const proxy = accountProxy(account);
   return !!proxy && proxy !== "direct://";
 }
+function proxyLabel(proxy) {
+  if (!proxy) return tr("accounts.proxy.system");
+  return proxy === "direct://" ? tr("accounts.proxy.none") : proxy;
+}
 /// Proxy and removal, in the card's top row as in the SwiftUI card. A
-/// Sub2api provider's group sets the proxy of, and removes, all its cards at
-/// once; its accounts have neither of their own.
+/// Sub2api provider's group has its provider's proxy and removes all its
+/// cards at once; its accounts have neither of their own.
 function accountManagement(account, group = null, title = null) {
   const actions = el("span", "block-aside");
   const cards = group ? group.accounts : [account];
@@ -484,8 +491,8 @@ function accountManagement(account, group = null, title = null) {
   const proxyButton = button("", "network", "icon-btn card-proxy", () =>
     group ? openProviderProxy(group, title) : openAccountProxy(account),
   );
-  proxyButton.classList.toggle("proxy-muted", !cards.some(accountUsesExplicitProxy));
-  proxyButton.title = tr("accounts.proxy.title");
+  proxyButton.classList.toggle("proxy-muted", !accountUsesExplicitProxy(account));
+  proxyButton.title = proxyLabel(accountProxy(account));
   proxyButton.setAttribute(
     "aria-label",
     `${tr("accounts.proxy.title")} ${group ? title : account.email || account.label}`,
@@ -917,7 +924,7 @@ function renderAccounts(accounts) {
     collapsed,
     locale,
     preferences?.usageDisplay,
-    accounts.map(accountUsesExplicitProxy),
+    accounts.map(accountProxy),
     // Cards group under their provider, which may load after them.
     accounts.map(providerTitle),
     preferences?.accountOrder?.[pool],
@@ -1817,36 +1824,23 @@ document.addEventListener("keydown", (event) => {
     $(TOOLBAR_SHORTCUTS[event.key]).click();
   }
 });
-function openAccountProxy(account, ids = [account.id]) {
+function openAccountProxy(account) {
   editingAccount = account;
-  editingIds = ids;
   $("edit-name").textContent =
     account.email || account.accountId || account.label;
   const direct = account.proxyUrl === "direct://";
   $("edit-proxy-enabled").checked = !direct;
   $("edit-proxy").disabled = direct;
   $("edit-proxy").value = direct ? "" : account.proxyUrl || "";
-  $("edit-proxy-help").textContent = tr(
-    account.sourceTag === "SUB2API"
-      ? "accounts.proxy.provider_help"
-      : "settings.sub2api.proxy_help",
-  );
+  $("edit-proxy-help").textContent = tr("settings.sub2api.proxy_help");
   $("edit-error").hidden = true;
   $("edit-dialog").showModal();
   $(direct ? "edit-proxy-enabled" : "edit-proxy").focus();
 }
-/// One proxy for every card of a provider. Cards set apart show a blank
-/// field, which saving would apply to all of them.
+/// The provider's proxy, saved through any of its cards.
 function openProviderProxy(group, title) {
-  const values = new Set(group.accounts.map((a) => a.proxyUrl || ""));
-  openAccountProxy(
-    {
-      label: title,
-      sourceTag: "SUB2API",
-      proxyUrl: values.size === 1 ? [...values][0] : "",
-    },
-    group.accounts.map((a) => a.id),
-  );
+  const { id, proxyUrl } = group.accounts[0];
+  openAccountProxy({ id, label: title, sourceTag: "SUB2API", proxyUrl });
 }
 $("edit-proxy-enabled").onchange = () => {
   $("edit-proxy").disabled = !$("edit-proxy-enabled").checked;
@@ -1863,7 +1857,7 @@ $("edit-form").onsubmit = (event) => {
       const value = $("edit-proxy-enabled").checked
         ? $("edit-proxy").value
         : "direct://";
-      for (const id of editingIds) await accountsController.saveProxy(id, value);
+      await accountsController.saveProxy(editingAccount.id, value);
       $("edit-dialog").close();
     } catch (error) {
       $("edit-error").textContent = String(error);

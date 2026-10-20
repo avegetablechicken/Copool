@@ -150,36 +150,23 @@ pub(crate) fn candidates_with_keys(
         let Some(key) = resolve_key(def).filter(|s| !s.is_empty()) else {
             continue;
         };
-        let mut groups: std::collections::BTreeMap<String, Vec<i64>> = Default::default();
-        for id in &provider.imported_account_ids {
-            groups.entry(provider.proxy_for(*id)).or_default().push(*id);
-        }
-        let count = groups.len();
-        for (proxy, ids) in groups {
-            let representative = provider
-                .cached_accounts
-                .iter()
-                .filter_map(|raw| {
-                    serde_json::from_value::<crate::sub2api::Account>(raw.clone()).ok()
-                })
-                .filter(|a| ids.contains(&a.id))
-                .max_by(|a, b| {
-                    crate::ranking::remaining_score(&a.summary())
-                        .total_cmp(&crate::ranking::remaining_score(&b.summary()))
-                });
-            let route = format!(
-                "sub2api-provider:{}{}",
-                provider.provider_id.to_lowercase(),
-                if count == 1 {
-                    String::new()
-                } else {
-                    format!(":{}", ids.iter().min().unwrap())
-                }
-            );
-            let auth = json!({"tokens":{"access_token":key,"account_id":route,"id_token":""},"copoolProvider":{"id":provider.provider_id,"baseUrl":base,"apiKey":key,"allowInsecureTLS":provider.allow_insecure_tls,"preferred":current.id.eq_ignore_ascii_case(&provider.provider_id)}});
-            let stored:StoredAccount=serde_json::from_value(json!({"id":route,"label":provider.provider_id,"accountId":route,"authJson":auth,"proxyUrl":proxy,"addedAt":representative.as_ref().map(|a|a.id).unwrap_or(*ids.iter().min().unwrap()),"updatedAt":0,"usage":representative.and_then(|a|a.usage)})).map_err(|e|e.to_string())?;
-            result.push(stored);
-        }
+        let ids = &provider.imported_account_ids;
+        let Some(&first) = ids.iter().min() else {
+            continue;
+        };
+        let representative = provider
+            .cached_accounts
+            .iter()
+            .filter_map(|raw| serde_json::from_value::<crate::sub2api::Account>(raw.clone()).ok())
+            .filter(|a| ids.contains(&a.id))
+            .max_by(|a, b| {
+                crate::ranking::remaining_score(&a.summary())
+                    .total_cmp(&crate::ranking::remaining_score(&b.summary()))
+            });
+        let route = format!("sub2api-provider:{}", provider.provider_id.to_lowercase());
+        let auth = json!({"tokens":{"access_token":key,"account_id":route,"id_token":""},"copoolProvider":{"id":provider.provider_id,"baseUrl":base,"apiKey":key,"allowInsecureTLS":provider.allow_insecure_tls,"preferred":current.id.eq_ignore_ascii_case(&provider.provider_id)}});
+        let stored:StoredAccount=serde_json::from_value(json!({"id":route,"label":provider.provider_id,"accountId":route,"authJson":auth,"proxyUrl":provider.proxy_url.trim(),"addedAt":representative.as_ref().map(|a|a.id).unwrap_or(first),"updatedAt":0,"usage":representative.and_then(|a|a.usage)})).map_err(|e|e.to_string())?;
+        result.push(stored);
     }
     Ok(result)
 }

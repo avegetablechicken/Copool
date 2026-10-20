@@ -590,11 +590,7 @@ impl Application {
                 if let Ok(mut account) = serde_json::from_value::<crate::sub2api::Account>(raw) {
                     account.provider_id = Some(p.provider_id.clone());
                     let mut summary = account.summary();
-                    summary.proxy_url = p
-                        .account_proxy_urls
-                        .get(&account.id.to_string())
-                        .cloned()
-                        .unwrap_or_default();
+                    summary.proxy_url = p.proxy_url.clone();
                     summary.is_current =
                         !provider.is_official() && provider.id.eq_ignore_ascii_case(&p.provider_id);
                     summaries.push(summary);
@@ -815,7 +811,6 @@ impl Application {
             p.imported_account_ids.retain(|v| *v != account.id);
             p.cached_accounts
                 .retain(|v| v["id"].as_i64() != Some(account.id));
-            p.account_proxy_urls.remove(&account.id.to_string());
             return self.persist_configuration(&settings);
         }
         let _op = self.operations.lock().await;

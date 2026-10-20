@@ -471,8 +471,9 @@
 "accounts.renewal.always" = "常に更新";
 "accounts.refresh.next_format" = "自動更新まで残り %@";
 "accounts.refresh.next_due" = "まもなく自動更新";
-"accounts.proxy.provider_help" = "HTTP、HTTPS、SOCKS5 に対応。空欄の場合は Provider のプロキシ設定を使用します。";
 "accounts.proxy.unsupported" = "このネットワークサービスはアカウント別のプロキシに対応していません。";
+"accounts.proxy.system" = "システムプロキシ";
+"accounts.proxy.none" = "プロキシなし";
 
 "accounts.notice.sub2api_sync_required_format" = "%@ の上流アカウント一覧が変更されました。有効なアカウントは保持されています。「%@」で非公式アカウントを同期してください。";
 

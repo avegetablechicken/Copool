@@ -46,7 +46,7 @@ test("account proxy dialog saves direct, restores it and allows inheritance agai
   assert.deepEqual(saved.pop(), ["card", ""]);
   assert.equal($("edit-proxy-enabled").checked, true);
 });
-test("a provider's proxy saves to each of its cards", async () => {
+test("a provider's proxy saves once, through its first card", async () => {
   const nodes = new Map();
   const $ = (id) => {
     if (!nodes.has(id)) nodes.set(id, {
@@ -71,14 +71,10 @@ test("a provider's proxy saves to each of its cards", async () => {
   scope.openProviderProxy(group("socks5://h:1", "socks5://h:1"), "team");
   assert.equal($("edit-name").textContent, "team");
   assert.equal($("edit-proxy").value, "socks5://h:1");
-  assert.equal($("edit-proxy-help").textContent, "accounts.proxy.provider_help");
+  assert.equal($("edit-proxy-help").textContent, "settings.sub2api.proxy_help");
   $("edit-proxy-enabled").checked = false;
   await submit();
-  assert.deepEqual(saved.splice(0), [["card-0", "direct://"], ["card-1", "direct://"]]);
-  // Cards set apart show no shared value.
-  scope.openProviderProxy(group("direct://", "socks5://h:1"), "team");
-  assert.equal($("edit-proxy-enabled").checked, true);
-  assert.equal($("edit-proxy").value, "");
+  assert.deepEqual(saved.splice(0), [["card-0", "direct://"]]);
 });
 test("Sub2api cards group by the provider in their id, even before the provider list knows them", () => {
   const scope = {

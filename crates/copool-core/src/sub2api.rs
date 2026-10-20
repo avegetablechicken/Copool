@@ -26,8 +26,6 @@ pub struct Account {
     pub usage_error: Option<String>,
     #[serde(default, rename = "providerID", alias = "providerId")]
     pub provider_id: Option<String>,
-    #[serde(default, rename = "proxyURL", alias = "proxyUrl")]
-    pub proxy_url: Option<String>,
 }
 impl Account {
     pub fn card_id(&self) -> String {
@@ -73,7 +71,7 @@ impl Account {
             renewal: None,
             next_refresh_at: None,
             available: self.status.eq_ignore_ascii_case("active"),
-            proxy_url: self.proxy_url.clone().unwrap_or_default(),
+            proxy_url: String::new(),
         }
     }
 }
@@ -170,9 +168,9 @@ async fn payload(response: reqwest::Response) -> Result<Value, String> {
         .ok_or_else(|| "Sub2api response is missing data".into())
 }
 impl Connection {
-    fn client(&self, proxy: &str) -> Result<reqwest::Client, String> {
+    fn client(&self) -> Result<reqwest::Client, String> {
         proxy_session::client(
-            proxy,
+            &self.configuration.proxy_url,
             proxy_session::Options {
                 insecure: self.configuration.allow_insecure_tls,
                 ..Default::default()
@@ -194,18 +192,14 @@ impl Connection {
         ids: Option<&[i64]>,
         now: i64,
     ) -> Result<Vec<Account>, String> {
-        let list_proxy = ids
-            .filter(|v| v.len() == 1)
-            .map(|v| self.configuration.proxy_for(v[0]))
-            .unwrap_or_else(|| self.configuration.proxy_url.clone());
         Ok(self
-            .fetch_platform_accounts_via(platform, ids, now, &list_proxy)
+            .fetch_platform_accounts_via(platform, ids, now)
             .await?
             .into_iter()
             .filter(|a| ids.is_none_or(|ids| ids.contains(&a.id)))
             .collect())
     }
-    /// Batch login and listing once per effective egress route within a provider.
+    /// Logs in and lists the provider's accounts once, with their usage.
     pub async fn refresh_platform_accounts(
         &self,
         platform: Platform,
@@ -213,45 +207,31 @@ impl Connection {
         now: i64,
     ) -> Result<Refresh, String> {
         let wanted = ids.unwrap_or(&self.configuration.imported_account_ids);
-        let mut groups = std::collections::BTreeMap::<String, Vec<i64>>::new();
-        for id in wanted {
-            let proxy = self.configuration.proxy_for(*id);
-            let proxy = proxy.trim();
-            groups.entry(proxy.to_owned()).or_default().push(*id);
-        }
-        let requests = groups.iter().map(|(proxy, group)| async move {
-            (
-                group,
-                self.fetch_platform_accounts_via(platform, Some(group), now, proxy)
-                    .await,
-            )
-        });
         let mut accounts = std::collections::BTreeMap::new();
         let mut errors = vec![];
-        for (group, result) in futures_util::future::join_all(requests).await {
-            match result {
-                Ok(fetched) => {
-                    for account in fetched {
-                        // Keep newly discovered IDs for the membership-change warning,
-                        // without issuing quota requests for unimported accounts.
-                        if group.contains(&account.id)
-                            || (ids.is_none() && !wanted.contains(&account.id))
-                        {
+        match self
+            .fetch_platform_accounts_via(platform, Some(wanted), now)
+            .await
+        {
+            Ok(fetched) => {
+                for account in fetched {
+                    // Keep newly discovered IDs for the membership-change warning,
+                    // without issuing quota requests for unimported accounts.
+                    if wanted.contains(&account.id) || ids.is_none() {
+                        accounts.insert(account.id, account);
+                    }
+                }
+            }
+            Err(error) => {
+                for raw in &self.configuration.cached_accounts {
+                    if let Ok(mut account) = serde_json::from_value::<Account>(raw.clone()) {
+                        if wanted.contains(&account.id) {
+                            account.usage_error = Some(error.clone());
                             accounts.insert(account.id, account);
                         }
                     }
                 }
-                Err(error) => {
-                    for raw in &self.configuration.cached_accounts {
-                        if let Ok(mut account) = serde_json::from_value::<Account>(raw.clone()) {
-                            if group.contains(&account.id) {
-                                account.usage_error = Some(error.clone());
-                                accounts.insert(account.id, account);
-                            }
-                        }
-                    }
-                    errors.push(error);
-                }
+                errors.push(error);
             }
         }
         Ok(Refresh {
@@ -272,7 +252,7 @@ impl Connection {
     /// Sub2api's connection test of an account: a "hi" to `model` through
     /// the account, answered as server-sent events.
     pub async fn test_account(&self, id: i64, model: &str) -> Result<(), String> {
-        let client = self.client(&self.configuration.proxy_for(id))?;
+        let client = self.client()?;
         let token = self.admin_token(&client).await?;
         let response = client
             .post(format!("{}/admin/accounts/{id}/test", self.admin_base))
@@ -308,9 +288,8 @@ impl Connection {
         platform: Platform,
         ids: Option<&[i64]>,
         now: i64,
-        list_proxy: &str,
     ) -> Result<Vec<Account>, String> {
-        let client = self.client(list_proxy)?;
+        let client = self.client()?;
         let token = &self.admin_token(&client).await?;
         let mut items = Vec::new();
         let mut page = 1usize;
@@ -381,24 +360,17 @@ impl Connection {
                 usage: None,
                 usage_error: item["error_message"].as_str().map(str::to_owned),
                 provider_id: Some(self.configuration.provider_id.clone()),
-                proxy_url: self
-                    .configuration
-                    .account_proxy_urls
-                    .get(&id.to_string())
-                    .cloned(),
             };
             if ids.is_some_and(|ids| !ids.contains(&id)) {
                 accounts.push(account);
                 continue;
             }
-            let proxy = self.configuration.proxy_for(id);
-            let quota_client = self.client(&proxy)?;
             let quota_url = match platform {
                 Platform::OpenAi => format!("{}/admin/openai/accounts/{id}/quota", self.admin_base),
                 Platform::Anthropic => format!("{}/admin/accounts/{id}/usage", self.admin_base),
             };
             let quota = async {
-                let response = quota_client
+                let response = client
                     .get(quota_url)
                     .bearer_auth(token)
                     .send()

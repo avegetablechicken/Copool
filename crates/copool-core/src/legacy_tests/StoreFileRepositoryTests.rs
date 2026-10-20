@@ -118,45 +118,6 @@ fn testAccountProxyReloadsFromDiskIntoCardSnapshotAfterRepositoryRestart() {
         "http://127.0.0.1:8080"
     );
 }
-#[test]
-fn testSub2APIProxyReloadsEvenWhenCachedCardHasNoProxy() {
-    let d = tempfile::tempdir().unwrap();
-    let settings_path = d.path().join("settings.json");
-    let provider = Provider {
-        provider_id: "p".into(),
-        imported_account_ids: vec![42],
-        cached_accounts: vec![cached()],
-        account_proxy_urls: [("42".into(), "http://127.0.0.1:8080".into())].into(),
-        ..Default::default()
-    };
-    let settings = Settings {
-        sub2_api_provider: Providers {
-            providers: vec![provider],
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    save_settings(&settings_path, &settings).unwrap();
-    let mut provider = load_settings(&settings_path)
-        .unwrap()
-        .sub2_api_provider
-        .providers
-        .remove(0);
-    assert_eq!(
-        provider.cached_accounts[0]["proxyURL"],
-        "http://127.0.0.1:8080"
-    );
-    assert!(!fs::read_to_string(d.path().join("accounts.json"))
-        .unwrap()
-        .contains("proxyURL"));
-    provider.account_proxy_urls.clear();
-    assert_eq!(
-        provider.normalized().cached_accounts[0]["proxyURL"]
-            .as_str()
-            .unwrap_or(""),
-        ""
-    );
-}
 fn corruption(raw: &[u8]) {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("accounts.json");

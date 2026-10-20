@@ -52,7 +52,8 @@ pub(crate) fn validate_and_save(
     if let Some(old) = existing {
         draft.imported_account_ids = old.imported_account_ids.clone();
         draft.cached_accounts = old.cached_accounts.clone();
-        draft.account_proxy_urls = old.account_proxy_urls.clone();
+        // The provider's card sets its proxy, not its settings.
+        draft.proxy_url = old.proxy_url.clone();
     }
     // Never read credentials while editing. Empty means retain the stored secret.
     if !draft.password.is_empty() {
@@ -191,7 +192,7 @@ impl Application {
     pub async fn save_account_proxy(&self, id: &str, value: &str) -> Result<(), String> {
         validate_account_proxy(value)?;
         let _op = self.operations.lock().await;
-        if let Some((provider, account)) = self.cached_provider_account(id)? {
+        if let Some((provider, _)) = self.cached_provider_account(id)? {
             let mut settings = self.configuration()?;
             let p = settings
                 .sub2_api_provider
@@ -199,12 +200,7 @@ impl Application {
                 .iter_mut()
                 .find(|p| p.id == provider.id)
                 .ok_or("Account not found")?;
-            if value.trim().is_empty() {
-                p.account_proxy_urls.remove(&account.id.to_string());
-            } else {
-                p.account_proxy_urls
-                    .insert(account.id.to_string(), value.trim().into());
-            }
+            p.proxy_url = value.trim().into();
             self.persist_configuration(&settings)
         } else {
             let _lock = self.state.store_lock.lock().await;

@@ -453,8 +453,9 @@
 "accounts.renewal.always" = "Altijd vernieuwen";
 "accounts.refresh.next_format" = "Volgende automatische vernieuwing over %@";
 "accounts.refresh.next_due" = "Automatische vernieuwing volgt zo";
-"accounts.proxy.provider_help" = "HTTP, HTTPS of SOCKS5. Laat leeg om de proxy van de Provider te gebruiken.";
 "accounts.proxy.unsupported" = "Deze netwerkdienst ondersteunt geen accountproxy.";
+"accounts.proxy.system" = "Systeemproxy";
+"accounts.proxy.none" = "Geen proxy";
 
 "accounts.notice.sub2api_sync_required_format" = "De upstream-accountlijst voor %@ is gewijzigd. Geldige accounts zijn behouden. Gebruik ‘%@’ om niet-officiële accounts te synchroniseren.";
 

@@ -453,8 +453,9 @@
 "accounts.renewal.always" = "Toujours renouveler";
 "accounts.refresh.next_format" = "Prochaine actualisation automatique dans %@";
 "accounts.refresh.next_due" = "Actualisation automatique imminente";
-"accounts.proxy.provider_help" = "HTTP, HTTPS ou SOCKS5. Laissez vide pour utiliser le proxy du Provider.";
 "accounts.proxy.unsupported" = "Ce service réseau ne prend pas en charge le proxy par compte.";
+"accounts.proxy.system" = "Proxy système";
+"accounts.proxy.none" = "Aucun proxy";
 
 "accounts.notice.sub2api_sync_required_format" = "La liste des comptes en amont de %@ a changé. Les comptes valides ont été conservés. Utilisez « %@ » pour synchroniser les comptes non officiels.";
 
