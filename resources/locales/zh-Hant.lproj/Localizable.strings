@@ -448,6 +448,7 @@
 "accounts.card.say_hi" = "Say hi";
 "accounts.card.say_hi.help" = "向 Claude 打個招呼，立即開始 5 小時計時";
 "accounts.notice.said_hi" = "已打招呼，5 小時計時已開始";
+"error.claude.say_hi_window_not_started" = "Claude 已接受招呼，但 5 小時計時沒有開始";
 "accounts.renewal.never" = "永不續期";
 "accounts.renewal.once" = "續期一次";
 "accounts.renewal.always" = "始終續期";

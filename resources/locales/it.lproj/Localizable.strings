@@ -448,6 +448,7 @@
 "accounts.card.say_hi" = "Saluta";
 "accounts.card.say_hi.help" = "Saluta Claude per avviare ora la finestra di 5 ore";
 "accounts.notice.said_hi" = "Saluto inviato; la finestra di 5 ore è iniziata";
+"error.claude.say_hi_window_not_started" = "Claude ha accettato il saluto, ma la finestra di 5 ore non è iniziata";
 "accounts.renewal.never" = "Non rinnovare mai";
 "accounts.renewal.once" = "Rinnova una volta";
 "accounts.renewal.always" = "Rinnova sempre";

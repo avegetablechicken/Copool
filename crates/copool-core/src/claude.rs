@@ -28,6 +28,11 @@ const ORGANIZATIONS_PATH: &str = "/api/oauth/organizations";
 const API_ROOT: &str = "https://api.anthropic.com";
 /// The cheapest model, which a hello costs the least of the five-hour window.
 pub(crate) const HELLO_MODEL: &str = "claude-haiku-5-5";
+/// How long after a hi its five-hour window is looked for again, the usage
+/// Claude reports possibly lagging the hi.
+const HELLO_RECHECK: std::time::Duration =
+    std::time::Duration::from_secs(if cfg!(test) { 0 } else { 3 });
+const WINDOW_NOT_STARTED: &str = "error.claude.say_hi_window_not_started";
 const USER_AGENT: &str = "claude-code/2.1.69";
 // The banked resets are returned only to Claude Code 2.1.280 or later, by its
 // User-Agent; others read `eligible: false` with the rest of the usage intact.
@@ -2684,7 +2689,36 @@ impl Application {
                 }
             }
         }
-        self.claude_refresh_usage(id).await
+        self.claude_hello_started(id, || self.claude_refresh_usage(id))
+            .await
+    }
+    /// Refreshes a card after its hi, and once more a moment later while its
+    /// five-hour window has not shown up. A window still not started is an
+    /// error: Claude accepted the hi without starting one.
+    async fn claude_hello_started<F, R>(&self, id: &str, refresh: F) -> Result<()>
+    where
+        F: Fn() -> R,
+        R: std::future::Future<Output = Result<()>>,
+    {
+        for attempt in 0..2 {
+            if attempt > 0 {
+                tokio::time::sleep(HELLO_RECHECK).await;
+            }
+            refresh().await?;
+            let now = now_unix_seconds();
+            let started = self.claude_usage_cards()?.into_iter().any(|card| {
+                card.id == id
+                    && card
+                        .usage
+                        .and_then(|usage| usage.five_hour)
+                        .and_then(|window| window.reset_at)
+                        .is_some_and(|at| at > now)
+            });
+            if started {
+                return Ok(());
+            }
+        }
+        Err(WINDOW_NOT_STARTED.into())
     }
     /// Sets whether Copool renews an account's tokens: "never", "once" (then
     /// never) or "always".
@@ -5794,6 +5828,20 @@ mod tests {
             .map(|(token, _)| token.clone())
             .collect();
         assert_eq!(tokens, vec!["alice-access", "fresh-access"]);
+
+        // Claude accepting the hi without starting the window says so, once
+        // the usage asked for again still shows none.
+        let usages = fake.usage_tokens.lock().unwrap().len();
+        let idle = json!({"five_hour": {"utilization": 0, "resets_at": null}});
+        fake.usage
+            .lock()
+            .unwrap()
+            .extend([(200, idle.clone()), (200, idle)]);
+        assert_eq!(
+            app.claude_say_hi(&id).await.unwrap_err(),
+            WINDOW_NOT_STARTED
+        );
+        assert_eq!(fake.usage_tokens.lock().unwrap().len(), usages + 2);
 
         // Other failures are reported without retrying.
         fake.hello_requests.lock().unwrap().clear();

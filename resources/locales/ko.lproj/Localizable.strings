@@ -466,6 +466,7 @@
 "accounts.card.say_hi" = "Say hi";
 "accounts.card.say_hi.help" = "Claude에게 인사해 5시간 창을 지금 시작";
 "accounts.notice.said_hi" = "인사했습니다. 5시간 창이 시작되었습니다";
+"error.claude.say_hi_window_not_started" = "Claude가 인사를 받았지만 5시간 창이 시작되지 않았습니다";
 "accounts.renewal.never" = "갱신 안 함";
 "accounts.renewal.once" = "한 번만 갱신";
 "accounts.renewal.always" = "항상 갱신";

@@ -448,6 +448,7 @@
 "accounts.card.say_hi" = "Hallo zeggen";
 "accounts.card.say_hi.help" = "Zeg hallo tegen Claude om het venster van 5 uur nu te starten";
 "accounts.notice.said_hi" = "Hallo gezegd; het venster van 5 uur is begonnen";
+"error.claude.say_hi_window_not_started" = "Claude heeft het hallo aangenomen, maar het venster van 5 uur is niet begonnen";
 "accounts.renewal.never" = "Nooit vernieuwen";
 "accounts.renewal.once" = "Eén keer vernieuwen";
 "accounts.renewal.always" = "Altijd vernieuwen";
