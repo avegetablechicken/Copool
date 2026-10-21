@@ -297,23 +297,30 @@ impl Connection {
     ) -> Result<Vec<Account>, String> {
         let client = self.client()?;
         let token = &self.admin_token(&client).await?;
+        // A Claude card Sub2api stopped serving, such as one whose token
+        // expired, says why; the Codex pool drops it and asks for a sync.
+        let inactive_shown =
+            |id: i64| platform == Platform::Anthropic && ids.is_some_and(|ids| ids.contains(&id));
         let mut items = Vec::new();
         let mut page = 1usize;
         loop {
+            let mut query = vec![
+                ("page", page.to_string()),
+                ("page_size", "200".into()),
+                ("platform", platform.name().into()),
+                ("type", "oauth".into()),
+                ("lite", "1".into()),
+                ("sort_by", "name".into()),
+                ("sort_order", "asc".into()),
+            ];
+            if platform != Platform::Anthropic || ids.is_none() {
+                query.push(("status", "active".into()));
+            }
             let data = payload(
                 client
                     .get(format!("{}/admin/accounts", self.admin_base))
                     .bearer_auth(token)
-                    .query(&[
-                        ("page", page.to_string()),
-                        ("page_size", "200".into()),
-                        ("platform", platform.name().into()),
-                        ("type", "oauth".into()),
-                        ("status", "active".into()),
-                        ("lite", "1".into()),
-                        ("sort_by", "name".into()),
-                        ("sort_order", "asc".into()),
-                    ])
+                    .query(&query)
                     .send()
                     .await
                     .map_err(|e| usage::format_reqwest_error(&e))?,
@@ -341,15 +348,44 @@ impl Connection {
                 continue;
             };
             if !item["parent_account_id"].is_null()
-                || !["platform", "type", "status"]
+                || !["platform", "type"]
                     .into_iter()
-                    .zip([platform.name(), "oauth", "active"])
+                    .zip([platform.name(), "oauth"])
                     .all(|(key, value)| {
                         item[key]
                             .as_str()
                             .is_some_and(|s| s.eq_ignore_ascii_case(value))
                     })
             {
+                continue;
+            }
+            let status = item["status"].as_str().unwrap_or_default();
+            if !status.eq_ignore_ascii_case("active") {
+                // Shown as deactivated, with Sub2api's reason.
+                if inactive_shown(id) {
+                    accounts.push(Account {
+                        id,
+                        name: item["name"].as_str().unwrap_or_default().into(),
+                        email: item["name"]
+                            .as_str()
+                            .filter(|s| s.contains('@'))
+                            .map(str::to_owned),
+                        account_id: None,
+                        account_type: "oauth".into(),
+                        status: if status.is_empty() { "unknown" } else { status }.into(),
+                        plan_type: None,
+                        usage: None,
+                        usage_error: Some(
+                            item["error_message"]
+                                .as_str()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| format!("The account is {status} in Sub2api")),
+                        ),
+                        provider_id: Some(self.configuration.provider_id.clone()),
+                    });
+                }
                 continue;
             }
             let mut account = Account {

@@ -341,6 +341,18 @@ impl Application {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
+            // A card Sub2api no longer lists says so, not its last error.
+            if fetched.errors.is_empty() {
+                for cached in &mut saved.cached_accounts {
+                    if ids.as_ref().is_none_or(|ids| ids.contains(&cached.id))
+                        && !fetched.accounts.iter().any(|a| a.id == cached.id)
+                    {
+                        cached.status = "missing".into();
+                        cached.usage = None;
+                        cached.usage_error = Some("The account is no longer in Sub2api".into());
+                    }
+                }
+            }
             for account in fetched.accounts {
                 if !saved.imported_account_ids.contains(&account.id) {
                     continue;
@@ -729,6 +741,84 @@ mod tests {
             .iter()
             .filter(|uri| uri.starts_with("/api/v1/auth/login"))
             .count()
+    }
+
+    #[tokio::test]
+    async fn a_card_sub2api_stops_serving_says_why_instead_of_its_last_error() {
+        use axum::{extract::Request, routing::any, Json, Router};
+        let items = std::sync::Arc::new(Mutex::new(json!([
+            {"id": 7, "name": "claude-team", "platform": "anthropic", "type": "oauth", "status": "active"}
+        ])));
+        let queries = std::sync::Arc::new(Mutex::new(vec![]));
+        let (listed, asked) = (items.clone(), queries.clone());
+        let router = Router::new().fallback(any(move |request: Request| {
+            let (listed, asked) = (listed.clone(), asked.clone());
+            async move {
+                let uri = request.uri().path_and_query().unwrap().to_string();
+                let data = if uri.starts_with("/api/v1/auth/login") {
+                    json!({"access_token": "admin"})
+                } else if uri.starts_with("/api/v1/admin/accounts?") {
+                    asked.lock().unwrap().push(uri);
+                    json!({"items": listed.lock().unwrap().clone(), "pages": 1})
+                } else {
+                    json!({"seven_day": {"utilization": 34, "resets_at": null}})
+                };
+                Json(json!({"code": 0, "data": data}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _) = open(dir.path());
+        let path = source_file(dir.path(), &base, AUTH_TOKEN, "sk-team");
+        let saved = app
+            .claude_save_sub2api_provider(Provider {
+                settings: path.to_str().unwrap().into(),
+                username: "admin@example.com".into(),
+                password: "secret".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        app.claude_sync_sub2api().await.unwrap();
+        let card = saved.card_id(7);
+        let shown = |app: &Application| {
+            let store = app.claude_load().unwrap();
+            let summary = summaries(&store, None).remove(0);
+            (
+                summary.workspace_status,
+                summary.usage.is_some(),
+                summary.usage_error,
+            )
+        };
+        app.claude_refresh_usage(&card).await.unwrap();
+        assert_eq!(shown(&app), ("active".into(), true, None));
+        // Only the full listing asks for active accounts.
+        let asked = queries.lock().unwrap().clone();
+        assert!(asked[0].contains("status=active"));
+        assert!(!asked.last().unwrap().contains("status="));
+
+        *items.lock().unwrap() = json!([{"id": 7, "name": "claude-team", "platform": "anthropic",
+            "type": "oauth", "status": "error", "error_message": "Token expired"}]);
+        app.claude_refresh_usage(&card).await.unwrap();
+        assert_eq!(
+            shown(&app),
+            ("deactivated".into(), false, Some("Token expired".into()))
+        );
+
+        *items.lock().unwrap() = json!([]);
+        app.claude_refresh_sub2api_provider(&saved.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            shown(&app),
+            (
+                "deactivated".into(),
+                false,
+                Some("The account is no longer in Sub2api".into())
+            )
+        );
     }
 
     #[tokio::test]
