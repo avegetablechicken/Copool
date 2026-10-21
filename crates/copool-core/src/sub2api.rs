@@ -149,7 +149,10 @@ pub fn connection(
 }
 async fn payload(response: reqwest::Response) -> Result<Value, String> {
     let status = response.status();
-    let value: Value = response.json().await.map_err(|e| e.to_string())?;
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|e| usage::format_reqwest_error(&e))?;
     if !status.is_success()
         || value
             .get("code")
@@ -240,7 +243,7 @@ impl Connection {
         })
     }
     async fn admin_token(&self, client: &reqwest::Client) -> Result<String, String> {
-        let login=payload(client.post(format!("{}/auth/login",self.admin_base)).json(&json!({"email":self.configuration.username,"password":self.configuration.password})).send().await.map_err(|e|e.to_string())?).await?;
+        let login=payload(client.post(format!("{}/auth/login",self.admin_base)).json(&json!({"email":self.configuration.username,"password":self.configuration.password})).send().await.map_err(|e|usage::format_reqwest_error(&e))?).await?;
         login
             .get("access_token")
             .and_then(Value::as_str)
@@ -260,11 +263,14 @@ impl Connection {
             .json(&json!({"model_id": model}))
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| usage::format_reqwest_error(&e))?;
         if !response.status().is_success() {
             return payload(response).await.map(|_| ());
         }
-        let events = response.text().await.map_err(|e| e.to_string())?;
+        let events = response
+            .text()
+            .await
+            .map_err(|e| usage::format_reqwest_error(&e))?;
         for event in events
             .lines()
             .filter_map(|line| line.strip_prefix("data:"))
@@ -310,7 +316,7 @@ impl Connection {
                     ])
                     .send()
                     .await
-                    .map_err(|e| e.to_string())?,
+                    .map_err(|e| usage::format_reqwest_error(&e))?,
             )
             .await?;
             items.extend(
@@ -375,7 +381,7 @@ impl Connection {
                     .bearer_auth(token)
                     .send()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| usage::format_reqwest_error(&e))?;
                 payload(response).await
             }
             .await;

@@ -163,7 +163,7 @@ pub(crate) fn chatgpt_base_origin(configured: Option<&str>) -> String {
     base_url.trim().trim_end_matches('/').to_owned()
 }
 
-fn format_reqwest_error(err: &reqwest::Error) -> String {
+pub(crate) fn format_reqwest_error(err: &reqwest::Error) -> String {
     let mut parts = vec![err.to_string()];
     let mut source = err.source();
     while let Some(next) = source {
