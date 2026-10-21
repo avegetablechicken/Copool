@@ -21,10 +21,11 @@ mod sub2api;
 pub use sub2api::Provider as Sub2ApiProvider;
 
 // `cedar_ember=1` adds the banked usage-limit resets to the usage response.
-const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
-const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
-const ORGANIZATIONS_URL: &str = "https://api.anthropic.com/api/oauth/organizations";
-const MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+const USAGE_PATH: &str = "/api/oauth/usage?cedar_ember=1";
+const PROFILE_PATH: &str = "/api/oauth/profile";
+const ORGANIZATIONS_PATH: &str = "/api/oauth/organizations";
+/// Where Claude Code sends its login's requests without a base URL.
+const API_ROOT: &str = "https://api.anthropic.com";
 /// The cheapest model, which a hello costs the least of the five-hour window.
 pub(crate) const HELLO_MODEL: &str = "claude-haiku-5-5";
 const USER_AGENT: &str = "claude-code/2.1.69";
@@ -69,6 +70,10 @@ pub struct Location {
     /// Copool keeps the pool's tokens in its own Keychain item: on macOS,
     /// wherever Claude Code keeps its login; never for an isolated directory.
     pub vault: bool,
+    /// `CLAUDE_CODE_CUSTOM_OAUTH_URL` in Copool's environment, which the user
+    /// settings' `env` overrides; none for an isolated directory.
+    #[serde(skip)]
+    pub custom_oauth_env: Option<String>,
 }
 impl Location {
     pub fn discover() -> Result<Self> {
@@ -100,20 +105,11 @@ impl Location {
             Some(dir) => dir.join(".claude.json"),
             None => home.join(".claude.json"),
         };
-        // The settings' env overrides the environment, an empty value included.
-        let custom_oauth = fs::read_to_string(config_dir.join("settings.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .and_then(|settings| {
-                settings["env"]["CLAUDE_CODE_CUSTOM_OAUTH_URL"]
-                    .as_str()
-                    .map(str::to_owned)
-            })
-            .or_else(|| env("CLAUDE_CODE_CUSTOM_OAUTH_URL"))
-            .filter(|url| !url.is_empty());
+        let custom_oauth_env = env(CUSTOM_OAUTH);
+        let custom_oauth = custom_oauth_url(&config_dir, custom_oauth_env.as_deref());
         let approved = custom_oauth
             .as_deref()
-            .is_none_or(|url| APPROVED_CUSTOM_OAUTH.contains(&url.trim_end_matches('/')));
+            .is_none_or(|url| APPROVED_CUSTOM_OAUTH.contains(&url));
         let digest =
             |dir: &str| hex(&Sha256::digest(dir.replace('\\', "/").as_bytes()))[..8].to_owned();
         let (hash, storage_dir) = match env("CLAUDE_SECURESTORAGE_CONFIG_DIR") {
@@ -141,6 +137,7 @@ impl Location {
             keychain: (keychain && approved).then_some(service),
             storage_dir,
             vault: keychain,
+            custom_oauth_env,
         }
     }
     /// Credentials and account in files of one directory, without the Keychain.
@@ -151,6 +148,7 @@ impl Location {
             config_dir: dir,
             keychain: None,
             vault: false,
+            custom_oauth_env: None,
         }
     }
     fn credentials_file(&self) -> PathBuf {
@@ -175,6 +173,19 @@ impl Location {
     }
 }
 
+const CUSTOM_OAUTH: &str = "CLAUDE_CODE_CUSTOM_OAUTH_URL";
+/// `CLAUDE_CODE_CUSTOM_OAUTH_URL` as Claude Code (2.1.300) reads it: the user
+/// settings' `env` sets it over the environment, an empty value included;
+/// empty is unset; one trailing slash is dropped.
+fn custom_oauth_url(config_dir: &std::path::Path, env: Option<&str>) -> Option<String> {
+    let settings = fs::read_to_string(config_dir.join("settings.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|settings| settings["env"][CUSTOM_OAUTH].as_str().map(str::to_owned));
+    let url = settings.or_else(|| env.map(str::to_owned))?;
+    let url = url.strip_suffix('/').unwrap_or(&url);
+    (!url.is_empty()).then(|| url.to_owned())
+}
 /// Authentication overrides in the user's `settings.json`. A custom API URL
 /// only changes routing and can still use the current subscription login.
 pub fn login_overrides(location: &Location) -> Vec<String> {
@@ -291,6 +302,7 @@ pub(crate) trait Network: Send + Sync {
     /// of a `Retry-After` header.
     fn usage<'a>(
         &'a self,
+        api: &'a str,
         token: &'a str,
         agent: &'a str,
         proxy: &'a str,
@@ -302,11 +314,23 @@ pub(crate) trait Network: Send + Sync {
         scope: &'a str,
         proxy: &'a str,
     ) -> Response<'a, Value>;
-    fn profile<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Value>;
+    fn profile<'a>(&'a self, api: &'a str, token: &'a str, proxy: &'a str) -> Response<'a, Value>;
     /// The organization's prepaid balance, which pays for extra usage.
-    fn prepaid<'a>(&'a self, token: &'a str, org: &'a str, proxy: &'a str) -> Response<'a, Value>;
-    /// The HTTP status and body of a one-token "hi", as Claude Code says it.
-    fn hello<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)>;
+    fn prepaid<'a>(
+        &'a self,
+        api: &'a str,
+        token: &'a str,
+        org: &'a str,
+        proxy: &'a str,
+    ) -> Response<'a, Value>;
+    /// The HTTP status and body of a one-token "hi" to the messages `url`,
+    /// as Claude Code says it.
+    fn hello<'a>(
+        &'a self,
+        url: &'a str,
+        token: &'a str,
+        proxy: &'a str,
+    ) -> Response<'a, (u16, Value)>;
 }
 struct Http;
 fn client(proxy: &str) -> Result<reqwest::Client> {
@@ -336,13 +360,14 @@ fn request_error(error: reqwest::Error) -> String {
 impl Network for Http {
     fn usage<'a>(
         &'a self,
+        api: &'a str,
         token: &'a str,
         agent: &'a str,
         proxy: &'a str,
     ) -> Response<'a, UsageResponse> {
         Box::pin(async move {
             let response = client(proxy)?
-                .get(USAGE_URL)
+                .get(format!("{api}{USAGE_PATH}"))
                 .header(reqwest::header::USER_AGENT, agent)
                 .bearer_auth(token.trim())
                 .header("Accept", "application/json")
@@ -373,10 +398,10 @@ impl Network for Http {
             proxy,
         ))
     }
-    fn profile<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Value> {
+    fn profile<'a>(&'a self, api: &'a str, token: &'a str, proxy: &'a str) -> Response<'a, Value> {
         Box::pin(async move {
             let response = client(proxy)?
-                .get(PROFILE_URL)
+                .get(format!("{api}{PROFILE_PATH}"))
                 .bearer_auth(token.trim())
                 .header("Accept", "application/json")
                 .header("anthropic-beta", "oauth-2025-04-20")
@@ -395,10 +420,16 @@ impl Network for Http {
             response.json().await.map_err(request_error)
         })
     }
-    fn prepaid<'a>(&'a self, token: &'a str, org: &'a str, proxy: &'a str) -> Response<'a, Value> {
+    fn prepaid<'a>(
+        &'a self,
+        api: &'a str,
+        token: &'a str,
+        org: &'a str,
+        proxy: &'a str,
+    ) -> Response<'a, Value> {
         Box::pin(async move {
             let response = client(proxy)?
-                .get(format!("{ORGANIZATIONS_URL}/{org}/prepaid/credits"))
+                .get(format!("{api}{ORGANIZATIONS_PATH}/{org}/prepaid/credits"))
                 .bearer_auth(token.trim())
                 .header("Accept", "application/json")
                 .header("x-organization-uuid", org)
@@ -416,11 +447,16 @@ impl Network for Http {
             response.json().await.map_err(request_error)
         })
     }
-    fn hello<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
+    fn hello<'a>(
+        &'a self,
+        url: &'a str,
+        token: &'a str,
+        proxy: &'a str,
+    ) -> Response<'a, (u16, Value)> {
         Box::pin(async move {
             // A subscription login is served only Claude Code's requests.
             let response = client(proxy)?
-                .post(MESSAGES_URL)
+                .post(url)
                 .bearer_auth(token.trim())
                 .header("Accept", "application/json")
                 .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
@@ -1921,7 +1957,11 @@ impl Application {
                 Some(known) => known.account,
                 None if self.preferences()?.request_new_accounts => {
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
-                    match self.claude_network().profile(&token, "").await {
+                    match self
+                        .claude_network()
+                        .profile(&self.claude_api_root(), &token, "")
+                        .await
+                    {
                         Ok(profile) => profile_account(Some(&profile), &Value::Null).0,
                         Err(_) => json!({}),
                     }
@@ -1943,7 +1983,10 @@ impl Application {
         // later on the first refresh for an account that waits.
         let profile = if self.claude_may_contact(known.as_ref())? {
             let proxy = known.map(|known| known.proxy_url).unwrap_or_default();
-            self.claude_network().profile(&token, &proxy).await.ok()
+            self.claude_network()
+                .profile(&self.claude_api_root(), &token, &proxy)
+                .await
+                .ok()
         } else {
             None
         };
@@ -2200,6 +2243,8 @@ impl Application {
             }));
         }
         let network = self.claude_network();
+        let api = self.claude_api_root();
+        let api = api.as_str();
         let request_proxy = if use_account_proxy {
             self.account_proxy(&account.proxy_url)?
         } else {
@@ -2266,14 +2311,14 @@ impl Application {
                 // its own proxy.
                 if identity(&account.account).is_none() {
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
-                    let found = match network.profile(&token, proxy).await {
+                    let found = match network.profile(api, &token, proxy).await {
                         Err(error) if error == SIGN_IN_EXPIRED => {
                             let tokens = refresh(&oauth).await?;
                             apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                             renewed = true;
                             renewals += 1;
                             let token = text(&oauth["accessToken"]).unwrap_or_default();
-                            network.profile(&token, proxy).await
+                            network.profile(api, &token, proxy).await
                         }
                         found => found,
                     }?;
@@ -2291,14 +2336,15 @@ impl Application {
                 }
                 let token = text(&oauth["accessToken"]).unwrap_or_default();
                 let (mut status, mut body, mut after) =
-                    self.claude_usage(&*network, &token, proxy).await?;
+                    self.claude_usage(&*network, api, &token, proxy).await?;
                 if status == 401 {
                     let tokens = refresh(&oauth).await?;
                     apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
                     renewed = true;
                     renewals += 1;
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
-                    (status, body, after) = self.claude_usage(&*network, &token, proxy).await?;
+                    (status, body, after) =
+                        self.claude_usage(&*network, api, &token, proxy).await?;
                 }
                 retry_after = after.filter(|_| status == 429);
                 // An account added without its profile learns its plan here,
@@ -2308,7 +2354,7 @@ impl Application {
                     && text(&oauth["subscriptionType"]).is_none()
                 {
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
-                    if let Ok(found) = network.profile(&token, proxy).await {
+                    if let Ok(found) = network.profile(api, &token, proxy).await {
                         let (named, subscription, tier) =
                             profile_account(Some(&found), &Value::Null);
                         if identity(&named) == identity(&account.account) {
@@ -2333,7 +2379,7 @@ impl Application {
                         );
                         if let (true, Some(org)) = (body["extra_usage"].is_object(), org) {
                             let token = text(&oauth["accessToken"]).unwrap_or_default();
-                            if let Ok(prepaid) = network.prepaid(&token, &org, proxy).await {
+                            if let Ok(prepaid) = network.prepaid(api, &token, &org, proxy).await {
                                 usage.credits = extra_usage_credits(&body["extra_usage"], &prepaid);
                             }
                         }
@@ -2529,6 +2575,7 @@ impl Application {
     async fn claude_usage(
         &self,
         network: &dyn Network,
+        api: &str,
         token: &str,
         proxy: &str,
     ) -> Result<UsageResponse> {
@@ -2541,7 +2588,7 @@ impl Application {
             .get(proxy)
             .is_some_and(|until| *until > now);
         if !refused {
-            let response = network.usage(token, USAGE_USER_AGENT, proxy).await?;
+            let response = network.usage(api, token, USAGE_USER_AGENT, proxy).await?;
             if response.0 != 429 {
                 return Ok(response);
             }
@@ -2551,7 +2598,41 @@ impl Application {
                 .unwrap()
                 .insert(proxy.to_owned(), now + CLI_REFUSAL_SECONDS);
         }
-        network.usage(token, USER_AGENT, proxy).await
+        network.usage(api, token, USER_AGENT, proxy).await
+    }
+    /// Where Claude Code sends a login's OAuth API requests (usage, profile,
+    /// prepaid credits): `CLAUDE_CODE_CUSTOM_OAUTH_URL`, its settings read
+    /// again each time, else the API. Claude Code approves only its own
+    /// endpoints there; any is accepted here, a relay say. Token renewal and
+    /// sign-in stay with the API.
+    fn claude_api_root(&self) -> String {
+        let location = self.claude_location();
+        custom_oauth_url(&location.config_dir, location.custom_oauth_env.as_deref())
+            .unwrap_or_else(|| API_ROOT.into())
+    }
+    /// Where Claude Code sends a login's messages: the base URL of its
+    /// official settings, a relay that forwards the login say, else the API.
+    /// While a provider is applied, the official settings are those recorded
+    /// on leaving them; a base URL beside a credential that replaces the
+    /// login is that credential's gateway.
+    fn claude_messages_url(&self) -> String {
+        let applied = self
+            .claude_load()
+            .is_ok_and(|store| store.settings_provider.is_some());
+        let official = if applied {
+            self.claude_official_settings()
+                .ok()
+                .flatten()
+                .and_then(|official| official.settings)
+        } else {
+            read_settings(&self.claude_location()).ok().flatten()
+        };
+        let base = parse_settings(official.as_deref())
+            .ok()
+            .filter(|settings| provider_config::overrides(settings).is_empty())
+            .and_then(|settings| text(&settings["env"][BASE_URL]))
+            .unwrap_or_else(|| API_ROOT.into());
+        format!("{}/v1/messages", base.trim_end_matches('/'))
     }
     /// Says hi with an account, through its proxy, so that its five-hour
     /// window starts now, then refreshes its usage to show it. A login Claude
@@ -2582,7 +2663,9 @@ impl Application {
             } else {
                 let token = text(&account.oauth["accessToken"]).unwrap_or_default();
                 let proxy = self.account_proxy(&account.proxy_url)?;
-                network.hello(&token, &proxy).await?
+                network
+                    .hello(&self.claude_messages_url(), &token, &proxy)
+                    .await?
             };
             match status {
                 200..=299 => break,
@@ -4289,6 +4372,8 @@ mod tests {
         usage_tokens: Mutex<Vec<String>>,
         usage_agents: Mutex<Vec<String>>,
         usage_proxies: Mutex<Vec<String>>,
+        /// The OAuth API root of each usage, profile and prepaid request.
+        api_roots: Mutex<Vec<String>>,
         usage_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
         refresh_error: Mutex<Option<String>>,
@@ -4298,15 +4383,18 @@ mod tests {
         prepaid_requests: Mutex<Vec<(String, String)>>,
         hellos: Mutex<Vec<(u16, Value)>>,
         hello_requests: Mutex<Vec<(String, String)>>,
+        hello_urls: Mutex<Vec<String>>,
     }
     impl Network for Fake {
         fn usage<'a>(
             &'a self,
+            api: &'a str,
             token: &'a str,
             agent: &'a str,
             proxy: &'a str,
         ) -> Response<'a, UsageResponse> {
             Box::pin(async move {
+                self.api_roots.lock().unwrap().push(api.into());
                 self.usage_tokens.lock().unwrap().push(token.into());
                 self.usage_agents.lock().unwrap().push(agent.into());
                 self.usage_proxies.lock().unwrap().push(proxy.into());
@@ -4352,16 +4440,24 @@ mod tests {
                 )
             })
         }
-        fn profile<'a>(&'a self, _: &'a str, proxy: &'a str) -> Response<'a, Value> {
+        fn profile<'a>(&'a self, api: &'a str, _: &'a str, proxy: &'a str) -> Response<'a, Value> {
             Box::pin(async move {
+                self.api_roots.lock().unwrap().push(api.into());
                 self.profile_proxies.lock().unwrap().push(proxy.into());
                 Ok(
                     json!({"account":{"uuid":"acct-new","email":"new@example.com"},"organization":{"uuid":"org-new","name":"New","organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}),
                 )
             })
         }
-        fn prepaid<'a>(&'a self, _: &'a str, org: &'a str, proxy: &'a str) -> Response<'a, Value> {
+        fn prepaid<'a>(
+            &'a self,
+            api: &'a str,
+            _: &'a str,
+            org: &'a str,
+            proxy: &'a str,
+        ) -> Response<'a, Value> {
             Box::pin(async move {
+                self.api_roots.lock().unwrap().push(api.into());
                 self.prepaid_requests
                     .lock()
                     .unwrap()
@@ -4373,8 +4469,14 @@ mod tests {
                     .ok_or_else(|| "HTTP 403".to_string())
             })
         }
-        fn hello<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, (u16, Value)> {
+        fn hello<'a>(
+            &'a self,
+            url: &'a str,
+            token: &'a str,
+            proxy: &'a str,
+        ) -> Response<'a, (u16, Value)> {
             Box::pin(async move {
+                self.hello_urls.lock().unwrap().push(url.into());
                 self.hello_requests
                     .lock()
                     .unwrap()
@@ -5562,6 +5664,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oauth_api_requests_follow_the_custom_oauth_url_as_claude_code_reads_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts.remove(0).id;
+        let mut store = app.claude_load().unwrap();
+        store.accounts[0].account["organizationUuid"] = "org-alice".into();
+        app.claude_save(&store).unwrap();
+        *fake.prepaid.lock().unwrap() = Some(json!({"amount": 0}));
+        fake.usage.lock().unwrap().extend((0..5).map(|_| {
+            (
+                200,
+                json!({"five_hour": {"utilization": 1}, "extra_usage": {}}),
+            )
+        }));
+        let roots = |env: Option<&str>, settings: Option<Value>| {
+            app.set_claude_location(Location {
+                custom_oauth_env: env.map(str::to_owned),
+                ..location.clone()
+            });
+            let text = settings.map(|env| json!({ "env": env }).to_string());
+            put_settings(&location, text.as_deref()).unwrap();
+            let (app, fake, id) = (&app, &fake, &id);
+            async move {
+                fake.api_roots.lock().unwrap().clear();
+                app.claude_refresh_usage(id).await.unwrap();
+                let roots = fake.api_roots.lock().unwrap().clone();
+                assert!(roots.len() >= 2, "usage and prepaid: {roots:?}");
+                roots.into_iter().collect::<std::collections::BTreeSet<_>>()
+            }
+        };
+        let only = |root: &str| std::collections::BTreeSet::from([root.to_owned()]);
+        assert_eq!(roots(None, None).await, only("https://api.anthropic.com"));
+        // The settings' value wins over the environment, without one slash.
+        assert_eq!(
+            roots(
+                Some("http://env.invalid"),
+                Some(json!({CUSTOM_OAUTH: "http://127.0.0.1:8787/anthropic/"}))
+            )
+            .await,
+            only("http://127.0.0.1:8787/anthropic")
+        );
+        // An empty value in the settings unsets the environment's.
+        assert_eq!(
+            roots(Some("http://env.invalid"), Some(json!({CUSTOM_OAUTH: ""}))).await,
+            only("https://api.anthropic.com")
+        );
+        assert_eq!(
+            roots(Some("http://env.invalid/"), Some(json!({}))).await,
+            only("http://env.invalid")
+        );
+    }
+
+    #[tokio::test]
+    async fn saying_hi_goes_where_claude_code_sends_the_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts.remove(0).id;
+        let settings =
+            |env: Value| put_settings(&location, Some(&json!({ "env": env }).to_string())).unwrap();
+        async fn said(app: &Application, fake: &Fake, id: &str) -> String {
+            app.claude_say_hi(id).await.unwrap();
+            fake.hello_urls.lock().unwrap().pop().unwrap()
+        }
+        assert_eq!(
+            said(&app, &fake, &id).await,
+            "https://api.anthropic.com/v1/messages"
+        );
+        // A relay forwarding the login, with blank credentials beside it.
+        settings(json!({BASE_URL: "http://127.0.0.1:8787/anthropic/",
+            "ANTHROPIC_AUTH_TOKEN": "", "ANTHROPIC_API_KEY": ""}));
+        assert_eq!(
+            said(&app, &fake, &id).await,
+            "http://127.0.0.1:8787/anthropic/v1/messages"
+        );
+        // A base URL beside a credential is that credential's gateway.
+        settings(json!({BASE_URL: "https://gateway.invalid", "ANTHROPIC_AUTH_TOKEN": "sk"}));
+        assert_eq!(
+            said(&app, &fake, &id).await,
+            "https://api.anthropic.com/v1/messages"
+        );
+        // While a provider is applied, the official settings recorded apply.
+        app.claude_record_official(&Official {
+            settings: Some(json!({"env": {BASE_URL: "http://relay.invalid"}}).to_string()),
+            applied: None,
+        })
+        .unwrap();
+        let mut store = app.claude_load().unwrap();
+        store.settings_provider = Some("provider".into());
+        app.claude_save(&store).unwrap();
+        assert_eq!(
+            said(&app, &fake, &id).await,
+            "http://relay.invalid/v1/messages"
+        );
+    }
+
+    #[tokio::test]
     async fn saying_hi_goes_through_the_account_proxy_and_then_shows_the_usage() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
@@ -6140,6 +6342,7 @@ mod tests {
             keychain: None,
             storage_dir: dir.path().join(".claude"),
             vault: false,
+            custom_oauth_env: None,
         };
         assert_eq!(location.account_file(), location.global_config);
         fs::create_dir_all(&location.config_dir).unwrap();
