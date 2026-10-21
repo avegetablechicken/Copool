@@ -195,6 +195,9 @@ pub struct Application {
     refresh_schedule: std::sync::Mutex<Option<crate::refresh_policy::Schedule>>,
     claude_refresh_schedule: std::sync::Mutex<Option<crate::refresh_policy::Schedule>>,
     claude_unchanged_rounds: std::sync::Mutex<u8>,
+    /// Each pool's wait for its next round, started over by a manual refresh.
+    round_deferred: tokio::sync::Notify,
+    claude_round_deferred: tokio::sync::Notify,
 }
 pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
@@ -269,6 +272,8 @@ impl Application {
             claude_refresh_schedule: Default::default(),
             claude_unchanged_rounds: Default::default(),
             refresh_schedule: Default::default(),
+            round_deferred: Default::default(),
+            claude_round_deferred: Default::default(),
         };
         app.migrate_provider_credentials()?;
         app.preferences()?;
@@ -1278,22 +1283,51 @@ impl Application {
     async fn background_pool(&self, claude: bool) {
         let mut tick = 0u64;
         loop {
-            let interval = self.background_round(tick, claude).await;
-            tokio::time::sleep(interval).await;
+            let mut wait = self.background_round(tick, claude).await;
+            let deferred = if claude {
+                &self.claude_round_deferred
+            } else {
+                &self.round_deferred
+            };
+            // Refreshing the whole pool starts the wait over.
+            while tokio::select! {
+                _ = tokio::time::sleep(wait) => false,
+                _ = deferred.notified() => true,
+            } {
+                wait = self.round_interval(claude);
+            }
             tick = tick.wrapping_add(1);
         }
     }
-    pub(crate) async fn background_round(&self, tick: u64, claude: bool) -> std::time::Duration {
-        let (interval, schedule) = if claude {
-            (
-                self.claude_refresh_interval(),
-                &self.claude_refresh_schedule,
-            )
+    fn round_interval(&self, claude: bool) -> std::time::Duration {
+        if claude {
+            self.claude_refresh_interval()
         } else {
-            (
-                crate::refresh_policy::CODEX_REFRESH_INTERVAL,
-                &self.refresh_schedule,
-            )
+            crate::refresh_policy::CODEX_REFRESH_INTERVAL
+        }
+    }
+    /// Refreshing the whole pool stands in for a background round: its next
+    /// round waits a whole interval from now. A round under way is left to
+    /// schedule the next itself.
+    pub fn defer_background_round(&self, claude: bool) {
+        let (schedule, deferred) = if claude {
+            (&self.claude_refresh_schedule, &self.claude_round_deferred)
+        } else {
+            (&self.refresh_schedule, &self.round_deferred)
+        };
+        let now = now_unix_seconds();
+        if let Some(next) = schedule.lock().unwrap().as_mut().filter(|s| s.at > now) {
+            next.at = now + next.interval;
+            // Kept until the loop waits, should it not wait yet.
+            deferred.notify_one();
+        }
+    }
+    pub(crate) async fn background_round(&self, tick: u64, claude: bool) -> std::time::Duration {
+        let interval = self.round_interval(claude);
+        let schedule = if claude {
+            &self.claude_refresh_schedule
+        } else {
+            &self.refresh_schedule
         };
         let set_schedule = |at, tick, interval: std::time::Duration| {
             *schedule.lock().unwrap() = Some(crate::refresh_policy::Schedule {

@@ -3247,6 +3247,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refreshing_the_pool_puts_the_next_round_off_by_an_interval() {
+        use crate::refresh_policy::Schedule;
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let next = |accounts: Vec<AccountSummary>| accounts[0].next_refresh_at.unwrap();
+        // A round ended a minute ago; refreshed now, Alice would miss the
+        // next one and wait for the one after.
+        let now = now_unix_seconds();
+        let round = |at| Schedule {
+            at,
+            tick: 2,
+            interval: REFRESH_SECONDS,
+        };
+        app.set_claude_refresh_schedule(round(now + REFRESH_SECONDS - 60));
+        app.claude_refresh(None).await.unwrap();
+        let now = now_unix_seconds();
+        assert!(next(app.claude_accounts().await.unwrap()) > now + REFRESH_SECONDS);
+        // Deferred, the next round asks for her an interval from now.
+        app.defer_background_round(true);
+        let schedule = app.claude_refresh_schedule().unwrap();
+        assert!((now..=now + 1).contains(&(schedule.at - REFRESH_SECONDS)));
+        assert_eq!(schedule.tick, 2);
+        assert_eq!(next(app.claude_accounts().await.unwrap()), schedule.at);
+        // A round under way schedules the next itself; the other pool stays.
+        app.set_claude_refresh_schedule(round(now - 1));
+        app.defer_background_round(true);
+        assert_eq!(app.claude_refresh_schedule(), Some(round(now - 1)));
+        assert_eq!(app.refresh_schedule(), None);
+        let codex = Schedule {
+            at: now + 5,
+            tick: 3,
+            interval: 10,
+        };
+        app.set_refresh_schedule(codex);
+        app.defer_background_round(false);
+        let deferred = app.refresh_schedule().unwrap();
+        assert!((now + 10..=now + 11).contains(&deferred.at));
+        assert_eq!((deferred.tick, deferred.interval), (3, 10));
+        assert_eq!(app.claude_refresh_schedule(), Some(round(now - 1)));
+    }
+
+    #[tokio::test]
     async fn cards_show_when_the_background_refresh_asks_for_them_next() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, _fake) = app(&dir).await;

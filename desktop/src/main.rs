@@ -84,7 +84,12 @@ async fn refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), St
     app.release_new_accounts(id.as_deref()).await?;
     match id {
         Some(id) => app.refresh_usage(&id).await,
-        None => app.refresh_all().await,
+        None => {
+            let result = app.refresh_all().await;
+            // Refreshing the whole pool stands in for its next round.
+            app.defer_background_round(false);
+            result
+        }
     }
 }
 /// The next background refresh of the selected pool.
@@ -276,7 +281,12 @@ async fn claude_refresh_usage(app: State<'_, App>, id: Option<String>) -> Result
     app.claude_release_new_accounts(id.as_deref()).await?;
     match id {
         Some(id) => app.claude_refresh_usage(&id).await,
-        None => app.claude_refresh(None).await,
+        None => {
+            let result = app.claude_refresh(None).await;
+            // Refreshing the whole pool stands in for its next round.
+            app.defer_background_round(true);
+            result
+        }
     }
 }
 #[tauri::command]
