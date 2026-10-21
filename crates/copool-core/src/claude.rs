@@ -28,6 +28,10 @@ const ORGANIZATIONS_PATH: &str = "/api/oauth/organizations";
 const API_ROOT: &str = "https://api.anthropic.com";
 /// The cheapest model, which a hello costs the least of the five-hour window.
 pub(crate) const HELLO_MODEL: &str = "claude-haiku-5-5";
+/// Claude Code 2.1.300 in a terminal session. A headless or background
+/// entrypoint (`sdk-cli`, `cli-bg`) is reportedly counted apart from the
+/// five-hour window.
+const INTERACTIVE_USER_AGENT: &str = "claude-cli/2.1.300 (external, cli)";
 /// How long after a hi its five-hour window is looked for again, the usage
 /// Claude reports possibly lagging the hi.
 const HELLO_RECHECK: std::time::Duration =
@@ -329,11 +333,13 @@ pub(crate) trait Network: Send + Sync {
         proxy: &'a str,
     ) -> Response<'a, Value>;
     /// The HTTP status and body of a one-token "hi" to the messages `url`,
-    /// as Claude Code says it.
+    /// as Claude Code says it in a terminal session of the `account` (its
+    /// UUID).
     fn hello<'a>(
         &'a self,
         url: &'a str,
         token: &'a str,
+        account: &'a str,
         proxy: &'a str,
     ) -> Response<'a, (u16, Value)>;
 }
@@ -456,22 +462,31 @@ impl Network for Http {
         &'a self,
         url: &'a str,
         token: &'a str,
+        account: &'a str,
         proxy: &'a str,
     ) -> Response<'a, (u16, Value)> {
         Box::pin(async move {
-            // A subscription login is served only Claude Code's requests.
+            // A subscription login is served only Claude Code's requests; its
+            // terminal sessions name the session and the device, which stands
+            // here for the account.
+            let session = uuid::Uuid::new_v4().to_string();
+            let device = hex(&Sha256::digest(format!("copool:{account}")));
+            let user = json!({"device_id": device, "account_uuid": account, "session_id": session});
             let response = client(proxy)?
                 .post(url)
                 .bearer_auth(token.trim())
+                .header(reqwest::header::USER_AGENT, INTERACTIVE_USER_AGENT)
                 .header("Accept", "application/json")
                 .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
                 .header("anthropic-version", "2023-06-01")
                 .header("x-app", "cli")
+                .header("X-Claude-Code-Session-Id", &session)
                 .json(&json!({
                     "model": HELLO_MODEL,
                     "max_tokens": 1,
                     "thinking": {"type": "disabled"},
                     "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+                    "metadata": {"user_id": user.to_string()},
                     "messages": [{"role": "user", "content": "hi"}],
                 }))
                 .send()
@@ -2668,8 +2683,9 @@ impl Application {
             } else {
                 let token = text(&account.oauth["accessToken"]).unwrap_or_default();
                 let proxy = self.account_proxy(&account.proxy_url)?;
+                let uuid = text(&account.account["accountUuid"]).unwrap_or_default();
                 network
-                    .hello(&self.claude_messages_url(), &token, &proxy)
+                    .hello(&self.claude_messages_url(), &token, &uuid, &proxy)
                     .await?
             };
             match status {
@@ -4418,6 +4434,7 @@ mod tests {
         hellos: Mutex<Vec<(u16, Value)>>,
         hello_requests: Mutex<Vec<(String, String)>>,
         hello_urls: Mutex<Vec<String>>,
+        hello_accounts: Mutex<Vec<String>>,
     }
     impl Network for Fake {
         fn usage<'a>(
@@ -4507,10 +4524,12 @@ mod tests {
             &'a self,
             url: &'a str,
             token: &'a str,
+            account: &'a str,
             proxy: &'a str,
         ) -> Response<'a, (u16, Value)> {
             Box::pin(async move {
                 self.hello_urls.lock().unwrap().push(url.into());
+                self.hello_accounts.lock().unwrap().push(account.into());
                 self.hello_requests
                     .lock()
                     .unwrap()
@@ -5698,6 +5717,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_hi_is_said_as_claude_code_in_a_terminal_session() {
+        use axum::{extract::Request, routing::any, Json, Router};
+        let seen = Arc::new(Mutex::new(None));
+        let recorder = seen.clone();
+        let router = Router::new().fallback(any(move |request: Request| {
+            let recorder = recorder.clone();
+            async move {
+                let headers = request.headers().clone();
+                let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                *recorder.lock().unwrap() = Some((headers, body));
+                Json(json!({"type": "message"}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let (status, _) = Http.hello(&url, "token", "acct-alice", "").await.unwrap();
+        assert_eq!(status, 200);
+        let (headers, body) = seen.lock().unwrap().take().unwrap();
+        let header = |name: &str| headers.get(name).unwrap().to_str().unwrap().to_owned();
+        assert_eq!(header("user-agent"), INTERACTIVE_USER_AGENT);
+        assert_eq!(header("x-app"), "cli");
+        assert_eq!(header("authorization"), "Bearer token");
+        let user: Value =
+            serde_json::from_str(body["metadata"]["user_id"].as_str().unwrap()).unwrap();
+        assert_eq!(user["account_uuid"], "acct-alice");
+        assert_eq!(user["session_id"], header("x-claude-code-session-id"));
+        assert_eq!(user["device_id"].as_str().unwrap().len(), 64);
+        assert_eq!(
+            (body["model"].as_str(), body["max_tokens"].as_i64()),
+            (Some(HELLO_MODEL), Some(1))
+        );
+    }
+
+    #[tokio::test]
     async fn oauth_api_requests_follow_the_custom_oauth_url_as_claude_code_reads_it() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
@@ -5814,6 +5871,7 @@ mod tests {
             vec![("alice-access".into(), "socks5://127.0.0.1:7891".into())]
         );
         assert_eq!(fake.usage_tokens.lock().unwrap().len(), usages + 1);
+        assert_eq!(*fake.hello_accounts.lock().unwrap(), vec!["acct-alice"]);
 
         // A login Claude does not accept is renewed and says hi again.
         fake.hello_requests.lock().unwrap().clear();
