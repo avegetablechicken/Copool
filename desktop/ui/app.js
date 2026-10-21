@@ -593,8 +593,10 @@ function accountControls(account, full, view, grouped = false) {
     actions.append(signInAgain);
     return actions;
   }
-  // A Claude card, a Sub2api provider's too, says hi to start its 5h window.
-  if (pool === "claude" && !collapsed) actions.append(sayHiButton(account, full));
+  // A Claude card, a Sub2api provider's too, says hi to start its 5h window
+  // while that window has yet to start.
+  if (pool === "claude" && !collapsed && fiveHourIdle(account))
+    actions.append(sayHiButton(account, full));
   if (grouped) return actions;
   const refresh = button("", "refresh", "icon-btn card-refresh", () =>
     refreshUsage(account.id),
@@ -614,6 +616,12 @@ function accountControls(account, full, view, grouped = false) {
     actions.append(control);
   }
   return actions;
+}
+/// Whether the account's 5h window has yet to start: its usage, once known,
+/// shows no window, or one without a reset ahead.
+function fiveHourIdle(account) {
+  if (!account.usage) return false;
+  return !(account.usage.fiveHour?.resetAt > Date.now() / 1000);
 }
 /// Says hi with the account, which starts its 5h window; shown, as the
 /// proxy button, only on the focused card.

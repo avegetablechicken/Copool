@@ -91,3 +91,18 @@ test("saying hi goes to the Claude pool, shows the card refreshing and reloads i
   for (const key of ["accounts.card.say_hi", "accounts.card.say_hi.help", "accounts.notice.said_hi"])
     assert.equal(locales.split(`"${key}"`).length - 1, 11, `${key} in every locale`);
 });
+
+test("say hi shows only while a known 5h window has yet to start", () => {
+  const start = source.indexOf("function fiveHourIdle(");
+  const idle = vm.runInNewContext(
+    `(${source.slice(start, source.indexOf("\n}\n", start) + 2)})`,
+    { Date },
+  );
+  const now = Date.now() / 1000;
+  assert.equal(idle({ usage: null }), false, "usage not yet known");
+  assert.equal(idle({ usage: {} }), true, "no window");
+  assert.equal(idle({ usage: { fiveHour: { usedPercent: 0, resetAt: null } } }), true);
+  assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now - 60 } } }), true, "ended");
+  assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now + 60 } } }), false);
+  assert.match(source, /if \(pool === "claude" && !collapsed && fiveHourIdle\(account\)\)\n\s+actions\.append\(sayHiButton/);
+});
