@@ -26,8 +26,9 @@ const PROFILE_PATH: &str = "/api/oauth/profile";
 const ORGANIZATIONS_PATH: &str = "/api/oauth/organizations";
 /// Where Claude Code sends its login's requests without a base URL.
 const API_ROOT: &str = "https://api.anthropic.com";
-/// The cheapest model, which a hello costs the least of the five-hour window.
-pub(crate) const HELLO_MODEL: &str = "claude-haiku-5-5";
+/// The cheapest model whose hi starts the five-hour window: a one-token
+/// Haiku hi, as Claude Code's own quota check, does not.
+pub(crate) const HELLO_MODEL: &str = "claude-sonnet-5-5";
 /// Claude Code 2.1.300 in a terminal session. A headless or background
 /// entrypoint (`sdk-cli`, `cli-bg`) is reportedly counted apart from the
 /// five-hour window.
@@ -484,7 +485,9 @@ impl Network for Http {
                 .json(&json!({
                     "model": HELLO_MODEL,
                     "max_tokens": 1,
-                    "thinking": {"type": "disabled"},
+                    // Sonnet 5.5 refuses thinking turned off; the least effort
+                    // costs least.
+                    "output_config": {"effort": "low"},
                     "system": "You are Claude Code, Anthropic's official CLI for Claude.",
                     "metadata": {"user_id": user.to_string()},
                     "messages": [{"role": "user", "content": "hi"}],
@@ -5796,6 +5799,8 @@ mod tests {
             (body["model"].as_str(), body["max_tokens"].as_i64()),
             (Some(HELLO_MODEL), Some(1))
         );
+        // Sonnet 5.5 refuses thinking turned off.
+        assert!(body["thinking"].is_null());
     }
 
     #[tokio::test]
