@@ -380,15 +380,12 @@ impl Application {
         self.claude_refresh_sub2api(&store.providers[i].id, Some(vec![account.id]))
             .await
     }
-    /// Says hi through Sub2api's connection test of the card's account, then
-    /// refreshes the card until its five-hour window shows.
+    /// Says hi through Sub2api's connection test of the card's account.
     pub(super) async fn claude_say_hi_sub2api(&self, id: &str) -> Result<()> {
         let store = self.claude_load()?;
         let (i, account) = card(&store, id).ok_or("Account not found")?;
         self.claude_sub2api_connection(&store.providers[i])?
             .test_account(account.id, super::HELLO_MODEL)
-            .await?;
-        self.claude_hello_started(id, || self.claude_refresh_sub2api_card(id))
             .await
     }
     /// Refreshes the providers of these cards, or every provider.
@@ -558,28 +555,13 @@ mod tests {
         }
     }
     /// A Sub2api admin API with one Claude account, recording request paths.
-    /// Its account's five-hour window starts with a hi, the usage it reports
-    /// showing it from the second request on.
     async fn server(requests: std::sync::Arc<Mutex<Vec<String>>>) -> String {
         use axum::{extract::Request, response::IntoResponse, routing::any, Json, Router};
         let router = Router::new().fallback(any(move |request: Request| {
             let requests = requests.clone();
             async move {
                 let uri = request.uri().path_and_query().unwrap().to_string();
-                let started = {
-                    let mut requests = requests.lock().unwrap();
-                    requests.push(uri.clone());
-                    requests
-                        .iter()
-                        .rposition(|uri| uri.ends_with("/test"))
-                        .is_some_and(|hi| {
-                            requests[hi..]
-                                .iter()
-                                .filter(|uri| uri.ends_with("/usage"))
-                                .count()
-                                >= 2
-                        })
-                };
+                requests.lock().unwrap().push(uri.clone());
                 if !uri.starts_with("/api/v1/auth/login") {
                     assert_eq!(request.headers().get("authorization").unwrap(), "Bearer admin");
                 }
@@ -603,10 +585,6 @@ mod tests {
                         {"id": 7, "name": "claude-team", "platform": "anthropic", "type": "oauth", "status": "active"},
                         {"id": 8, "name": "child", "platform": "anthropic", "type": "oauth", "status": "active", "parent_account_id": 7}
                     ], "pages": 1})
-                } else if started {
-                    json!({"five_hour": {"utilization": 1, "resets_at": "2099-01-01T00:00:00Z"},
-                           "seven_day": {"utilization": 34, "resets_at": "2099-01-01T00:00:00Z"},
-                           "subscription_tier": "MAX"})
                 } else {
                     json!({"five_hour": {"utilization": 0, "resets_at": null, "remaining_seconds": 0},
                            "seven_day": {"utilization": 34, "resets_at": "2099-01-01T00:00:00Z"},
@@ -842,27 +820,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_card_says_hi_through_the_sub2api_account_test_and_refreshes() {
+    async fn a_card_says_hi_through_the_sub2api_account_test() {
         let dir = tempfile::tempdir().unwrap();
         let (app, _, _, _, card, _, _, requests) = pool_recording(dir.path()).await;
         requests.lock().unwrap().clear();
         app.claude_say_hi(&card).await.unwrap();
-        let requests = requests.lock().unwrap().clone();
-        let test = requests
-            .iter()
-            .position(|uri| uri == "/api/v1/admin/accounts/7/test")
-            .unwrap();
-        // The usage first reported lags the hi; it is asked for once more.
+        // The usage, which shows the window only later, is left to the card.
         assert_eq!(
-            requests[test + 1..]
-                .iter()
-                .filter(|uri| *uri == "/api/v1/admin/accounts/7/usage")
-                .count(),
-            2
+            *requests.lock().unwrap(),
+            ["/api/v1/auth/login", "/api/v1/admin/accounts/7/test"]
         );
-        let store = app.claude_load().unwrap();
-        let window = summaries(&store, None).remove(0).usage.unwrap().five_hour;
-        assert!(window.unwrap().reset_at.is_some());
     }
 
     #[tokio::test]

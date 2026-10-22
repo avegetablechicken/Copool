@@ -33,11 +33,6 @@ pub(crate) const HELLO_MODEL: &str = "claude-sonnet-5-5";
 /// entrypoint (`sdk-cli`, `cli-bg`) is reportedly counted apart from the
 /// five-hour window.
 const INTERACTIVE_USER_AGENT: &str = "claude-cli/2.1.300 (external, cli)";
-/// How long after a hi its five-hour window is looked for again, the usage
-/// Claude reports possibly lagging the hi.
-const HELLO_RECHECK: std::time::Duration =
-    std::time::Duration::from_secs(if cfg!(test) { 0 } else { 3 });
-const WINDOW_NOT_STARTED: &str = "error.claude.say_hi_window_not_started";
 const USER_AGENT: &str = "claude-code/2.1.69";
 // The banked resets are returned only to Claude Code 2.1.280 or later, by its
 // User-Agent; others read `eligible: false` with the rest of the usage intact.
@@ -2658,9 +2653,9 @@ impl Application {
         format!("{}/v1/messages", base.trim_end_matches('/'))
     }
     /// Says hi with an account, through its proxy, so that its five-hour
-    /// window starts now, then refreshes its usage to show it. A login Claude
-    /// does not accept is renewed by that refresh, as its renewal allows, and
-    /// says hi once more. A Sub2api card says hi through Sub2api.
+    /// window starts now; the usage Claude reports shows it only later. A
+    /// login Claude does not accept is renewed by a refresh, as its renewal
+    /// allows, and says hi once more. A Sub2api card says hi through Sub2api.
     pub async fn claude_say_hi(&self, id: &str) -> Result<()> {
         if sub2api::is_card(id) {
             return self.claude_say_hi_sub2api(id).await;
@@ -2708,36 +2703,7 @@ impl Application {
                 }
             }
         }
-        self.claude_hello_started(id, || self.claude_refresh_usage(id))
-            .await
-    }
-    /// Refreshes a card after its hi, and once more a moment later while its
-    /// five-hour window has not shown up. A window still not started is an
-    /// error: Claude accepted the hi without starting one.
-    async fn claude_hello_started<F, R>(&self, id: &str, refresh: F) -> Result<()>
-    where
-        F: Fn() -> R,
-        R: std::future::Future<Output = Result<()>>,
-    {
-        for attempt in 0..2 {
-            if attempt > 0 {
-                tokio::time::sleep(HELLO_RECHECK).await;
-            }
-            refresh().await?;
-            let now = now_unix_seconds();
-            let started = self.claude_usage_cards()?.into_iter().any(|card| {
-                card.id == id
-                    && card
-                        .usage
-                        .and_then(|usage| usage.five_hour)
-                        .and_then(|window| window.reset_at)
-                        .is_some_and(|at| at > now)
-            });
-            if started {
-                return Ok(());
-            }
-        }
-        Err(WINDOW_NOT_STARTED.into())
+        Ok(())
     }
     /// Sets whether Copool renews an account's tokens: "never", "once" (then
     /// never) or "always".
@@ -5919,7 +5885,8 @@ mod tests {
             *fake.hello_requests.lock().unwrap(),
             vec![("alice-access".into(), "socks5://127.0.0.1:7891".into())]
         );
-        assert_eq!(fake.usage_tokens.lock().unwrap().len(), usages + 1);
+        // The usage, which shows the window only later, is left to the card.
+        assert_eq!(fake.usage_tokens.lock().unwrap().len(), usages);
         assert_eq!(*fake.hello_accounts.lock().unwrap(), vec!["acct-alice"]);
 
         // A login Claude does not accept is renewed and says hi again.
@@ -5935,20 +5902,6 @@ mod tests {
             .map(|(token, _)| token.clone())
             .collect();
         assert_eq!(tokens, vec!["alice-access", "fresh-access"]);
-
-        // Claude accepting the hi without starting the window says so, once
-        // the usage asked for again still shows none.
-        let usages = fake.usage_tokens.lock().unwrap().len();
-        let idle = json!({"five_hour": {"utilization": 0, "resets_at": null}});
-        fake.usage
-            .lock()
-            .unwrap()
-            .extend([(200, idle.clone()), (200, idle)]);
-        assert_eq!(
-            app.claude_say_hi(&id).await.unwrap_err(),
-            WINDOW_NOT_STARTED
-        );
-        assert_eq!(fake.usage_tokens.lock().unwrap().len(), usages + 2);
 
         // Other failures are reported without retrying.
         fake.hello_requests.lock().unwrap().clear();

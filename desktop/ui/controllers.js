@@ -205,7 +205,7 @@
       }
     }
     /// Claude only: says hi with an account, which starts its five-hour
-    /// window, then refreshes it; the card shows as refreshing meanwhile.
+    /// window; the card shows as refreshing meanwhile.
     async sayHi(id) {
       if (
         this.manualRefreshing ||

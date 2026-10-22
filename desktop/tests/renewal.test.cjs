@@ -106,3 +106,43 @@ test("say hi shows only while a known 5h window has yet to start", () => {
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now + 60 } } }), false);
   assert.match(source, /if \(pool === "claude" && !collapsed && fiveHourIdle\(account\)\)\n\s+actions\.append\(sayHiButton/);
 });
+
+test("after a hi the card is refreshed again only until its 5h window shows", async () => {
+  const start = source.indexOf("const SAY_HI_LOOKS =");
+  const end = source.indexOf("/// Says hi with the account; shown");
+  for (const [shownAfter, expected] of [
+    [0, { refreshes: 0, notices: [["accounts.notice.said_hi", false]] }],
+    [2, { refreshes: 2, notices: [["accounts.notice.said_hi", false]] }],
+    [Infinity, { refreshes: 4, notices: [["error.claude.say_hi_window_not_started", true]] }],
+  ]) {
+    const waits = [];
+    const notices = [];
+    let refreshes = 0;
+    const card = { id: "a", usage: { fiveHour: { resetAt: null } } };
+    const show = () => {
+      if (refreshes >= shownAfter) card.usage.fiveHour.resetAt = Date.now() / 1000 + 600;
+    };
+    const accountsController = {
+      accounts: [card],
+      sayHi: async () => (show(), true),
+      refresh: async () => (refreshes++, show(), true),
+    };
+    const scope = {
+      Date,
+      Set,
+      Promise,
+      accountsController,
+      refreshView: async () => {},
+      setTimeout: (resolve, ms) => (waits.push(ms), resolve()),
+      tr: (key) => key,
+      notice: (message, error = false) => notices.push([message, error]),
+    };
+    vm.createContext(scope);
+    vm.runInContext(`${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`, scope);
+    await scope.run({ id: "a" });
+    assert.equal(refreshes, expected.refreshes);
+    assert.deepEqual(notices, expected.notices);
+    assert.deepEqual(waits, [10000, 20000, 60000, 90000].slice(0, refreshes));
+    assert.equal(scope.pending.size, 0);
+  }
+});

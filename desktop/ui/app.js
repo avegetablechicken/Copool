@@ -623,19 +623,51 @@ function fiveHourIdle(account) {
   if (!account.usage) return false;
   return !(account.usage.fiveHour?.resetAt > Date.now() / 1000);
 }
-/// Says hi with the account, which starts its 5h window; shown, as the
-/// proxy button, only on the focused card.
+/// When after a hi its card is refreshed, in seconds, while its 5h window
+/// has not shown: the usage Claude reports shows it from tens of seconds to
+/// minutes later.
+const SAY_HI_LOOKS = [10, 30, 90, 180];
+/// Cards that said hi and whose 5h window has yet to show.
+const sayingHi = new Set();
+/// Says hi with the account, which starts its 5h window, then refreshes its
+/// card over the next minutes until the window shows. Each refresh
+/// shows as one, and nothing between them; a window still not shown at the
+/// last is reported.
+async function sayHi(account) {
+  const controller = accountsController;
+  const shown = () => {
+    const card = controller.accounts.find((a) => a.id === account.id);
+    return !card || card.usage?.fiveHour?.resetAt > Date.now() / 1000;
+  };
+  if (!(await controller.sayHi(account.id))) return;
+  sayingHi.add(account.id);
+  try {
+    let waited = 0;
+    for (const at of SAY_HI_LOOKS) {
+      if (shown()) break;
+      await refreshView();
+      await new Promise((resolve) => setTimeout(resolve, (at - waited) * 1000));
+      waited = at;
+      await controller.refresh(account.id);
+    }
+    if (shown()) notice(tr("accounts.notice.said_hi"));
+    else notice(tr("error.claude.say_hi_window_not_started"), true);
+  } finally {
+    sayingHi.delete(account.id);
+  }
+}
+/// Says hi with the account; shown, as the proxy button, only on the
+/// focused card.
 function sayHiButton(account, full) {
   const control = button("", "say-hi", "icon-btn card-say-hi", () =>
-    accountsController
-      .sayHi(account.id)
-      .then((done) => done && notice(tr("accounts.notice.said_hi")))
+    sayHi(account)
       .catch((error) => notice(error, true))
       .finally(() => refreshView().catch((error) => notice(error, true))),
   );
   control.title = tr("accounts.card.say_hi.help");
   control.setAttribute("aria-label", `${tr("accounts.card.say_hi")} ${full}`);
   control.disabled =
+    sayingHi.has(account.id) ||
     accountsController.refreshingIds.has(account.id) ||
     accountsController.remoteRefreshingIds.has(account.id);
   return control;
