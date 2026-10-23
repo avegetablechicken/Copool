@@ -650,13 +650,16 @@ fn main() {
                     "open" => {
                         // GNOME fades the tray menu out (150 ms) after activation;
                         // waiting keeps it out of the panel's captured backdrop.
+                        // The pointer is still on the menu, under the tray icon.
                         #[cfg(target_os = "linux")]
                         {
+                            let anchor = panel::menu_anchor(app);
                             let handle = app.clone();
                             tauri::async_runtime::spawn(async move {
                                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                                 let app = handle.clone();
-                                let _ = handle.run_on_main_thread(move || panel::show(&app, None));
+                                let _ =
+                                    handle.run_on_main_thread(move || panel::show(&app, anchor));
                             });
                         }
                         #[cfg(not(target_os = "linux"))]
