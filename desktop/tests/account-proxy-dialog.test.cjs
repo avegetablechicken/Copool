@@ -76,6 +76,36 @@ test("a provider's proxy saves once, through its first card", async () => {
   await submit();
   assert.deepEqual(saved.splice(0), [["card-0", "direct://"]]);
 });
+test("a blank card proxy is described as the shared account proxy when one is set", () => {
+  const nodes = new Map();
+  const $ = (id) => {
+    if (!nodes.has(id)) nodes.set(id, {
+      value: "", disabled: false, focus() {}, showModal() {}, close() {},
+    });
+    return nodes.get(id);
+  };
+  const scope = {
+    $,
+    preferences: { accountProxyUrl: " socks5://127.0.0.1:7891 " },
+    tr: (key, ...args) => [key, ...args].join(" "),
+  };
+  vm.createContext(scope);
+  vm.runInContext(source.slice(source.indexOf("function proxyLabel("),
+    source.indexOf("/// Proxy and removal")), scope);
+  vm.runInContext(source.slice(source.indexOf("function openAccountProxy("),
+    source.indexOf("/// The provider's proxy")), scope);
+  const help = (account) => {
+    scope.openAccountProxy({ id: "card", proxyUrl: "", ...account });
+    return $("edit-proxy-help").textContent;
+  };
+  assert.equal(help({}), "accounts.proxy.shared_help_format socks5://127.0.0.1:7891");
+  // A Sub2api provider's cards never take the shared proxy.
+  assert.equal(help({ sourceTag: "SUB2API" }), "settings.sub2api.proxy_help");
+  scope.preferences.accountProxyUrl = "direct://";
+  assert.equal(help({}), "accounts.proxy.shared_help_format accounts.proxy.none");
+  scope.preferences.accountProxyUrl = "";
+  assert.equal(help({}), "settings.sub2api.proxy_help");
+});
 test("Sub2api cards group by the provider in their id, even before the provider list knows them", () => {
   const scope = {
     pool: "claude",

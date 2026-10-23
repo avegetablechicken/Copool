@@ -490,5 +490,6 @@
 "accounts.card.awaiting_first_request.help" = "Copool heeft voor dit account nog geen upstream benaderd. Stel zo nodig de proxy in en vernieuw daarna deze kaart.";
 
 "settings.account_proxy" = "Gedeelde accountproxy";
+"accounts.proxy.shared_help_format" = "HTTP, HTTPS of SOCKS5. Laat leeg om de gedeelde accountproxy (%@) te gebruiken.";
 
 "accounts.proxy.enabled" = "Proxy inschakelen";

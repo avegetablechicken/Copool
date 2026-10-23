@@ -1872,7 +1872,13 @@ function openAccountProxy(account) {
   $("edit-proxy-enabled").checked = !direct;
   $("edit-proxy").disabled = direct;
   $("edit-proxy").value = direct ? "" : account.proxyUrl || "";
-  $("edit-proxy-help").textContent = tr("settings.sub2api.proxy_help");
+  // Left blank, a card takes the shared account proxy (see `accountProxy`);
+  // a Sub2api provider's does not.
+  const shared =
+    account.sourceTag === "SUB2API" ? "" : (preferences?.accountProxyUrl || "").trim();
+  $("edit-proxy-help").textContent = shared
+    ? tr("accounts.proxy.shared_help_format", proxyLabel(shared))
+    : tr("settings.sub2api.proxy_help");
   $("edit-error").hidden = true;
   $("edit-dialog").showModal();
   $(direct ? "edit-proxy-enabled" : "edit-proxy").focus();

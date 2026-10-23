@@ -490,5 +490,6 @@
 "accounts.card.awaiting_first_request.help" = "Copool non ha ancora contattato l’upstream per questo account. Imposta il proxy se serve, poi aggiorna questa scheda.";
 
 "settings.account_proxy" = "Proxy condiviso degli account";
+"accounts.proxy.shared_help_format" = "HTTP, HTTPS o SOCKS5. Lascia vuoto per usare il proxy condiviso degli account (%@).";
 
 "accounts.proxy.enabled" = "Abilita proxy";

@@ -490,5 +490,6 @@
 "accounts.card.awaiting_first_request.help" = "Copool n’a pas encore contacté l’amont pour ce compte. Définissez son proxy si besoin, puis actualisez cette carte.";
 
 "settings.account_proxy" = "Proxy commun aux comptes";
+"accounts.proxy.shared_help_format" = "HTTP, HTTPS ou SOCKS5. Laissez vide pour utiliser le proxy commun aux comptes (%@).";
 
 "accounts.proxy.enabled" = "Activer le proxy";
