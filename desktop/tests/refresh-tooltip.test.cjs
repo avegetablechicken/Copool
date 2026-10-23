@@ -53,3 +53,25 @@ test("The toolbar follows the full refresh; a provider its first card due", () =
   assert.match(source, /refreshTooltip\(refresh, tr\("common\.refresh_usage"\), \(\) => account\.nextRefreshAt\)/);
   assert.match(body("providerControls"), /nextRefreshAt\(group\.accounts\)/);
 });
+
+test("Refreshing a provider's only account refreshes the entire provider", () => {
+  const calls = [];
+  const context = {
+    accountsController: { refresh: (id) => { calls.push(["account", id]); return Promise.resolve(false); } },
+    refreshProvider: (group) => calls.push(["provider", group.key, group.accounts[0].id]),
+    refreshView: () => Promise.resolve(),
+    notice: () => {},
+  };
+  vm.createContext(context);
+  vm.runInContext(body("providerKey") + body("refreshUsage"), context);
+  context.refreshUsage("claude-sub2api-team-7");
+  context.refreshUsage("sub2api-work-42");
+  context.refreshUsage("official");
+  context.refreshUsage();
+  assert.deepEqual(calls, [
+    ["provider", "team", "claude-sub2api-team-7"],
+    ["provider", "work", "sub2api-work-42"],
+    ["account", "official"],
+    ["account", null],
+  ]);
+});

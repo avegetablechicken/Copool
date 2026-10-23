@@ -301,7 +301,7 @@ impl Application {
             Err(errors.join("\n"))
         }
     }
-    /// Refreshes imported cards (all, or some) without changing membership.
+    /// Refreshes upstream usage, adopting newly discovered accounts on a provider refresh.
     pub(super) async fn claude_refresh_sub2api(
         &self,
         provider: &str,
@@ -315,6 +315,10 @@ impl Application {
         else {
             return Err("Provider not found".into());
         };
+        // Only explicit sync may restore a removed provider card.
+        if p.imported_account_ids.is_empty() {
+            return Ok(());
+        }
         let cards: Vec<_> = p
             .cached_accounts
             .iter()
@@ -341,6 +345,10 @@ impl Application {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
+            // Respect removal even if it happened during the network request.
+            if saved.imported_account_ids.is_empty() {
+                return Ok(());
+            }
             // A card Sub2api no longer lists says so, not its last error.
             if fetched.errors.is_empty() {
                 for cached in &mut saved.cached_accounts {
@@ -355,7 +363,7 @@ impl Application {
             }
             for account in fetched.accounts {
                 if !saved.imported_account_ids.contains(&account.id) {
-                    continue;
+                    saved.imported_account_ids.push(account.id);
                 }
                 match saved
                     .cached_accounts
@@ -797,6 +805,24 @@ mod tests {
         assert!(asked[0].contains("status=active"));
         assert!(!asked.last().unwrap().contains("status="));
 
+        // A provider refresh discovers a second account and fetches its usage immediately.
+        items.lock().unwrap().as_array_mut().unwrap().push(json!({
+            "id": 9, "name": "new-account", "platform": "anthropic",
+            "type": "oauth", "status": "active"
+        }));
+        app.claude_refresh_sub2api_provider(&saved.id)
+            .await
+            .unwrap();
+        let store = app.claude_load().unwrap();
+        assert_eq!(store.providers[0].imported_account_ids, [7, 9]);
+        let added = store.providers[0]
+            .cached_accounts
+            .iter()
+            .find(|a| a.id == 9)
+            .unwrap();
+        assert!(added.usage.is_some());
+        assert!(added.usage_error.is_none());
+
         *items.lock().unwrap() = json!([{"id": 7, "name": "claude-team", "platform": "anthropic",
             "type": "oauth", "status": "error", "error_message": "Token expired"}]);
         app.claude_refresh_usage(&card).await.unwrap();
@@ -889,6 +915,28 @@ mod tests {
             .unwrap()
             .usage_error
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn deleted_sub2api_provider_stays_removed_until_explicit_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, _, _, _, _, requests) = pool_recording(dir.path()).await;
+        for account in app.claude_accounts().await.unwrap() {
+            if is_card(&account.id) {
+                app.claude_delete_account(&account.id).await.unwrap();
+            }
+        }
+        requests.lock().unwrap().clear();
+        app.claude_refresh(None).await.unwrap();
+        app.claude_refresh_recurring(0).await.unwrap();
+        assert!(requests.lock().unwrap().is_empty());
+        assert!(app.claude_load().unwrap().providers[0]
+            .cached_accounts
+            .is_empty());
+        app.claude_sync_sub2api().await.unwrap();
+        assert!(!app.claude_load().unwrap().providers[0]
+            .cached_accounts
+            .is_empty());
     }
 
     #[tokio::test]

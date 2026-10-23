@@ -8,7 +8,6 @@ use crate::{
     sub2api,
     utils::{now_unix_seconds, validate_account_proxy},
 };
-use serde_json::Value;
 
 pub(crate) fn validate_and_save(
     mut draft: Provider,
@@ -216,13 +215,22 @@ impl Application {
             .map(|_| ())
         }
     }
-    /// Sync adopts membership. Refresh preserves imported IDs and only updates their intersection.
+    /// Refresh adopts the provider’s current upstream accounts and their usage.
     pub async fn refresh_provider(
         &self,
         provider_id: &str,
         sync_membership: bool,
     ) -> Result<usize, String> {
         let snapshot = self.configuration()?;
+        // Refresh updates an imported provider; only an explicit sync restores
+        // a provider whose entire card was removed.
+        if !sync_membership
+            && snapshot.sub2_api_provider.providers.iter().any(|p| {
+                p.provider_id.eq_ignore_ascii_case(provider_id) && p.imported_account_ids.is_empty()
+            })
+        {
+            return Ok(0);
+        }
         // The provider's cards show as refreshing until its accounts land.
         let _activity: Vec<_> = snapshot
             .sub2_api_provider
@@ -291,22 +299,18 @@ impl Application {
             .iter_mut()
             .find(|p| p.provider_id.eq_ignore_ascii_case(provider_id))
             .ok_or("Provider was removed during refresh")?;
-        let ids: Vec<_> = fetched.iter().map(|a| a.id).collect();
-        let changed = ids.iter().any(|id| !p.imported_account_ids.contains(id))
-            || p.imported_account_ids.iter().any(|id| !ids.contains(id));
-        if sync_membership {
-            p.imported_account_ids = ids;
+        // Deleting the card while its request was in flight must also win.
+        if !sync_membership && p.imported_account_ids.is_empty() {
+            return Ok(0);
         }
+        p.imported_account_ids = fetched.iter().map(|a| a.id).collect();
         p.cached_accounts = fetched
             .into_iter()
-            .filter(|a| p.imported_account_ids.contains(&a.id))
             .map(|a| serde_json::to_value(a).map_err(|e| e.to_string()))
             .collect::<Result<Vec<_>, _>>()?;
         let count = p.cached_accounts.len();
         let key = format!("providerSyncNeeded:{}", p.provider_id);
-        latest
-            .extra
-            .insert(key, Value::Bool(changed && !sync_membership));
+        latest.extra.remove(&key);
         self.persist_configuration(&latest)?;
         Ok(count)
     }

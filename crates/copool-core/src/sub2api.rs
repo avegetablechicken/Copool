@@ -209,18 +209,12 @@ impl Connection {
         ids: Option<&[i64]>,
         now: i64,
     ) -> Result<Refresh, String> {
-        let wanted = ids.unwrap_or(&self.configuration.imported_account_ids);
         let mut accounts = std::collections::BTreeMap::new();
         let mut errors = vec![];
-        match self
-            .fetch_platform_accounts_via(platform, Some(wanted), now)
-            .await
-        {
+        match self.fetch_platform_accounts_via(platform, ids, now).await {
             Ok(fetched) => {
                 for account in fetched {
-                    // Keep newly discovered IDs for the membership-change warning,
-                    // without issuing quota requests for unimported accounts.
-                    if wanted.contains(&account.id) || ids.is_none() {
+                    if ids.is_none_or(|ids| ids.contains(&account.id)) {
                         accounts.insert(account.id, account);
                     }
                 }
@@ -228,7 +222,7 @@ impl Connection {
             Err(error) => {
                 for raw in &self.configuration.cached_accounts {
                     if let Ok(mut account) = serde_json::from_value::<Account>(raw.clone()) {
-                        if wanted.contains(&account.id) {
+                        if ids.is_none_or(|ids| ids.contains(&account.id)) {
                             account.usage_error = Some(error.clone());
                             accounts.insert(account.id, account);
                         }
@@ -298,9 +292,13 @@ impl Connection {
         let client = self.client()?;
         let token = &self.admin_token(&client).await?;
         // A Claude card Sub2api stopped serving, such as one whose token
-        // expired, says why; the Codex pool drops it and asks for a sync.
-        let inactive_shown =
-            |id: i64| platform == Platform::Anthropic && ids.is_some_and(|ids| ids.contains(&id));
+        // expired, says why; the Codex pool drops it.
+        let inactive_shown = |id: i64| {
+            platform == Platform::Anthropic
+                && ids
+                    .unwrap_or(&self.configuration.imported_account_ids)
+                    .contains(&id)
+        };
         let mut items = Vec::new();
         let mut page = 1usize;
         loop {
@@ -313,7 +311,9 @@ impl Connection {
                 ("sort_by", "name".into()),
                 ("sort_order", "asc".into()),
             ];
-            if platform != Platform::Anthropic || ids.is_none() {
+            if platform != Platform::Anthropic
+                || (ids.is_none() && self.configuration.imported_account_ids.is_empty())
+            {
                 query.push(("status", "active".into()));
             }
             let data = payload(

@@ -1912,6 +1912,8 @@ $("edit-form").onsubmit = (event) => {
 /// takes no panel-wide lock: each card updates and becomes operable again as
 /// its own refresh lands ("copool-changed"), while the others stay usable.
 function refreshUsage(id = null) {
+  const provider = id === null ? null : providerKey({ id, sourceTag: "SUB2API" });
+  if (provider !== null) return refreshProvider({ key: provider, accounts: [{ id }] });
   accountsController
     .refresh(id)
     .then((done) => {

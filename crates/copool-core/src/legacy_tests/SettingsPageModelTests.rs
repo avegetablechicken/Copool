@@ -283,7 +283,7 @@ async fn testManualSub2APIRefreshUsesCardProviderWithoutConfirmation() {
         .is_empty());
 }
 #[tokio::test]
-async fn testRefreshPreservesValidSub2APICardsAndWarnsWhenUpstreamMembershipChanges() {
+async fn testRefreshAdoptsUpstreamMembershipChanges() {
     let (_dir, app, _) = fixture();
     let ids = Arc::new(Mutex::new(vec![42, 43]));
     let server = upstream(ids.clone(), Default::default()).await;
@@ -294,16 +294,17 @@ async fn testRefreshPreservesValidSub2APICardsAndWarnsWhenUpstreamMembershipChan
     app.refresh_provider("my", false).await.unwrap();
     let settings = app.configuration().unwrap();
     let p = settings.sub2_api_provider.provider("my").unwrap();
-    assert_eq!(p.imported_account_ids, [42, 43]);
+    assert_eq!(p.imported_account_ids, [43, 44]);
     assert_eq!(
         p.cached_accounts
             .iter()
             .map(|v| v["id"].as_i64().unwrap())
             .collect::<Vec<_>>(),
-        [43]
+        [43, 44]
     );
-    assert_eq!(settings.extra["providerSyncNeeded:my"], true);
-    assert_eq!(app.accounts().await.unwrap().len(), 1);
+    assert!(!settings.extra.contains_key("providerSyncNeeded:my"));
+    assert_eq!(app.accounts().await.unwrap().len(), 2);
+    assert!(p.cached_accounts.iter().all(|a| !a["usage"].is_null()));
     app.refresh_provider("my", true).await.unwrap();
     let settings = app.configuration().unwrap();
     assert_eq!(
@@ -314,7 +315,7 @@ async fn testRefreshPreservesValidSub2APICardsAndWarnsWhenUpstreamMembershipChan
             .imported_account_ids,
         [43, 44]
     );
-    assert_eq!(settings.extra["providerSyncNeeded:my"], false);
+    assert!(!settings.extra.contains_key("providerSyncNeeded:my"));
     assert_eq!(app.accounts().await.unwrap().len(), 2);
 }
 #[tokio::test]
@@ -726,4 +727,31 @@ async fn testSavedCloudflareTokenIsMarkedWithoutBeingReturned() {
     secrets.remove("cloudflare-api-token").unwrap();
     app.save_tunnel_configuration(&config).await.unwrap();
     assert_eq!(cloudflared()["hasAPIToken"], false);
+}
+
+#[tokio::test]
+async fn deleted_sub2api_provider_stays_removed_until_explicit_sync() {
+    let (_dir, app, _) = fixture();
+    let calls = Arc::new(Mutex::new(vec![]));
+    let server = upstream(Arc::new(Mutex::new(vec![42, 43])), calls.clone()).await;
+    config(&app, &[("my", &server.base)], "my");
+    app.save_provider(provider("my")).await.unwrap();
+    app.refresh_provider("my", true).await.unwrap();
+    for account in app.accounts().await.unwrap() {
+        app.delete_account(&account.id).await.unwrap();
+    }
+    calls.lock().unwrap().clear();
+    app.refresh_all().await.unwrap();
+    app.refresh_recurring(0).await.unwrap();
+    app.refresh_recurring(1).await.unwrap();
+    assert!(calls.lock().unwrap().is_empty());
+    assert!(app.accounts().await.unwrap().is_empty());
+    // A response from a refresh started before removal cannot resurrect it either.
+    let stale = serde_json::from_value(cached(42, "my", 20.)).unwrap();
+    app.apply_provider_refresh("my", vec![stale], false)
+        .await
+        .unwrap();
+    assert!(app.accounts().await.unwrap().is_empty());
+    app.refresh_provider("my", true).await.unwrap();
+    assert_eq!(app.accounts().await.unwrap().len(), 2);
 }
