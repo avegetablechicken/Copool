@@ -42,6 +42,16 @@ impl Account {
             .filter(|s| !s.is_empty())
             .unwrap_or("--")
     }
+    /// The card's email: Sub2api's name for the account stands in until its
+    /// usage reports one.
+    fn shown_email(&self) -> Option<String> {
+        [self.email.as_deref(), Some(self.name.as_str())]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .find(|s| !s.is_empty())
+            .map(str::to_owned)
+    }
     pub fn summary(&self) -> AccountSummary {
         AccountSummary {
             display_status: "list".into(),
@@ -52,8 +62,8 @@ impl Account {
             }
             .into(),
             id: self.card_id(),
-            label: self.display_email().into(),
-            email: self.email.clone(),
+            label: self.shown_email().unwrap_or_else(|| "--".into()),
+            email: self.shown_email(),
             account_id: self
                 .account_id
                 .clone()

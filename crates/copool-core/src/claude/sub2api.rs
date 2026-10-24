@@ -101,9 +101,6 @@ pub(super) fn summaries(store: &Store, current: Option<&str>) -> Vec<AccountSumm
             let mut summary = a.summary();
             summary.id = p.card_id(a.id);
             summary.is_current = current == Some(p.id.as_str());
-            // Sub2api names Claude accounts freely; the name stands in for an email.
-            summary.email = summary.email.or_else(|| Some(a.name.clone()));
-            summary.label = summary.email.clone().unwrap_or_default();
             summary.proxy_url = p.proxy_url.clone();
             result.push(summary);
         }

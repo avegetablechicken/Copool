@@ -436,3 +436,14 @@ fn testConfiguredProviderDoesNotRequireExplicitConfirmation() {
     assert_eq!(connection.definition.id, "my");
     assert!(connection.configuration.is_enabled());
 }
+#[test]
+fn testSub2APICardWithoutEmailShowsItsAccountName() {
+    let account: sub2api::Account = serde_json::from_value(json!({
+        "id": 10, "name": " team-pool ", "accountType": "oauth", "status": "active",
+        "usageError": "upstream timeout", "providerID": "my"
+    }))
+    .unwrap();
+    let card = account.summary();
+    assert_eq!(card.email.as_deref(), Some("team-pool"));
+    assert_eq!(card.label, "team-pool");
+}
