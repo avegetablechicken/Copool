@@ -1188,8 +1188,8 @@ impl Application {
             return Ok(None);
         }
         let accounts = self.accounts().await?;
-        // A Sub2api provider's cards are current together; any fresh one
-        // will do, as in the Claude pool.
+        // A Sub2api provider's accounts, on its one card, are current together;
+        // any fresh one will do, as in the Claude pool.
         if !accounts.iter().any(|a| {
             a.is_current
                 && a.usage_error.is_none()

@@ -75,8 +75,8 @@ fn testAutoSwitchTargetIsNilWhenCurrentExhaustedButNoAlternative() {
     assert!(auto_switch_target(&[account("current", 100., 100., true)]).is_none());
 }
 #[test]
-fn testAutoSwitchTargetKeepsProviderWhileAnyOfItsCardsHasQuota() {
-    // A Sub2api provider in use: all its cards are current.
+fn testAutoSwitchTargetKeepsProviderWhileAnyOfItsAccountsHasQuota() {
+    // A Sub2api provider in use: all its accounts are current.
     let a = [
         account("spent", 0., 100., true),
         account("left", 50., 0., true),
@@ -85,7 +85,7 @@ fn testAutoSwitchTargetKeepsProviderWhileAnyOfItsCardsHasQuota() {
     assert!(auto_switch_target(&a).is_none());
 }
 #[test]
-fn testAutoSwitchTargetLeavesProviderOnceEveryCardIsExhausted() {
+fn testAutoSwitchTargetLeavesProviderOnceEveryAccountIsExhausted() {
     let mut paused = account("paused", 20., 20., true);
     paused.available = false;
     let a = [
