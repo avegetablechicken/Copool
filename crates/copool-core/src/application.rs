@@ -1188,9 +1188,11 @@ impl Application {
             return Ok(None);
         }
         let accounts = self.accounts().await?;
-        let current = accounts.iter().find(|a| a.is_current);
-        if !current.is_some_and(|a| {
-            a.usage_error.is_none()
+        // A Sub2api provider's cards are current together; any fresh one
+        // will do, as in the Claude pool.
+        if !accounts.iter().any(|a| {
+            a.is_current
+                && a.usage_error.is_none()
                 && a.usage
                     .as_ref()
                     .is_some_and(|u| (0..=900).contains(&(now_unix_seconds() - u.fetched_at)))

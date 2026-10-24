@@ -33,17 +33,19 @@ pub(crate) fn exhausted(a: &AccountSummary) -> bool {
     })
 }
 pub(crate) fn auto_switch_target(accounts: &[AccountSummary]) -> Option<&AccountSummary> {
-    let current = accounts.iter().find(|a| a.is_current)?;
-    if !exhausted(current) {
+    // A Sub2api provider's cards are current together: it is exhausted once
+    // each of its accounts is exhausted or unavailable, as a single account is.
+    let current: Vec<_> = accounts.iter().filter(|a| a.is_current).collect();
+    let spent: Vec<_> = current.iter().filter(|a| exhausted(a)).collect();
+    if spent.is_empty() || current.iter().any(|a| a.available && !exhausted(a)) {
         return None;
     }
+    let floor = spent
+        .iter()
+        .map(|a| remaining_score(a))
+        .fold(f64::MIN, f64::max);
     accounts
         .iter()
-        .filter(|a| {
-            a.id != current.id
-                && a.available
-                && !exhausted(a)
-                && remaining_score(a) > remaining_score(current)
-        })
+        .filter(|a| !a.is_current && a.available && !exhausted(a) && remaining_score(a) > floor)
         .max_by(|a, b| remaining_score(a).total_cmp(&remaining_score(b)))
 }
