@@ -299,6 +299,55 @@ async fn testExplicitAdminURLRoutesLoginAccountsAndQuotaIndependently() {
         check_sub2api(Some(mode)).await;
     }
 }
+#[tokio::test]
+async fn testFailedSub2APIQuotaKeepsLastKnownAccount() {
+    let server = serve(|r| {
+        let value = match r.path.as_str() {
+            "/api/v1/auth/login" => json!({"code":0,"data":{"access_token":"admin-token"}}),
+            "/api/v1/admin/accounts" => json!({"code":0,"data":{"items":[{"id":10,"name":"10","platform":"openai","type":"oauth","status":"active","parent_account_id":null}],"pages":1}}),
+            "/api/v1/admin/openai/accounts/10/quota" => json!({"code":500,"message":"upstream timeout"}),
+            path => panic!("Unexpected request: {path}"),
+        };
+        (StatusCode::OK, value.to_string())
+    })
+    .await;
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("config.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "model_provider = \"my\"\n[model_providers.my]\nbase_url = \"{}/v1\"\n",
+            server.base
+        ),
+    )
+    .unwrap();
+    let provider = Provider {
+        provider_id: "my".into(),
+        username: "admin@example.com".into(),
+        imported_account_ids: vec![10],
+        cached_accounts: vec![json!({
+            "id": 10, "name": "10", "email": "you@example.com", "accountID": "acct-10",
+            "accountType": "oauth", "status": "active", "planType": "plus",
+            "usage": {"fetchedAt": 1787431000, "planType": "plus", "oneWeek": {"usedPercent": 38, "windowSeconds": 604800, "resetAt": 1787810131}},
+            "usageError": null
+        })],
+        ..Default::default()
+    };
+    let secrets = super::MemorySecrets::default();
+    secrets.set(&provider.id, "secret").unwrap();
+    let settings = Providers {
+        confirmed_provider_ids: vec!["my".into()],
+        providers: vec![provider],
+    };
+    let connection = sub2api::connection(&path, &settings, None, &secrets).unwrap();
+    let accounts = connection.fetch_accounts(None, 1787431578).await.unwrap();
+    let a = &accounts[0];
+    assert_eq!(a.display_email(), "you@example.com");
+    assert_eq!(a.account_id.as_deref(), Some("acct-10"));
+    assert_eq!(a.plan_type.as_deref(), Some("plus"));
+    assert_eq!(a.usage.as_ref().unwrap().fetched_at, 1787431000);
+    assert_eq!(a.usage_error.as_deref(), Some("upstream timeout"));
+}
 #[test]
 fn testConfiguredSub2APIIsNotQueriedWhenItIsNotTheDefaultProvider() {
     let d = tempfile::tempdir().unwrap();

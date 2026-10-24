@@ -283,6 +283,14 @@ impl Connection {
         }
         Err("Sub2api account test did not complete".into())
     }
+    /// The account as the provider last cached it.
+    fn cached_account(&self, id: i64) -> Option<Account> {
+        self.configuration
+            .cached_accounts
+            .iter()
+            .filter_map(|raw| serde_json::from_value::<Account>(raw.clone()).ok())
+            .find(|a| a.id == id)
+    }
     async fn fetch_platform_accounts_via(
         &self,
         platform: Platform,
@@ -445,6 +453,16 @@ impl Connection {
                     }
                 }
                 Err(e) => account.usage_error = Some(e),
+            }
+            // An account whose usage failed keeps its last known identity,
+            // plan and usage, with the error, as an imported account does.
+            if account.usage.is_none() {
+                if let Some(last) = self.cached_account(id) {
+                    account.email = account.email.or(last.email);
+                    account.account_id = account.account_id.or(last.account_id);
+                    account.plan_type = account.plan_type.or(last.plan_type);
+                    account.usage = last.usage;
+                }
             }
             accounts.push(account);
         }
