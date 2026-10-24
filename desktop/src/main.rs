@@ -15,6 +15,8 @@ mod backdrop;
 mod native_icons;
 mod panel;
 mod placement;
+#[cfg(all(target_os = "macos", tray_icon_attached_menu))]
+mod tray_menu;
 mod widget_support;
 type App = Arc<Application>;
 
@@ -634,17 +636,21 @@ fn main() {
                 .tooltip("Copool")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click {
+                .on_tray_icon_event(|tray, event| match event {
+                    tauri::tray::TrayIconEvent::Click {
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
                         rect,
                         position,
                         ..
-                    } = event
-                    {
-                        panel::toggle(tray.app_handle(), Some(panel::anchor(rect, position)));
-                    }
+                    } => panel::toggle(tray.app_handle(), Some(panel::anchor(rect, position))),
+                    #[cfg(all(target_os = "macos", tray_icon_attached_menu))]
+                    tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Right,
+                        button_state: tauri::tray::MouseButtonState::Down,
+                        ..
+                    } => tray_menu::show(tray),
+                    _ => {}
                 })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
@@ -679,6 +685,8 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+            #[cfg(all(target_os = "macos", tray_icon_attached_menu))]
+            tray_menu::detach(&tray);
             panel::set_tray(app.handle(), tray);
             Ok(())
         })
