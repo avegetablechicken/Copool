@@ -447,6 +447,8 @@
 "accounts.renewal.title" = "Renouvellement du jeton";
 "accounts.card.say_hi" = "Dire bonjour";
 "accounts.card.say_hi.help" = "Dire bonjour à Claude pour lancer la fenêtre de 5 heures maintenant";
+"accounts.card.say_hi.sent" = "Bonjour envoyé ; en attente de la réponse de Claude";
+"accounts.card.say_hi.received" = "Claude a répondu ; en attente de l’affichage de la fenêtre de 5 heures";
 "accounts.notice.said_hi" = "Bonjour envoyé ; la fenêtre de 5 heures a commencé";
 "error.claude.say_hi_window_not_started" = "Claude a accepté le bonjour, mais la fenêtre de 5 heures n’a pas commencé";
 "accounts.renewal.never" = "Ne jamais renouveler";

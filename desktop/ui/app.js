@@ -60,6 +60,9 @@ const ICONS = {
   plus: '<path d="M11 3v16M3 11h16"/>',
   refresh: '<path d="M18 8a8 8 0 1 0 .4 6M18 3v5h-5"/>',
   "say-hi": '<path d="M3 4h16v11H9l-4 4v-4H3Z"/>',
+  "say-hi-sent":
+    '<path d="M3 4h16v11H9l-4 4v-4H3Z"/><path d="M7.5 9.5h.01M11 9.5h.01M14.5 9.5h.01" stroke-width="2.4" stroke-linecap="round"/>',
+  "say-hi-received": '<path d="M3 4h16v11H9l-4 4v-4H3Z"/><path d="m7.5 9.5 2.5 2.5 4.5-4.5"/>',
   renewal:
     '<path d="M18.6 12.5A7.7 7.7 0 1 1 16.3 5.4M17 2.4v3.8h-3.8"/><path d="M11 7.2V11l2.6 1.8"/>',
   "chevron-up": '<path d="m5 14 6-6 6 6"/>',
@@ -604,6 +607,7 @@ function accountControls(account, full, view, grouped = false) {
   refresh.setAttribute("aria-label", `${tr("common.refresh_usage")} ${full}`);
   refreshTooltip(refresh, tr("common.refresh_usage"), () => account.nextRefreshAt);
   refresh.classList.toggle("spinning", refreshing);
+  refresh.disabled = accountsController.sayingHiIds.has(account.id);
   actions.append(refresh);
   if (!account.isCurrent) {
     const control = button("", "switch", "icon-btn card-switch", () =>
@@ -627,21 +631,25 @@ function fiveHourIdle(account) {
 /// has not shown: the usage Claude reports shows it from tens of seconds to
 /// minutes later.
 const SAY_HI_LOOKS = [10, 30, 90, 180];
-/// Cards that said hi and whose 5h window has yet to show.
-const sayingHi = new Set();
+/// Cards saying hi, by how far: "sent" until Claude replies, then
+/// "received" while their 5h window has yet to show.
+const sayingHi = new Map();
 /// Says hi with the account, which starts its 5h window, then refreshes its
-/// card over the next minutes until the window shows. Each refresh
-/// shows as one, and nothing between them; a window still not shown at the
-/// last is reported.
+/// card over the next minutes until the window shows. Its say hi button
+/// shows the hi sent, then the reply received; each refresh shows as one,
+/// and nothing between them; a window still not shown at the last is
+/// reported.
 async function sayHi(account) {
   const controller = accountsController;
   const shown = () => {
     const card = controller.accounts.find((a) => a.id === account.id);
     return !card || card.usage?.fiveHour?.resetAt > Date.now() / 1000;
   };
-  if (!(await controller.sayHi(account.id))) return;
-  sayingHi.add(account.id);
+  if (sayingHi.has(account.id)) return;
+  sayingHi.set(account.id, "sent");
   try {
+    if (!(await controller.sayHi(account.id))) return;
+    sayingHi.set(account.id, "received");
     let waited = 0;
     for (const at of SAY_HI_LOOKS) {
       if (shown()) break;
@@ -659,15 +667,23 @@ async function sayHi(account) {
 /// Says hi with the account; shown, as the proxy button, only on the
 /// focused card.
 function sayHiButton(account, full) {
-  const control = button("", "say-hi", "icon-btn card-say-hi", () =>
-    sayHi(account)
-      .catch((error) => notice(error, true))
-      .finally(() => refreshView().catch((error) => notice(error, true))),
+  const phase = sayingHi.get(account.id);
+  const control = button(
+    "",
+    phase ? `say-hi-${phase}` : "say-hi",
+    `icon-btn card-say-hi${phase ? ` ${phase}` : ""}`,
+    () =>
+      sayHi(account)
+        .catch((error) => notice(error, true))
+        .finally(() => refreshView().catch((error) => notice(error, true))),
   );
-  control.title = tr("accounts.card.say_hi.help");
-  control.setAttribute("aria-label", `${tr("accounts.card.say_hi")} ${full}`);
+  control.title = tr(phase ? `accounts.card.say_hi.${phase}` : "accounts.card.say_hi.help");
+  control.setAttribute(
+    "aria-label",
+    `${phase ? control.title : tr("accounts.card.say_hi")} ${full}`,
+  );
   control.disabled =
-    sayingHi.has(account.id) ||
+    !!phase ||
     accountsController.refreshingIds.has(account.id) ||
     accountsController.remoteRefreshingIds.has(account.id);
   return control;
@@ -762,6 +778,7 @@ function providerControls(group, title, current) {
     nextRefreshAt(group.accounts),
   );
   refresh.classList.toggle("spinning", refreshing);
+  refresh.disabled = ids.some((id) => accountsController.sayingHiIds.has(id));
   actions.append(refresh);
   if (!current) {
     const target = switchTarget(group);
@@ -970,6 +987,8 @@ function renderAccounts(accounts) {
     preferences?.accountOrder?.[pool],
     [...accountsController.refreshingIds],
     [...accountsController.remoteRefreshingIds],
+    [...accountsController.sayingHiIds],
+    [...sayingHi],
     switchingId,
     accountsController.adding,
     accountsController.authorizing,

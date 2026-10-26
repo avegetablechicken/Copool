@@ -447,6 +447,8 @@
 "accounts.renewal.title" = "Token-Erneuerung";
 "accounts.card.say_hi" = "Hallo sagen";
 "accounts.card.say_hi.help" = "Claude Hallo sagen, um das 5-Stunden-Fenster jetzt zu starten";
+"accounts.card.say_hi.sent" = "Hallo gesendet; warte auf Claudes Antwort";
+"accounts.card.say_hi.received" = "Claude hat geantwortet; warte, bis das 5-Stunden-Fenster erscheint";
 "accounts.notice.said_hi" = "Hallo gesagt; das 5-Stunden-Fenster hat begonnen";
 "error.claude.say_hi_window_not_started" = "Claude hat das Hallo angenommen, aber das 5-Stunden-Fenster hat nicht begonnen";
 "accounts.renewal.never" = "Nie erneuern";

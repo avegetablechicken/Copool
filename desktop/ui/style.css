@@ -711,6 +711,27 @@ main > section.page-leaving {
   pointer-events: auto;
 }
 
+/* A hi on its way, then answered, shows on its card until the 5h window does. */
+.account .card-say-hi.sent,
+.account .card-say-hi.received {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.card-say-hi.sent .icon {
+  animation: pulse 1200ms ease-in-out infinite;
+}
+
+.card-say-hi.received {
+  color: var(--green);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .icon-btn.card-proxy.proxy-muted {
   color: var(--secondary);
 }

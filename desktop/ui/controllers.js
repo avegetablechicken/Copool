@@ -104,6 +104,7 @@
       this.manualRefreshing = false;
       this.refreshingIds = new Set();
       this.remoteRefreshingIds = new Set();
+      this.sayingHiIds = new Set();
       this.pendingGeneration = 0;
       this.loadGeneration = 0;
       this.loginGeneration = 0;
@@ -120,7 +121,8 @@
       return (
         this.manualRefreshing ||
         this.refreshingIds.size > 0 ||
-        this.remoteRefreshingIds.size > 0
+        this.remoteRefreshingIds.size > 0 ||
+        this.sayingHiIds.size > 0
       );
     }
     get spinner() {
@@ -183,7 +185,8 @@
           ? this.refreshing
           : this.manualRefreshing ||
             this.refreshingIds.has(id) ||
-            this.remoteRefreshingIds.has(id);
+            this.remoteRefreshingIds.has(id) ||
+            this.sayingHiIds.has(id);
       if (busy) return false;
       if (id === null) this.manualRefreshing = true;
       else this.refreshingIds.add(id);
@@ -205,22 +208,23 @@
       }
     }
     /// Claude only: says hi with an account, which starts its five-hour
-    /// window; the card shows as refreshing meanwhile.
+    /// window; the card cannot refresh until Claude replies.
     async sayHi(id) {
       if (
         this.manualRefreshing ||
         this.refreshingIds.has(id) ||
-        this.remoteRefreshingIds.has(id)
+        this.remoteRefreshingIds.has(id) ||
+        this.sayingHiIds.has(id)
       )
         return false;
-      this.refreshingIds.add(id);
+      this.sayingHiIds.add(id);
       this.onUpdate();
       try {
         await this.invoke("say_hi", { id });
         return true;
       } finally {
         await this.load().catch(() => {});
-        this.refreshingIds.delete(id);
+        this.sayingHiIds.delete(id);
         this.onUpdate();
       }
     }
@@ -230,7 +234,10 @@
       const busy =
         this.manualRefreshing ||
         ids.some(
-          (id) => this.refreshingIds.has(id) || this.remoteRefreshingIds.has(id),
+          (id) =>
+            this.refreshingIds.has(id) ||
+            this.remoteRefreshingIds.has(id) ||
+            this.sayingHiIds.has(id),
         );
       if (busy) return false;
       for (const id of ids) this.refreshingIds.add(id);

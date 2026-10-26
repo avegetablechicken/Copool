@@ -77,18 +77,24 @@ test("the card footer no longer shows the token expiry; the renewal button does"
 });
 
 
-test("saying hi goes to the Claude pool, shows the card refreshing and reloads it", async () => {
+test("saying hi goes to the Claude pool, locks the card's refresh without spinning it and reloads it", async () => {
   const { model, calls } = fixture("claude");
-  let refreshing;
-  model.onUpdate = () => (refreshing ??= model.refreshingIds.has("a"));
+  let locked;
+  model.onUpdate = () => (locked ??= [model.sayingHiIds.has("a"), model.refreshingIds.has("a")]);
   assert.equal(await model.sayHi("a"), true);
-  assert.equal(refreshing, true);
-  assert.equal(model.refreshingIds.has("a"), false);
+  assert.deepEqual(locked, [true, false]);
+  assert.equal(model.sayingHiIds.has("a"), false);
   const at = calls.findIndex(([name]) => name === "claude_say_hi");
   assert.deepEqual(calls[at], ["claude_say_hi", { id: "a" }]);
   assert(calls.slice(at + 1).some(([name]) => name === "claude_accounts"), "the cards reload");
   const locales = fs.readFileSync(path.join(__dirname, "../ui/locales.js"), "utf8");
-  for (const key of ["accounts.card.say_hi", "accounts.card.say_hi.help", "accounts.notice.said_hi"])
+  for (const key of [
+    "accounts.card.say_hi",
+    "accounts.card.say_hi.help",
+    "accounts.card.say_hi.sent",
+    "accounts.card.say_hi.received",
+    "accounts.notice.said_hi",
+  ])
     assert.equal(locales.split(`"${key}"`).length - 1, 11, `${key} in every locale`);
 });
 
@@ -117,6 +123,7 @@ test("after a hi the card is refreshed again only until its 5h window shows", as
   ]) {
     const waits = [];
     const notices = [];
+    const phases = [];
     let refreshes = 0;
     const card = { id: "a", usage: { fiveHour: { resetAt: null } } };
     const show = () => {
@@ -124,7 +131,7 @@ test("after a hi the card is refreshed again only until its 5h window shows", as
     };
     const accountsController = {
       accounts: [card],
-      sayHi: async () => (show(), true),
+      sayHi: async () => (phases.push(scope.pending.get("a")), show(), true),
       refresh: async () => (refreshes++, show(), true),
     };
     const scope = {
@@ -132,7 +139,7 @@ test("after a hi the card is refreshed again only until its 5h window shows", as
       Set,
       Promise,
       accountsController,
-      refreshView: async () => {},
+      refreshView: async () => phases.push(scope.pending.get("a")),
       setTimeout: (resolve, ms) => (waits.push(ms), resolve()),
       tr: (key) => key,
       notice: (message, error = false) => notices.push([message, error]),
@@ -144,5 +151,6 @@ test("after a hi the card is refreshed again only until its 5h window shows", as
     assert.deepEqual(notices, expected.notices);
     assert.deepEqual(waits, [10000, 20000, 60000, 90000].slice(0, refreshes));
     assert.equal(scope.pending.size, 0);
+    assert.deepEqual(phases, ["sent", ...Array(refreshes).fill("received")]);
   }
 });

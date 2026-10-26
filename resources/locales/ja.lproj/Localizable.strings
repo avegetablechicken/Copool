@@ -465,6 +465,8 @@
 "accounts.renewal.title" = "トークンの更新";
 "accounts.card.say_hi" = "Say hi";
 "accounts.card.say_hi.help" = "Claude に挨拶して 5 時間枠を今すぐ開始";
+"accounts.card.say_hi.sent" = "挨拶を送信しました。Claude の返信を待っています";
+"accounts.card.say_hi.received" = "Claude から返信がありました。5 時間枠の表示を待っています";
 "accounts.notice.said_hi" = "挨拶しました。5 時間枠が始まりました";
 "error.claude.say_hi_window_not_started" = "Claude は挨拶を受け付けましたが、5 時間枠は始まっていません";
 "accounts.renewal.never" = "更新しない";

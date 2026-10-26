@@ -465,6 +465,8 @@
 "accounts.renewal.title" = "토큰 갱신";
 "accounts.card.say_hi" = "Say hi";
 "accounts.card.say_hi.help" = "Claude에게 인사해 5시간 창을 지금 시작";
+"accounts.card.say_hi.sent" = "인사를 보냈습니다. Claude의 답장을 기다리는 중";
+"accounts.card.say_hi.received" = "Claude가 답장했습니다. 5시간 창이 표시되기를 기다리는 중";
 "accounts.notice.said_hi" = "인사했습니다. 5시간 창이 시작되었습니다";
 "error.claude.say_hi_window_not_started" = "Claude가 인사를 받았지만 5시간 창이 시작되지 않았습니다";
 "accounts.renewal.never" = "갱신 안 함";

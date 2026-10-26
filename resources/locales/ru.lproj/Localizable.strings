@@ -447,6 +447,8 @@
 "accounts.renewal.title" = "Обновление токена";
 "accounts.card.say_hi" = "Поздороваться";
 "accounts.card.say_hi.help" = "Поздороваться с Claude, чтобы сразу начать 5-часовое окно";
+"accounts.card.say_hi.sent" = "Приветствие отправлено; ждём ответа Claude";
+"accounts.card.say_hi.received" = "Claude ответил; ждём, когда появится 5-часовое окно";
 "accounts.notice.said_hi" = "Приветствие отправлено; 5-часовое окно началось";
 "error.claude.say_hi_window_not_started" = "Claude принял приветствие, но 5-часовое окно не началось";
 "accounts.renewal.never" = "Не обновлять";

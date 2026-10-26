@@ -447,6 +447,8 @@
 "accounts.renewal.title" = "Renovación del token";
 "accounts.card.say_hi" = "Saludar";
 "accounts.card.say_hi.help" = "Saluda a Claude para iniciar ya la ventana de 5 horas";
+"accounts.card.say_hi.sent" = "Saludo enviado; esperando la respuesta de Claude";
+"accounts.card.say_hi.received" = "Claude respondió; esperando a que aparezca la ventana de 5 horas";
 "accounts.notice.said_hi" = "Saludo enviado; la ventana de 5 horas ha comenzado";
 "error.claude.say_hi_window_not_started" = "Claude aceptó el saludo, pero la ventana de 5 horas no ha comenzado";
 "accounts.renewal.never" = "No renovar nunca";
