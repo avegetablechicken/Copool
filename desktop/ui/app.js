@@ -627,9 +627,9 @@ function fiveHourIdle(account) {
   if (!account.usage) return false;
   return !(account.usage.fiveHour?.resetAt > Date.now() / 1000);
 }
-/// When after a hi its card is refreshed, in seconds, while its 5h window
-/// has not shown: the usage Claude reports shows it from tens of seconds to
-/// minutes later.
+/// When after Claude's reply its card is refreshed, in seconds, while its
+/// 5h window has not shown: the usage Claude reports shows it from tens of
+/// seconds to minutes later.
 const SAY_HI_LOOKS = [10, 30, 90, 180];
 /// Cards saying hi, by how far: "sent" until Claude replies, then
 /// "received" while their 5h window has yet to show.
@@ -637,8 +637,8 @@ const sayingHi = new Map();
 /// Says hi with the account, which starts its 5h window, then refreshes its
 /// card over the next minutes until the window shows. Its say hi button
 /// shows the hi sent, then the reply received; each refresh shows as one,
-/// and nothing between them; a window still not shown at the last is
-/// reported.
+/// and nothing between them. A window shown, by these refreshes or any
+/// other, is reported at once; one still not shown at the last, then.
 async function sayHi(account) {
   const controller = accountsController;
   const shown = () => {
@@ -650,12 +650,17 @@ async function sayHi(account) {
   try {
     if (!(await controller.sayHi(account.id))) return;
     sayingHi.set(account.id, "received");
-    let waited = 0;
+    const replied = Date.now();
     for (const at of SAY_HI_LOOKS) {
       if (shown()) break;
       await refreshView();
-      await new Promise((resolve) => setTimeout(resolve, (at - waited) * 1000));
-      waited = at;
+      // Until the next refresh, the window is looked for each second.
+      const due = replied + at * 1000;
+      while (!shown() && Date.now() < due)
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(1000, due - Date.now())),
+        );
+      if (shown()) break;
       await controller.refresh(account.id);
     }
     if (shown()) notice(tr("accounts.notice.said_hi"));

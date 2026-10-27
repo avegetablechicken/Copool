@@ -116,18 +116,22 @@ test("say hi shows only while a known 5h window has yet to start", () => {
 test("after a hi the card is refreshed again only until its 5h window shows", async () => {
   const start = source.indexOf("const SAY_HI_LOOKS =");
   const end = source.indexOf("/// Says hi with the account; shown");
-  for (const [shownAfter, expected] of [
-    [0, { refreshes: 0, notices: [["accounts.notice.said_hi", false]] }],
-    [2, { refreshes: 2, notices: [["accounts.notice.said_hi", false]] }],
-    [Infinity, { refreshes: 4, notices: [["error.claude.say_hi_window_not_started", true]] }],
+  // [refreshes before the window shows, or the second another refresh shows it]
+  for (const [shownAfter, shownAt, expected] of [
+    [0, Infinity, { refreshes: 0, slept: 0, notices: [["accounts.notice.said_hi", false]] }],
+    [2, Infinity, { refreshes: 2, slept: 30000, notices: [["accounts.notice.said_hi", false]] }],
+    [Infinity, 15, { refreshes: 1, slept: 15000, notices: [["accounts.notice.said_hi", false]] }],
+    [Infinity, Infinity, { refreshes: 4, slept: 180000, notices: [["error.claude.say_hi_window_not_started", true]] }],
   ]) {
-    const waits = [];
     const notices = [];
     const phases = [];
     let refreshes = 0;
+    let clock = Date.now();
+    const replied = clock;
     const card = { id: "a", usage: { fiveHour: { resetAt: null } } };
     const show = () => {
-      if (refreshes >= shownAfter) card.usage.fiveHour.resetAt = Date.now() / 1000 + 600;
+      if (refreshes >= shownAfter || clock - replied >= shownAt * 1000)
+        card.usage.fiveHour.resetAt = clock / 1000 + 600;
     };
     const accountsController = {
       accounts: [card],
@@ -135,12 +139,14 @@ test("after a hi the card is refreshed again only until its 5h window shows", as
       refresh: async () => (refreshes++, show(), true),
     };
     const scope = {
-      Date,
+      Date: { now: () => clock },
+      Math,
       Set,
+      Map,
       Promise,
       accountsController,
       refreshView: async () => phases.push(scope.pending.get("a")),
-      setTimeout: (resolve, ms) => (waits.push(ms), resolve()),
+      setTimeout: (resolve, ms) => ((clock += ms), show(), resolve()),
       tr: (key) => key,
       notice: (message, error = false) => notices.push([message, error]),
     };
@@ -148,9 +154,10 @@ test("after a hi the card is refreshed again only until its 5h window shows", as
     vm.runInContext(`${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`, scope);
     await scope.run({ id: "a" });
     assert.equal(refreshes, expected.refreshes);
+    assert.equal(clock - replied, expected.slept);
     assert.deepEqual(notices, expected.notices);
-    assert.deepEqual(waits, [10000, 20000, 60000, 90000].slice(0, refreshes));
     assert.equal(scope.pending.size, 0);
-    assert.deepEqual(phases, ["sent", ...Array(refreshes).fill("received")]);
+    assert.equal(phases[0], "sent");
+    assert(phases.slice(1).every((phase) => phase === "received"));
   }
 });
