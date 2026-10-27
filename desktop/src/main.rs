@@ -15,8 +15,8 @@ mod backdrop;
 mod native_icons;
 mod panel;
 mod placement;
-#[cfg(all(target_os = "macos", tray_icon_attached_menu))]
-mod tray_menu;
+#[cfg(target_os = "macos")]
+mod status_item;
 mod widget_support;
 type App = Arc<Application>;
 
@@ -649,7 +649,7 @@ fn main() {
                         button: tauri::tray::MouseButton::Right,
                         button_state: tauri::tray::MouseButtonState::Down,
                         ..
-                    } => tray_menu::show(tray),
+                    } => status_item::show_menu(),
                     _ => {}
                 })
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -685,8 +685,24 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
-            #[cfg(all(target_os = "macos", tray_icon_attached_menu))]
-            tray_menu::detach(&tray);
+            #[cfg(target_os = "macos")]
+            {
+                let (press, begin, end) = (
+                    app.handle().clone(),
+                    app.handle().clone(),
+                    app.handle().clone(),
+                );
+                status_item::install(
+                    &tray,
+                    status_item::Handlers {
+                        press: Box::new(move || panel::toggle(&press, panel::tray_anchor(&press))),
+                        begin: Box::new(move |focus| {
+                            panel::present(&begin, panel::tray_anchor(&begin), focus)
+                        }),
+                        end: Box::new(move || panel::hide(&end)),
+                    },
+                );
+            }
             panel::set_tray(app.handle(), tray);
             Ok(())
         })

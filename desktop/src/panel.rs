@@ -70,7 +70,7 @@ pub fn anchor(rect: tauri::Rect, position: tauri::PhysicalPosition<f64>) -> Rect
 }
 
 /// The tray icon's current rectangle, when the platform reports one.
-fn tray_anchor(app: &AppHandle) -> Option<Rect> {
+pub fn tray_anchor(app: &AppHandle) -> Option<Rect> {
     let tray = state(app).tray.lock().unwrap().clone()?;
     let rect = tray.rect().ok().flatten()?;
     Some(anchor(rect, tauri::PhysicalPosition::new(0.0, 0.0))).filter(|r| r.w > 0.0)
@@ -79,6 +79,11 @@ fn tray_anchor(app: &AppHandle) -> Option<Rect> {
 /// Shows the panel under `anchor`; without one, where it was last shown, or
 /// under the tray icon the first time.
 pub fn show(app: &AppHandle, anchor: Option<Rect>) {
+    present(app, anchor, true);
+}
+
+/// Shows the panel as `show`, taking focus from the active app only if `focus`.
+pub fn present(app: &AppHandle, anchor: Option<Rect>, focus: bool) {
     let panel = state(app);
     panel.generation.fetch_add(1, Ordering::SeqCst);
     let known = panel.anchor.lock().unwrap().is_some();
@@ -90,9 +95,30 @@ pub fn show(app: &AppHandle, anchor: Option<Rect>) {
     };
     let hidden = !w.is_visible().unwrap_or(false);
     layout(&w, &panel, hidden);
-    let _ = w.show();
-    let _ = w.set_focus();
+    if focus {
+        let _ = w.show();
+        let _ = w.set_focus();
+    } else {
+        order_front(&w);
+    }
     let _ = w.emit("panel-shown", ());
+}
+
+/// Shows the panel without making it the key window, which would end keyboard
+/// navigation of the menu bar even while the app stays inactive.
+fn order_front(w: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    if let Ok(ns_window) = w.ns_window() {
+        // SAFETY: Tauri returns the panel's NSWindow, used here on the main thread.
+        let () = unsafe {
+            objc2::msg_send![
+                &*ns_window.cast::<objc2::runtime::AnyObject>(),
+                orderFrontRegardless
+            ]
+        };
+        return;
+    }
+    let _ = w.show();
 }
 
 pub fn hide(app: &AppHandle) {
@@ -100,6 +126,8 @@ pub fn hide(app: &AppHandle) {
         let _ = w.hide();
         let _ = w.emit("panel-hidden", ());
     }
+    #[cfg(target_os = "macos")]
+    crate::status_item::end_session(app);
 }
 
 pub fn toggle(app: &AppHandle, anchor: Option<Rect>) {
