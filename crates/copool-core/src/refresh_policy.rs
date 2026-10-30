@@ -98,7 +98,10 @@ pub(crate) fn target_ids(accounts: &[AccountSummary], now: i64, lead: i64) -> Ve
             [&u.five_hour, &u.one_week]
                 .into_iter()
                 .flatten()
-                .filter_map(|w| w.reset_at)
+                .filter_map(|w| {
+                    w.reset_at
+                        .map(|reset| reset.saturating_sub(w.clock_offset_seconds.unwrap_or(0)))
+                })
                 .any(|reset| reset.abs_diff(now) <= lead.max(0) as u64)
         });
         let failed = account

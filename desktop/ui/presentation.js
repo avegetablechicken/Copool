@@ -122,9 +122,9 @@
   /// Time left until a reset as OpenQuota shows it: days and hours, hours
   /// and minutes, or minutes (rounded up), localized; soon within five
   /// minutes or once past; null without a reset time.
-  function resetCountdown(epoch, now, locale = "en") {
+  function resetCountdown(epoch, now, locale = "en", clockOffsetSeconds = 0) {
     if (!Number.isFinite(epoch)) return null;
-    const seconds = epoch - now;
+    const seconds = epoch - (now + (clockOffsetSeconds ?? 0));
     if (seconds <= 5 * 60) return { soon: true, remaining: null };
     const minutes = Math.ceil(seconds / 60),
       days = Math.floor(minutes / 1440),
@@ -200,6 +200,7 @@
       secondaryPercent: mode === "remaining" ? used : 100 - used,
       reset: window?.resetAt != null ? formatDate(window.resetAt) : "--",
       resetAt: window?.resetAt ?? null,
+      clockOffsetSeconds: window?.clockOffsetSeconds ?? null,
     };
   }
   function card(account, collapsed = false, mode = "used", formatDate) {

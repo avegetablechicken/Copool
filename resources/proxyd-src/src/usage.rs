@@ -282,6 +282,7 @@ pub(crate) fn pick_nearest_window(
 
 fn to_usage_window(window: UsageWindowRaw) -> UsageWindow {
     UsageWindow {
+        clock_offset_seconds: None,
         used_percent: window.used_percent,
         window_seconds: window.limit_window_seconds,
         reset_at: Some(window.reset_at).filter(|at| *at > 0),

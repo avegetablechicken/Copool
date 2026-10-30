@@ -4463,11 +4463,13 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
                 fetched_at: 0,
                 plan_type: None,
                 five_hour: five_hour_used.map(|used_percent| UsageWindow {
+                    clock_offset_seconds: None,
                     used_percent,
                     window_seconds: 1,
                     reset_at: None,
                 }),
                 one_week: one_week_used.map(|used_percent| UsageWindow {
+                    clock_offset_seconds: None,
                     used_percent,
                     window_seconds: 1,
                     reset_at: None,

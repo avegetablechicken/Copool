@@ -153,6 +153,9 @@ impl UsageSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
+    /// Server UTC minus local UTC when the usage response arrived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_offset_seconds: Option<i64>,
     pub used_percent: f64,
     pub window_seconds: i64,
     pub reset_at: Option<i64>,

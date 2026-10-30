@@ -1894,11 +1894,13 @@ mod tests {
             fetched_at: now_unix_seconds(),
             plan_type: None,
             five_hour: Some(UsageWindow {
+                clock_offset_seconds: None,
                 used_percent: 10.0,
                 window_seconds: 18000,
                 reset_at: None,
             }),
             one_week: Some(UsageWindow {
+                clock_offset_seconds: None,
                 used_percent: 20.0,
                 window_seconds: 604800,
                 reset_at: None,

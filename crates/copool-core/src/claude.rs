@@ -301,7 +301,7 @@ fn settings_are_official(location: &Location) -> bool {
         .is_ok_and(|settings| provider_config::overrides(&settings).is_empty())
 }
 
-type UsageResponse = (u16, Value, Option<u64>);
+type UsageResponse = (u16, Value, Option<u64>, Option<i64>);
 pub(crate) trait Network: Send + Sync {
     /// The HTTP status and body of the OAuth usage endpoint, with the seconds
     /// of a `Retry-After` header.
@@ -388,8 +388,13 @@ impl Network for Http {
                 .get(reqwest::header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.trim().parse().ok());
+            let clock_offset = response
+                .headers()
+                .get(reqwest::header::DATE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| clock_offset_seconds(value, now_unix_seconds()));
             let body = response.json().await.unwrap_or(Value::Null);
-            Ok((status, body, retry_after))
+            Ok((status, body, retry_after, clock_offset))
         })
     }
     fn refresh<'a>(
@@ -971,6 +976,11 @@ fn number(value: &Value) -> Option<f64> {
         .as_f64()
         .or_else(|| value.as_str().and_then(|v| v.parse().ok()))
 }
+fn clock_offset_seconds(value: &str, now: i64) -> Option<i64> {
+    let server = chrono::DateTime::parse_from_rfc2822(value.trim()).ok()?;
+    server.timestamp().checked_sub(now)
+}
+
 fn reset_at(value: &Value) -> Option<i64> {
     if let Some(text) = value.as_str() {
         return chrono::DateTime::parse_from_rfc3339(text.trim())
@@ -998,6 +1008,7 @@ fn usage_snapshot(body: &Value, plan: Option<String>, now: i64) -> Result<UsageS
         body.get(key)
             .filter(|w| w.is_object())
             .map(|w| UsageWindow {
+                clock_offset_seconds: None,
                 used_percent: number(&w["utilization"]).unwrap_or(0.0).clamp(0.0, 100.0),
                 window_seconds: seconds,
                 reset_at: reset_at(&w["resets_at"]),
@@ -2353,7 +2364,7 @@ impl Application {
                     profiled = Some(named);
                 }
                 let token = text(&oauth["accessToken"]).unwrap_or_default();
-                let (mut status, mut body, mut after) =
+                let (mut status, mut body, mut after, mut clock_offset) =
                     self.claude_usage(&*network, api, &token, proxy).await?;
                 if status == 401 {
                     let tokens = refresh(&oauth).await?;
@@ -2361,7 +2372,7 @@ impl Application {
                     renewed = true;
                     renewals += 1;
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
-                    (status, body, after) =
+                    (status, body, after, clock_offset) =
                         self.claude_usage(&*network, api, &token, proxy).await?;
                 }
                 retry_after = after.filter(|_| status == 429);
@@ -2390,6 +2401,12 @@ impl Application {
                 match status {
                     200..=299 => {
                         let mut usage = usage_snapshot(&body, plan(&oauth), now_unix_seconds())?;
+                        for window in [&mut usage.five_hour, &mut usage.one_week]
+                            .into_iter()
+                            .flatten()
+                        {
+                            window.clock_offset_seconds = clock_offset;
+                        }
                         // Extra usage is paid from the organization's prepaid
                         // balance, asked for through the same proxy.
                         let org = text(
@@ -2936,6 +2953,50 @@ mod tests {
         assert_eq!(credits(&extra, json!({"amount":-1})), None);
         assert_eq!(credits(&extra, Value::Null), None);
         assert_eq!(credits(&Value::Null, held(9000)), None);
+    }
+
+    #[test]
+    fn server_clock_offsets_respect_time_zones() {
+        let now = reset_at(&json!("2026-10-30T12:00:00Z")).unwrap();
+        for date in [
+            "Fri, 30 Oct 2026 18:00:00 GMT",
+            "Sat, 31 Oct 2026 02:00:00 +0800",
+        ] {
+            assert_eq!(clock_offset_seconds(date, now), Some(6 * 3600));
+        }
+        assert_eq!(
+            clock_offset_seconds("Fri, 30 Oct 2026 06:00:00 GMT", now),
+            Some(-6 * 3600)
+        );
+        assert_eq!(clock_offset_seconds("invalid", now), None);
+        assert_eq!(reset_at(&json!("2026-10-30T20:00:00+08:00")), Some(now));
+    }
+
+    #[tokio::test]
+    async fn usage_clock_offset_survives_storage_without_changing_reset_dates() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_accounts().await.unwrap()[0].id.clone();
+        for offset in [Some(6 * 3600), Some(-6 * 3600), None] {
+            *fake.usage_clock_offset.lock().unwrap() = offset;
+            app.claude_refresh_usage(&id).await.unwrap();
+            let stored = app.claude_load().unwrap();
+            let usage = stored.accounts[0].usage.as_ref().unwrap();
+            assert_eq!(
+                usage.five_hour.as_ref().unwrap().clock_offset_seconds,
+                offset
+            );
+            assert_eq!(
+                usage.one_week.as_ref().unwrap().clock_offset_seconds,
+                offset
+            );
+            assert_eq!(
+                usage.five_hour.as_ref().unwrap().reset_at,
+                reset_at(&json!("2099-01-01T00:00:00Z"))
+            );
+        }
     }
 
     #[tokio::test]
@@ -4429,6 +4490,7 @@ mod tests {
     pub(super) struct Fake {
         usage: Mutex<Vec<(u16, Value)>>,
         usage_retry_after: Mutex<Option<u64>>,
+        usage_clock_offset: Mutex<Option<i64>>,
         refreshed: Mutex<Vec<String>>,
         refresh_scopes: Mutex<Vec<String>>,
         profile_proxies: Mutex<Vec<String>>,
@@ -4476,7 +4538,12 @@ mod tests {
                 } else {
                     queued.remove(0)
                 };
-                Ok((status, body, *self.usage_retry_after.lock().unwrap()))
+                Ok((
+                    status,
+                    body,
+                    *self.usage_retry_after.lock().unwrap(),
+                    *self.usage_clock_offset.lock().unwrap(),
+                ))
             })
         }
         fn refresh<'a>(

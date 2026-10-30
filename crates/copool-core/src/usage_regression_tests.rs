@@ -200,6 +200,7 @@ fn windows_of_other_durations_are_not_shown() {
 #[test]
 fn stored_windows_of_other_durations_are_not_shown() {
     let window = |window_seconds| crate::models::UsageWindow {
+        clock_offset_seconds: None,
         used_percent: 63.,
         window_seconds,
         reset_at: Some(1),
@@ -244,11 +245,13 @@ fn a_missing_five_hour_window_counts_as_no_five_hour_limit() {
         fetched_at: 0,
         plan_type: None,
         five_hour: five.map(|used_percent| crate::models::UsageWindow {
+            clock_offset_seconds: None,
             used_percent,
             window_seconds: 18000,
             reset_at: None,
         }),
         one_week: week.map(|used_percent| crate::models::UsageWindow {
+            clock_offset_seconds: None,
             used_percent,
             window_seconds: 604800,
             reset_at: None,

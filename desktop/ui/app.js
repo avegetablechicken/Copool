@@ -349,7 +349,7 @@ function resetLabel(view, mode) {
     return tr("accounts.window.reset_unavailable");
   if (mode === "exact")
     return tr("accounts.window.reset_at_format", view.reset);
-  const countdown = P.resetCountdown(view.resetAt, Date.now() / 1000, locale);
+  const countdown = P.resetCountdown(view.resetAt, Date.now() / 1000, locale, view.clockOffsetSeconds);
   return countdown.soon
     ? tr("accounts.window.resets_soon")
     : tr("accounts.window.resets_in_format", countdown.remaining);

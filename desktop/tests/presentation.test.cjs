@@ -366,3 +366,15 @@ test("Dragged order first, then cards not yet ordered as ranked", () => {
     ["b", "c", "a", "d"],
   );
 });
+
+test("Server UTC corrects either direction of local clock skew", () => {
+  const now = Date.parse("2026-10-30T18:52:00Z") / 1000;
+  const reset = Date.parse("2026-10-31T07:40:00+08:00") / 1000;
+  for (const offset of [6 * 3600, -6 * 3600, 0]) {
+    const view = P.card({ usage: { fiveHour: { usedPercent: 2, resetAt: reset, clockOffsetSeconds: offset } } }).fiveHour;
+    assert.equal(view.resetAt, reset);
+    assert.equal(P.resetCountdown(view.resetAt, now - offset, "en", view.clockOffsetSeconds).remaining, "4h 48m");
+    assert.equal(P.resetCountdown(view.resetAt, now - offset + 60, "en", view.clockOffsetSeconds).remaining, "4h 47m");
+  }
+  assert.equal(P.resetCountdown(reset, now, "en", null).remaining, "4h 48m");
+});
