@@ -199,7 +199,14 @@ fn monitor() -> Option<Retained<AnyObject>> {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        let point = NSEvent::mouseLocation();
+        // Use the event's position, not the current hardware cursor. Launchers
+        // such as Hammerspoon can post a click on the status item without moving
+        // the pointer there (or restore it before this callback runs).
+        // Events without a window already use screen coordinates.
+        let point = event.locationInWindow();
+        let point = event
+            .window(mtm)
+            .map_or(point, |window| window.convertPointToScreen(point));
         let Some((on_item, session)) = INSTALLED.with(|cell| {
             let installed = cell.borrow();
             let item = &installed.as_ref()?.item;

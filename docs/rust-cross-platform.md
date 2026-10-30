@@ -297,3 +297,5 @@ macOS 上 366 项核心测试、Rust 格式及 diff 检查通过，新增回归�
 验证：本机模拟服务覆盖 Codex 成员替换、新账号用量、Claude 新账号发现，以及前端单账号 Provider 刷新入口。`python3 scripts/test_rust.py` 在允许本机端口绑定的环境下执行：核心 456 项通过、2 项跳过，2 项既有钥匙串测试（`an_unreadable_vault_loses_no_tokens_and_contacts_no_one`、`a_vault_without_the_tokens_moved_there_is_never_trusted_nor_written`）因 `Copool Keychain access failed: User interaction is not allowed.` 失败；桌面 7 项、前端 149 项、JS 语法、格式检查与独立 daemon 检查通过。未用真实账号验证、未打包或安装，未进行 Windows/Linux 实机验证。
 
 2026-10-23（删除整个 Sub2api 卡片后不自动恢复）：补充 Provider 级刷新边界，Codex 与 Claude 的普通刷新只更新仍有已导入账号的 Provider；移除整张卡片清空导入 ID 后，手动全局刷新和后台刷新均跳过该 Provider，也不请求其管理 API。刷新响应写回时再次检查，防止请求途中删除的整张卡片被旧响应恢复。显式同步仍可重新导入；保留现有卡片刷新时发现新增上游账号的行为。回归测试覆盖两种账号池删除后全局/后台刷新不请求 Provider、显式同步恢复，以及 Codex 在途响应不恢复已删除卡片。Sub2api 测试 16 项和 SettingsPageModelTests 22 项通过（两组含重叠测试），格式与 diff 检查通过；未使用真实账号、未打包安装或进行跨平台 GUI 验证。
+
+2026-10-30（Hammerspoon 搜索栏激活后的快捷键焦点）：macOS 状态栏展开会话原先通过当前鼠标位置判断是否由点击触发；Hammerspoon 可发送定点点击并立即恢复鼠标位置，导致面板按无焦点方式显示。现在使用点击事件自身的位置，并在事件关联窗口时转换为屏幕坐标，避免鼠标恢复影响判断。保留菜单栏键盘导航的无焦点展示逻辑。本机 `cargo check -p copool-desktop --locked`、格式与 diff 检查通过；尚未用运行中的 Hammerspoon/Copool 实机回归，未打包或安装。
