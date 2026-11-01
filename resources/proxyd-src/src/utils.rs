@@ -32,6 +32,25 @@ pub(crate) fn truncate_for_error(value: &str, max_len: usize) -> String {
     format!("{}...", &value[..end])
 }
 
+/// Separates a localization key from its arguments in a [`localized`] message.
+pub(crate) const LOCALIZED_SEPARATOR: char = '\u{1f}';
+
+/// An error the UI shows in the app's language: its `Localizable.strings` key,
+/// then the `%@` arguments, so a stored message follows a later language change.
+pub(crate) fn localized(key: &str, args: &[&dyn std::fmt::Display]) -> String {
+    args.iter().fold(key.to_owned(), |mut message, arg| {
+        message.push(LOCALIZED_SEPARATOR);
+        message.push_str(&arg.to_string());
+        message
+    })
+}
+
+/// A [`localized`] message as plain text for readers outside the UI, such as
+/// API clients.
+pub(crate) fn unlocalized(message: &str) -> String {
+    message.replace(LOCALIZED_SEPARATOR, ": ")
+}
+
 /// Compares two secrets without leaking how much of a prefix matched.
 pub(crate) fn constant_time_eq(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
@@ -376,5 +395,31 @@ mod account_proxy_tests {
         ] {
             assert!(with_account_proxy(reqwest::Client::builder(), value).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod localized_tests {
+    use super::{unlocalized, LOCALIZED_SEPARATOR};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    #[tokio::test]
+    async fn a_failed_token_refresh_reports_a_key_the_ui_localizes() {
+        let claims = URL_SAFE_NO_PAD.encode(r#"{"iss":"https://auth.openai.com"}"#);
+        let auth = serde_json::json!({
+            "tokens": {"refresh_token": "refresh", "id_token": format!("h.{claims}.s")}
+        });
+        // Nothing listens on port 9, so the refresh fails before leaving the machine.
+        let error = crate::auth::refresh_chatgpt_auth_tokens(&auth, "http://127.0.0.1:9")
+            .await
+            .unwrap_err();
+        let (key, detail) = error.split_once(LOCALIZED_SEPARATOR).unwrap();
+        assert_eq!(key, "error.auth.refresh_failed_format");
+        assert!(
+            detail.starts_with("https://auth.openai.com/oauth/token: "),
+            "{detail}"
+        );
+        assert!(!unlocalized(&error).contains(LOCALIZED_SEPARATOR));
     }
 }

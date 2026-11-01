@@ -307,6 +307,11 @@
 "error.auth.auth_json_invalid" = "auth.json ist kein gültiges JSON";
 "error.auth.id_token_invalid_format" = "id_token hat ein ungültiges Format";
 "error.auth.decode_id_token_failed" = "id_token konnte nicht dekodiert werden";
+"error.auth.missing_refresh_token" = "auth.json enthält kein refresh_token";
+"error.auth.write_auth_json_failed_format" = "auth.json konnte nicht geschrieben werden: %@";
+"error.auth.delete_auth_json_failed_format" = "auth.json konnte nicht gelöscht werden: %@";
+"error.auth.codex_home_not_found" = "Codex-Verzeichnis nicht gefunden";
+"error.auth.refresh_failed_format" = "Anmeldetokens konnten nicht erneuert werden: %@";
 "error.json.unsupported_value" = "Nicht unterstützter JSON-Wert";
 "error.json.unsupported_payload_type" = "Nicht unterstützter JSON-Payload-Typ";
 "error.codex_cli.launch_login_failed_format" = "codex login konnte nicht gestartet werden: %@";
@@ -404,6 +409,10 @@
 "error.proxy_runtime.summary.model_format" = "model restricted %@";
 "error.proxy_runtime.summary.auth_format" = "auth failed %@";
 "error.proxy_runtime.summary.permission_format" = "permission denied %@";
+"error.proxy_runtime.start_failed_format" = "Proxy-Start fehlgeschlagen: %@";
+"error.proxy_runtime.listen_failed_format" = "Proxy konnte nicht lauschen. Port %@ ist möglicherweise belegt: %@";
+"error.proxy_runtime.exited_format" = "Der Proxy-Dienst wurde unerwartet beendet: %@";
+"error.proxy_runtime.read_api_key_failed_format" = "API-Schlüsselspeicher konnte nicht gelesen werden: %@";
 "error.remote.logs_unavailable" = "Remote-Protokolle sind vorübergehend nicht verfügbar. Bitte versuchen Sie es in Kürze erneut.";
 "proxy.notice.remote_discovery_empty" = "Auf diesem Server wurden keine Remote-Proxy-Instanzen gefunden.";
 "proxy.notice.remote_discovery_found_format" = "%1$@ Remote-Proxy-Instanz(en) gefunden.";

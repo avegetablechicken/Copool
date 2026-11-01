@@ -596,7 +596,7 @@ function renderRemoteStates() {
       }
       output.prepend(metrics);
       if (status.lastError)
-        output.append(el("p", "error", status.lastError));
+        output.append(el("p", "error", tr(status.lastError)));
     }
     // RemoteServerDiscoverySection and its cards.
     const discoveries = proxyController.remoteDiscoveries[id] || [];

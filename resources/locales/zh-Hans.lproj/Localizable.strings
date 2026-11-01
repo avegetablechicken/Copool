@@ -326,6 +326,11 @@
 "error.auth.auth_json_invalid" = "auth.json 不是合法 JSON";
 "error.auth.id_token_invalid_format" = "id_token 格式无效";
 "error.auth.decode_id_token_failed" = "解码 id_token 失败";
+"error.auth.missing_refresh_token" = "auth.json 缺少 refresh_token";
+"error.auth.write_auth_json_failed_format" = "写入 auth.json 失败: %@";
+"error.auth.delete_auth_json_failed_format" = "删除 auth.json 失败: %@";
+"error.auth.codex_home_not_found" = "无法读取 Codex 目录";
+"error.auth.refresh_failed_format" = "刷新登录令牌失败: %@";
 "error.json.unsupported_value" = "不支持的 JSON 值";
 "error.json.unsupported_payload_type" = "不支持的 JSON payload 类型";
 
@@ -432,6 +437,10 @@
 "error.proxy_runtime.summary.model_format" = "模型受限 %@ 个";
 "error.proxy_runtime.summary.auth_format" = "鉴权失败 %@ 个";
 "error.proxy_runtime.summary.permission_format" = "权限不足 %@ 个";
+"error.proxy_runtime.start_failed_format" = "代理启动失败: %@";
+"error.proxy_runtime.listen_failed_format" = "启动代理监听失败，端口 %@ 可能已被占用: %@";
+"error.proxy_runtime.exited_format" = "代理服务异常退出: %@";
+"error.proxy_runtime.read_api_key_failed_format" = "读取 API Key 存储失败: %@";
 "error.remote.logs_unavailable" = "暂时无法获取远程日志，请稍后重试";
 "proxy.notice.remote_discovery_empty" = "这台服务器上未发现远程代理实例。";
 "proxy.notice.remote_discovery_found_format" = "发现 %1$@ 个远程代理实例。";

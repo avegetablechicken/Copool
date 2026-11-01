@@ -50,8 +50,10 @@ use crate::store::save_store_to_path;
 use crate::usage::fetch_usage_snapshot_from;
 use crate::usage::{chatgpt_base_origin, resolve_chatgpt_base_origin};
 use crate::utils::constant_time_eq;
+use crate::utils::localized;
 use crate::utils::now_unix_seconds;
 use crate::utils::truncate_for_error;
+use crate::utils::unlocalized;
 
 const DEFAULT_PROXY_PORT: u16 = 8787;
 const DEFAULT_PROXY_REQUEST_BODY_LIMIT_MIB: usize = 8;
@@ -395,18 +397,21 @@ pub(crate) async fn start_api_proxy_with_runtime(
 
     let available_accounts = load_proxy_candidates(storage).await?;
     if available_accounts.is_empty() {
-        return Err("暂无可用于代理的账号，请先添加并授权账号。".to_string());
+        return Err(localized("error.proxy_runtime.no_accounts_available", &[]));
     }
 
     let preferred_port = preferred_port.unwrap_or(DEFAULT_PROXY_PORT);
     let listener = TcpListener::bind((bind_host, preferred_port))
         .await
         .map_err(|error| {
-            format!("启动代理监听失败，端口 {preferred_port} 可能已被占用: {error}")
+            localized(
+                "error.proxy_runtime.listen_failed_format",
+                &[&preferred_port, &error],
+            )
         })?;
     let port = listener
         .local_addr()
-        .map_err(|error| format!("读取代理端口失败: {error}"))?
+        .map_err(|error| localized("error.proxy_runtime.start_failed_format", &[&error]))?
         .port();
     let api_key = ensure_persisted_api_proxy_key(storage).await?;
     let shared_api_key = Arc::new(RwLock::new(api_key));
@@ -419,7 +424,7 @@ pub(crate) async fn start_api_proxy_with_runtime(
         "",
     )?
     .build()
-    .map_err(|error| format!("创建代理 HTTP 客户端失败: {error}"))?;
+    .map_err(|error| localized("error.proxy_runtime.start_failed_format", &[&error]))?;
 
     let shared = Arc::new(tokio::sync::Mutex::new(ApiProxyRuntimeSnapshot::default()));
     let context = Arc::new(ProxyContext {
@@ -452,7 +457,7 @@ pub(crate) async fn start_api_proxy_with_runtime(
 
         if let Err(error) = server.await {
             let mut snapshot = server_context.shared.lock().await;
-            snapshot.last_error = Some(format!("代理服务异常退出: {error}"));
+            snapshot.last_error = Some(localized("error.proxy_runtime.exited_format", &[&error]));
         }
     });
     let usage_refresh_context = context.clone();
@@ -618,7 +623,7 @@ async fn chat_completions_handler(
         let upstream_body = match upstream_response.bytes().await {
             Ok(bytes) => bytes,
             Err(error) => {
-                let message = format!("读取 Codex 上游响应失败: {error}");
+                let message = format!("Failed to read the Codex upstream response: {error}");
                 update_proxy_error(&context, Some(message.clone())).await;
                 return json_error_response(StatusCode::BAD_GATEWAY, &message);
             }
@@ -636,7 +641,7 @@ async fn chat_completions_handler(
             match serde_json::to_vec(&convert_completed_response_to_chat_completion(&completed)) {
                 Ok(bytes) => Bytes::from(bytes),
                 Err(error) => {
-                    let message = format!("序列化聊天响应失败: {error}");
+                    let message = format!("Failed to serialize the chat response: {error}");
                     update_proxy_error(&context, Some(message.clone())).await;
                     return json_error_response(StatusCode::BAD_GATEWAY, &message);
                 }
@@ -682,7 +687,7 @@ async fn responses_handler(
         let upstream_body = match upstream_response.bytes().await {
             Ok(bytes) => bytes,
             Err(error) => {
-                let message = format!("读取 Codex 上游响应失败: {error}");
+                let message = format!("Failed to read the Codex upstream response: {error}");
                 update_proxy_error(&context, Some(message.clone())).await;
                 return json_error_response(StatusCode::BAD_GATEWAY, &message);
             }
@@ -700,7 +705,7 @@ async fn responses_handler(
         let body = match serde_json::to_vec(&completed) {
             Ok(bytes) => Bytes::from(bytes),
             Err(error) => {
-                let message = format!("序列化 responses 响应失败: {error}");
+                let message = format!("Failed to serialize the responses response: {error}");
                 update_proxy_error(&context, Some(message.clone())).await;
                 return json_error_response(StatusCode::BAD_GATEWAY, &message);
             }
@@ -727,7 +732,7 @@ async fn unsupported_proxy_handler(
     json_error_response(
         StatusCode::NOT_FOUND,
         &format!(
-            "当前反代只支持 GET /v1/models、POST /v1/chat/completions、POST /v1/responses，收到的是 {method} {}",
+            "This proxy supports only GET /v1/models, POST /v1/chat/completions and POST /v1/responses; received {method} {}",
             uri.path()
         ),
     )
@@ -751,8 +756,9 @@ fn parse_json_request(body: &Bytes) -> Result<Value, Response<Body>> {
             "Request body exceeds the configured limit",
         ));
     }
-    serde_json::from_slice::<Value>(body)
-        .map_err(|error| invalid_request_response(&format!("请求体不是合法 JSON: {error}")))
+    serde_json::from_slice::<Value>(body).map_err(|error| {
+        invalid_request_response(&format!("The request body is not valid JSON: {error}"))
+    })
 }
 
 fn invalid_request_response(message: &str) -> Response<Body> {
@@ -770,7 +776,7 @@ fn invalid_request_response(message: &str) -> Response<Body> {
 fn convert_openai_chat_request_to_codex(request: &Value) -> Result<(Value, bool), String> {
     let request_object = request
         .as_object()
-        .ok_or_else(|| "聊天请求必须是 JSON 对象".to_string())?;
+        .ok_or_else(|| "The chat request must be a JSON object".to_string())?;
 
     // Cursor Agent may send Responses-style payloads to /v1/chat/completions.
     if request_object
@@ -787,7 +793,7 @@ fn convert_openai_chat_request_to_codex(request: &Value) -> Result<(Value, bool)
     let messages = request_object
         .get("messages")
         .and_then(Value::as_array)
-        .ok_or_else(|| "聊天请求缺少 messages 数组".to_string())?;
+        .ok_or_else(|| "The chat request is missing the messages array".to_string())?;
 
     let downstream_stream = request_object
         .get("stream")
@@ -830,7 +836,7 @@ fn convert_openai_chat_request_to_codex(request: &Value) -> Result<(Value, bool)
     for message in messages {
         let message_object = message
             .as_object()
-            .ok_or_else(|| "messages 数组中的每一项都必须是对象".to_string())?;
+            .ok_or_else(|| "Every item in the messages array must be an object".to_string())?;
         let role = required_string(message_object, "role")?;
 
         if role == "tool" {
@@ -967,7 +973,7 @@ fn convert_openai_chat_request_to_codex(request: &Value) -> Result<(Value, bool)
 fn normalize_openai_responses_request(mut request: Value) -> Result<(Value, bool), String> {
     let object = request
         .as_object_mut()
-        .ok_or_else(|| "responses 请求必须是 JSON 对象".to_string())?;
+        .ok_or_else(|| "The responses request must be a JSON object".to_string())?;
 
     let model_resolution = resolve_client_model(&required_string(object, "model")?)?;
     let model = model_resolution.upstream_model.clone();
@@ -1306,7 +1312,7 @@ fn required_string(object: &Map<String, Value>, key: &str) -> Result<String, Str
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
-        .ok_or_else(|| format!("缺少必填字段 {key}"))
+        .ok_or_else(|| format!("Missing required field {key}"))
 }
 
 fn convert_message_content_to_codex_parts(role: &str, content: &Value) -> Vec<Value> {
@@ -1547,8 +1553,10 @@ async fn send_codex_request_over_candidates(
             let upstream_body = match upstream.bytes().await {
                 Ok(bytes) => bytes,
                 Err(error) => {
-                    attempt_errors
-                        .push(format!("{}: 读取上游响应失败: {}", candidate.label, error));
+                    attempt_errors.push(format!(
+                        "{}: failed to read the upstream response: {}",
+                        candidate.label, error
+                    ));
                     break;
                 }
             };
@@ -1564,8 +1572,11 @@ async fn send_codex_request_over_candidates(
                         continue;
                     }
                     Err(error) => {
-                        attempt_errors
-                            .push(format!("{}: 刷新登录态失败: {}", candidate.label, error));
+                        attempt_errors.push(format!(
+                            "{}: failed to refresh the login: {}",
+                            candidate.label,
+                            unlocalized(&error)
+                        ));
                         break;
                     }
                 }
@@ -1595,7 +1606,7 @@ async fn send_codex_request_over_candidates(
     let merged_error = if !retriable_failures.is_empty() && attempt_errors.is_empty() {
         build_retriable_failure_summary(&retriable_failures)
     } else if attempt_errors.is_empty() {
-        "全部代理账号均不可用".to_string()
+        "No proxy account is available".to_string()
     } else {
         let base = attempt_errors
             .into_iter()
@@ -1655,8 +1666,8 @@ async fn forward_codex_request_with_candidate(
         .map(str::trim);
     let version = resolve_codex_client_version(explicit_version, user_agent);
 
-    let serialized =
-        serde_json::to_vec(payload).map_err(|error| format!("序列化上游请求失败: {error}"))?;
+    let serialized = serde_json::to_vec(payload)
+        .map_err(|error| format!("Failed to serialize the upstream request: {error}"))?;
 
     let insecure = provider.is_some_and(|p| p["allowInsecureTLS"] == true);
     let client = if candidate.proxy_url.trim().is_empty() && !insecure {
@@ -1692,7 +1703,7 @@ async fn forward_codex_request_with_candidate(
     request
         .send()
         .await
-        .map_err(|error| format!("请求 Codex 上游失败 {upstream_url}: {error}"))
+        .map_err(|error| format!("Codex upstream request failed {upstream_url}: {error}"))
 }
 
 fn parse_codex_version_from_user_agent(user_agent: &str) -> Option<&str> {
@@ -1966,7 +1977,7 @@ async fn refresh_all_proxy_account_usage(storage: &ProxyStorageContext) {
     let candidates = match load_proxy_candidates(storage).await {
         Ok(candidates) => candidates,
         Err(error) => {
-            log::warn!("刷新远端账号额度前读取账号失败: {error}");
+            log::warn!("Failed to read accounts before refreshing remote account usage: {error}");
             return;
         }
     };
@@ -1978,7 +1989,7 @@ async fn refresh_proxy_account_usage_for_tick(context: &ProxyContext, tick: u64)
     let candidates = match load_proxy_candidates(&context.storage).await {
         Ok(candidates) => candidates,
         Err(error) => {
-            log::warn!("刷新远端账号额度前读取账号失败: {error}");
+            log::warn!("Failed to read accounts before refreshing remote account usage: {error}");
             return;
         }
     };
@@ -2047,7 +2058,7 @@ async fn persist_candidate_usage_result(
     let mut store = match load_store_from_path(&store_path) {
         Ok(store) => store,
         Err(error) => {
-            log::warn!("刷新远端账号额度后读取账号失败: {error}");
+            log::warn!("Failed to read accounts after refreshing remote account usage: {error}");
             return;
         }
     };
@@ -2071,7 +2082,7 @@ async fn persist_candidate_usage_result(
     }
 
     if let Err(error) = save_store_to_path(&store_path, &store) {
-        log::warn!("保存远端账号额度失败: {error}");
+        log::warn!("Failed to save remote account usage: {error}");
     }
 }
 
@@ -2144,8 +2155,12 @@ async fn refresh_proxy_candidate_auth(
     )
     .await?;
 
-    let extracted = extract_auth(&refreshed_auth_json)
-        .map_err(|error| format!("刷新后解析账号登录态失败: {error}"))?;
+    let extracted = extract_auth(&refreshed_auth_json).map_err(|error| {
+        format!(
+            "Failed to parse the account login after refresh: {}",
+            unlocalized(&error)
+        )
+    })?;
 
     Ok(ProxyCandidate {
         renews: candidate.renews,
@@ -2229,35 +2244,35 @@ fn classify_retriable_failure(status: StatusCode, body: &Bytes) -> Option<RetryF
     {
         return Some(RetryFailureInfo {
             category: RetryFailureCategory::QuotaExceeded,
-            detail: format!("额度用完：{}", signals.brief),
+            detail: format!("Quota exhausted: {}", signals.brief),
         });
     }
 
     if contains_model_restriction_signal(&signals.normalized) {
         return Some(RetryFailureInfo {
             category: RetryFailureCategory::ModelRestricted,
-            detail: format!("模型受限：{}", signals.brief),
+            detail: format!("Model restricted: {}", signals.brief),
         });
     }
 
     if status == StatusCode::TOO_MANY_REQUESTS || contains_rate_limit_signal(&signals.normalized) {
         return Some(RetryFailureInfo {
             category: RetryFailureCategory::RateLimited,
-            detail: format!("频率限制：{}", signals.brief),
+            detail: format!("Rate limited: {}", signals.brief),
         });
     }
 
     if status == StatusCode::UNAUTHORIZED || contains_auth_signal(&signals.normalized) {
         return Some(RetryFailureInfo {
             category: RetryFailureCategory::Authentication,
-            detail: format!("鉴权失败：{}", signals.brief),
+            detail: format!("Authentication failed: {}", signals.brief),
         });
     }
 
     if status == StatusCode::FORBIDDEN || contains_permission_signal(&signals.normalized) {
         return Some(RetryFailureInfo {
             category: RetryFailureCategory::Permission,
-            detail: format!("权限不足：{}", signals.brief),
+            detail: format!("Permission denied: {}", signals.brief),
         });
     }
 
@@ -2292,7 +2307,7 @@ fn extract_error_signals(body: &Bytes) -> ErrorSignals {
         })
         .join(" | ");
     let brief = if joined.is_empty() {
-        "未返回具体错误信息".to_string()
+        "No error details returned".to_string()
     } else {
         truncate_for_error(&joined, 120)
     };
@@ -2390,19 +2405,19 @@ fn build_retriable_failure_summary(failures: &[RetryFailureInfo]) -> String {
 
     let mut parts = Vec::new();
     if quota > 0 {
-        parts.push(format!("额度用完 {quota} 个"));
+        parts.push(format!("{quota} quota exhausted"));
     }
     if rate > 0 {
-        parts.push(format!("频率限制 {rate} 个"));
+        parts.push(format!("{rate} rate limited"));
     }
     if model > 0 {
-        parts.push(format!("模型受限 {model} 个"));
+        parts.push(format!("{model} model restricted"));
     }
     if auth > 0 {
-        parts.push(format!("鉴权失败 {auth} 个"));
+        parts.push(format!("{auth} authentication failed"));
     }
     if permission > 0 {
-        parts.push(format!("权限不足 {permission} 个"));
+        parts.push(format!("{permission} permission denied"));
     }
     let sample = failures
         .iter()
@@ -2410,12 +2425,12 @@ fn build_retriable_failure_summary(failures: &[RetryFailureInfo]) -> String {
         .find(|detail| !detail.trim().is_empty());
 
     let mut message = format!(
-        "本次尝试的 {} 个账号全部被上游拒绝：{}。",
+        "The upstream rejected all {} accounts tried: {}.",
         failures.len(),
-        parts.join("，")
+        parts.join(", ")
     );
     if let Some(sample) = sample {
-        message.push_str(" 示例：");
+        message.push_str(" Example: ");
         message.push_str(sample);
     }
     message
@@ -2519,8 +2534,12 @@ fn read_api_proxy_key_file(storage: &ProxyStorageContext) -> Result<Option<Strin
         return Ok(None);
     }
 
-    let raw = fs::read_to_string(&path)
-        .map_err(|error| format!("读取 API Key 存储失败 {}: {error}", path.display()))?;
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        localized(
+            "error.proxy_runtime.read_api_key_failed_format",
+            &[&format!("{}: {error}", path.display())],
+        )
+    })?;
     let value = raw.trim();
     if value.is_empty() {
         return Ok(None);
@@ -2542,7 +2561,7 @@ fn api_proxy_key_path(storage: &ProxyStorageContext) -> Result<PathBuf, String> 
 fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
-        .map_err(|error| format!("无法获取应用数据目录: {error}"))
+        .map_err(|error| format!("Unable to locate the app data directory: {error}"))
 }
 
 fn read_current_api_key(shared: &Arc<RwLock<String>>) -> String {
@@ -2571,7 +2590,12 @@ fn build_proxy_response(
     response
         .header("content-type", "application/json")
         .body(Body::from(body))
-        .unwrap_or_else(|_| json_error_response(StatusCode::BAD_GATEWAY, "构建代理响应失败"))
+        .unwrap_or_else(|_| {
+            json_error_response(
+                StatusCode::BAD_GATEWAY,
+                "Failed to build the proxy response",
+            )
+        })
 }
 
 fn build_json_proxy_response(
@@ -2607,7 +2631,7 @@ fn build_passthrough_sse_response(upstream: reqwest::Response) -> Response<Body>
                         &json!({
                             "type": "error",
                             "code": "upstream_error",
-                            "message": format!("上游流式响应中断: {error}"),
+                            "message": format!("The upstream stream was interrupted: {error}"),
                         })
                         .to_string(),
                     ));
@@ -2634,7 +2658,12 @@ fn build_passthrough_sse_response(upstream: reqwest::Response) -> Response<Body>
         .header("content-type", "text/event-stream; charset=utf-8")
         .header("cache-control", "no-cache")
         .body(Body::from_stream(output))
-        .unwrap_or_else(|_| json_error_response(StatusCode::BAD_GATEWAY, "构建流式代理响应失败"))
+        .unwrap_or_else(|_| {
+            json_error_response(
+                StatusCode::BAD_GATEWAY,
+                "Failed to build the streaming proxy response",
+            )
+        })
 }
 
 fn build_chat_streaming_response(mut upstream: reqwest::Response) -> Response<Body> {
@@ -2656,7 +2685,7 @@ fn build_chat_streaming_response(mut upstream: reqwest::Response) -> Response<Bo
                 Err(error) => {
                     yield Ok::<Bytes, Infallible>(sse_data_chunk(&json!({
                         "error": {
-                            "message": format!("上游流式响应中断: {error}")
+                            "message": format!("The upstream stream was interrupted: {error}")
                         }
                     })));
                     yield Ok::<Bytes, Infallible>(Bytes::from_static(SSE_DONE.as_bytes()));
@@ -2685,7 +2714,12 @@ fn build_chat_streaming_response(mut upstream: reqwest::Response) -> Response<Bo
         .header("content-type", "text/event-stream; charset=utf-8")
         .header("cache-control", "no-cache")
         .body(Body::from_stream(output))
-        .unwrap_or_else(|_| json_error_response(StatusCode::BAD_GATEWAY, "构建聊天流式响应失败"))
+        .unwrap_or_else(|_| {
+            json_error_response(
+                StatusCode::BAD_GATEWAY,
+                "Failed to build the chat streaming response",
+            )
+        })
 }
 
 fn sse_data_chunk(value: &Value) -> Bytes {
@@ -2735,7 +2769,7 @@ fn extract_completed_response_from_sse(bytes: &[u8]) -> Result<Value, String> {
                 .get("response")
                 .cloned()
                 .map(|response| CompletedResponseAccumulator::default().finalize_response(response))
-                .ok_or_else(|| "Codex 响应缺少 response 字段".to_string());
+                .ok_or_else(|| "The Codex response is missing the response field".to_string());
         }
     }
 
@@ -2757,7 +2791,9 @@ fn extract_completed_response_from_sse(bytes: &[u8]) -> Result<Value, String> {
     completed_response
         .map(|response| accumulator.finalize_response(response))
         .ok_or_else(|| {
-            failure.unwrap_or_else(|| "未在 Codex SSE 中找到 response.completed 事件".to_string())
+            failure.unwrap_or_else(|| {
+                "No response.completed event in the Codex SSE stream".to_string()
+            })
         })
 }
 

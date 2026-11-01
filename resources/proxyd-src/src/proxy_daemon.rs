@@ -31,7 +31,7 @@ pub fn run_cli_from_env() -> Result<(), String> {
     let runtime = Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(|error| format!("创建 proxyd 运行时失败: {error}"))?;
+        .map_err(|error| format!("Failed to create the proxyd runtime: {error}"))?;
 
     runtime.block_on(run_proxy_daemon(options))
 }
@@ -50,7 +50,7 @@ pub async fn run_proxy_daemon(options: ProxyDaemonOptions) -> Result<(), String>
         start_api_proxy_with_runtime(&storage, &runtime_slot, options.port, &options.host).await?;
     let port = status
         .port
-        .ok_or_else(|| "代理已启动，但未返回监听端口".to_string())?;
+        .ok_or_else(|| "The proxy started but reported no listening port".to_string())?;
 
     println!("codex-tools-proxyd started");
     println!("data_dir={}", options.data_dir.display());
@@ -92,24 +92,24 @@ fn parse_cli_args(args: Vec<String>) -> Result<CliAction, String> {
             "--data-dir" => {
                 let value = args
                     .get(index + 1)
-                    .ok_or_else(|| format!("缺少 --data-dir 参数值\n\n{}", usage_text(&program)))?;
+                    .ok_or_else(|| format!("Missing value for --data-dir\n\n{}", usage_text(&program)))?;
                 data_dir = PathBuf::from(value);
                 index += 2;
             }
             "--host" => {
                 let value = args
                     .get(index + 1)
-                    .ok_or_else(|| format!("缺少 --host 参数值\n\n{}", usage_text(&program)))?;
+                    .ok_or_else(|| format!("Missing value for --host\n\n{}", usage_text(&program)))?;
                 host = value.to_string();
                 index += 2;
             }
             "--port" => {
                 let value = args
                     .get(index + 1)
-                    .ok_or_else(|| format!("缺少 --port 参数值\n\n{}", usage_text(&program)))?;
+                    .ok_or_else(|| format!("Missing value for --port\n\n{}", usage_text(&program)))?;
                 let parsed = value
                     .parse::<u16>()
-                    .map_err(|_| format!("无效端口: {value}\n\n{}", usage_text(&program)))?;
+                    .map_err(|_| format!("Invalid port: {value}\n\n{}", usage_text(&program)))?;
                 port = Some(parsed);
                 index += 2;
             }
@@ -121,7 +121,7 @@ fn parse_cli_args(args: Vec<String>) -> Result<CliAction, String> {
                 return Ok(CliAction::PrintHelp(usage_text(&program)));
             }
             unknown => {
-                return Err(format!("未知参数: {unknown}\n\n{}", usage_text(&program)));
+                return Err(format!("Unknown argument: {unknown}\n\n{}", usage_text(&program)));
             }
         }
     }
@@ -135,7 +135,7 @@ fn parse_cli_args(args: Vec<String>) -> Result<CliAction, String> {
 }
 
 fn default_daemon_data_dir() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or_else(|| "无法读取 HOME 目录".to_string())?;
+    let home = dirs::home_dir().ok_or_else(|| "Unable to locate the HOME directory".to_string())?;
     Ok(home.join(".codex-tools-proxyd"))
 }
 
@@ -146,10 +146,10 @@ async fn wait_for_shutdown_signal() -> Result<(), String> {
         use tokio::signal::unix::SignalKind;
 
         let mut terminate = signal(SignalKind::terminate())
-            .map_err(|error| format!("监听 SIGTERM 失败: {error}"))?;
+            .map_err(|error| format!("Failed to listen for SIGTERM: {error}"))?;
         tokio::select! {
             result = tokio::signal::ctrl_c() => {
-                result.map_err(|error| format!("监听 Ctrl+C 失败: {error}"))?;
+                result.map_err(|error| format!("Failed to listen for Ctrl+C: {error}"))?;
             }
             _ = terminate.recv() => {}
         }
@@ -160,7 +160,7 @@ async fn wait_for_shutdown_signal() -> Result<(), String> {
     {
         tokio::signal::ctrl_c()
             .await
-            .map_err(|error| format!("监听 Ctrl+C 失败: {error}"))
+            .map_err(|error| format!("Failed to listen for Ctrl+C: {error}"))
     }
 }
 

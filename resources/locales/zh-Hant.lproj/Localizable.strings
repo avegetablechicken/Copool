@@ -307,6 +307,11 @@
 "error.auth.auth_json_invalid" = "auth.json 不是有效的 JSON";
 "error.auth.id_token_invalid_format" = "id_token 格式無效";
 "error.auth.decode_id_token_failed" = "解碼 id_token 失敗";
+"error.auth.missing_refresh_token" = "auth.json 缺少 refresh_token";
+"error.auth.write_auth_json_failed_format" = "寫入 auth.json 失敗：%@";
+"error.auth.delete_auth_json_failed_format" = "刪除 auth.json 失敗：%@";
+"error.auth.codex_home_not_found" = "無法讀取 Codex 目錄";
+"error.auth.refresh_failed_format" = "重新整理登入權杖失敗：%@";
 "error.json.unsupported_value" = "不支援的 JSON 值";
 "error.json.unsupported_payload_type" = "不支援的 JSON payload 類型";
 "error.codex_cli.launch_login_failed_format" = "啟動 codex login 失敗：%@";
@@ -404,6 +409,10 @@
 "error.proxy_runtime.summary.model_format" = "model restricted %@";
 "error.proxy_runtime.summary.auth_format" = "auth failed %@";
 "error.proxy_runtime.summary.permission_format" = "permission denied %@";
+"error.proxy_runtime.start_failed_format" = "代理啟動失敗：%@";
+"error.proxy_runtime.listen_failed_format" = "啟動代理監聽失敗，連接埠 %@ 可能已被占用：%@";
+"error.proxy_runtime.exited_format" = "代理服務異常結束：%@";
+"error.proxy_runtime.read_api_key_failed_format" = "讀取 API Key 儲存失敗：%@";
 "error.remote.logs_unavailable" = "暫時無法取得遠端日誌，請稍後再試。";
 "proxy.notice.remote_discovery_empty" = "這台伺服器上找不到遠端代理實例。";
 "proxy.notice.remote_discovery_found_format" = "找到 %1$@ 個遠端代理實例。";

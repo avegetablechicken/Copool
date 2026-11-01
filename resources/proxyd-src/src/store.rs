@@ -28,8 +28,8 @@ pub(crate) fn save_store(app: &AppHandle, store: &AccountsStore) -> Result<(), S
     save_store_to_path(&account_store_path(app)?, store)
 }
 
-/// 启动时自动同步当前登录账号：
-/// 若本机已有 `~/.codex/auth.json` 且账号不在列表中，则自动写入存储。
+/// Syncs the current login at startup:
+/// if `~/.codex/auth.json` exists and its account is not listed, it is added to the store.
 #[cfg(feature = "desktop")]
 pub(crate) fn sync_current_auth_account_on_startup(app: &AppHandle) -> Result<(), String> {
     sync_current_auth_account_on_startup_in_path(&account_store_path(app)?)
@@ -51,7 +51,7 @@ pub(crate) fn sync_current_auth_account_on_startup_in_path(path: &Path) -> Resul
     let extracted = match extract_auth(&auth_json) {
         Ok(value) => value,
         Err(err) => {
-            log::warn!("跳过启动自动导入当前账号: {err}");
+            log::warn!("Skipped importing the current account at startup: {err}");
             return Ok(());
         }
     };
@@ -97,7 +97,7 @@ fn account_store_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("无法获取应用数据目录: {e}"))?;
+        .map_err(|e| format!("Unable to locate the app data directory: {e}"))?;
     Ok(account_store_path_from_data_dir(&dir))
 }
 
@@ -108,12 +108,16 @@ pub(crate) fn account_store_path_from_data_dir(data_dir: &Path) -> PathBuf {
 fn write_store_file(path: &Path, store: &AccountsStore) -> Result<(), String> {
     let parent = path
         .parent()
-        .ok_or_else(|| format!("无法解析存储目录 {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("创建存储目录失败 {}: {e}", parent.display()))?;
+        .ok_or_else(|| format!("Unable to resolve the storage directory {}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|e| {
+        format!(
+            "Failed to create the storage directory {}: {e}",
+            parent.display()
+        )
+    })?;
 
-    let serialized =
-        serde_json::to_string_pretty(store).map_err(|e| format!("序列化账号存储失败: {e}"))?;
+    let serialized = serde_json::to_string_pretty(store)
+        .map_err(|e| format!("Failed to serialize the account store: {e}"))?;
     write_file_atomically(path, serialized.as_bytes())?;
     Ok(())
 }
@@ -130,13 +134,21 @@ fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
 fn backup_corrupted_store_file(path: &Path, raw: &str) -> Result<PathBuf, String> {
     let parent = path
         .parent()
-        .ok_or_else(|| format!("无法解析存储目录 {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("创建存储目录失败 {}: {e}", parent.display()))?;
+        .ok_or_else(|| format!("Unable to resolve the storage directory {}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|e| {
+        format!(
+            "Failed to create the storage directory {}: {e}",
+            parent.display()
+        )
+    })?;
 
     let backup_path = parent.join(format!("accounts.corrupt-{}.json", now_unix_seconds()));
-    fs::write(&backup_path, raw)
-        .map_err(|e| format!("写入损坏备份文件失败 {}: {e}", backup_path.display()))?;
+    fs::write(&backup_path, raw).map_err(|e| {
+        format!(
+            "Failed to write the corrupted-store backup {}: {e}",
+            backup_path.display()
+        )
+    })?;
     set_private_permissions(&backup_path);
     Ok(backup_path)
 }

@@ -307,6 +307,11 @@
 "error.auth.auth_json_invalid" = "auth.json は有効な JSON ではありません";
 "error.auth.id_token_invalid_format" = "id_token の形式が不正です";
 "error.auth.decode_id_token_failed" = "id_token のデコードに失敗しました";
+"error.auth.missing_refresh_token" = "auth.json に refresh_token がありません";
+"error.auth.write_auth_json_failed_format" = "auth.json の書き込みに失敗しました: %@";
+"error.auth.delete_auth_json_failed_format" = "auth.json の削除に失敗しました: %@";
+"error.auth.codex_home_not_found" = "Codex ディレクトリが見つかりません";
+"error.auth.refresh_failed_format" = "ログイントークンの更新に失敗しました: %@";
 "error.json.unsupported_value" = "サポートされていない JSON 値です";
 "error.json.unsupported_payload_type" = "サポートされていない JSON ペイロード型です";
 "error.codex_cli.launch_login_failed_format" = "codex login の起動に失敗しました: %@";
@@ -407,6 +412,10 @@
 "error.proxy_runtime.summary.model_format" = "モデル制限 %@ 件";
 "error.proxy_runtime.summary.auth_format" = "認証失敗 %@ 件";
 "error.proxy_runtime.summary.permission_format" = "権限不足 %@ 件";
+"error.proxy_runtime.start_failed_format" = "プロキシの起動に失敗しました: %@";
+"error.proxy_runtime.listen_failed_format" = "プロキシの待ち受けを開始できませんでした。ポート %@ が使用中の可能性があります: %@";
+"error.proxy_runtime.exited_format" = "プロキシサービスが予期せず終了しました: %@";
+"error.proxy_runtime.read_api_key_failed_format" = "API キーの保存データを読み込めませんでした: %@";
 "error.remote.logs_unavailable" = "リモートログを取得できませんでした。しばらくしてから再試行してください";
 "proxy.notice.remote_discovery_empty" = "このサーバーではリモートプロキシインスタンスが見つかりませんでした。";
 "proxy.notice.remote_discovery_found_format" = "リモートプロキシインスタンスを %1$@ 件検出しました。";

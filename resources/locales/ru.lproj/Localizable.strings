@@ -307,6 +307,11 @@
 "error.auth.auth_json_invalid" = "auth.json не является корректным JSON";
 "error.auth.id_token_invalid_format" = "Неверный формат id_token";
 "error.auth.decode_id_token_failed" = "Не удалось декодировать id_token";
+"error.auth.missing_refresh_token" = "В auth.json отсутствует refresh_token";
+"error.auth.write_auth_json_failed_format" = "Не удалось записать auth.json: %@";
+"error.auth.delete_auth_json_failed_format" = "Не удалось удалить auth.json: %@";
+"error.auth.codex_home_not_found" = "Не удалось найти каталог Codex";
+"error.auth.refresh_failed_format" = "Не удалось обновить токены входа: %@";
 "error.json.unsupported_value" = "Неподдерживаемое значение JSON";
 "error.json.unsupported_payload_type" = "Неподдерживаемый тип JSON payload";
 "error.codex_cli.launch_login_failed_format" = "Не удалось запустить codex login: %@";
@@ -404,6 +409,10 @@
 "error.proxy_runtime.summary.model_format" = "model restricted %@";
 "error.proxy_runtime.summary.auth_format" = "auth failed %@";
 "error.proxy_runtime.summary.permission_format" = "permission denied %@";
+"error.proxy_runtime.start_failed_format" = "Не удалось запустить прокси: %@";
+"error.proxy_runtime.listen_failed_format" = "Не удалось начать прослушивание прокси. Порт %@ может быть занят: %@";
+"error.proxy_runtime.exited_format" = "Служба прокси неожиданно завершилась: %@";
+"error.proxy_runtime.read_api_key_failed_format" = "Не удалось прочитать хранилище API-ключа: %@";
 "error.remote.logs_unavailable" = "Удалённые логи временно недоступны. Повторите попытку чуть позже.";
 "proxy.notice.remote_discovery_empty" = "На этом сервере не найдено удалённых прокси-инстансов.";
 "proxy.notice.remote_discovery_found_format" = "Найдено удалённых прокси-инстансов: %1$@.";

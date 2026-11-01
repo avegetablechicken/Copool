@@ -307,6 +307,11 @@
 "error.auth.auth_json_invalid" = "auth.json n’est pas un JSON valide";
 "error.auth.id_token_invalid_format" = "Le format de id_token est invalide";
 "error.auth.decode_id_token_failed" = "Impossible de décoder id_token";
+"error.auth.missing_refresh_token" = "refresh_token est manquant dans auth.json";
+"error.auth.write_auth_json_failed_format" = "Impossible d’écrire auth.json : %@";
+"error.auth.delete_auth_json_failed_format" = "Impossible de supprimer auth.json : %@";
+"error.auth.codex_home_not_found" = "Dossier Codex introuvable";
+"error.auth.refresh_failed_format" = "Impossible de renouveler les jetons de connexion : %@";
 "error.json.unsupported_value" = "Valeur JSON non prise en charge";
 "error.json.unsupported_payload_type" = "Type de payload JSON non pris en charge";
 "error.codex_cli.launch_login_failed_format" = "Impossible de lancer codex login : %@";
@@ -404,6 +409,10 @@
 "error.proxy_runtime.summary.model_format" = "model restricted %@";
 "error.proxy_runtime.summary.auth_format" = "auth failed %@";
 "error.proxy_runtime.summary.permission_format" = "permission denied %@";
+"error.proxy_runtime.start_failed_format" = "Échec du démarrage du proxy : %@";
+"error.proxy_runtime.listen_failed_format" = "Impossible de démarrer l’écoute du proxy. Le port %@ est peut-être utilisé : %@";
+"error.proxy_runtime.exited_format" = "Le service proxy s’est arrêté de façon inattendue : %@";
+"error.proxy_runtime.read_api_key_failed_format" = "Impossible de lire le stockage de la clé API : %@";
 "error.remote.logs_unavailable" = "Les journaux distants sont temporairement indisponibles. Réessayez dans un instant.";
 "proxy.notice.remote_discovery_empty" = "Aucune instance de proxy distante n’a été trouvée sur ce serveur.";
 "proxy.notice.remote_discovery_found_format" = "%1$@ instance(s) de proxy distante(s) trouvée(s).";

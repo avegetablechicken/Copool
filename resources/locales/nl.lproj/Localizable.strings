@@ -307,6 +307,11 @@
 "error.auth.auth_json_invalid" = "auth.json is not valid JSON";
 "error.auth.id_token_invalid_format" = "id_token format is invalid";
 "error.auth.decode_id_token_failed" = "Failed to decode id_token";
+"error.auth.missing_refresh_token" = "refresh_token ontbreekt in auth.json";
+"error.auth.write_auth_json_failed_format" = "Kan auth.json niet schrijven: %@";
+"error.auth.delete_auth_json_failed_format" = "Kan auth.json niet verwijderen: %@";
+"error.auth.codex_home_not_found" = "Codex-map niet gevonden";
+"error.auth.refresh_failed_format" = "Kan aanmeldtokens niet vernieuwen: %@";
 "error.json.unsupported_value" = "Unsupported JSON value";
 "error.json.unsupported_payload_type" = "Unsupported JSON payload type";
 "error.codex_cli.launch_login_failed_format" = "Failed to launch codex login: %@";
@@ -404,6 +409,10 @@
 "error.proxy_runtime.summary.model_format" = "model restricted %@";
 "error.proxy_runtime.summary.auth_format" = "auth failed %@";
 "error.proxy_runtime.summary.permission_format" = "permission denied %@";
+"error.proxy_runtime.start_failed_format" = "Proxy starten mislukt: %@";
+"error.proxy_runtime.listen_failed_format" = "Kan de proxy niet laten luisteren. Poort %@ is mogelijk in gebruik: %@";
+"error.proxy_runtime.exited_format" = "De proxyservice is onverwacht gestopt: %@";
+"error.proxy_runtime.read_api_key_failed_format" = "Kan de API-sleutelopslag niet lezen: %@";
 "error.remote.logs_unavailable" = "Externe logs zijn tijdelijk niet beschikbaar. Probeer het straks opnieuw.";
 "proxy.notice.remote_discovery_empty" = "Geen externe proxy-instanties gevonden op deze server.";
 "proxy.notice.remote_discovery_found_format" = "%1$@ externe proxy-instantie(s) gevonden.";

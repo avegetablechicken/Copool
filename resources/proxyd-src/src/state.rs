@@ -42,11 +42,11 @@ pub(crate) struct CloudflaredRuntimeHandle {
     pub(crate) child: Child,
 }
 
-/// 全局运行态：
-/// - `store_lock` 保证账号存储读写的串行化。
-/// - `add_flow_auth_backup` 用于“添加账号”流程前后的 auth.json 回滚。
-/// - `api_proxy` 维护本地 API 反代服务的生命周期与状态。
-/// - `cloudflared` 维护公网隧道进程与当前状态。
+/// Global runtime state:
+/// - `store_lock` serializes account store reads and writes.
+/// - `add_flow_auth_backup` restores auth.json around the "add account" flow.
+/// - `api_proxy` manages the local API proxy service lifecycle and status.
+/// - `cloudflared` manages the public tunnel process and its status.
 pub(crate) struct AppState {
     pub(crate) store_lock: Arc<Mutex<()>>,
     pub(crate) add_flow_auth_backup: Mutex<Option<Option<Value>>>,

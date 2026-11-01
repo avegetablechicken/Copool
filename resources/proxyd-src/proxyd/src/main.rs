@@ -25,7 +25,7 @@ mod utils;
 
 fn main() {
     if let Err(error) = proxy_daemon::run_cli_from_env() {
-        eprintln!("{error}");
+        eprintln!("{}", utils::unlocalized(&error));
         std::process::exit(1);
     }
 }

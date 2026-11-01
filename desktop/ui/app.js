@@ -155,12 +155,15 @@ function appLocale() {
     ? P.resolveLocale(preferences.locale)
     : P.preferredLocale(navigator.languages?.length ? navigator.languages : [navigator.language]);
 }
-function tr(key, ...args) {
-  let value =
-    window.COPOOL_LOCALES[locale]?.[key] ??
-    window.COPOOL_LOCALES.en[key] ??
-    key;
-  return P.formatLocalized(value, args);
+/// Core errors arrive as their key followed by its arguments, each after a
+/// U+001F; an argument that is itself a key is translated too.
+function tr(message, ...args) {
+  const [key, ...carried] = String(message).split("\u001f");
+  const lookup = (key) =>
+    window.COPOOL_LOCALES[locale]?.[key] ?? window.COPOOL_LOCALES.en[key];
+  const value = lookup(key) ?? key;
+  const values = carried.map((arg) => (lookup(arg) === undefined ? arg : tr(arg)));
+  return P.formatLocalized(value, [...values, ...args]);
 }
 const extra = (en, zh) => (locale.startsWith("zh") ? zh : en);
 function translate() {
@@ -577,8 +580,8 @@ function accountControls(account, full, view, grouped = false) {
     const warning = button("", "warning", "icon-btn error-indicator", () =>
       notice(account.usageError, true),
     );
-    warning.title = account.usageError;
-    warning.setAttribute("aria-label", account.usageError);
+    warning.title = tr(account.usageError);
+    warning.setAttribute("aria-label", warning.title);
     actions.append(warning);
   }
   // An expired sign-in replaces refresh and switch with "Sign in again",
@@ -764,7 +767,9 @@ function providerControls(group, title, current) {
       accountsController.remoteRefreshingIds.has(id),
   );
   if (!collapsed && !refreshing) {
-    const errors = [...new Set(group.accounts.map((a) => a.usageError).filter(Boolean))];
+    const errors = [
+      ...new Set(group.accounts.map((a) => a.usageError).filter(Boolean).map((e) => tr(e))),
+    ];
     if (errors.length) {
       const message = errors.join("\n");
       const warning = button("", "warning", "icon-btn error-indicator", () =>
@@ -1334,7 +1339,7 @@ function renderProxy() {
     proxy.activeAccountLabel || tr("proxy.info.no_request_matched");
   $("proxy-active-id").textContent =
     proxy.activeAccountId || tr("proxy.info.active_account_hint");
-  $("proxy-error").textContent = proxy.lastError || tr("common.none");
+  $("proxy-error").textContent = tr(proxy.lastError || "common.none");
 }
 async function refreshView() {
   const controller = accountsController;

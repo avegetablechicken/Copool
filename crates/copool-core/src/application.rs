@@ -435,7 +435,7 @@ impl Application {
                 match legacy {
                     Ok(legacy) => Self::project_preferences(&mut settings, &legacy),
                     Err(error) => {
-                        log::warn!("读取旧 preferences.json 失败, 已保留副本: {error}");
+                        log::warn!("Failed to read the old preferences.json; kept a copy: {error}");
                         let backup = old.with_file_name(format!(
                             "preferences.corrupt-{}.json",
                             now_unix_seconds()

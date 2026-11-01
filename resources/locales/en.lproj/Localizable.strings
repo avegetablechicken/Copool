@@ -326,6 +326,11 @@
 "error.auth.auth_json_invalid" = "auth.json is not valid JSON";
 "error.auth.id_token_invalid_format" = "id_token format is invalid";
 "error.auth.decode_id_token_failed" = "Failed to decode id_token";
+"error.auth.missing_refresh_token" = "auth.json missing refresh_token";
+"error.auth.write_auth_json_failed_format" = "Failed to write auth.json: %@";
+"error.auth.delete_auth_json_failed_format" = "Failed to delete auth.json: %@";
+"error.auth.codex_home_not_found" = "Unable to locate the Codex directory";
+"error.auth.refresh_failed_format" = "Failed to refresh login tokens: %@";
 "error.json.unsupported_value" = "Unsupported JSON value";
 "error.json.unsupported_payload_type" = "Unsupported JSON payload type";
 
@@ -432,6 +437,10 @@
 "error.proxy_runtime.summary.model_format" = "model restricted %@";
 "error.proxy_runtime.summary.auth_format" = "auth failed %@";
 "error.proxy_runtime.summary.permission_format" = "permission denied %@";
+"error.proxy_runtime.start_failed_format" = "Proxy start failed: %@";
+"error.proxy_runtime.listen_failed_format" = "Failed to start the proxy listener. Port %@ may be in use: %@";
+"error.proxy_runtime.exited_format" = "The proxy service exited unexpectedly: %@";
+"error.proxy_runtime.read_api_key_failed_format" = "Failed to read the API key store: %@";
 "error.remote.logs_unavailable" = "Remote logs are temporarily unavailable. Try again shortly.";
 "proxy.notice.remote_discovery_empty" = "No remote proxy instances were found on this server.";
 "proxy.notice.remote_discovery_found_format" = "Found %1$@ remote proxy instance(s).";

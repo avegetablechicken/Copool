@@ -9,6 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::models::CurrentAuthStatus;
 use crate::models::ExtractedAuth;
+use crate::utils::localized;
 use crate::utils::truncate_for_error;
 
 pub(crate) struct CodexOAuthTokens {
@@ -20,9 +21,8 @@ pub(crate) struct CodexOAuthTokens {
 
 pub(crate) fn read_current_codex_auth() -> Result<Value, String> {
     let path = codex_auth_path()?;
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("读取当前 Codex 认证文件失败 {}: {e}", path.display()))?;
-    serde_json::from_str(&raw).map_err(|e| format!("当前 Codex 认证文件不是合法 JSON: {e}"))
+    let raw = fs::read_to_string(&path).map_err(|e| read_failed(&path, e))?;
+    serde_json::from_str(&raw).map_err(|_| localized("error.auth.auth_json_invalid", &[]))
 }
 
 pub(crate) fn read_current_codex_auth_optional() -> Result<Option<Value>, String> {
@@ -31,10 +31,9 @@ pub(crate) fn read_current_codex_auth_optional() -> Result<Option<Value>, String
         return Ok(None);
     }
 
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("读取当前 Codex 认证文件失败 {}: {e}", path.display()))?;
+    let raw = fs::read_to_string(&path).map_err(|e| read_failed(&path, e))?;
     let value =
-        serde_json::from_str(&raw).map_err(|e| format!("当前 Codex 认证文件不是合法 JSON: {e}"))?;
+        serde_json::from_str(&raw).map_err(|_| localized("error.auth.auth_json_invalid", &[]))?;
     Ok(Some(value))
 }
 
@@ -53,18 +52,16 @@ pub(crate) fn read_current_auth_status() -> Result<CurrentAuthStatus, String> {
         });
     }
 
-    let metadata = fs::metadata(&path)
-        .map_err(|e| format!("读取 auth.json 文件信息失败 {}: {e}", path.display()))?;
+    let metadata = fs::metadata(&path).map_err(|e| read_failed(&path, e))?;
     let modified_at = metadata
         .modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs() as i64);
 
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("读取 auth.json 失败 {}: {e}", path.display()))?;
+    let raw = fs::read_to_string(&path).map_err(|e| read_failed(&path, e))?;
     let value: Value =
-        serde_json::from_str(&raw).map_err(|e| format!("auth.json 不是合法 JSON: {e}"))?;
+        serde_json::from_str(&raw).map_err(|_| localized("error.auth.auth_json_invalid", &[]))?;
 
     let auth_mode = value
         .get("auth_mode")
@@ -103,11 +100,15 @@ pub(crate) fn read_current_auth_status() -> Result<CurrentAuthStatus, String> {
 pub(crate) fn write_active_codex_auth(auth_json: &Value) -> Result<(), String> {
     let path = codex_auth_path()?;
     let serialized = serde_json::to_string_pretty(auth_json)
-        .map_err(|e| format!("序列化 auth.json 失败: {e}"))?;
+        .map_err(|e| localized("error.auth.write_auth_json_failed_format", &[&e]))?;
     // The login Codex is using holds its only refresh token, so replace it
     // atomically instead of truncating first.
-    crate::utils::write_private_file_atomically(&path, serialized.as_bytes())
-        .map_err(|e| format!("写入 auth.json 失败 {}: {e}", path.display()))
+    crate::utils::write_private_file_atomically(&path, serialized.as_bytes()).map_err(|e| {
+        localized(
+            "error.auth.write_auth_json_failed_format",
+            &[&format!("{}: {e}", path.display())],
+        )
+    })
 }
 
 pub(crate) fn remove_active_codex_auth() -> Result<(), String> {
@@ -115,7 +116,12 @@ pub(crate) fn remove_active_codex_auth() -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
-    fs::remove_file(&path).map_err(|e| format!("删除 auth.json 失败 {}: {e}", path.display()))
+    fs::remove_file(&path).map_err(|e| {
+        localized(
+            "error.auth.delete_auth_json_failed_format",
+            &[&format!("{}: {e}", path.display())],
+        )
+    })
 }
 
 pub(crate) fn normalize_imported_auth_json(mut auth_json: Value) -> Value {
@@ -188,9 +194,9 @@ fn workspace_name(claims: &Value) -> Option<String> {
         .or_else(|| clean(organization.get("title")).filter(|s| s.to_lowercase() != "personal"))
 }
 
-/// 解析当前 auth.json，提取账号标识和用量接口所需 token。
+/// Parses the current auth.json for the account identity and the tokens the usage API needs.
 ///
-/// 注意：`auth_mode` 在某些版本可能缺失，因此优先按 `tokens` 字段判断是否可用。
+/// `auth_mode` is missing in some versions, so the `tokens` field decides availability first.
 pub(crate) fn extract_auth(auth_json: &Value) -> Result<ExtractedAuth, String> {
     let mode = auth_json
         .get("auth_mode")
@@ -203,25 +209,22 @@ pub(crate) fn extract_auth(auth_json: &Value) -> Result<ExtractedAuth, String> {
         Some(value) => value,
         None => {
             if !mode.is_empty() && mode != "chatgpt" && mode != "chatgpt_auth_tokens" {
-                return Err(
-                    "当前账号不是 ChatGPT 登录模式，无法读取 Codex 5h/1week 用量。请先执行 codex login。"
-                        .to_string(),
-                );
+                return Err(localized("error.auth.not_chatgpt_mode", &[]));
             }
-            return Err("当前未检测到 ChatGPT 登录令牌，请先执行 codex login。".to_string());
+            return Err(localized("error.auth.no_chatgpt_token", &[]));
         }
     };
 
     let access_token = tokens
         .get("access_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| "auth.json 缺少 access_token".to_string())?
+        .ok_or_else(|| localized("error.auth.missing_access_token", &[]))?
         .to_string();
 
     let id_token = tokens
         .get("id_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| "auth.json 缺少 id_token".to_string())?;
+        .ok_or_else(|| localized("error.auth.missing_id_token", &[]))?;
 
     let mut account_id = tokens
         .get("account_id")
@@ -254,7 +257,7 @@ pub(crate) fn extract_auth(auth_json: &Value) -> Result<ExtractedAuth, String> {
     }
 
     let account_id =
-        account_id.ok_or_else(|| "无法从 auth.json 识别 chatgpt_account_id".to_string())?;
+        account_id.ok_or_else(|| localized("error.auth.missing_chatgpt_account_id", &[]))?;
 
     if email.is_none() {
         email = auth_json
@@ -316,19 +319,20 @@ pub(crate) fn current_auth_account_id() -> Option<String> {
         .map(|auth| auth.account_id)
 }
 
-/// 为第三方客户端同步登录态时，提取可复用的 OpenAI OAuth token。
+/// Extracts the reusable OpenAI OAuth tokens when syncing a login to third-party clients.
 pub(crate) fn extract_codex_oauth_tokens(auth_json: &Value) -> Result<CodexOAuthTokens, String> {
-    let tokens = auth_token_object(auth_json).ok_or_else(|| "auth.json 缺少 tokens".to_string())?;
+    let tokens = auth_token_object(auth_json)
+        .ok_or_else(|| localized("error.auth.auth_json_invalid_structure", &[]))?;
 
     let access_token = tokens
         .get("access_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| "auth.json 缺少 access_token".to_string())?
+        .ok_or_else(|| localized("error.auth.missing_access_token", &[]))?
         .to_string();
     let refresh_token = tokens
         .get("refresh_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| "auth.json 缺少 refresh_token".to_string())?
+        .ok_or_else(|| localized("error.opencode.missing_refresh_token", &[]))?
         .to_string();
     let account_id = tokens
         .get("account_id")
@@ -350,23 +354,24 @@ pub(crate) fn extract_codex_oauth_tokens(auth_json: &Value) -> Result<CodexOAuth
     })
 }
 
-/// 使用 auth.json 内的 refresh_token 刷新 ChatGPT OAuth 令牌。
+/// Refreshes ChatGPT OAuth tokens with the refresh_token in auth.json.
 ///
-/// 返回更新后的 auth.json（仅内存对象，不会自动写盘）。
+/// Returns the updated auth.json in memory only; it is not written to disk.
 pub(crate) async fn refresh_chatgpt_auth_tokens(
     auth_json: &Value,
     proxy_url: &str,
 ) -> Result<Value, String> {
-    let tokens = auth_token_object(auth_json).ok_or_else(|| "auth.json 缺少 tokens".to_string())?;
+    let tokens = auth_token_object(auth_json)
+        .ok_or_else(|| localized("error.auth.auth_json_invalid_structure", &[]))?;
 
     let refresh_token = tokens
         .get("refresh_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| "auth.json 缺少 refresh_token".to_string())?;
+        .ok_or_else(|| localized("error.auth.missing_refresh_token", &[]))?;
     let id_token = tokens
         .get("id_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| "auth.json 缺少 id_token".to_string())?;
+        .ok_or_else(|| localized("error.auth.missing_id_token", &[]))?;
 
     let claims = decode_jwt_payload(id_token)?;
     let issuer = claims
@@ -395,37 +400,45 @@ pub(crate) async fn refresh_chatgpt_auth_tokens(
         proxy_url,
     )?
     .build()
-    .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    .map_err(|e| localized("error.auth.refresh_failed_format", &[&e]))?;
 
     let response = client
         .post(&token_url)
         .form(&form_pairs)
         .send()
         .await
-        .map_err(|e| format!("刷新登录令牌失败 {token_url}: {e}"))?;
+        .map_err(|e| {
+            localized(
+                "error.auth.refresh_failed_format",
+                &[&format!("{token_url}: {e}")],
+            )
+        })?;
 
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(format!(
-            "刷新登录令牌失败 {token_url} -> {status}: {}",
-            truncate_for_error(&body, 140)
+        return Err(localized(
+            "error.auth.refresh_failed_format",
+            &[&format!(
+                "{token_url} -> {status}: {}",
+                truncate_for_error(&body, 140)
+            )],
         ));
     }
 
     let refreshed: RefreshedTokenPayload = response
         .json()
         .await
-        .map_err(|e| format!("解析刷新令牌响应失败: {e}"))?;
+        .map_err(|e| localized("error.auth.refresh_failed_format", &[&e]))?;
 
     let mut updated = auth_json.clone();
     let root = updated
         .as_object_mut()
-        .ok_or_else(|| "auth.json 结构异常（根节点不是对象）".to_string())?;
+        .ok_or_else(|| localized("error.auth.auth_json_invalid_structure", &[]))?;
     let tokens = root
         .get_mut("tokens")
         .and_then(Value::as_object_mut)
-        .ok_or_else(|| "auth.json 缺少 tokens".to_string())?;
+        .ok_or_else(|| localized("error.auth.auth_json_invalid_structure", &[]))?;
 
     tokens.insert(
         "access_token".to_string(),
@@ -444,12 +457,19 @@ pub(crate) async fn refresh_chatgpt_auth_tokens(
     Ok(updated)
 }
 
+fn read_failed(path: &std::path::Path, error: std::io::Error) -> String {
+    localized(
+        "error.auth.read_auth_json_failed_format",
+        &[&format!("{}: {error}", path.display())],
+    )
+}
+
 fn codex_auth_path() -> Result<PathBuf, String> {
     let home = std::env::var_os("CODEX_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|p| p.join(".codex")))
-        .ok_or_else(|| "无法读取 Codex 目录".to_string())?;
+        .ok_or_else(|| localized("error.auth.codex_home_not_found", &[]))?;
     Ok(home.join("auth.json"))
 }
 
@@ -483,7 +503,7 @@ pub(crate) fn decode_jwt_payload(token: &str) -> Result<Value, String> {
     let payload = token
         .split('.')
         .nth(1)
-        .ok_or_else(|| "id_token 格式无效".to_string())?;
+        .ok_or_else(|| localized("error.auth.id_token_invalid_format", &[]))?;
 
     let decoded = URL_SAFE_NO_PAD
         .decode(payload)
@@ -496,9 +516,10 @@ pub(crate) fn decode_jwt_payload(token: &str) -> Result<Value, String> {
             };
             URL_SAFE.decode(padded)
         })
-        .map_err(|e| format!("解码 id_token 失败: {e}"))?;
+        .map_err(|_| localized("error.auth.decode_id_token_failed", &[]))?;
 
-    serde_json::from_slice(&decoded).map_err(|e| format!("解析 id_token payload 失败: {e}"))
+    serde_json::from_slice(&decoded)
+        .map_err(|_| localized("error.auth.decode_id_token_failed", &[]))
 }
 
 #[derive(Debug, serde::Deserialize)]
