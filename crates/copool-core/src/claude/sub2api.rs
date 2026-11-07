@@ -112,7 +112,8 @@ impl Application {
     /// Claude Sub2api providers, without their secrets.
     pub fn claude_sub2api_providers(&self) -> Result<Vec<Provider>> {
         let location = self.claude_location();
-        let mut providers = self.claude_load()?.providers;
+        // Provider metadata does not need the official accounts' vault tokens.
+        let mut providers = self.claude_store_file()?.providers;
         for p in &mut providers {
             p.has_api_key = settings_source::load(&location, &p.name, &p.settings_path).is_ok();
             p.settings = p.settings_input();
@@ -275,7 +276,7 @@ impl Application {
     /// Explicit sync of one provider, including restoring its removed cards.
     pub async fn claude_sync_sub2api_selection(&self, id: Option<&str>) -> Result<usize> {
         let providers: Vec<_> = self
-            .claude_load()?
+            .claude_store_file()?
             .providers
             .into_iter()
             .filter(|provider| id.is_none_or(|id| provider.id == id))
@@ -291,12 +292,15 @@ impl Application {
                     let fetched = fetched.accounts;
                     count += fetched.len();
                     let _lock = self.claude.lock.lock().await;
-                    let mut store = self.claude_load()?;
+                    let mut store = self.claude_store_file()?;
                     if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
                         saved.imported_account_ids = fetched.iter().map(|a| a.id).collect();
                         saved.cached_accounts = fetched;
                     }
-                    self.claude_save(&store)?;
+                    // Only provider metadata changed. Preserve official account
+                    // tokens exactly as stored without reading or rewriting the vault.
+                    crate::persistence::write_json(&self.claude_store_path(), &store)?;
+                    self.publish();
                 }
                 Err(error) => errors.push(format!("{}: {error}", p.name)),
             }
@@ -682,6 +686,36 @@ mod tests {
             .claude_sync_sub2api_selection(Some("missing"))
             .await
             .is_err());
+    }
+    #[tokio::test]
+    async fn provider_listing_and_sync_do_not_access_official_vault() {
+        struct UnavailableVault;
+        impl crate::vault::Vault for UnavailableVault {
+            fn read(&self, _: crate::vault::KeychainAccess) -> Result<Option<String>> {
+                panic!("Provider metadata must not read official tokens");
+            }
+            fn write(&self, _: &str, _: crate::vault::KeychainAccess) -> Result<()> {
+                panic!("Provider metadata must not rewrite official tokens");
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, _, _, _) = pool(dir.path()).await;
+        let mut store = app.claude_store_file().unwrap();
+        assert!(!store.accounts.is_empty());
+        store
+            .accounts
+            .iter_mut()
+            .for_each(super::super::strip_secrets);
+        crate::persistence::write_json(&app.claude_store_path(), &store).unwrap();
+        let before = serde_json::to_value(&store.accounts).unwrap();
+        app.set_claude_vault(std::sync::Arc::new(UnavailableVault));
+        let providers = app.claude_sub2api_providers().unwrap();
+        app.claude_sync_sub2api_selection(Some(&providers[0].id))
+            .await
+            .unwrap();
+        let after = app.claude_store_file().unwrap();
+        assert_eq!(serde_json::to_value(&after.accounts).unwrap(), before);
+        assert!(!after.providers[0].cached_accounts.is_empty());
     }
     /// A synced provider, and an imported login as the official account.
     async fn pool(

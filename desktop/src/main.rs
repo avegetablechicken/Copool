@@ -314,10 +314,14 @@ async fn claude_set_renewal(
     app.claude_set_renewal(&id, &renewal).await
 }
 #[tauri::command]
-fn claude_sub2api_providers(
+async fn claude_sub2api_providers(
     app: State<'_, App>,
 ) -> Result<Vec<copool_core::claude::Sub2ApiProvider>, String> {
-    app.claude_sub2api_providers()
+    let app = app.inner().clone();
+    // Resolving settings may scan directories; never do it on the UI thread.
+    tokio::task::spawn_blocking(move || app.claude_sub2api_providers())
+        .await
+        .map_err(|error| error.to_string())?
 }
 #[tauri::command]
 async fn claude_save_sub2api_provider(
