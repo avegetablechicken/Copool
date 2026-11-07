@@ -60,6 +60,7 @@ for (const [name, panel, parentWidth, childWidth, preferred] of [
   test(`Submenu stays beside its parent inside the panel: ${name}`, () => {
     const layout = layoutScope.menuPairLayout(panel, parentWidth, childWidth, preferred);
     const childLeft = layout.left + layout.parentWidth - 1;
+    assert.equal(layout.left, preferred);
     assert.ok(layout.left >= panel.left + 8);
     assert.ok(childLeft + layout.submenuWidth <= panel.right - 8);
     assert.ok(layout.parentWidth > 0 && layout.submenuWidth > 0);
@@ -70,3 +71,77 @@ for (const [name, panel, parentWidth, childWidth, preferred] of [
     }
   });
 }
+
+test("Different pool labels and provider counts produce the same menu origins", () => {
+  function render(label, providers, right = 360) {
+    const panel = { left: 0, right, top: 0, bottom: 500 };
+    const all = [];
+    class Node {
+      constructor(tag, classes = "", text = "") {
+        this.tag = tag;
+        this.classes = classes;
+        this.textContent = text;
+        this.style = {};
+        this.children = [];
+        this.attrs = {};
+        this.classList = { add() {}, remove() {}, toggle() {} };
+        all.push(this);
+      }
+      append(child) { this.children.push(child); child.parent = this; }
+      remove() {
+        if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this);
+      }
+      setAttribute(key, value) { this.attrs[key] = value; }
+      addEventListener() {}
+      querySelector(selector) {
+        return selector.includes("aria-checked") ? null : this.children.find(x => x.tag === "button");
+      }
+      focus() { this.onfocus?.(); }
+      get offsetWidth() {
+        const natural = Math.max(this.classes.includes("provider-submenu") ? 0 : 150,
+          ...this.children.map(x => x.textContent.length * 6 + 28));
+        return parseFloat(this.style.width) || Math.min(natural, parseFloat(this.style.maxWidth) || Infinity);
+      }
+      get offsetHeight() { return this.children.length * 23 + 8; }
+      getBoundingClientRect() {
+        if (this.tag === "button") {
+          const parent = this.parent.getBoundingClientRect();
+          return { ...parent, top: parent.top + 4 + this.parent.children.indexOf(this) * 23 };
+        }
+        const left = parseFloat(this.style.left) || 0;
+        const top = parseFloat(this.style.top) || 0;
+        return { left, right: left + this.offsetWidth, top, bottom: top + this.offsetHeight };
+      }
+    }
+    const scope = {
+      el: (tag, classes, text) => new Node(tag, classes, text),
+      document: { body: new Node("body"), querySelector: () => ({ getBoundingClientRect: () => panel }) },
+    };
+    vm.createContext(scope);
+    vm.runInContext(appSource.slice(appSource.indexOf("let openMenu = null;"), appSource.indexOf('document.addEventListener("pointerdown", (event) => {', appSource.indexOf("let openMenu = null;"))), scope);
+    const trigger = new Node("button");
+    trigger.id = "import-open";
+    trigger.getBoundingClientRect = () => ({ left: 24, top: 40, bottom: 62 });
+    scope.showMenu(trigger, [
+      { label, run() {} }, { label: "Import JSON file", run() {} },
+      { label: "Sync unofficial providers", children: providers.map(label => ({ label, run() {} })) },
+    ]);
+    const parent = scope.document.body.children[0];
+    assert.equal(parent.style.left, "24px", "menu left must align with the button");
+    assert.equal(parent.style.top, "66px", "menu must open directly below the button");
+    parent.children[2].onpointerenter();
+    const child = scope.document.body.children[1];
+    assert.equal(child.style.width, undefined, "provider submenu must not have a forced width");
+    if (providers[0] === "team")
+      assert.equal(child.offsetWidth, 52, "short provider labels keep a compact submenu");
+    assert.ok(child.getBoundingClientRect().right <= panel.right - 8);
+    assert.equal(child.getBoundingClientRect().left, parent.getBoundingClientRect().right - 1);
+    return [parent.style.left, parent.style.top, parent.style.width, child.style.left, child.style.top];
+  }
+  for (const width of [320, 360, 640]) {
+    assert.deepEqual(
+      render("Import current auth", ["team"], width),
+      render("Import current Claude Code login", Array(30).fill("A very long provider name"), width),
+    );
+  }
+});

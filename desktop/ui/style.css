@@ -2105,6 +2105,8 @@ dialog > .dialog-actions {
 
 .provider-submenu {
   z-index: 101;
+  width: max-content;
+  min-width: 0;
 }
 .provider-submenu button:disabled {
   opacity: 0.5;

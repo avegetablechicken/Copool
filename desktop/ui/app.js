@@ -1657,15 +1657,19 @@ function configureImportMenu(menu) {
   menu.addEventListener("pointermove", () => menu.classList.add("pointer-navigation"));
   menu.addEventListener("keydown", () => menu.classList.remove("pointer-navigation"));
 }
-// Reserve room for both menus before opening, so a long localized parent
-// label cannot force its submenu back over the parent.
+// Keep the parent aligned with its button. Fit the menu pair into the
+// space to its right instead of shifting the parent away from its anchor.
 function menuPairLayout(panel, parentWidth, submenuWidth, preferredLeft) {
-  const available = Math.max(0, panel.right - panel.left - 16);
+  const left = Math.max(panel.left + 8, Math.min(preferredLeft, panel.right - 8));
+  const available = Math.max(0, panel.right - 8 - left);
   const child = Math.floor(Math.min(submenuWidth, available * 0.45));
   const parent = Math.floor(Math.min(parentWidth, available - child + 1));
-  const left = Math.max(panel.left + 8,
-    Math.min(preferredLeft, panel.right - 8 - parent - child + 1));
   return { left, parentWidth: parent, submenuWidth: child };
+}
+function importMenuLayout(panel, preferredLeft) {
+  // Both pools share the toolbar anchor and parent width. Reserve only
+  // a maximum for the child; its actual width follows its provider names.
+  return menuPairLayout(panel, 200, 150, preferredLeft);
 }
 function showMenu(trigger, items) {
   closeMenu();
@@ -1701,8 +1705,9 @@ function showMenu(trigger, items) {
         const left = right + submenu.offsetWidth <= panel.right - 8
           ? right
           : parent.left - submenu.offsetWidth + 1;
+        // Align to the parent row in both pools; long lists scroll below it.
         const top = Math.max(panel.top + 8,
-          Math.min(bounds.top - 4, panel.bottom - submenu.offsetHeight - 8));
+          Math.min(bounds.top - 4, panel.bottom - 32));
         submenu.style.left = `${Math.max(panel.left + 8, left)}px`;
         submenu.style.top = `${top}px`;
         submenu.style.maxHeight = `${panel.bottom - top - 8}px`;
@@ -1757,8 +1762,18 @@ function showMenu(trigger, items) {
   // Below the trigger, or above it when the panel is too short; kept inside.
   const bounds = trigger.getBoundingClientRect();
   const panel = document.querySelector(".panel").getBoundingClientRect();
-  let left = Math.min(bounds.left, innerWidth - menu.offsetWidth - 8);
-  if (submenus.length) {
+  let left = Math.max(panel.left + 8,
+    Math.min(bounds.left, panel.right - menu.offsetWidth - 8));
+  if (submenus.length && trigger.id === "import-open") {
+    const layout = importMenuLayout(panel, bounds.left);
+    menu.style.minWidth = "0";
+    menu.style.width = `${layout.parentWidth}px`;
+    for (const submenu of submenus) {
+      submenu.style.minWidth = "0";
+      submenu.style.maxWidth = `${layout.submenuWidth}px`;
+    }
+    left = layout.left;
+  } else if (submenus.length) {
     let childWidth = 0;
     for (const submenu of submenus) {
       submenu.style.visibility = "hidden";
