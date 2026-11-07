@@ -270,7 +270,16 @@ impl Application {
     }
     /// Imports every active Claude OAuth account of each provider; returns how many.
     pub async fn claude_sync_sub2api(&self) -> Result<usize> {
-        let providers = self.claude_load()?.providers;
+        self.claude_sync_sub2api_selection(None).await
+    }
+    /// Explicit sync of one provider, including restoring its removed cards.
+    pub async fn claude_sync_sub2api_selection(&self, id: Option<&str>) -> Result<usize> {
+        let providers: Vec<_> = self
+            .claude_load()?
+            .providers
+            .into_iter()
+            .filter(|provider| id.is_none_or(|id| provider.id == id))
+            .collect();
         if providers.is_empty() {
             return Err("error.claude.sub2api_not_configured".into());
         }
@@ -652,6 +661,27 @@ mod tests {
         let location = Location::files(dir.join("claude"));
         app.set_claude_location(location.clone());
         (app, location, secrets)
+    }
+    #[tokio::test]
+    async fn selected_sync_leaves_other_providers_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, _, _, _) = pool(dir.path()).await;
+        let mut store = app.claude_load().unwrap();
+        let id = store.providers[0].id.clone();
+        let mut other = store.providers[0].clone();
+        other.id = "unselected".into();
+        other.name = "Unselected".into();
+        other.admin_base_url = "http://127.0.0.1:1".into();
+        let before = serde_json::to_value(&other).unwrap();
+        store.providers.push(other);
+        app.claude_save(&store).unwrap();
+        app.claude_sync_sub2api_selection(Some(&id)).await.unwrap();
+        let after = app.claude_load().unwrap();
+        assert_eq!(serde_json::to_value(&after.providers[1]).unwrap(), before);
+        assert!(app
+            .claude_sync_sub2api_selection(Some("missing"))
+            .await
+            .is_err());
     }
     /// A synced provider, and an imported login as the official account.
     async fn pool(

@@ -1625,7 +1625,23 @@ $("collapse-all").onclick = () => {
 // In-panel menus, as Coport's: they keep focus in the panel window, which a
 // native menu would take away.
 let openMenu = null;
+let openSubmenu = null;
+function closeSubmenu(restoreFocus = false) {
+  if (!openSubmenu) return;
+  const { menu, trigger } = openSubmenu;
+  openSubmenu = null;
+  menu.remove();
+  trigger.setAttribute("aria-expanded", "false");
+  if (restoreFocus) {
+    // Focusing the parent normally opens its submenu.
+    const onfocus = trigger.onfocus;
+    trigger.onfocus = null;
+    trigger.focus();
+    trigger.onfocus = onfocus;
+  }
+}
 function closeMenu(restoreFocus = false) {
+  closeSubmenu();
   if (!openMenu) return;
   const { menu, trigger } = openMenu;
   openMenu = null;
@@ -1633,9 +1649,29 @@ function closeMenu(restoreFocus = false) {
   trigger.setAttribute("aria-expanded", "false");
   if (restoreFocus) trigger.focus();
 }
+// Mouse hover and keyboard focus are separate states. In Import menus,
+// show only hover while using the pointer, without moving keyboard focus.
+function configureImportMenu(menu) {
+  menu.classList.add("import-menu");
+  menu.addEventListener("pointerover", () => menu.classList.add("pointer-navigation"));
+  menu.addEventListener("pointermove", () => menu.classList.add("pointer-navigation"));
+  menu.addEventListener("keydown", () => menu.classList.remove("pointer-navigation"));
+}
+// Reserve room for both menus before opening, so a long localized parent
+// label cannot force its submenu back over the parent.
+function menuPairLayout(panel, parentWidth, submenuWidth, preferredLeft) {
+  const available = Math.max(0, panel.right - panel.left - 16);
+  const child = Math.floor(Math.min(submenuWidth, available * 0.45));
+  const parent = Math.floor(Math.min(parentWidth, available - child + 1));
+  const left = Math.max(panel.left + 8,
+    Math.min(preferredLeft, panel.right - 8 - parent - child + 1));
+  return { left, parentWidth: parent, submenuWidth: child };
+}
 function showMenu(trigger, items) {
   closeMenu();
   const menu = el("div", "select-menu action-menu");
+  const submenus = [];
+  if (trigger.id === "import-open") configureImportMenu(menu);
   menu.setAttribute("role", "menu");
   // Choices show a check mark on the current one, as a native menu.
   const choices = items.some((item) => "selected" in item);
@@ -1646,17 +1682,100 @@ function showMenu(trigger, items) {
     option.type = "button";
     option.setAttribute("role", choices ? "menuitemradio" : "menuitem");
     if (choices) option.setAttribute("aria-checked", item.selected ? "true" : "false");
-    option.onclick = () => {
-      closeMenu(true);
-      item.run();
-    };
     menu.append(option);
+    if (item.children) {
+      const submenu = el("div", "select-menu action-menu provider-submenu");
+      if (trigger.id === "import-open") configureImportMenu(submenu);
+      submenu.setAttribute("role", "menu");
+      submenu.setAttribute("aria-label", item.label);
+      option.setAttribute("aria-haspopup", "menu");
+      option.setAttribute("aria-expanded", "false");
+      const expand = () => {
+        if (openSubmenu?.trigger === option) return;
+        closeSubmenu();
+        document.body.append(submenu);
+        const bounds = option.getBoundingClientRect();
+        const parent = menu.getBoundingClientRect();
+        const panel = document.querySelector(".panel").getBoundingClientRect();
+        const right = parent.right - 1;
+        const left = right + submenu.offsetWidth <= panel.right - 8
+          ? right
+          : parent.left - submenu.offsetWidth + 1;
+        const top = Math.max(panel.top + 8,
+          Math.min(bounds.top - 4, panel.bottom - submenu.offsetHeight - 8));
+        submenu.style.left = `${Math.max(panel.left + 8, left)}px`;
+        submenu.style.top = `${top}px`;
+        submenu.style.maxHeight = `${panel.bottom - top - 8}px`;
+        openSubmenu = { menu: submenu, trigger: option };
+        option.setAttribute("aria-expanded", "true");
+      };
+      option.onpointerenter = expand;
+      option.onfocus = expand;
+      option.onclick = () => {
+        expand();
+        submenu.querySelector("button:not(:disabled)")?.focus();
+      };
+      option.onkeydown = (event) => {
+        if (event.key !== "ArrowRight") return;
+        event.preventDefault();
+        option.onclick();
+      };
+      for (const child of item.children) {
+        const button = el("button", "", child.label);
+        button.type = "button";
+        button.setAttribute("role", "menuitem");
+        button.disabled = !!child.disabled;
+        button.onclick = () => {
+          closeMenu(true);
+          child.run();
+        };
+        submenu.append(button);
+      }
+      submenus.push(submenu);
+      submenu.onkeydown = (event) => {
+        if (!["ArrowLeft", "Escape"].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeSubmenu(true);
+      };
+    } else {
+      option.onclick = () => {
+        closeMenu(true);
+        item.run();
+      };
+    }
   }
+  // Dismiss only the submenu when moving to another parent item; leave
+  // the parent menu's original pointer and keyboard focus behavior alone.
+  const dismissSubmenu = (event) => {
+    if (openSubmenu && event.target.closest("button") !== openSubmenu.trigger)
+      closeSubmenu();
+  };
+  menu.addEventListener("pointerover", dismissSubmenu);
+  menu.addEventListener("focusin", dismissSubmenu);
   document.body.append(menu);
   // Below the trigger, or above it when the panel is too short; kept inside.
   const bounds = trigger.getBoundingClientRect();
   const panel = document.querySelector(".panel").getBoundingClientRect();
-  const left = Math.min(bounds.left, innerWidth - menu.offsetWidth - 8);
+  let left = Math.min(bounds.left, innerWidth - menu.offsetWidth - 8);
+  if (submenus.length) {
+    let childWidth = 0;
+    for (const submenu of submenus) {
+      submenu.style.visibility = "hidden";
+      document.body.append(submenu);
+      childWidth = Math.max(childWidth, submenu.offsetWidth);
+      submenu.remove();
+      submenu.style.visibility = "";
+    }
+    const layout = menuPairLayout(panel, menu.offsetWidth, childWidth, left);
+    menu.style.minWidth = "0";
+    menu.style.maxWidth = `${layout.parentWidth}px`;
+    for (const submenu of submenus) {
+      submenu.style.minWidth = "0";
+      submenu.style.maxWidth = `${layout.submenuWidth}px`;
+    }
+    left = layout.left;
+  }
   const below = bounds.bottom + 4;
   const top =
     below + menu.offsetHeight <= panel.bottom - 8
@@ -1675,6 +1794,7 @@ document.addEventListener("pointerdown", (event) => {
   if (
     openMenu &&
     !openMenu.menu.contains(event.target) &&
+    !openSubmenu?.menu.contains(event.target) &&
     !openMenu.trigger.contains(event.target)
   )
     closeMenu();
@@ -1814,7 +1934,7 @@ $("import-open").onclick = () => {
       },
       {
         label: tr("accounts.action.import_sub2api"),
-        run: () => syncClaudeSub2api(),
+        children: providerSyncChoices("claude"),
       },
     ]);
     return;
@@ -1834,7 +1954,7 @@ $("import-open").onclick = () => {
     },
     {
       label: tr("accounts.action.import_sub2api"),
-      run: () => openProviderImport(),
+      children: providerSyncChoices("codex"),
     },
   ]);
 };
@@ -1843,7 +1963,11 @@ $("import-open").onclick = () => {
 document.addEventListener("keydown", (event) => {
   if (document.querySelector("dialog[open]")) return;
   if (openMenu) {
-    const items = [...openMenu.menu.querySelectorAll("button")];
+    const activeMenu = openSubmenu?.menu.contains(document.activeElement)
+      ? openSubmenu.menu : openMenu.menu;
+    const items = [...activeMenu.querySelectorAll("button")].filter(
+      (item) => !item.disabled && !item.closest("[hidden]"),
+    );
     const index = items.indexOf(document.activeElement);
     if (event.key === "Escape" || event.key === "Tab") {
       event.preventDefault();
@@ -1857,7 +1981,7 @@ document.addEventListener("keydown", (event) => {
             ? items.length - 1
             : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) %
               items.length;
-      items[next].focus();
+      items[next]?.focus();
     }
     return;
   }

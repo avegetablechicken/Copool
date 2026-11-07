@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-07（按 provider 同步卡片）：Codex / Claude 的 Import 菜单支持独立 provider 子菜单和最右侧右箭头，仅同步所选 provider。鼠标与键盘分别控制高亮；父菜单预留子菜单空间，过长标题省略。前端测试 156 项、单 provider 隔离回归测试及桌面 cargo check 通过，尚未桌面实机验证或打包。
+
 Rust 桌面版本的应用名为 `Copool`，Bundle ID / 应用标识为 `io.github.copool.rust`。
 
 Copool 是 Rust + Tauri 2 桌面应用，目标为 macOS、Windows 和 Linux。原 SwiftUI 版本已从仓库移除，界面与交互仍以它为准，源码可在提交 `cae2fce` 中查阅（如 `git show cae2fce:Sources/Copool/Features/Accounts/AccountsPageModel.swift`）。

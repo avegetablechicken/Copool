@@ -140,40 +140,35 @@ function renderProviders() {
     root.append(form);
   }
 }
-async function openProviderImport() {
-  // The pool can change while the import runs; release the controller that started it.
-  const controller = accountsController;
+function providerSyncChoices(target) {
+  const providers = target === "claude"
+    ? claudeProvidersSaved
+    : providerController.persisted;
+  if (!providers.length) return [{
+    label: extra("Add a provider in Settings first.", "请先在设置中添加服务商。"),
+    disabled: true,
+  }];
+  return providers.map((provider) => ({
+    label: target === "claude" ? provider.name : provider.providerID,
+    run: () => target === "claude"
+      ? syncClaudeSub2api(provider.id)
+      : openProviderImport(provider.providerID),
+  }));
+}
+async function openProviderImport(id) {
+  const controller = poolControllers.codex;
   if (controller.importing) return;
   controller.importing = true;
   syncButtons();
-  await droppingNewCards($("import-open"), () => action(async () => {
-    const settings = await invoke("configuration");
-    const providers = settings.sub2APIProvider.providers;
-    if (!providers.length) {
-      throw new Error(
-        extra(
-          "Add a Sub2api provider in Settings first.",
-          "请先在设置中添加 Sub2api 服务商。",
-        ),
-      );
-    }
-    const failures = [];
-    let count = 0;
-    for (const provider of providers) {
-      try {
-        count += await invoke("refresh_provider", {
-          id: provider.providerID,
-          sync: true,
-        });
-      } catch (error) {
-        failures.push(`${provider.providerID}: ${error}`);
-      }
-    }
-    if (failures.length) throw new Error(failures.join("\n"));
-    notice(tr("accounts.notice.sub2api_imported_format", count));
-  }));
-  controller.importing = false;
-  syncButtons();
+  try {
+    await droppingNewCards($("import-open"), () => action(async () => {
+      const count = await invoke("refresh_provider", { id, sync: true });
+      notice(tr("accounts.notice.sub2api_imported_format", count));
+    }));
+  } finally {
+    controller.importing = false;
+    syncButtons();
+  }
 }
 async function initializeFeatures() {
   [configurationCache, installedEditors] = await Promise.all([
@@ -1100,22 +1095,25 @@ function addClaudeProvider() {
   expandedClaudeProviders.add(id);
   renderClaudeProviders();
 }
-/// Imports the Claude accounts of every Claude Sub2api provider.
-async function syncClaudeSub2api() {
-  // The pool can change while the import runs; release the controller that started it.
-  const controller = accountsController;
+/// Imports the Claude accounts of the selected provider.
+async function syncClaudeSub2api(id) {
+  const controller = poolControllers.claude;
   if (controller.importing) return;
   controller.importing = true;
   syncButtons();
-  await droppingNewCards($("import-open"), () => action(async () => {
-    const count = await invoke("claude_sync_sub2api");
-    // The cards' providers, as the sync left them.
-    await loadClaudeProviders();
-    notice(tr("accounts.notice.sub2api_imported_format", count));
-  }));
-  controller.importing = false;
-  syncButtons();
+  try {
+    await droppingNewCards($("import-open"), () => action(async () => {
+      const count = await invoke("claude_sync_sub2api", { id });
+      // The cards' providers, as the sync left them.
+      await loadClaudeProviders();
+      notice(tr("accounts.notice.sub2api_imported_format", count));
+    }));
+  } finally {
+    controller.importing = false;
+    syncButtons();
+  }
 }
+
 const initializeClaudeFeatures = initializeFeatures;
 initializeFeatures = async () => {
   await initializeClaudeFeatures();

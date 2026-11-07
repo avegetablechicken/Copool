@@ -1106,8 +1106,35 @@ html.linux.composited .tooltip {
   outline: none;
 }
 
+/* Import keeps its keyboard focus, but mouse navigation paints only hover. */
+.import-menu.pointer-navigation button:focus:not(:hover) {
+  background: none;
+  color: inherit;
+}
+.import-menu:not(.pointer-navigation):focus-within button:hover:not(:focus) {
+  background: none;
+  color: inherit;
+}
+
 .action-menu {
   min-width: 150px;
+}
+
+.action-menu button[aria-haspopup="menu"] {
+  position: relative;
+  padding-right: 28px;
+}
+.action-menu button[aria-haspopup="menu"]::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-top: 1.7px solid currentColor;
+  border-right: 1.7px solid currentColor;
+  transform: translateY(-50%) rotate(45deg);
+  pointer-events: none;
 }
 
 /* A menu of choices checks the current one, as a native menu does. */
@@ -2068,4 +2095,18 @@ dialog > .dialog-actions {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* Long localized labels must leave room for the adjacent provider menu. */
+.import-menu > button {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-submenu {
+  z-index: 101;
+}
+.provider-submenu button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }

@@ -336,9 +336,9 @@ async fn claude_refresh_provider(app: State<'_, App>, id: String) -> Result<(), 
     app.claude_refresh_sub2api_provider(&id).await
 }
 #[tauri::command]
-async fn claude_sync_sub2api(app: State<'_, App>) -> Result<usize, String> {
+async fn claude_sync_sub2api(app: State<'_, App>, id: String) -> Result<usize, String> {
     let _ = app.authorize_keychain().await;
-    app.claude_sync_sub2api().await
+    app.claude_sync_sub2api_selection(Some(&id)).await
 }
 #[tauri::command]
 async fn cancel_login(state: State<'_, LoginState>) -> Result<(), String> {
