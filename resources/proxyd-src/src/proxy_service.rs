@@ -60,8 +60,10 @@ const DEFAULT_PROXY_REQUEST_BODY_LIMIT_MIB: usize = 8;
 const DEFAULT_PROXY_REQUEST_BODY_LIMIT_BYTES: usize =
     DEFAULT_PROXY_REQUEST_BODY_LIMIT_MIB * 1024 * 1024;
 const PROXY_REQUEST_BODY_LIMIT_MIB_ENV_VAR: &str = "CODEX_TOOLS_PROXY_MAX_BODY_MIB";
-const CODEX_CLIENT_VERSION: &str = "0.101.0";
-const CODEX_USER_AGENT: &str = "codex_cli_rs/0.101.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464";
+// OpenAI documents 0.144.0 as the minimum Codex CLI for GPT-5.6 (including Luna).
+// https://help.openai.com/en/articles/20001354-gpt-6-and-other-models-in-chatgpt
+const CODEX_CLIENT_VERSION: &str = "0.144.0";
+const CODEX_USER_AGENT: &str = "codex_cli_rs/0.144.0";
 const UNSUPPORTED_RESPONSES_FORWARDING_KEYS: &[&str] = &[
     "prompt_cache_key",
     "prompt_cache_retention",
@@ -3577,6 +3579,11 @@ mod tests {
 
     #[test]
     fn resolves_codex_version_from_explicit_header_then_user_agent_then_fallback() {
+        assert_eq!(CODEX_CLIENT_VERSION, "0.144.0");
+        assert_eq!(
+            parse_codex_version_from_user_agent(super::CODEX_USER_AGENT),
+            Some(CODEX_CLIENT_VERSION)
+        );
         let user_agent = "codex_exec/7.8.9 (Mac OS 26.0.1; arm64)";
         assert_eq!(
             resolve_codex_client_version(Some("9.9.9"), user_agent),
