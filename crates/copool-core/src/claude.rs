@@ -2674,6 +2674,7 @@ impl Application {
     /// login Claude does not accept is renewed by a refresh, as its renewal
     /// allows, and says hi once more. A Sub2api card says hi through Sub2api.
     pub async fn claude_say_hi(&self, id: &str) -> Result<()> {
+        let _greeting = self.begin_greeting(true, id)?;
         if sub2api::is_card(id) {
             return self.claude_say_hi_sub2api(id).await;
         }

@@ -537,6 +537,20 @@
         </div>
       </form>
     </dialog>
+    <dialog id="say-hi-time-dialog">
+      <form id="say-hi-time-form">
+        <h2 data-l10n="accounts.say_hi.custom"></h2>
+        <p id="say-hi-time-name" class="secondary"></p>
+        <input id="say-hi-time" type="time" class="field" required data-title="accounts.say_hi.custom" aria-labelledby="say-hi-time-label" />
+        <p id="say-hi-time-label" class="setting-description" data-l10n="accounts.say_hi.help"></p>
+        <p id="say-hi-time-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" id="say-hi-time-remove" class="btn danger" data-l10n="common.remove"></button>
+          <button type="button" id="say-hi-time-cancel" class="btn" data-l10n="common.cancel"></button>
+          <button type="submit" id="say-hi-time-save" class="btn primary" data-l10n="common.save"></button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="confirm-dialog">
       <form method="dialog">
         <h2 id="confirm-title"></h2>

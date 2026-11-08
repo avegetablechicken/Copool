@@ -25,9 +25,9 @@ test("Provider menu syncs only the chosen saved provider in its pool", () => {
   assert.equal(scope.providerSyncChoices("claude")[0].disabled, true);
 });
 
-test("Import hover suppresses stale focus without moving focus; keyboard restores it", () => {
+test("Menu hover suppresses stale focus without moving focus; keyboard restores it", () => {
   const app = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8");
-  const start = app.indexOf("function configureImportMenu(");
+  const start = app.indexOf("function configureMenuNavigation(");
   const end = app.indexOf("\nfunction showMenu", start);
   const handlers = {};
   const classes = new Set();
@@ -38,14 +38,35 @@ test("Import hover suppresses stale focus without moving focus; keyboard restore
   const scope = {};
   vm.createContext(scope);
   vm.runInContext(app.slice(start, end), scope);
-  scope.configureImportMenu(menu);
-  assert.ok(classes.has("import-menu"));
+  scope.configureMenuNavigation(menu);
   handlers.pointerover();
   assert.ok(classes.has("pointer-navigation"));
   handlers.keydown();
   assert.ok(!classes.has("pointer-navigation"));
   handlers.pointermove();
   assert.ok(classes.has("pointer-navigation"));
+  const childClasses = new Set();
+  const childHandlers = {};
+  const child = {
+    classList: { add: (name) => childClasses.add(name), remove: (name) => childClasses.delete(name) },
+    addEventListener: (name, handler) => { childHandlers[name] = handler; },
+  };
+  const group = [menu, child];
+  scope.configureMenuNavigation(menu, group);
+  scope.configureMenuNavigation(child, group);
+  handlers.pointerover();
+  childHandlers.pointerover();
+  assert.ok(classes.has("inactive-menu"), "hovering Add time clears the parent highlight");
+  assert.ok(classes.has("pointer-navigation"));
+  assert.ok(!childClasses.has("inactive-menu"));
+  childHandlers.keydown();
+  assert.ok(!classes.has("pointer-navigation"));
+  assert.ok(!childClasses.has("pointer-navigation"));
+  childHandlers.focusin();
+  assert.ok(classes.has("inactive-menu"), "keyboard focus in the child suppresses parent hover");
+  handlers.focusin();
+  assert.ok(!classes.has("inactive-menu"));
+  assert.ok(childClasses.has("inactive-menu"), "returning focus restores only the parent");
 });
 
 const appSource = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8");
@@ -144,4 +165,47 @@ test("Different pool labels and provider counts produce the same menu origins", 
       render("Import current Claude Code login", Array(30).fill("A very long provider name"), width),
     );
   }
+});
+
+test("Card menus retain room for their labels at the right edge", () => {
+  for (const panel of [{ left: 0, right: 320 }, { left: 24, right: 484 }]) {
+    for (const width of [150, 210, 280]) {
+      const left = layoutScope.menuLeft(panel, width, panel.right - 24);
+      assert.ok(left >= panel.left + 8);
+      assert.ok(left + width <= panel.right - 8);
+      assert.equal(left + width, panel.right - 8, "move the full-width menu inward");
+      const childWidth = 150;
+      const preferred = left - childWidth + 1;
+      const childLeft = layoutScope.menuLeft(panel, childWidth, preferred);
+      assert.ok(childLeft >= panel.left + 8);
+      assert.ok(childLeft + childWidth <= panel.right - 8);
+    }
+  }
+});
+
+test("Crossing parent rows toward Add time can cancel pending dismissal", () => {
+  let callback;
+  let removed = 0;
+  let cancelled = 0;
+  const scope = {
+    setTimeout(fn, delay) { assert.equal(delay, 350); callback = fn; return 1; },
+    clearTimeout() { cancelled++; callback = null; },
+    child: { menu: { remove() { removed++; } }, trigger: { setAttribute() {} } },
+  };
+  vm.createContext(scope);
+  vm.runInContext(appSource.slice(appSource.indexOf("let openSubmenu = null;"), appSource.indexOf("function closeMenu(")), scope);
+  vm.runInContext("openSubmenu = child", scope);
+  scope.deferSubmenuDismiss();
+  assert.equal(removed, 0, "crossing another row must not immediately close the child");
+  scope.cancelSubmenuDismiss();
+  assert.equal(cancelled, 1, "entering the child or returning to its parent cancels dismissal");
+  assert.equal(callback, null);
+  assert.equal(removed, 0);
+  scope.deferSubmenuDismiss();
+  callback();
+  assert.equal(removed, 1, "remaining on a different row eventually closes the child");
+  vm.runInContext("openSubmenu = child", scope);
+  scope.deferSubmenuDismiss();
+  scope.closeSubmenu();
+  assert.equal(callback, null, "closing the menu cancels its pending timer");
 });

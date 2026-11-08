@@ -98,7 +98,7 @@ test("saying hi goes to the Claude pool, locks the card's refresh without spinni
     assert.equal(locales.split(`"${key}"`).length - 1, 11, `${key} in every locale`);
 });
 
-test("say hi shows only while a known 5h window has yet to start", () => {
+test("say hi now requires an idle window while scheduling stays available", () => {
   const start = source.indexOf("function fiveHourIdle(");
   const idle = vm.runInNewContext(
     `(${source.slice(start, source.indexOf("\n}\n", start) + 2)})`,
@@ -110,7 +110,7 @@ test("say hi shows only while a known 5h window has yet to start", () => {
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 0, resetAt: null } } }), true);
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now - 60 } } }), true, "ended");
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now + 60 } } }), false);
-  assert.match(source, /if \(!collapsed && \(sayingHi\.has\(account\.id\) \|\| canSayHi\(account\)\)\)\n\s+actions\.append\(sayHiButton/);
+  assert.match(source, /if \(!collapsed && \(sayingHi\.has\(account\.id\) \|\| supportsSayHi\(account\)\)\)\n\s+actions\.append\(sayHiButton/);
 });
 
 test("both pools refresh immediately after a reply, then only until the window shows", async () => {

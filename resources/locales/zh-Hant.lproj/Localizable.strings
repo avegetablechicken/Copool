@@ -454,7 +454,7 @@
 
 "accounts.proxy.title" = "帳號代理";
 "accounts.renewal.title" = "權杖續期";
-"accounts.card.say_hi" = "Say hi";
+"accounts.card.say_hi" = "Greet";
 "accounts.card.say_hi.help" = "向 Claude 打個招呼，立即開始 5 小時計時";
 "accounts.card.say_hi.sent" = "已傳送招呼，等待 Claude 回覆";
 "accounts.card.say_hi.received" = "已收到 Claude 回覆，等待 5 小時計時顯示";
@@ -509,3 +509,11 @@
 "accounts.card.codex_say_hi.sent" = "已傳送招呼，等待 Codex 回覆";
 "accounts.card.codex_say_hi.received" = "已收到 Codex 回覆，等待 5 小時計時顯示";
 "error.codex.say_hi_window_not_started" = "Codex 已接受招呼，但 5 小時計時沒有開始";
+
+"accounts.say_hi.custom" = "自選時間";
+"accounts.say_hi.add" = "新增時間";
+"accounts.say_hi.remove" = "刪除";
+"accounts.say_hi.help" = "每天依本地時間執行。Auto 在 5h 視窗結束後自動打招呼。需保持 Copool 執行；錯過的時間不會補發。";
+"accounts.say_hi.now" = "立即打招呼";
+"accounts.say_hi.auto" = "自動打招呼";
+"accounts.say_hi.schedule" = "在指定時間打招呼…";

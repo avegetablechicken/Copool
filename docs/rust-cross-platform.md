@@ -314,3 +314,5 @@ Claude quota countdowns now retain the HTTP Date clock offset per usage window,
 so a fast or slow VM clock does not extend the five-hour window. Reset instants
 remain UTC timestamps and exact dates remain localized. Old caches and responses
 without a valid Date header use the local clock until a successful refresh.
+
+Say hi schedules (Codex Plus and Claude): each account has an independent Auto toggle and multiple daily local HH:MM times persisted in `greetings.json`. The Rust service checks timers every second while Copool is running, including when the panel is hidden. Auto starts a known idle/expired 5h window and retries failed sends no sooner than five minutes later; successful greetings refresh usage without repeating the same window. Scheduled times are claimed before sending and run at most once per local date (including a repeated DST hour); missed minutes while asleep/quit are skipped. Auto catches an expired window after wake/relaunch. New accounts awaiting their first request must be refreshed before scheduling. Native UI interaction and sleep/wake behavior have not yet been manually validated on macOS, Windows or Linux.

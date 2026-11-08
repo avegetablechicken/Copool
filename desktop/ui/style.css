@@ -1106,18 +1106,34 @@ html.linux.composited .tooltip {
   outline: none;
 }
 
-/* Import keeps its keyboard focus, but mouse navigation paints only hover. */
-.import-menu.pointer-navigation button:focus:not(:hover) {
+/* Paint only the active navigation target across the parent/child pair. */
+.action-menu.pointer-navigation button:focus:not(:hover) {
   background: none;
   color: inherit;
 }
-.import-menu:not(.pointer-navigation):focus-within button:hover:not(:focus) {
+.action-menu:not(.pointer-navigation):focus-within button:hover:not(:focus) {
+  background: none;
+  color: inherit;
+}
+
+.action-menu.inactive-menu button:hover,
+.action-menu.inactive-menu button:focus {
   background: none;
   color: inherit;
 }
 
 .action-menu {
+  /* Size from labels plus checkmark/arrow padding before positioning. A
+     fixed box with auto width otherwise shrinks at a right-edge anchor. */
+  width: max-content;
   min-width: 150px;
+  max-width: calc(100vw - 16px);
+}
+
+.action-menu > button {
+  /* Only wrap when the entire panel is narrower than a translated label. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .action-menu button[aria-haspopup="menu"] {
@@ -2099,14 +2115,13 @@ dialog > .dialog-actions {
 
 /* Long localized labels must leave room for the adjacent provider menu. */
 .import-menu > button {
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .provider-submenu {
   z-index: 101;
-  width: max-content;
-  min-width: 0;
 }
 .provider-submenu button:disabled {
   opacity: 0.5;

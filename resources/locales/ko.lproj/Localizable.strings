@@ -472,7 +472,7 @@
 
 "accounts.proxy.title" = "계정 프록시";
 "accounts.renewal.title" = "토큰 갱신";
-"accounts.card.say_hi" = "Say hi";
+"accounts.card.say_hi" = "Greet";
 "accounts.card.say_hi.help" = "Claude에게 인사해 5시간 창을 지금 시작";
 "accounts.card.say_hi.sent" = "인사를 보냈습니다. Claude의 답장을 기다리는 중";
 "accounts.card.say_hi.received" = "Claude가 답장했습니다. 5시간 창이 표시되기를 기다리는 중";
@@ -529,3 +529,11 @@
 "accounts.card.codex_say_hi.sent" = "인사를 보냈습니다. Codex의 답장을 기다리는 중";
 "accounts.card.codex_say_hi.received" = "Codex가 답장했습니다. 5시간 창이 표시되기를 기다리는 중";
 "error.codex.say_hi_window_not_started" = "Codex가 인사를 받았지만 5시간 창이 시작되지 않았습니다";
+
+"accounts.say_hi.custom" = "Custom times";
+"accounts.say_hi.add" = "Add time";
+"accounts.say_hi.remove" = "Remove";
+"accounts.say_hi.help" = "Daily, local time. Auto starts an idle 5h window. Copool must be running; missed times are skipped.";
+"accounts.say_hi.now" = "지금 인사하기";
+"accounts.say_hi.auto" = "자동으로 인사하기";
+"accounts.say_hi.schedule" = "지정한 시간에 인사하기…";

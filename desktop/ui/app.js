@@ -600,7 +600,7 @@ function accountControls(account, full, view, grouped = false) {
     return actions;
   }
   // Start an idle subscription window with a small model request.
-  if (!collapsed && (sayingHi.has(account.id) || canSayHi(account)))
+  if (!collapsed && (sayingHi.has(account.id) || supportsSayHi(account)))
     actions.append(sayHiButton(account, full));
   if (grouped) return actions;
   const refresh = button("", "refresh", "icon-btn card-refresh", () =>
@@ -625,7 +625,9 @@ function accountControls(account, full, view, grouped = false) {
 }
 /// Claude subscriptions and official Codex Plus cards can start an idle window.
 function canSayHi(account) {
-  if (!fiveHourIdle(account)) return false;
+  return fiveHourIdle(account) && supportsSayHi(account);
+}
+function supportsSayHi(account) {
   if (pool === "claude") return true;
   const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
   return account.sourceTag !== "SUB2API" && plan === "plus";
@@ -687,11 +689,10 @@ function sayHiButton(account, full) {
     "",
     phase ? `say-hi-${phase}` : "say-hi",
     `icon-btn card-say-hi${phase ? ` ${phase}` : ""}`,
-    () =>
-      sayHi(account)
-        .catch((error) => notice(error, true))
-        .finally(() => refreshView().catch((error) => notice(error, true))),
+    () => showSayHiMenu(control, account).catch((error) => notice(error, true)),
   );
+  control.setAttribute("aria-haspopup", "menu");
+  control.setAttribute("aria-expanded", "false");
   const prefix = pool === "codex" ? "accounts.card.codex_say_hi" : "accounts.card.say_hi";
   control.title = tr(`${prefix}.${phase || "help"}`);
   control.setAttribute(
@@ -703,6 +704,69 @@ function sayHiButton(account, full) {
     accountsController.refreshingIds.has(account.id) ||
     accountsController.remoteRefreshingIds.has(account.id);
   return control;
+}
+async function showSayHiMenu(trigger, account) {
+  if (openMenu?.trigger === trigger) {
+    closeMenu(true);
+    return;
+  }
+  const targetPool = pool;
+  const args = { claude: targetPool === "claude", id: account.id };
+  const schedule = await invoke("greeting_schedule", args);
+  if (pool !== targetPool || !trigger.isConnected) return;
+  const save = async (auto, times) => {
+    await invoke("set_greeting_schedule", { ...args, auto, times });
+    schedule.auto = auto;
+    schedule.times = times;
+  };
+  const run = (action) => () => action().catch((error) => notice(error, true));
+  const editTime = (previous = "") => {
+    const dialog = $("say-hi-time-dialog");
+    const input = $("say-hi-time");
+    const error = $("say-hi-time-error");
+    const remove = $("say-hi-time-remove");
+    const submit = $("say-hi-time-save");
+    input.value = previous;
+    error.textContent = schedule.lastError || "";
+    error.hidden = !schedule.lastError;
+    remove.hidden = !previous;
+    $("say-hi-time-name").textContent = account.email || account.label;
+    const commit = async (times) => {
+      submit.disabled = remove.disabled = true;
+      try {
+        await save(schedule.auto, times);
+        dialog.close();
+      } catch (reason) {
+        error.textContent = String(reason);
+        error.hidden = false;
+      } finally {
+        submit.disabled = remove.disabled = false;
+      }
+    };
+    $("say-hi-time-form").onsubmit = (event) => {
+      event.preventDefault();
+      if (submit.disabled || !input.reportValidity()) return;
+      commit([...new Set([...schedule.times.filter((t) => t !== previous), input.value])].sort());
+    };
+    remove.onclick = () => commit(schedule.times.filter((t) => t !== previous));
+    $("say-hi-time-cancel").onclick = () => dialog.close();
+    dialog.showModal();
+    input.focus();
+  };
+  showMenu(trigger, [
+    { label: tr("accounts.say_hi.now"), disabled: !canSayHi(account), run: run(async () => {
+      await sayHi(account);
+      await refreshView();
+    }) },
+    { label: tr("accounts.say_hi.auto"), checked: schedule.auto, run: run(() => save(!schedule.auto, schedule.times)) },
+    { label: tr("accounts.say_hi.schedule"), children: [
+      ...schedule.times.map((time) => ({
+        label: time,
+        run: () => editTime(time),
+      })),
+      { label: `${tr("accounts.say_hi.add")}…`, run: () => editTime() },
+    ] },
+  ]);
 }
 /// The plan tag. Codex treats an unknown plan as Team; Claude shows none
 /// until its plan is known.
@@ -1634,7 +1698,21 @@ $("collapse-all").onclick = () => {
 // native menu would take away.
 let openMenu = null;
 let openSubmenu = null;
+let submenuDismissTimer = null;
+function cancelSubmenuDismiss() {
+  if (submenuDismissTimer !== null) clearTimeout(submenuDismissTimer);
+  submenuDismissTimer = null;
+}
+function deferSubmenuDismiss() {
+  if (submenuDismissTimer !== null || !openSubmenu) return;
+  const pending = openSubmenu;
+  submenuDismissTimer = setTimeout(() => {
+    submenuDismissTimer = null;
+    if (openSubmenu === pending) closeSubmenu();
+  }, 350);
+}
 function closeSubmenu(restoreFocus = false) {
+  cancelSubmenuDismiss();
   if (!openSubmenu) return;
   const { menu, trigger } = openSubmenu;
   openSubmenu = null;
@@ -1657,13 +1735,26 @@ function closeMenu(restoreFocus = false) {
   trigger.setAttribute("aria-expanded", "false");
   if (restoreFocus) trigger.focus();
 }
-// Mouse hover and keyboard focus are separate states. In Import menus,
-// show only hover while using the pointer, without moving keyboard focus.
-function configureImportMenu(menu) {
-  menu.classList.add("import-menu");
-  menu.addEventListener("pointerover", () => menu.classList.add("pointer-navigation"));
-  menu.addEventListener("pointermove", () => menu.classList.add("pointer-navigation"));
-  menu.addEventListener("keydown", () => menu.classList.remove("pointer-navigation"));
+// Parent and child share one navigation mode and one highlighted menu.
+// Hover must not leave a previously focused row painted in either menu.
+function configureMenuNavigation(menu, group = [menu]) {
+  const activate = () => {
+    for (const member of group) {
+      if (member === menu) member.classList.remove("inactive-menu");
+      else member.classList.add("inactive-menu");
+    }
+  };
+  const pointer = () => {
+    for (const member of group) member.classList.add("pointer-navigation");
+    activate();
+  };
+  menu.addEventListener("pointerover", pointer);
+  menu.addEventListener("pointermove", pointer);
+  menu.addEventListener("focusin", activate);
+  menu.addEventListener("keydown", () => {
+    for (const member of group) member.classList.remove("pointer-navigation");
+    activate();
+  });
 }
 // Keep the parent aligned with its button. Fit the menu pair into the
 // space to its right instead of shifting the parent away from its anchor.
@@ -1679,30 +1770,46 @@ function importMenuLayout(panel, preferredLeft) {
   // a maximum for the child; its actual width follows its provider names.
   return menuPairLayout(panel, 200, 150, preferredLeft);
 }
+// Preserve the menu's measured width; move it inward instead of squeezing it.
+function menuLeft(panel, width, preferredLeft) {
+  return Math.max(panel.left + 8, Math.min(preferredLeft, panel.right - width - 8));
+}
 function showMenu(trigger, items) {
   closeMenu();
   const menu = el("div", "select-menu action-menu");
   const submenus = [];
-  if (trigger.id === "import-open") configureImportMenu(menu);
+  const navigationGroup = [menu];
+  configureMenuNavigation(menu, navigationGroup);
+  if (trigger.id === "import-open") menu.classList.add("import-menu");
   menu.setAttribute("role", "menu");
-  // Choices show a check mark on the current one, as a native menu.
-  const choices = items.some((item) => "selected" in item);
+  // Reserve the checkmark gutter only when an item is actually checked.
+  const choices = items.some((item) => item.selected || item.checked);
   menu.classList.toggle("choices", choices);
   for (const item of items) {
     const option = el("button", "", item.label);
     if (item.icon) option.prepend(item.icon);
     option.type = "button";
-    option.setAttribute("role", choices ? "menuitemradio" : "menuitem");
-    if (choices) option.setAttribute("aria-checked", item.selected ? "true" : "false");
+    option.disabled = !!item.disabled;
+    option.setAttribute("role", "selected" in item ? "menuitemradio" : "menuitem");
+    if ("selected" in item) option.setAttribute("aria-checked", item.selected ? "true" : "false");
+    if ("checked" in item) {
+      option.setAttribute("role", "menuitemcheckbox");
+      option.setAttribute("aria-checked", String(item.checked));
+    }
     menu.append(option);
     if (item.children) {
       const submenu = el("div", "select-menu action-menu provider-submenu");
-      if (trigger.id === "import-open") configureImportMenu(submenu);
+      navigationGroup.push(submenu);
+      configureMenuNavigation(submenu, navigationGroup);
+      if (trigger.id === "import-open") submenu.classList.add("import-menu");
+      submenu.addEventListener("pointerenter", cancelSubmenuDismiss);
+      submenu.addEventListener("focusin", cancelSubmenuDismiss);
       submenu.setAttribute("role", "menu");
       submenu.setAttribute("aria-label", item.label);
       option.setAttribute("aria-haspopup", "menu");
       option.setAttribute("aria-expanded", "false");
       const expand = () => {
+        cancelSubmenuDismiss();
         if (openSubmenu?.trigger === option) return;
         closeSubmenu();
         document.body.append(submenu);
@@ -1716,7 +1823,7 @@ function showMenu(trigger, items) {
         // Align to the parent row in both pools; long lists scroll below it.
         const top = Math.max(panel.top + 8,
           Math.min(bounds.top - 4, panel.bottom - 32));
-        submenu.style.left = `${Math.max(panel.left + 8, left)}px`;
+        submenu.style.left = `${menuLeft(panel, submenu.offsetWidth, left)}px`;
         submenu.style.top = `${top}px`;
         submenu.style.maxHeight = `${panel.bottom - top - 8}px`;
         openSubmenu = { menu: submenu, trigger: option };
@@ -1758,20 +1865,27 @@ function showMenu(trigger, items) {
       };
     }
   }
-  // Dismiss only the submenu when moving to another parent item; leave
-  // the parent menu's original pointer and keyboard focus behavior alone.
-  const dismissSubmenu = (event) => {
-    if (openSubmenu && event.target.closest("button") !== openSubmenu.trigger)
-      closeSubmenu();
-  };
-  menu.addEventListener("pointerover", dismissSubmenu);
-  menu.addEventListener("focusin", dismissSubmenu);
+  // Padding is the bridge between the two menus, not another choice.
+  // Give diagonal pointer travel across adjacent rows time to reach the child.
+  menu.addEventListener("pointerover", (event) => {
+    const row = event.target.closest("button");
+    if (!openSubmenu) return;
+    if (!row || row === openSubmenu.trigger) cancelSubmenuDismiss();
+    else deferSubmenuDismiss();
+  });
+  menu.addEventListener("focusin", (event) => {
+    const row = event.target.closest("button");
+    if (openSubmenu && row && row !== openSubmenu.trigger) closeSubmenu();
+  });
   document.body.append(menu);
   // Below the trigger, or above it when the panel is too short; kept inside.
   const bounds = trigger.getBoundingClientRect();
   const panel = document.querySelector(".panel").getBoundingClientRect();
-  let left = Math.max(panel.left + 8,
-    Math.min(bounds.left, panel.right - menu.offsetWidth - 8));
+  // Freeze the intrinsic width before assigning left: positioning must not
+  // change the measured width (especially for cards along the right edge).
+  menu.style.maxWidth = `${Math.max(0, panel.right - panel.left - 16)}px`;
+  menu.style.width = `${menu.offsetWidth}px`;
+  let left = menuLeft(panel, menu.offsetWidth, bounds.left);
   if (submenus.length && trigger.id === "import-open") {
     const layout = importMenuLayout(panel, bounds.left);
     menu.style.minWidth = "0";
@@ -1781,24 +1895,10 @@ function showMenu(trigger, items) {
       submenu.style.maxWidth = `${layout.submenuWidth}px`;
     }
     left = layout.left;
-  } else if (submenus.length) {
-    let childWidth = 0;
-    for (const submenu of submenus) {
-      submenu.style.visibility = "hidden";
-      document.body.append(submenu);
-      childWidth = Math.max(childWidth, submenu.offsetWidth);
-      submenu.remove();
-      submenu.style.visibility = "";
-    }
-    const layout = menuPairLayout(panel, menu.offsetWidth, childWidth, left);
-    menu.style.minWidth = "0";
-    menu.style.maxWidth = `${layout.parentWidth}px`;
-    for (const submenu of submenus) {
-      submenu.style.minWidth = "0";
-      submenu.style.maxWidth = `${layout.submenuWidth}px`;
-    }
-    left = layout.left;
   }
+  // Other card menus keep their normal width; expand() opens the child to
+  // the left when the trigger is near the panel's right edge.
+
   const below = bounds.bottom + 4;
   const top =
     below + menu.offsetHeight <= panel.bottom - 8
@@ -1810,7 +1910,7 @@ function showMenu(trigger, items) {
   trigger.setAttribute("aria-expanded", "true");
   openMenu = { menu, trigger };
   (
-    menu.querySelector("[aria-checked=true]") || menu.querySelector("button")
+    menu.querySelector("[aria-checked=true]") || menu.querySelector("button:not(:disabled)")
   )?.focus();
 }
 document.addEventListener("pointerdown", (event) => {

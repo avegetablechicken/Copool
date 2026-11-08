@@ -292,6 +292,24 @@ async fn claude_refresh_usage(app: State<'_, App>, id: Option<String>) -> Result
     }
 }
 #[tauri::command]
+async fn greeting_schedule(
+    app: State<'_, App>,
+    claude: bool,
+    id: String,
+) -> Result<copool_core::GreetingSchedule, String> {
+    app.greeting_schedule(claude, &id).await
+}
+#[tauri::command]
+async fn set_greeting_schedule(
+    app: State<'_, App>,
+    claude: bool,
+    id: String,
+    auto: bool,
+    times: Vec<String>,
+) -> Result<(), String> {
+    app.set_greeting_schedule(claude, &id, auto, times).await
+}
+#[tauri::command]
 async fn say_hi(app: State<'_, App>, id: String) -> Result<(), String> {
     let _ = app.authorize_keychain().await;
     app.release_new_accounts(Some(&id)).await?;
@@ -770,6 +788,8 @@ fn main() {
             claude_switch_account,
             claude_smart_switch,
             claude_refresh_usage,
+            greeting_schedule,
+            set_greeting_schedule,
             claude_say_hi,
             say_hi,
             claude_save_account_proxy,

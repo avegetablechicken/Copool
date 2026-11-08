@@ -509,3 +509,11 @@
 "accounts.card.codex_say_hi.sent" = "Bonjour envoyé ; en attente de la réponse de Codex";
 "accounts.card.codex_say_hi.received" = "Codex a répondu ; en attente de l’affichage de la fenêtre de 5 heures";
 "error.codex.say_hi_window_not_started" = "Codex a accepté le bonjour, mais la fenêtre de 5 heures n’a pas commencé";
+
+"accounts.say_hi.custom" = "Custom times";
+"accounts.say_hi.add" = "Add time";
+"accounts.say_hi.remove" = "Remove";
+"accounts.say_hi.help" = "Daily, local time. Auto starts an idle 5h window. Copool must be running; missed times are skipped.";
+"accounts.say_hi.now" = "Dire bonjour maintenant";
+"accounts.say_hi.auto" = "Dire bonjour automatiquement";
+"accounts.say_hi.schedule" = "Dire bonjour à…";

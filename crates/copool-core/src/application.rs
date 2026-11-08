@@ -185,6 +185,7 @@ pub struct Application {
     pub(crate) state: AppState,
     pub(crate) operations: Mutex<()>,
     proxy_operations: Mutex<()>,
+    pub(crate) greetings_inflight: std::sync::Mutex<std::collections::BTreeSet<String>>,
     // Prevent two app processes from concurrently mutating the same account pool.
     _instance_lock: fs::File,
     switch_effects: Arc<std::sync::RwLock<Option<SwitchEffect>>>,
@@ -264,6 +265,7 @@ impl Application {
             state: AppState::default(),
             operations: Mutex::new(()),
             proxy_operations: Mutex::new(()),
+            greetings_inflight: Default::default(),
             _instance_lock: file,
             switch_effects: Arc::new(std::sync::RwLock::new(None)),
             refreshing: Default::default(),
@@ -935,6 +937,7 @@ impl Application {
     }
     /// Send one small request with this card's login, without switching accounts.
     pub async fn say_hi(&self, id: &str) -> Result<()> {
+        let _greeting = self.begin_greeting(false, id)?;
         if self.cached_provider_account(id)?.is_some() {
             return Err("Say hi requires a ChatGPT Plus account".into());
         }
@@ -1333,7 +1336,11 @@ impl Application {
             let _ = self.start_proxy().await;
         }
         // Independent loops keep a slow provider from delaying the other pool.
-        tokio::join!(self.background_pool(false), self.background_pool(true));
+        tokio::join!(
+            self.background_pool(false),
+            self.background_pool(true),
+            self.clone().background_greetings()
+        );
     }
     async fn background_pool(&self, claude: bool) {
         let mut tick = 0u64;
