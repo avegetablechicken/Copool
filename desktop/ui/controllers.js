@@ -207,8 +207,7 @@
         this.onUpdate();
       }
     }
-    /// Claude only: says hi with an account, which starts its five-hour
-    /// window; the card cannot refresh until Claude replies.
+    /// Says hi with an account; refresh waits until the model replies.
     async sayHi(id) {
       if (
         this.manualRefreshing ||

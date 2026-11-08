@@ -933,6 +933,59 @@ impl Application {
             execution,
         })
     }
+    /// Send one small request with this card's login, without switching accounts.
+    pub async fn say_hi(&self, id: &str) -> Result<()> {
+        if self.cached_provider_account(id)?.is_some() {
+            return Err("Say hi requires a ChatGPT Plus account".into());
+        }
+        let mut renewed = false;
+        loop {
+            let account = {
+                let _lock = self.state.store_lock.lock().await;
+                store::load_store_from_path(&self.paths.store())?
+                    .accounts
+                    .into_iter()
+                    .find(|a| a.id == id)
+                    .ok_or("Account not found")?
+            };
+            let plan = account
+                .usage
+                .as_ref()
+                .and_then(|u| u.plan_type.as_deref())
+                .filter(|p| !p.trim().is_empty())
+                .or(account.plan_type.as_deref())
+                .unwrap_or_default();
+            if !plan.trim().eq_ignore_ascii_case("plus") {
+                return Err("Say hi requires a ChatGPT Plus account".into());
+            }
+            let live = self
+                .current_auth()
+                .ok()
+                .flatten()
+                .filter(|live| newer_login(live, &account.auth_json));
+            let auth = live.as_ref().unwrap_or(&account.auth_json);
+            let expired =
+                auth::access_token_expiry(auth).is_some_and(|at| at <= now_unix_seconds());
+            let result = if expired {
+                Err("Provided authentication token is expired".into())
+            } else {
+                let base = crate::usage::chatgpt_base_origin(
+                    crate::codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
+                );
+                proxy_service::say_hi(&base, auth, &self.account_proxy(&account.proxy_url)?).await
+            };
+            match result {
+                // Like Claude, renew only when authentication requires it.
+                // An explicit greeting never preflights or skips based on usage.
+                Err(error) if !renewed && crate::account_network::expired_error(&error) => {
+                    renewed = true;
+                    self.refresh_usage(id).await?;
+                }
+                result => return result,
+            }
+        }
+    }
+
     pub async fn refresh_usage(&self, id: &str) -> Result<()> {
         self.refresh_usage_if_needed(id, true).await
     }

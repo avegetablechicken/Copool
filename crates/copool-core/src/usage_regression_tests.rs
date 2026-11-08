@@ -330,3 +330,46 @@ async fn empty_plus_window_is_confirmed_once_on_the_same_endpoint() {
         );
     }
 }
+
+#[tokio::test]
+async fn explicit_codex_greeting_sends_without_usage_preflight_or_reset_shortcut() {
+    use serde_json::json;
+    for succeeds in [true, false] {
+        let (_dir, app) = super::fixture();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        let server = serve(move |r| {
+            seen.lock().unwrap().push((r.method.clone(), r.path.clone()));
+            assert_eq!(r.path, "/backend-api/codex/responses", "no usage preflight");
+            assert_eq!(r.headers["chatgpt-account-id"], "greeting-workspace");
+            let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+            assert_eq!(body["input"][0]["content"][0]["text"], "Hi");
+            if succeeds {
+                (StatusCode::OK, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n".into())
+            } else {
+                (StatusCode::TOO_MANY_REQUESTS, "rate limited".into())
+            }
+        }).await;
+        std::fs::create_dir_all(app.codex_config_path().parent().unwrap()).unwrap();
+        std::fs::write(
+            app.codex_config_path(),
+            format!("chatgpt_base_url = {:?}\n", server.base),
+        )
+        .unwrap();
+        let mut account = super::stored("greeting", "fixture-user", "greeting-workspace");
+        account["planType"] = json!("plus");
+        // Even a future cached reset must not silently turn a click into success.
+        account["usage"] = json!({"fetchedAt": 1, "planType": "plus", "fiveHour": {
+            "usedPercent": 0, "windowSeconds": 18000,
+            "resetAt": crate::utils::now_unix_seconds() + 18000
+        }});
+        super::save_fixture(&app, json!({"accounts": [account]}));
+        let result = app.say_hi("greeting").await;
+        assert_eq!(result.is_ok(), succeeds, "{result:?}");
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![("POST".into(), "/backend-api/codex/responses".into())]
+        );
+        assert!(app.refresh_activity().is_empty());
+    }
+}

@@ -504,3 +504,8 @@
 "accounts.proxy.shared_help_format" = "HTTP, HTTPS o SOCKS5. Lascia vuoto per usare il proxy condiviso degli account (%@).";
 
 "accounts.proxy.enabled" = "Abilita proxy";
+
+"accounts.card.codex_say_hi.help" = "Saluta Codex per avviare ora la finestra di 5 ore";
+"accounts.card.codex_say_hi.sent" = "Saluto inviato; in attesa della risposta di Codex";
+"accounts.card.codex_say_hi.received" = "Codex ha risposto; in attesa che compaia la finestra di 5 ore";
+"error.codex.say_hi_window_not_started" = "Codex ha accettato il saluto, ma la finestra di 5 ore non è iniziata";

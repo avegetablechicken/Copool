@@ -292,6 +292,12 @@ async fn claude_refresh_usage(app: State<'_, App>, id: Option<String>) -> Result
     }
 }
 #[tauri::command]
+async fn say_hi(app: State<'_, App>, id: String) -> Result<(), String> {
+    let _ = app.authorize_keychain().await;
+    app.release_new_accounts(Some(&id)).await?;
+    app.say_hi(&id).await
+}
+#[tauri::command]
 async fn claude_say_hi(app: State<'_, App>, id: String) -> Result<(), String> {
     let _ = app.claude_authorize().await;
     app.claude_release_new_accounts(Some(&id)).await?;
@@ -765,6 +771,7 @@ fn main() {
             claude_smart_switch,
             claude_refresh_usage,
             claude_say_hi,
+            say_hi,
             claude_save_account_proxy,
             claude_set_renewal,
             claude_sub2api_providers,

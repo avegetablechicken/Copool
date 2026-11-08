@@ -504,3 +504,8 @@
 "accounts.proxy.shared_help_format" = "HTTP, HTTPS или SOCKS5. Оставьте пустым, чтобы использовать общий прокси аккаунтов (%@).";
 
 "accounts.proxy.enabled" = "Включить прокси";
+
+"accounts.card.codex_say_hi.help" = "Поздороваться с Codex, чтобы сразу начать 5-часовое окно";
+"accounts.card.codex_say_hi.sent" = "Приветствие отправлено; ждём ответа Codex";
+"accounts.card.codex_say_hi.received" = "Codex ответил; ждём, когда появится 5-часовое окно";
+"error.codex.say_hi_window_not_started" = "Codex принял приветствие, но 5-часовое окно не началось";

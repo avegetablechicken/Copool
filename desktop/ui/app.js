@@ -599,9 +599,8 @@ function accountControls(account, full, view, grouped = false) {
     actions.append(signInAgain);
     return actions;
   }
-  // A Claude card, a Sub2api provider's too, says hi to start its 5h window
-  // while that window has yet to start.
-  if (pool === "claude" && !collapsed && fiveHourIdle(account))
+  // Start an idle subscription window with a small model request.
+  if (!collapsed && (sayingHi.has(account.id) || canSayHi(account)))
     actions.append(sayHiButton(account, full));
   if (grouped) return actions;
   const refresh = button("", "refresh", "icon-btn card-refresh", () =>
@@ -624,17 +623,21 @@ function accountControls(account, full, view, grouped = false) {
   }
   return actions;
 }
-/// Whether the account's 5h window has yet to start: its usage, once known,
-/// shows no window, or one without a reset ahead.
+/// Claude subscriptions and official Codex Plus cards can start an idle window.
+function canSayHi(account) {
+  if (!fiveHourIdle(account)) return false;
+  if (pool === "claude") return true;
+  const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
+  return account.sourceTag !== "SUB2API" && plan === "plus";
+}
+/// Known usage with no future reset indicates an idle window.
 function fiveHourIdle(account) {
   if (!account.usage) return false;
   return !(account.usage.fiveHour?.resetAt > Date.now() / 1000);
 }
-/// When after Claude's reply its card is refreshed, in seconds, while its
-/// 5h window has not shown: the usage Claude reports shows it from tens of
-/// seconds to minutes later.
+/// Both pools use the same delayed usage checks after the model replies.
 const SAY_HI_LOOKS = [10, 30, 90, 180];
-/// Cards saying hi, by how far: "sent" until Claude replies, then
+/// Cards saying hi, by how far: "sent" until the model replies, then
 /// "received" while their 5h window has yet to show.
 const sayingHi = new Map();
 /// Says hi with the account, which starts its 5h window, then refreshes its
@@ -644,6 +647,7 @@ const sayingHi = new Map();
 /// other, is reported at once; one still not shown at the last, then.
 async function sayHi(account) {
   const controller = accountsController;
+  const targetPool = pool;
   const shown = () => {
     const card = controller.accounts.find((a) => a.id === account.id);
     return !card || card.usage?.fiveHour?.resetAt > Date.now() / 1000;
@@ -653,7 +657,10 @@ async function sayHi(account) {
   try {
     if (!(await controller.sayHi(account.id))) return;
     sayingHi.set(account.id, "received");
+    controller.onUpdate();
     const replied = Date.now();
+    // Always fetch usage after the reply; a cached reset cannot confirm this hi.
+    await controller.refresh(account.id);
     for (const at of SAY_HI_LOOKS) {
       if (shown()) break;
       await refreshView();
@@ -667,7 +674,7 @@ async function sayHi(account) {
       await controller.refresh(account.id);
     }
     if (shown()) notice(tr("accounts.notice.said_hi"));
-    else notice(tr("error.claude.say_hi_window_not_started"), true);
+    else notice(tr(`error.${targetPool}.say_hi_window_not_started`), true);
   } finally {
     sayingHi.delete(account.id);
   }
@@ -685,7 +692,8 @@ function sayHiButton(account, full) {
         .catch((error) => notice(error, true))
         .finally(() => refreshView().catch((error) => notice(error, true))),
   );
-  control.title = tr(phase ? `accounts.card.say_hi.${phase}` : "accounts.card.say_hi.help");
+  const prefix = pool === "codex" ? "accounts.card.codex_say_hi" : "accounts.card.say_hi";
+  control.title = tr(`${prefix}.${phase || "help"}`);
   control.setAttribute(
     "aria-label",
     `${phase ? control.title : tr("accounts.card.say_hi")} ${full}`,

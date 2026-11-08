@@ -534,3 +534,8 @@
 "accounts.proxy.shared_help_format" = "支持 HTTP、HTTPS 或 SOCKS5；留空使用账号统一代理（%@）。";
 
 "accounts.proxy.enabled" = "启用代理";
+
+"accounts.card.codex_say_hi.help" = "向 Codex 打个招呼，立即开始 5 小时计时";
+"accounts.card.codex_say_hi.sent" = "已发送招呼，等待 Codex 回复";
+"accounts.card.codex_say_hi.received" = "已收到 Codex 回复，等待 5 小时计时显示";
+"error.codex.say_hi_window_not_started" = "Codex 已接受招呼，但 5 小时计时没有开始";

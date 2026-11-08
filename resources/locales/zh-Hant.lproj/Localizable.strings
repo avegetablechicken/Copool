@@ -504,3 +504,8 @@
 "accounts.proxy.shared_help_format" = "支援 HTTP、HTTPS 或 SOCKS5；留空使用帳號統一代理（%@）。";
 
 "accounts.proxy.enabled" = "啟用代理";
+
+"accounts.card.codex_say_hi.help" = "向 Codex 打個招呼，立即開始 5 小時計時";
+"accounts.card.codex_say_hi.sent" = "已傳送招呼，等待 Codex 回覆";
+"accounts.card.codex_say_hi.received" = "已收到 Codex 回覆，等待 5 小時計時顯示";
+"error.codex.say_hi_window_not_started" = "Codex 已接受招呼，但 5 小時計時沒有開始";

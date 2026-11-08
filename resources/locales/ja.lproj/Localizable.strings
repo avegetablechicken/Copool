@@ -524,3 +524,8 @@
 "accounts.proxy.shared_help_format" = "HTTP、HTTPS、SOCKS5 に対応。空欄の場合はアカウント共通プロキシ（%@）を使用します。";
 
 "accounts.proxy.enabled" = "プロキシを有効にする";
+
+"accounts.card.codex_say_hi.help" = "Codex に挨拶して 5 時間枠を今すぐ開始";
+"accounts.card.codex_say_hi.sent" = "挨拶を送信しました。Codex の返信を待っています";
+"accounts.card.codex_say_hi.received" = "Codex から返信がありました。5 時間枠の表示を待っています";
+"error.codex.say_hi_window_not_started" = "Codex は挨拶を受け付けましたが、5 時間枠は始まっていません";

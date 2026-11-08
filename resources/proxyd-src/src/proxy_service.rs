@@ -1629,6 +1629,61 @@ async fn send_codex_request_over_candidates(
     Err(json_error_response(StatusCode::BAD_GATEWAY, &merged_error))
 }
 
+/// A bounded greeting on the selected subscription, independent of proxy routing.
+pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), String> {
+    let auth = crate::auth::extract_auth(auth)?;
+    let client = crate::proxy_session::client(
+        proxy,
+        crate::proxy_session::Options {
+            timeout: std::time::Duration::from_secs(60),
+            user_agent: CODEX_USER_AGENT.into(),
+            ..Default::default()
+        },
+    )?;
+    let url = format!(
+        "{}/responses",
+        resolve_upstream_base_url(base, UpstreamRouteFamily::Codex)
+    );
+    let (payload, _) = normalize_openai_responses_request(json!({
+        "model": "gpt-5.6-luna",
+        "instructions": "Reply only with Hi.",
+        "input": "Hi",
+        "reasoning": {"effort": "low"}
+    }))?;
+    let mut response = client
+        .post(url)
+        .bearer_auth(&auth.access_token)
+        .header("ChatGPT-Account-Id", &auth.account_id)
+        .header("Originator", "codex_cli_rs")
+        .header("Version", CODEX_CLIENT_VERSION)
+        .header("Session_id", uuid::Uuid::new_v4().to_string())
+        .header("Accept", "text/event-stream")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Codex greeting failed: {e}"))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Provided authentication token is expired".into());
+    }
+    let status = response.status();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if body.len() + chunk.len() > 1024 * 1024 {
+            return Err("Codex greeting response exceeded 1 MiB".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    if !status.is_success() {
+        let detail = extract_error_signals(&Bytes::from(body)).brief;
+        return Err(format!("Codex greeting failed: HTTP {status}: {detail}"));
+    }
+    let reply = extract_completed_response_from_sse(&body)?;
+    if reply["status"] != "completed" {
+        return Err("Codex greeting did not complete".into());
+    }
+    Ok(())
+}
+
 async fn forward_codex_request_with_candidate(
     context: &ProxyContext,
     candidate: &ProxyCandidate,
@@ -4565,4 +4620,62 @@ fn is_payload_oversized(buffer: &[u8], limit: usize) -> bool {
             name.eq_ignore_ascii_case("content-length")
                 && value.trim().parse::<u64>().is_ok_and(|n| n > limit as u64)
         })
+}
+
+#[cfg(test)]
+mod say_hi_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn greeting_uses_selected_login_and_requires_completed_response() {
+        use axum::{extract::Request, routing::any, Router};
+        for (status, reply, succeeds) in [
+            (200, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n", true),
+            (200, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"quota exhausted\"}}}\n\n", false),
+            (200, "data: {\"type\":\"response.created\"}\n\n", false),
+            (400, r#"{"error":{"message":"Unsupported value for input type","code":"invalid_request_error"}}"#, false),
+            (401, "unauthorized", false),
+            (429, "rate limited", false),
+        ] {
+            let seen = Arc::new(std::sync::Mutex::new(None));
+            let recorder = seen.clone();
+            let router = Router::new().fallback(any(move |request: Request| {
+                let recorder = recorder.clone();
+                async move {
+                    let uri = request.uri().path().to_owned();
+                    let headers = request.headers().clone();
+                    let bytes = axum::body::to_bytes(request.into_body(), 4096).await.unwrap();
+                    let body: Value = serde_json::from_slice(&bytes).unwrap();
+                    *recorder.lock().unwrap() = Some((uri, headers, body));
+                    (StatusCode::from_u16(status).unwrap(), reply)
+                }
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/backend-api/codex", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let auth = serde_json::json!({"tokens": {"access_token": "test-only", "id_token": "test-only", "account_id": "selected-account"}});
+            let result = say_hi(&base, &auth, "").await;
+            server.abort();
+            assert_eq!(result.is_ok(), succeeds, "{result:?}");
+            if status == 400 {
+                assert!(result.unwrap_err().contains("Unsupported value for input type"));
+            }
+            let (uri, headers, body) = seen.lock().unwrap().take().unwrap();
+            assert_eq!(uri, "/backend-api/codex/responses");
+            assert_eq!(headers["authorization"], "Bearer test-only");
+            assert_eq!(headers["chatgpt-account-id"], "selected-account");
+            assert_eq!(headers["version"], "0.144.0");
+            assert_eq!(headers["user-agent"], "codex_cli_rs/0.144.0");
+            assert_eq!(parse_codex_version_from_user_agent(CODEX_USER_AGENT), Some(CODEX_CLIENT_VERSION));
+            assert_eq!(body["input"][0]["content"][0]["text"], "Hi");
+            assert_eq!(body["input"][0]["type"], "message");
+            assert_eq!(body["model"], "gpt-5.6-luna");
+            assert_eq!(body["reasoning"]["effort"], "low");
+            assert_eq!(body["parallel_tool_calls"], true);
+            assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+            assert_eq!(body["stream"], true);
+            assert_eq!(body["store"], false);
+            assert!(body.get("tools").is_none());
+        }
+    }
 }

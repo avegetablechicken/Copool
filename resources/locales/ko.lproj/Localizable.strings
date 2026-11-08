@@ -524,3 +524,8 @@
 "accounts.proxy.shared_help_format" = "HTTP, HTTPS 또는 SOCKS5를 지원합니다. 비워 두면 계정 공통 프록시(%@)를 사용합니다.";
 
 "accounts.proxy.enabled" = "프록시 활성화";
+
+"accounts.card.codex_say_hi.help" = "Codex에게 인사해 5시간 창을 지금 시작";
+"accounts.card.codex_say_hi.sent" = "인사를 보냈습니다. Codex의 답장을 기다리는 중";
+"accounts.card.codex_say_hi.received" = "Codex가 답장했습니다. 5시간 창이 표시되기를 기다리는 중";
+"error.codex.say_hi_window_not_started" = "Codex가 인사를 받았지만 5시간 창이 시작되지 않았습니다";

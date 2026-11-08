@@ -110,54 +110,91 @@ test("say hi shows only while a known 5h window has yet to start", () => {
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 0, resetAt: null } } }), true);
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now - 60 } } }), true, "ended");
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now + 60 } } }), false);
-  assert.match(source, /if \(pool === "claude" && !collapsed && fiveHourIdle\(account\)\)\n\s+actions\.append\(sayHiButton/);
+  assert.match(source, /if \(!collapsed && \(sayingHi\.has\(account\.id\) \|\| canSayHi\(account\)\)\)\n\s+actions\.append\(sayHiButton/);
 });
 
-test("after a hi the card is refreshed again only until its 5h window shows", async () => {
+test("both pools refresh immediately after a reply, then only until the window shows", async () => {
   const start = source.indexOf("const SAY_HI_LOOKS =");
   const end = source.indexOf("/// Says hi with the account; shown");
   // [refreshes before the window shows, or the second another refresh shows it]
-  for (const [shownAfter, shownAt, expected] of [
-    [0, Infinity, { refreshes: 0, slept: 0, notices: [["accounts.notice.said_hi", false]] }],
-    [2, Infinity, { refreshes: 2, slept: 30000, notices: [["accounts.notice.said_hi", false]] }],
-    [Infinity, 15, { refreshes: 1, slept: 15000, notices: [["accounts.notice.said_hi", false]] }],
-    [Infinity, Infinity, { refreshes: 4, slept: 180000, notices: [["error.claude.say_hi_window_not_started", true]] }],
-  ]) {
-    const notices = [];
-    const phases = [];
-    let refreshes = 0;
-    let clock = Date.now();
-    const replied = clock;
-    const card = { id: "a", usage: { fiveHour: { resetAt: null } } };
-    const show = () => {
-      if (refreshes >= shownAfter || clock - replied >= shownAt * 1000)
-        card.usage.fiveHour.resetAt = clock / 1000 + 600;
-    };
-    const accountsController = {
-      accounts: [card],
-      sayHi: async () => (phases.push(scope.pending.get("a")), show(), true),
-      refresh: async () => (refreshes++, show(), true),
-    };
-    const scope = {
-      Date: { now: () => clock },
-      Math,
-      Set,
-      Map,
-      Promise,
-      accountsController,
-      refreshView: async () => phases.push(scope.pending.get("a")),
-      setTimeout: (resolve, ms) => ((clock += ms), show(), resolve()),
-      tr: (key) => key,
-      notice: (message, error = false) => notices.push([message, error]),
-    };
-    vm.createContext(scope);
-    vm.runInContext(`${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`, scope);
-    await scope.run({ id: "a" });
-    assert.equal(refreshes, expected.refreshes);
-    assert.equal(clock - replied, expected.slept);
-    assert.deepEqual(notices, expected.notices);
-    assert.equal(scope.pending.size, 0);
-    assert.equal(phases[0], "sent");
-    assert(phases.slice(1).every((phase) => phase === "received"));
+  for (const target of ["claude", "codex"]) {
+    for (const [shownAfter, shownAt, expected] of [
+      [0, Infinity, { refreshes: 1, slept: 0, notices: [["accounts.notice.said_hi", false]] }],
+      [2, Infinity, { refreshes: 2, slept: 10000, notices: [["accounts.notice.said_hi", false]] }],
+      [Infinity, 15, { refreshes: 2, slept: 15000, notices: [["accounts.notice.said_hi", false]] }],
+      [Infinity, Infinity, { refreshes: 5, slept: 180000, notices: [["error.claude.say_hi_window_not_started", true]] }],
+    ]) {
+      const notices = [];
+      const phases = [];
+      let refreshes = 0;
+      let clock = Date.now();
+      const replied = clock;
+      const card = { id: "a", usage: { fiveHour: { resetAt: null } } };
+      const show = () => {
+        if (refreshes >= shownAfter || clock - replied >= shownAt * 1000)
+          card.usage.fiveHour.resetAt = clock / 1000 + 600;
+      };
+      const accountsController = {
+        accounts: [card],
+        onUpdate: () => phases.push(scope.pending.get("a")),
+        sayHi: async () => (phases.push(scope.pending.get("a")), show(), true),
+        refresh: async () => {
+          assert.equal(scope.pending.get("a"), "received", "refresh follows model reply");
+          if (refreshes === 0) assert.equal(clock, replied, "first refresh has no delay");
+          refreshes++;
+          show();
+          return true;
+        },
+      };
+      const scope = {
+        Date: { now: () => clock },
+        Math,
+        Set,
+        Map,
+        Promise,
+        accountsController,
+        pool: target,
+        refreshView: async () => phases.push(scope.pending.get("a")),
+        setTimeout: (resolve, ms) => ((clock += ms), show(), resolve()),
+        tr: (key) => key,
+        notice: (message, error = false) => notices.push([message, error]),
+      };
+      vm.createContext(scope);
+      vm.runInContext(`${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`, scope);
+      await scope.run({ id: "a" });
+      assert.equal(refreshes, expected.refreshes);
+      assert.equal(clock - replied, expected.slept);
+      assert.deepEqual(notices, expected.notices.map(([key, error]) => [key.replace("error.claude.", `error.${target}.`), error]));
+      assert.equal(scope.pending.size, 0);
+      assert.equal(phases[0], "sent");
+      assert(phases.slice(1).every((phase) => phase === "received"));
+    }
   }
+});
+
+
+test("Codex Plus greetings route to their own account command", async () => {
+  const { model, calls } = fixture("codex");
+  assert.equal(await model.sayHi("a"), true);
+  assert(calls.some(([name, args]) => name === "say_hi" && args.id === "a"));
+  assert(!calls.some(([name]) => name === "claude_say_hi"));
+});
+
+test("Codex greetings are limited to idle official Plus cards", () => {
+  const start = source.indexOf("function canSayHi(");
+  const end = source.indexOf("/// Both pools", start);
+  const scope = { pool: "codex", Date };
+  vm.createContext(scope);
+  vm.runInContext(source.slice(start, end), scope);
+  const card = { planType: "plus", usage: {} };
+  assert.equal(scope.canSayHi(card), true);
+  assert.equal(scope.canSayHi({ ...card, usage: null }), false);
+  assert.equal(scope.canSayHi({ ...card, sourceTag: "SUB2API" }), false);
+  for (const planType of ["pro", "free", "team", ""]) {
+    assert.equal(scope.canSayHi({ ...card, planType }), false);
+  }
+  assert.equal(scope.canSayHi({ ...card, usage: { planType: "pro" } }), false);
+  assert.equal(scope.canSayHi({ ...card, usage: { fiveHour: { resetAt: Date.now() / 1000 + 100 } } }), false);
+  scope.pool = "claude";
+  assert.equal(scope.canSayHi({ ...card, planType: "max" }), true);
 });
