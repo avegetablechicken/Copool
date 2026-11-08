@@ -262,3 +262,71 @@ fn a_missing_five_hour_window_counts_as_no_five_hour_limit() {
     assert_eq!(usage(None, Some(20.)).five_hour_remaining(), Some(100.));
     assert_eq!(usage(None, None).five_hour_remaining(), None);
 }
+
+#[tokio::test]
+async fn empty_plus_window_is_confirmed_once_on_the_same_endpoint() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for mode in ["idle", "active", "used", "failed", "malformed", "not-empty"] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let first_reset = crate::utils::now_unix_seconds() + 18000;
+        let server = serve(move |r| {
+            if r.path != "/backend-api/wham/usage" {
+                return (StatusCode::NOT_FOUND, "{}".into());
+            }
+            let n = count.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(r.headers["authorization"], "Bearer fixture-token");
+            assert_eq!(r.headers["chatgpt-account-id"], "fixture-account");
+            if n > 0 {
+                assert_eq!(r.headers["cache-control"], "no-cache");
+                if mode == "failed" {
+                    return (StatusCode::TOO_MANY_REQUESTS, "{}".into());
+                }
+                if mode == "malformed" {
+                    return (StatusCode::OK, "not json".into());
+                }
+            }
+            let reset = if mode == "idle" || mode == "used" {
+                crate::utils::now_unix_seconds() + 18000
+            } else {
+                first_reset
+            };
+            let used = if mode == "not-empty" || (mode == "used" && n > 0) { 1 } else { 0 };
+            (StatusCode::OK, serde_json::json!({
+                "plan_type": "plus",
+                "rate_limit": {"primary_window": {
+                    "used_percent": used, "limit_window_seconds": 18000, "reset_at": reset
+                }, "secondary_window": {
+                    "used_percent": 12, "limit_window_seconds": 604800, "reset_at": first_reset + 604800
+                }}
+            }).to_string())
+        }).await;
+        let snapshot = fetch_usage_from_urls(
+            &background_client("").unwrap(),
+            &[format!("{}/backend-api/wham/usage", server.base)],
+            "fixture-token",
+            "fixture-account",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            if mode == "not-empty" { 1 } else { 2 },
+            "{mode}"
+        );
+        let window = snapshot.five_hour.unwrap();
+        assert_eq!(window.reset_at.is_none(), mode == "idle", "{mode}");
+        assert_eq!(
+            window.used_percent,
+            if mode == "used" || mode == "not-empty" {
+                1.0
+            } else {
+                0.0
+            }
+        );
+        assert_eq!(
+            snapshot.one_week.unwrap().reset_at,
+            Some(first_reset + 604800)
+        );
+    }
+}

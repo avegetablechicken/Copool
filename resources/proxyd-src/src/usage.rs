@@ -90,6 +90,38 @@ pub(crate) async fn fetch_usage_from_urls(
         )
         .await?;
     let mut snapshot = map_usage_payload(result.value);
+    if idle_window_candidate(&snapshot) {
+        // reset_at has whole-second precision. Cross a second boundary so
+        // an immediate confirmation can distinguish a moving placeholder
+        // from a fixed deadline, even when both requests are very fast.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let confirmation = client
+            .get(&result.endpoint)
+            .bearer_auth(access_token)
+            .header("ChatGPT-Account-Id", account_id)
+            .header("Accept", "application/json")
+            .header("User-Agent", "codex-tools-swift/0.1")
+            .header("Cache-Control", "no-cache")
+            .send()
+            .await;
+        // Confirm only on the endpoint that answered. A failed confirmation
+        // must not discard the successful reading or try other origins.
+        if let Ok(response) = confirmation {
+            if response.status().is_success() {
+                if let Ok(payload) = response.json::<UsageApiResponse>().await {
+                    let mut latest = map_usage_payload(payload);
+                    if moving_idle_window(&snapshot, &latest) {
+                        if let Some(window) = latest.five_hour.as_mut() {
+                            // A rolling placeholder is not an actual reset.
+                            // Preserve the window and quota, but omit its timer.
+                            window.reset_at = None;
+                        }
+                    }
+                    snapshot = latest;
+                }
+            }
+        }
+    }
     // The /api/codex/usage fallback has no sibling reset endpoint; as in the
     // Swift usage service, reset credits always come from backend-api/wham.
     let reset_url = if let Some(origin) = result.endpoint.strip_suffix(CODEX_USAGE_PATH) {
@@ -124,6 +156,36 @@ pub(crate) async fn fetch_usage_from_urls(
         }
     }
     Ok(snapshot)
+}
+
+fn idle_window_candidate(snapshot: &UsageSnapshot) -> bool {
+    snapshot
+        .plan_type
+        .as_deref()
+        .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("plus"))
+        && snapshot.five_hour.as_ref().is_some_and(|window| {
+            window.used_percent == 0.0
+                && [0, FIVE_HOUR_SECONDS].contains(&window.window_seconds)
+                && window.reset_at.is_some_and(|reset| {
+                    (reset - snapshot.fetched_at - FIVE_HOUR_SECONDS).abs() <= 60
+                })
+        })
+}
+
+fn moving_idle_window(first: &UsageSnapshot, latest: &UsageSnapshot) -> bool {
+    if !idle_window_candidate(first) || !idle_window_candidate(latest) {
+        return false;
+    }
+    let elapsed = latest.fetched_at - first.fetched_at;
+    let first_reset = first.five_hour.as_ref().and_then(|w| w.reset_at);
+    let latest_reset = latest.five_hour.as_ref().and_then(|w| w.reset_at);
+    match (first_reset, latest_reset) {
+        (Some(before), Some(after)) => {
+            // Allow a second of rounding/network jitter, never a fixed reset.
+            elapsed > 0 && after > before && (after - before - elapsed).abs() <= 1
+        }
+        _ => false,
+    }
 }
 
 /// Usage endpoints under the configured ChatGPT origin, then the official ones.
@@ -347,4 +409,46 @@ pub(crate) fn parse_payload(value: serde_json::Value, now: i64) -> Result<UsageS
     let mut snapshot = map_usage_payload(payload);
     snapshot.fetched_at = now;
     Ok(snapshot)
+}
+
+#[cfg(test)]
+mod idle_window_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn reading(now: i64, reset: i64, used: f64) -> UsageSnapshot {
+        parse_payload(
+            json!({
+                "plan_type": "plus",
+                "rate_limit": {"primary_window": {
+                    "used_percent": used, "limit_window_seconds": 18000, "reset_at": reset
+                }}
+            }),
+            now,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn only_empty_plus_windows_near_five_hours_need_confirmation() {
+        assert!(idle_window_candidate(&reading(1000, 19000, 0.0)));
+        assert!(idle_window_candidate(&reading(1000, 18940, 0.0)));
+        assert!(!idle_window_candidate(&reading(1000, 18939, 0.0)));
+        assert!(!idle_window_candidate(&reading(1000, 19061, 0.0)));
+        assert!(!idle_window_candidate(&reading(1000, 19000, 0.1)));
+        let mut pro = reading(1000, 19000, 0.0);
+        pro.plan_type = Some("pro".into());
+        assert!(!idle_window_candidate(&pro));
+    }
+
+    #[test]
+    fn fixed_resets_or_new_usage_never_confirm_an_idle_window() {
+        let first = reading(1000, 19000, 0.0);
+        assert!(moving_idle_window(&first, &reading(1002, 19002, 0.0)));
+        assert!(!moving_idle_window(&first, &reading(1002, 19000, 0.0)));
+        assert!(!moving_idle_window(&first, &reading(1002, 19002, 0.1)));
+        assert!(!moving_idle_window(&first, &reading(1000, 19000, 0.0)));
+        assert!(!moving_idle_window(&first, &reading(1002, 19020, 0.0)));
+        assert!(!moving_idle_window(&first, &reading(999, 19001, 0.0)));
+    }
 }
