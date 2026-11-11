@@ -41,6 +41,7 @@ pub fn load() -> Result<NativeIcons, String> {
         ("server", "server.rack"),
         ("folder", "folder"),
         ("warning", "exclamationmark.triangle"),
+        ("reset-notice", "exclamationmark.circle"),
     ];
     for (key, symbol) in names {
         // The Coport-style panel draws icons at 11–14 pt.

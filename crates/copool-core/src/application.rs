@@ -1951,6 +1951,7 @@ mod tests {
         account.usage = Some(UsageSnapshot {
             remaining_reset_count: None,
             reset_expiries: Vec::new(),
+            reset_grants: Vec::new(),
             fetched_at: now_unix_seconds(),
             plan_type: None,
             five_hour: Some(UsageWindow {

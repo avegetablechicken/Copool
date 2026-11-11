@@ -517,3 +517,8 @@
 "accounts.say_hi.now" = "Nu hallo zeggen";
 "accounts.say_hi.auto" = "Automatisch hallo zeggen";
 "accounts.say_hi.schedule" = "Hallo zeggen om…";
+
+"accounts.card.reset_full" = "Volledige reset";
+"accounts.card.reset_fable" = "Fable-reset";
+"accounts.card.reset_partial" = "Gedeeltelijke reset";
+"accounts.card.reset_unknown" = "Bereik onbekend";

@@ -4558,6 +4558,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             usage: Some(UsageSnapshot {
                 remaining_reset_count: None,
                 reset_expiries: Vec::new(),
+                reset_grants: Vec::new(),
                 fetched_at: 0,
                 plan_type: None,
                 five_hour: five_hour_used.map(|used_percent| UsageWindow {

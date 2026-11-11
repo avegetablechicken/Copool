@@ -283,6 +283,7 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
     UsageSnapshot {
         remaining_reset_count: resets.and_then(reset_count),
         reset_expiries: resets.map(reset_expiries).unwrap_or_default(),
+        reset_grants: Vec::new(),
         fetched_at: now_unix_seconds(),
         plan_type: payload.plan_type,
         five_hour,

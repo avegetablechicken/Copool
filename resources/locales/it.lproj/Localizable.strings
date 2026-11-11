@@ -517,3 +517,8 @@
 "accounts.say_hi.now" = "Saluta ora";
 "accounts.say_hi.auto" = "Saluta automaticamente";
 "accounts.say_hi.schedule" = "Saluta alle…";
+
+"accounts.card.reset_full" = "Ripristino completo";
+"accounts.card.reset_fable" = "Ripristino Fable";
+"accounts.card.reset_partial" = "Ripristino parziale";
+"accounts.card.reset_unknown" = "Ambito sconosciuto";

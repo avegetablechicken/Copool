@@ -80,6 +80,7 @@ const ICONS = {
   server:
     '<rect x="2" y="3" width="18" height="6" rx="2"/><rect x="2" y="13" width="18" height="6" rx="2"/><path d="M5 6h1M5 16h1M10 6h7M10 16h7"/>',
   warning: '<path d="m11 2 10 18H1Z"/><path d="M11 8v5M11 16v1"/>',
+  "reset-notice": '<circle cx="11" cy="11" r="8.5"/><path d="M11 6.5v6M11 15.5v.5"/>',
 };
 function icon(name) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -936,8 +937,8 @@ function accountCard(account, grouped = false) {
   // Sub2api cards keep their credits, which their usage reports.
   const credits =
     view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
-  const count = account.usage?.remainingResetCount;
-  const resets = count != null && count >= 0 ? count : null;
+  const inventory = P.resetInventory(account.usage);
+  const resets = inventory.count;
   const footer = el("div", "account-footer");
   const footerText = el(
     "span",
@@ -954,15 +955,32 @@ function accountCard(account, grouped = false) {
       resets ?? "--",
     ),
   );
-  // Its tooltip lists when each remaining reset expires, as in OpenQuota.
-  const now = Date.now() / 1000;
-  const expiries = (account.usage?.resetExpiries ?? []).filter((at) => at > now);
-  if (resets && expiries.length)
-    resetCount.title = expiries
-      .map((at) =>
-        tr("accounts.card.reset_expires_format", P.formatReset(at, locale)),
-      )
-      .join("\n");
+  const details = [];
+  const kinds = {
+    full: "accounts.card.reset_full",
+    fable: "accounts.card.reset_fable",
+    partial: "accounts.card.reset_partial",
+    unknown: "accounts.card.reset_unknown",
+  };
+  for (const grant of inventory.grants) {
+    let detail = `${tr(kinds[grant.kind] || kinds.unknown)} × ${grant.count}`;
+    if (grant.expiresAt != null)
+      detail += ` · ${tr("accounts.card.reset_expires_format", P.formatReset(grant.expiresAt, locale))}`;
+    details.push(detail);
+  }
+  // Older snapshots and Codex retain their expiry-only tooltip.
+  if (!inventory.grants.length && resets)
+    details.push(...(account.usage?.resetExpiries ?? [])
+      .filter((at) => at > Date.now() / 1000)
+      .map((at) => tr("accounts.card.reset_expires_format", P.formatReset(at, locale))));
+  if (inventory.warning) {
+    const warning = el("span", "reset-warning");
+    warning.append(icon("reset-notice"));
+    resetCount.append(warning);
+    resetCount.tabIndex = 0;
+    resetCount.setAttribute("aria-label", `${resetCount.textContent}. ${details.join("\n")}`);
+  }
+  if (details.length) resetCount.title = details.join("\n");
   footerText.append(resetCount);
   footer.append(footerText, accountControls(account, full, view, grouped));
   card.append(

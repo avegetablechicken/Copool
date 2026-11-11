@@ -517,3 +517,8 @@
 "accounts.say_hi.now" = "Поздороваться сейчас";
 "accounts.say_hi.auto" = "Здороваться автоматически";
 "accounts.say_hi.schedule" = "Поздороваться в…";
+
+"accounts.card.reset_full" = "Полный сброс";
+"accounts.card.reset_fable" = "Сброс Fable";
+"accounts.card.reset_partial" = "Частичный сброс";
+"accounts.card.reset_unknown" = "Область сброса неизвестна";

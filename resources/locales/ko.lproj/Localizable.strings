@@ -537,3 +537,8 @@
 "accounts.say_hi.now" = "지금 인사하기";
 "accounts.say_hi.auto" = "자동으로 인사하기";
 "accounts.say_hi.schedule" = "지정한 시간에 인사하기…";
+
+"accounts.card.reset_full" = "전체 초기화";
+"accounts.card.reset_fable" = "Fable 초기화";
+"accounts.card.reset_partial" = "부분 초기화";
+"accounts.card.reset_unknown" = "초기화 범위 불명";

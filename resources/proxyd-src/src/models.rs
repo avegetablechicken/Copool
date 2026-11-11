@@ -121,11 +121,32 @@ pub struct UsageSnapshot {
     /// those whose expiry upstream reports.
     #[serde(default)]
     pub reset_expiries: Vec<i64>,
+    /// Claude grant inventory; absent in older snapshots and other providers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reset_grants: Vec<ResetGrant>,
     pub fetched_at: i64,
     pub plan_type: Option<String>,
     pub five_hour: Option<UsageWindow>,
     pub one_week: Option<UsageWindow>,
     pub credits: Option<CreditSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetGrant {
+    pub count: i64,
+    pub kind: ResetKind,
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResetKind {
+    Full,
+    Fable,
+    Partial,
+    #[serde(other)]
+    Unknown,
 }
 
 impl UsageSnapshot {

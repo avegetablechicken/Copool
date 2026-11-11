@@ -2127,3 +2127,15 @@ dialog > .dialog-actions {
   opacity: 0.5;
   cursor: default;
 }
+
+/* Keep the reset warning directly after the combined count. */
+.reset-warning {
+  display: inline-flex;
+  margin-left: 4px;
+  vertical-align: -2px;
+  color: inherit;
+}
+.reset-warning .icon {
+  width: 12px;
+  height: 12px;
+}

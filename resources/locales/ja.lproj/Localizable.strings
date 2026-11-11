@@ -537,3 +537,8 @@
 "accounts.say_hi.now" = "今すぐ挨拶する";
 "accounts.say_hi.auto" = "自動で挨拶する";
 "accounts.say_hi.schedule" = "時刻を指定して挨拶する…";
+
+"accounts.card.reset_full" = "完全リセット";
+"accounts.card.reset_fable" = "Fable リセット";
+"accounts.card.reset_partial" = "部分リセット";
+"accounts.card.reset_unknown" = "リセット範囲不明";

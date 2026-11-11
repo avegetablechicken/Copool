@@ -517,3 +517,8 @@
 "accounts.say_hi.now" = "Dire bonjour maintenant";
 "accounts.say_hi.auto" = "Dire bonjour automatiquement";
 "accounts.say_hi.schedule" = "Dire bonjour à…";
+
+"accounts.card.reset_full" = "Réinitialisation complète";
+"accounts.card.reset_fable" = "Réinitialisation Fable";
+"accounts.card.reset_partial" = "Réinitialisation partielle";
+"accounts.card.reset_unknown" = "Portée inconnue";

@@ -517,3 +517,8 @@
 "accounts.say_hi.now" = "立即打招呼";
 "accounts.say_hi.auto" = "自動打招呼";
 "accounts.say_hi.schedule" = "在指定時間打招呼…";
+
+"accounts.card.reset_full" = "Full reset";
+"accounts.card.reset_fable" = "Fable reset";
+"accounts.card.reset_partial" = "部分重置";
+"accounts.card.reset_unknown" = "重置範圍未知";

@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-11（Claude reset 类型）：用量查询使用 `/api/oauth/usage?cedar_ember=1&skip_spend=1`，读取 `cedar_ember.grants` 的 `resets_left`、`ends_at`、`gives_back_weekly` 和 `clears`。Fable 周用量返还优先识别为 Fable；完整清除五小时和全模型周窗口的 grant 为 Full，其余范围为 Partial / Unknown。卡片显示未过期数量合计，包含非 Full 或范围未知项时在数字后加与文字同色的圆圈感叹号提示（macOS 使用 `exclamationmark.circle`），tooltip 仅展示 reset 类型、数量和到期时间。旧缓存与 Codex 保留原有显示，刷新后 Claude 获得类型信息。依据：[官方 Fable 说明](https://support.claude.com/en/articles/17506494-claude-fable-5-2-launch-offers)及 [Claude Code 2.1.322 字段核验记录](https://github.com/1jehuang/jcode/blob/master/docs/anthropic-fable-resets.md)。通过用户指定的 `127.0.0.1:8787` HTTP 代理和 Claude 文件凭据只读查询成功（HTTP 200）：1 次 Fable + 1 次 Full。两者 `type` 均为 `full`，已用真实响应的非敏感字段补充回归测试，确认必须依据 `gives_back_weekly` / `clears` 区分；未修改凭据、续期或消耗 reset。格式、UI 语法、164 项前端测试、8 项桌面测试及独立 daemon 检查通过；核心测试 477 通过、2 忽略，2 项既有钥匙串测试因无法访问钥匙串失败（此前文档已记录同类限制）。新增 reset 分类回归测试通过。尚未打包或进行跨平台实机验证。
+
 2026-11-08（Codex Plus Say hi）：官方 Plus 空闲卡片复用 Claude 的按钮、发送/回复状态与轮询代码，使用所选账户的凭据和代理发送 Hi；有效登录直接请求模型，仅认证失效时按现有策略恢复后重试。收到回复立即刷新用量，再按 10/30/90/180 秒检查至窗口出现。请求复用代理规范化与错误解析，模型为 gpt-5.6-luna、推理 low，使用已提交的默认 Codex 0.144.0 版本头。核心、桌面、159 项前端测试和独立 daemon 检查通过；用户已反馈问候成功，回复后立即刷新的调整仅经模拟测试，未重新打包或跨平台实机验证。
 
 2026-11-08（Plus 空闲窗口复查）：五小时用量为 0 且距重置约五小时（±60 秒）时，间隔 1.1 秒在同一接口复查一次。两次均满足条件且重置时间随查询间隔后移（允许 1 秒误差），才清除占位倒计时；固定时间或新增用量保留最新读数，复查失败保留首次读数。这是启发式判断，不是上游状态标志。本机模拟测试覆盖空闲、已启动、新增用量、限流、无效响应及无需复查；核心测试和独立 daemon 检查通过，未进行跨平台实机验证。

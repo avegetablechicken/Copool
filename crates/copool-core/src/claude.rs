@@ -4,7 +4,7 @@
 use crate::{
     account_network::Response,
     application::{Application, SmartSwitchOutcome, SwitchExecution},
-    models::{AccountSummary, CreditSnapshot, UsageSnapshot, UsageWindow},
+    models::{AccountSummary, CreditSnapshot, ResetGrant, ResetKind, UsageSnapshot, UsageWindow},
     persistence::write_json,
     utils::now_unix_seconds,
 };
@@ -21,7 +21,7 @@ mod sub2api;
 pub use sub2api::Provider as Sub2ApiProvider;
 
 // `cedar_ember=1` adds the banked usage-limit resets to the usage response.
-const USAGE_PATH: &str = "/api/oauth/usage?cedar_ember=1";
+const USAGE_PATH: &str = "/api/oauth/usage?cedar_ember=1&skip_spend=1";
 const PROFILE_PATH: &str = "/api/oauth/profile";
 const ORGANIZATIONS_PATH: &str = "/api/oauth/organizations";
 /// Where Claude Code sends its login's requests without a base URL.
@@ -36,8 +36,8 @@ const INTERACTIVE_USER_AGENT: &str = "claude-cli/2.1.300 (external, cli)";
 const USER_AGENT: &str = "claude-code/2.1.69";
 // The banked resets are returned only to Claude Code 2.1.280 or later, by its
 // User-Agent; others read `eligible: false` with the rest of the usage intact.
-// This is the earliest version that receives them.
-const USAGE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
+// 2.1.322 also understands Fable grants and their weekly-refund flag.
+const USAGE_USER_AGENT: &str = "claude-cli/2.1.322 (external, cli)";
 /// How long usage is asked as `claude-code/…` through a proxy after the
 /// usage endpoint refused `claude-cli/…` there.
 const CLI_REFUSAL_SECONDS: i64 = 3600;
@@ -1014,13 +1014,14 @@ fn usage_snapshot(body: &Value, plan: Option<String>, now: i64) -> Result<UsageS
                 reset_at: reset_at(&w["resets_at"]),
             })
     };
-    let (resets, reset_expiries) = banked_resets(&body["cedar_ember"], now)
-        .map_or((None, Vec::new()), |(count, expiries)| {
-            (Some(count), expiries)
-        });
+    let (resets, reset_expiries, reset_grants) = banked_resets(&body["cedar_ember"], now).map_or(
+        (None, Vec::new(), Vec::new()),
+        |(count, expiries, grants)| (Some(count), expiries, grants),
+    );
     Ok(UsageSnapshot {
         remaining_reset_count: resets,
         reset_expiries,
+        reset_grants,
         fetched_at: now,
         plan_type: plan,
         five_hour: window("five_hour", 5 * 60 * 60),
@@ -1082,12 +1083,12 @@ fn extra_usage_credits(extra: &Value, prepaid: &Value) -> Option<CreditSnapshot>
 /// the account, so it is unknown rather than zero. With the count come when
 /// its resets expire, earliest first: each reset a grant has left ends with
 /// it. Grant ids, which spend a reset, are never read.
-fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>)> {
+fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>, Vec<ResetGrant>)> {
     if block["eligible"].as_bool() != Some(true) {
         return None;
     }
     let grants = block["grants"].as_array()?;
-    let (mut count, mut expiries) = (0, Vec::new());
+    let (mut count, mut expiries, mut inventory) = (0, Vec::new(), Vec::new());
     for grant in grants {
         let ends = reset_at(&grant["ends_at"]);
         if ends.is_some_and(|end| end <= now) {
@@ -1096,6 +1097,27 @@ fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>)> {
         let Some(left) = number(&grant["resets_left"]).map(|left| left.max(0.0) as i64) else {
             continue;
         };
+        if left == 0 {
+            continue;
+        }
+        // Claude Code classifies the weekly Fable refund by this flag.
+        // It does not clear other models' weekly usage, even when it clears 5h.
+        let kind = if grant["gives_back_weekly"].as_bool() == Some(true) {
+            ResetKind::Fable
+        } else if let Some(clears) = grant["clears"].as_array() {
+            if clears.iter().any(|v| v == "seven_day") && clears.iter().any(|v| v == "five_hour") {
+                ResetKind::Full
+            } else {
+                ResetKind::Partial
+            }
+        } else {
+            ResetKind::Unknown
+        };
+        inventory.push(ResetGrant {
+            count: left,
+            kind,
+            expires_at: ends,
+        });
         count += left;
         expiries.extend(
             ends.into_iter()
@@ -1103,7 +1125,7 @@ fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>)> {
         );
     }
     expiries.sort_unstable();
-    Some((count, expiries))
+    Some((count, expiries, inventory))
 }
 /// Usage of a Claude account as Sub2api reports it. Sub2api reports an idle
 /// five-hour window as zero without a reset, which is no window at all.
@@ -2840,6 +2862,75 @@ mod tests {
     use super::*;
     use crate::Preferences;
     use std::sync::Mutex;
+
+    #[test]
+    fn live_reset_shape_uses_refund_flag_even_when_both_types_say_full() {
+        // Read-only OAuth usage response, 2026-11-11. IDs and labels omitted.
+        let body = json!({"cedar_ember": {"eligible": true, "grants": [
+            {"type":"full", "resets_left":1, "ends_at":"2026-11-17T07:59:00+00:00",
+             "gives_back_weekly":true, "clears":["five_hour","seven_day_overage_included"]},
+            {"type":"full", "resets_left":1, "ends_at":"2026-12-10T22:00:00+00:00",
+             "gives_back_weekly":false, "clears":["five_hour","seven_day","seven_day_overage_included"]}
+        ]}});
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-11T00:00:00Z")
+            .unwrap()
+            .timestamp();
+        let usage = usage_snapshot(&body, None, now).unwrap();
+        assert_eq!(usage.remaining_reset_count, Some(2));
+        assert_eq!(usage.reset_grants[0].kind, ResetKind::Fable);
+        assert_eq!(usage.reset_grants[1].kind, ResetKind::Full);
+    }
+
+    #[test]
+    fn reset_inventory_distinguishes_weekly_refunds_from_full_resets() {
+        let grant = |left, ends, clears: Value, refund| {
+            json!({
+                "resets_left": left, "ends_at": ends, "clears": clears,
+                "gives_back_weekly": refund
+            })
+        };
+        let body = json!({"cedar_ember": {"eligible": true, "grants": [
+            grant(1, 300, json!(["five_hour", "seven_day"]), false),
+            grant(2, 400, json!(["five_hour", "seven_day_overage_included"]), true),
+            grant(1, 500, json!(["five_hour"]), false),
+            grant(1, 600, Value::Null, false),
+            grant(3, 100, json!(["five_hour"]), true),
+            grant(0, 700, json!(["five_hour"]), true)
+        ]}});
+        let usage = usage_snapshot(&body, None, 100).unwrap();
+        assert_eq!(usage.remaining_reset_count, Some(5));
+        assert_eq!(usage.reset_expiries, [300, 400, 400, 500, 600]);
+        assert_eq!(
+            usage
+                .reset_grants
+                .iter()
+                .map(|g| g.kind)
+                .collect::<Vec<_>>(),
+            [
+                ResetKind::Full,
+                ResetKind::Fable,
+                ResetKind::Partial,
+                ResetKind::Unknown
+            ]
+        );
+        assert_eq!(usage.reset_grants[1].count, 2);
+        let serialized = serde_json::to_value(&usage).unwrap();
+        assert_eq!(serialized["resetGrants"][1]["kind"], "fable");
+        assert_eq!(serialized["resetGrants"][1]["expiresAt"], 400);
+        let mut old = serialized;
+        old.as_object_mut().unwrap().remove("resetGrants");
+        assert!(serde_json::from_value::<UsageSnapshot>(old)
+            .unwrap()
+            .reset_grants
+            .is_empty());
+        // A future grant field must never override the weekly-refund flag.
+        let refund = json!({"eligible":true,"grants":[
+            grant(1, 300, json!(["five_hour", "seven_day"]), true)]});
+        assert_eq!(
+            banked_resets(&refund, 100).unwrap().2[0].kind,
+            ResetKind::Fable
+        );
+    }
 
     #[test]
     fn banked_resets_count_what_unexpired_grants_have_left() {

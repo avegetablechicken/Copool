@@ -588,6 +588,21 @@
       )
     );
   }
+  function resetInventory(usage, now = Date.now() / 1000) {
+    const grants = (usage?.resetGrants ?? []).filter(
+      (g) => g.count > 0 && (g.expiresAt == null || g.expiresAt > now),
+    );
+    const hasInventory = (usage?.resetGrants ?? []).length > 0;
+    const count = hasInventory
+      ? grants.reduce((sum, g) => sum + g.count, 0)
+      : usage?.remainingResetCount;
+    return {
+      count: count != null && count >= 0 ? count : null,
+      grants,
+      warning: grants.some((g) => g.kind !== "full"),
+      fable: grants.some((g) => g.kind === "fable"),
+    };
+  }
   function cardsEqual(a, b) {
     return JSON.stringify(a) === JSON.stringify(b);
   }
@@ -604,6 +619,7 @@
     orderEntries,
     needsReauthentication,
     cardsEqual,
+    resetInventory,
     settingsControls,
     publicCallout,
     remoteHeader,

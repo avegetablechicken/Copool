@@ -209,6 +209,7 @@ fn stored_windows_of_other_durations_are_not_shown() {
         crate::models::UsageSnapshot {
             remaining_reset_count: None,
             reset_expiries: Vec::new(),
+            reset_grants: Vec::new(),
             fetched_at: 0,
             plan_type: None,
             five_hour: Some(window(five)),
@@ -242,6 +243,7 @@ fn a_missing_five_hour_window_counts_as_no_five_hour_limit() {
     let usage = |five: Option<f64>, week: Option<f64>| crate::models::UsageSnapshot {
         remaining_reset_count: None,
         reset_expiries: Vec::new(),
+        reset_grants: Vec::new(),
         fetched_at: 0,
         plan_type: None,
         five_hour: five.map(|used_percent| crate::models::UsageWindow {

@@ -517,3 +517,8 @@
 "accounts.say_hi.now" = "Jetzt Hallo sagen";
 "accounts.say_hi.auto" = "Automatisch Hallo sagen";
 "accounts.say_hi.schedule" = "Hallo sagen um…";
+
+"accounts.card.reset_full" = "Vollständiger Reset";
+"accounts.card.reset_fable" = "Fable-Reset";
+"accounts.card.reset_partial" = "Teilweiser Reset";
+"accounts.card.reset_unknown" = "Umfang unbekannt";
