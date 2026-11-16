@@ -542,3 +542,4 @@
 "accounts.card.reset_fable" = "Fable 초기화";
 "accounts.card.reset_partial" = "부분 초기화";
 "accounts.card.reset_unknown" = "초기화 범위 불명";
+"accounts.card.expiry_unknown" = "만료 시간 알 수 없음";

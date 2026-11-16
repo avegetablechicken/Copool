@@ -603,6 +603,32 @@
       fable: grants.some((g) => g.kind === "fable"),
     };
   }
+  function balanceTooltips(usage, now = Date.now() / 1000) {
+    const inventory = resetInventory(usage, now);
+    const types = new Map();
+    const resetDates = new Map();
+    const addDate = (at, count = 1) => {
+      const date = Number.isFinite(at) && at > 0 ? at : null;
+      resetDates.set(date, (resetDates.get(date) ?? 0) + count);
+    };
+    for (const grant of inventory.grants) {
+      const kind = ["full", "fable", "partial"].includes(grant.kind) ? grant.kind : "unknown";
+      types.set(kind, (types.get(kind) ?? 0) + grant.count);
+      addDate(grant.expiresAt, grant.count);
+    }
+    if (!inventory.grants.length && inventory.count) {
+      const dates = (usage?.resetExpiries ?? []).filter((at) => Number.isFinite(at) && at > now);
+      for (const at of dates) addDate(at);
+      if (dates.length < inventory.count) addDate(null, inventory.count - dates.length);
+    }
+    return {
+      types: [...types].map(([kind, count]) => ({ kind, count })),
+      resetDates: [...resetDates].map(([at, count]) => ({ at, count }))
+        .sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity)),
+      creditDates: [...new Set((usage?.credits?.expiries ?? [])
+        .filter((at) => Number.isFinite(at) && at > now))].sort((a, b) => a - b),
+    };
+  }
   function cardsEqual(a, b) {
     return JSON.stringify(a) === JSON.stringify(b);
   }
@@ -620,6 +646,7 @@
     needsReauthentication,
     cardsEqual,
     resetInventory,
+    balanceTooltips,
     settingsControls,
     publicCallout,
     remoteHeader,

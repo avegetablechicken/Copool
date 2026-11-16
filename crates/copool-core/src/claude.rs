@@ -1068,6 +1068,7 @@ fn extra_usage_credits(extra: &Value, prepaid: &Value) -> Option<CreditSnapshot>
         .unwrap_or_else(|| "USD".into());
     let places = places.clamp(0.0, 4.0) as usize;
     Some(CreditSnapshot {
+        expiries: prepaid_credit_expiries(prepaid),
         has_credits: left.is_none_or(|left| left > 0.0),
         unlimited: left.is_none(),
         balance: left.map(|amount| match currency.as_str() {
@@ -1078,6 +1079,24 @@ fn extra_usage_credits(extra: &Value, prepaid: &Value) -> Option<CreditSnapshot>
         }),
     })
 }
+/// Paid and promotional tranches have independent expiries. Never infer
+/// these from the monthly spending limit or the subscription renewal date.
+fn prepaid_credit_expiries(prepaid: &Value) -> Vec<i64> {
+    let mut expiries: Vec<i64> = ["tranches", "promo_tranches"]
+        .into_iter()
+        .flat_map(|key| prepaid[key].as_array().into_iter().flatten())
+        .filter(|tranche| {
+            number(&tranche["remaining_amount_minor_units"]).is_none_or(|left| left > 0.0)
+        })
+        .filter_map(|tranche| reset_at(&tranche["expires_at"]))
+        .chain(reset_at(&prepaid["next_expires_at"]))
+        .filter_map(crate::models::displayed_expiry)
+        .collect();
+    expiries.sort_unstable();
+    expiries.dedup();
+    expiries
+}
+
 /// The usage-limit resets the account has banked: what its unexpired grants
 /// have left, as claude.ai shows them. An ineligible block says nothing about
 /// the account, so it is unknown rather than zero. With the count come when
@@ -2997,6 +3016,33 @@ mod tests {
         ] {
             assert_eq!(usage(block).remaining_reset_count, None);
         }
+    }
+
+    #[test]
+    fn credit_expiries_include_paid_and_promotional_tranches_without_spending_dates() {
+        let a = "2026-12-01T00:00:00Z";
+        let b = "2027-01-01T00:00:00Z";
+        let prepaid = json!({"amount":500, "next_expires_at":a,
+            "tranches":[{"remaining_amount_minor_units":200,"expires_at":b},
+                        {"remaining_amount_minor_units":0,"expires_at":"2026-11-01T00:00:00Z"}],
+            "promo_tranches":[{"remaining_amount_minor_units":300,"expires_at":a},
+                              {"remaining_amount_minor_units":10,"expires_at":"invalid"}]});
+        let extra = json!({"monthly_limit":10000,"used_credits":0});
+        let credits = extra_usage_credits(&extra, &prepaid).unwrap();
+        assert_eq!(
+            credits.expiries,
+            [reset_at(&json!(a)).unwrap(), reset_at(&json!(b)).unwrap()]
+        );
+        assert_eq!(credits.balance.as_deref(), Some("$5.00"));
+        assert!(prepaid_credit_expiries(&json!({"expiry_policy_months":12})).is_empty());
+        assert_eq!(
+            prepaid_credit_expiries(&json!({"next_expires_at":b})),
+            [reset_at(&json!(b)).unwrap()]
+        );
+        let old: CreditSnapshot =
+            serde_json::from_value(json!({"hasCredits":true,"unlimited":false,"balance":"5"}))
+                .unwrap();
+        assert!(old.expiries.is_empty());
     }
 
     #[test]

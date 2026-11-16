@@ -522,3 +522,4 @@
 "accounts.card.reset_fable" = "Fable-reset";
 "accounts.card.reset_partial" = "Gedeeltelijke reset";
 "accounts.card.reset_unknown" = "Bereik onbekend";
+"accounts.card.expiry_unknown" = "Vervaldatum onbekend";

@@ -522,3 +522,4 @@
 "accounts.card.reset_fable" = "Ripristino Fable";
 "accounts.card.reset_partial" = "Ripristino parziale";
 "accounts.card.reset_unknown" = "Ambito sconosciuto";
+"accounts.card.expiry_unknown" = "Scadenza sconosciuta";

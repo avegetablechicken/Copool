@@ -185,6 +185,9 @@ pub struct UsageWindow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreditSnapshot {
+    /// Expiry dates explicitly reported for the remaining credit balance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expiries: Vec<i64>,
     pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,

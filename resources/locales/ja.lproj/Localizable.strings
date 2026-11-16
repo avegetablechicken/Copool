@@ -542,3 +542,4 @@
 "accounts.card.reset_fable" = "Fable リセット";
 "accounts.card.reset_partial" = "部分リセット";
 "accounts.card.reset_unknown" = "リセット範囲不明";
+"accounts.card.expiry_unknown" = "有効期限不明";

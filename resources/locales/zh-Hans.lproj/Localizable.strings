@@ -552,3 +552,4 @@
 "accounts.card.reset_fable" = "Fable reset";
 "accounts.card.reset_partial" = "部分重置";
 "accounts.card.reset_unknown" = "重置范围未知";
+"accounts.card.expiry_unknown" = "过期时间未知";

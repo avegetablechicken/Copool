@@ -522,3 +522,4 @@
 "accounts.card.reset_fable" = "Сброс Fable";
 "accounts.card.reset_partial" = "Частичный сброс";
 "accounts.card.reset_unknown" = "Область сброса неизвестна";
+"accounts.card.expiry_unknown" = "Срок действия неизвестен";

@@ -522,3 +522,4 @@
 "accounts.card.reset_fable" = "Restablecimiento Fable";
 "accounts.card.reset_partial" = "Restablecimiento parcial";
 "accounts.card.reset_unknown" = "Alcance desconocido";
+"accounts.card.expiry_unknown" = "Caducidad desconocida";

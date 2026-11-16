@@ -289,6 +289,8 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
         five_hour,
         one_week,
         credits: payload.credits.map(|credit| CreditSnapshot {
+            // WHAM usage reports the balance without its expiry dates.
+            expiries: Vec::new(),
             has_credits: credit.has_credits,
             unlimited: credit.unlimited,
             balance: credit.balance,

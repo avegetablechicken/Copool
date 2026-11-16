@@ -552,3 +552,4 @@
 "accounts.card.reset_fable" = "Fable reset";
 "accounts.card.reset_partial" = "Partial reset";
 "accounts.card.reset_unknown" = "Reset scope unknown";
+"accounts.card.expiry_unknown" = "Expiry unknown";

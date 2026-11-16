@@ -882,6 +882,40 @@ function providerControls(group, title, current) {
 function switchTarget(group) {
   return group.accounts.find((a) => a.available !== false) || group.accounts[0];
 }
+function accountBalanceText(usage, credits, inventory = P.resetInventory(usage)) {
+  const footerText = el("span", "account-footer-text");
+  const details = P.balanceTooltips(usage);
+  const expiry = (at) => at == null
+    ? tr("accounts.card.expiry_unknown")
+    : tr("accounts.card.reset_expires_format", P.formatReset(at, locale));
+  const creditText = el("span", "account-credits", tr("accounts.card.credits_format", credits));
+  creditText.title = details.creditDates.length
+    ? details.creditDates.map(expiry).join("\n") : expiry(null);
+  const resetCount = el("span", "account-resets", tr(
+    inventory.count !== null
+      ? "accounts.card.remaining_resets_format" : "accounts.card.resets_unavailable_format",
+    inventory.count ?? "--",
+  ));
+  resetCount.title = details.resetDates.length
+    ? details.resetDates.map(({ at, count }) => `${expiry(at)}${count > 1 ? ` × ${count}` : ""}`).join("\n")
+    : expiry(null);
+  footerText.append(creditText, " · ", resetCount);
+  if (inventory.warning) {
+    const kinds = {
+      full: "accounts.card.reset_full", fable: "accounts.card.reset_fable",
+      partial: "accounts.card.reset_partial", unknown: "accounts.card.reset_unknown",
+    };
+    const warning = el("span", "reset-warning");
+    warning.append(icon("reset-notice"));
+    warning.title = details.types.map(({ kind, count }) => `${tr(kinds[kind])} × ${count}`).join("\n");
+    warning.tabIndex = 0;
+    warning.setAttribute("aria-label", warning.title);
+    // Sibling of the reset text: its tooltip must not inherit expiry details.
+    footerText.append(warning);
+  }
+  return footerText;
+}
+
 function accountCard(account, grouped = false) {
   const full = account.email || account.accountId || account.label;
   const view = P.card(account, collapsed, usageMode(), (epoch) =>
@@ -938,50 +972,8 @@ function accountCard(account, grouped = false) {
   const credits =
     view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
   const inventory = P.resetInventory(account.usage);
-  const resets = inventory.count;
   const footer = el("div", "account-footer");
-  const footerText = el(
-    "span",
-    "account-footer-text",
-    `${tr("accounts.card.credits_format", credits)} · `,
-  );
-  const resetCount = el(
-    "span",
-    "",
-    tr(
-      resets !== null
-        ? "accounts.card.remaining_resets_format"
-        : "accounts.card.resets_unavailable_format",
-      resets ?? "--",
-    ),
-  );
-  const details = [];
-  const kinds = {
-    full: "accounts.card.reset_full",
-    fable: "accounts.card.reset_fable",
-    partial: "accounts.card.reset_partial",
-    unknown: "accounts.card.reset_unknown",
-  };
-  for (const grant of inventory.grants) {
-    let detail = `${tr(kinds[grant.kind] || kinds.unknown)} × ${grant.count}`;
-    if (grant.expiresAt != null)
-      detail += ` · ${tr("accounts.card.reset_expires_format", P.formatReset(grant.expiresAt, locale))}`;
-    details.push(detail);
-  }
-  // Older snapshots and Codex retain their expiry-only tooltip.
-  if (!inventory.grants.length && resets)
-    details.push(...(account.usage?.resetExpiries ?? [])
-      .filter((at) => at > Date.now() / 1000)
-      .map((at) => tr("accounts.card.reset_expires_format", P.formatReset(at, locale))));
-  if (inventory.warning) {
-    const warning = el("span", "reset-warning");
-    warning.append(icon("reset-notice"));
-    resetCount.append(warning);
-    resetCount.tabIndex = 0;
-    resetCount.setAttribute("aria-label", `${resetCount.textContent}. ${details.join("\n")}`);
-  }
-  if (details.length) resetCount.title = details.join("\n");
-  footerText.append(resetCount);
+  const footerText = accountBalanceText(account.usage, credits, inventory);
   footer.append(footerText, accountControls(account, full, view, grouped));
   card.append(
     // A provider's account without a plan tag has no tag row to show.

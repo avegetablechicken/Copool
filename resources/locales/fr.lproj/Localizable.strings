@@ -522,3 +522,4 @@
 "accounts.card.reset_fable" = "Réinitialisation Fable";
 "accounts.card.reset_partial" = "Réinitialisation partielle";
 "accounts.card.reset_unknown" = "Portée inconnue";
+"accounts.card.expiry_unknown" = "Expiration inconnue";

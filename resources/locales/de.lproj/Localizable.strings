@@ -522,3 +522,4 @@
 "accounts.card.reset_fable" = "Fable-Reset";
 "accounts.card.reset_partial" = "Teilweiser Reset";
 "accounts.card.reset_unknown" = "Umfang unbekannt";
+"accounts.card.expiry_unknown" = "Ablaufzeit unbekannt";
