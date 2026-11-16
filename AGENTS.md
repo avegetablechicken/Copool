@@ -25,3 +25,11 @@ python3 scripts/build_rust_desktop.py > /tmp/copool-app-bundle-build.log 2>&1
 - Keep limitations and platform validation status current in `docs/rust-cross-platform.md`.
 
 - The GUI must preserve the original SwiftUI app's layout, controls and interactions. Its sources were removed from the tree; consult them in history at commit `cae2fce` (for example `git show cae2fce:Sources/Copool/Features/Accounts/AccountsPageModel.swift`). References such as Coport inform native material and rendering implementation; they do not authorize redesigning Copool.
+
+## Windows Line Endings (Recurring CI Failure)
+
+- Windows checkouts may use CRLF (`\r\n`). Do not assume files read from disk contain only LF (`\n`), even when tests pass on macOS or Linux.
+- Tests and scripts that extract source functions, match multiline text, or compare text snapshots must normalize line endings before parsing or asserting, for example `fs.readFileSync(path, "utf8").replace(/\r\n/g, "\n")`. Alternatively, explicitly support both line endings. Do not normalize binary data or tests whose purpose is to verify exact bytes.
+- Never search raw source with LF-only boundaries such as `indexOf("\n}\n")`. Check that start and end markers were found before slicing or evaluating extracted code; otherwise CRLF can silently produce an empty snippet and misleading errors such as `... is not a function`.
+- When adding or changing source-reading tests, verify them with both LF and CRLF input. For UI tests, run the suite against a temporary copy with the UI source files converted to CRLF; do not rewrite the working tree or change global Git settings. A passing macOS run alone does not establish Windows compatibility.
+- For Windows-only CI test failures, check line-ending assumptions early. This has repeatedly affected `desktop/tests`, including the reset-inventory function-extraction tests; do not fix it by skipping Windows tests or weakening assertions.
