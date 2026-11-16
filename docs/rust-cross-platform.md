@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-16（macOS 开机启动恢复为登录项）：沿原 SwiftUI 版本的 `LaunchAtStartupService`，macOS 13 及以上从 App 包运行时用 `SMAppService.mainApp` 注册/注销，启动时按已保存偏好同步（被系统设置阻止的仍视为已注册，不重复注册），并删除早期 Rust 版本写入的 `~/Library/LaunchAgents/io.github.copool.rust.plist`。包外 plist 在系统设置中归于开发者名下，曾被禁用而导致不启动；原版（`com.alick.copool`）留下的同路径登录项不会被本应用移除，需在“登录时打开”中手动删除以免重复启动。旧版 macOS、非 App 包运行及 Windows/Linux 保持原实现。`scripts/test_rust.py` 与桌面 crate 的 clippy 通过；本机打包安装后已确认注册（系统设置中归于 Copool，状态 enabled）；尚未验证登录时启动与注销。
+
 2026-11-16（用量条预测 tooltip）：采用 OpenQuota 的告警文字（`paceLabel`），而非条形图的 `paceTooltip` 百分比：黄色显示约 X% 余量；红色有重置前耗尽时间时显示多久后用完，五分钟内显示即将用完；已耗尽显示额度已用完。红色没有提前耗尽时间时不编造时间，健康状态和无有效预测时不显示告警 tooltip。颜色规则继续与 OpenQuota 一致，计入服务器时钟偏移，悬停及现有刷新更新。170 项前端测试通过。尚未打包或实机验证。
 
 2026-11-16（reset popover 换行）：详情浮层按内容自然宽度展开，每行类型和数量保持不换行；取消整数测量宽度锁定，保留面板边界约束。UI 语法及 reset 相关前端测试通过，尚未实机复验。

@@ -12,6 +12,8 @@ use tauri::{
 mod appearance;
 #[cfg(target_os = "linux")]
 mod backdrop;
+#[cfg(target_os = "macos")]
+mod login_item;
 mod native_icons;
 mod panel;
 mod placement;
@@ -140,12 +142,40 @@ fn preferences(app: State<'_, App>) -> Result<Preferences, String> {
 async fn save_preferences(app: State<'_, App>, value: Preferences) -> Result<(), String> {
     let old = app.preferences()?;
     if old.launch_at_startup != value.launch_at_startup {
-        copool_core::platform::startup(
-            value.launch_at_startup,
-            &std::env::current_exe().map_err(|e| e.to_string())?,
-        )?;
+        set_launch_at_startup(value.launch_at_startup)?;
     }
     app.save_preferences(value).await
+}
+/// On macOS 13 and later the app registers as a login item; elsewhere, or
+/// outside an app bundle, the core writes the platform's startup entry.
+fn set_launch_at_startup(enabled: bool) -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    if login_item::available() {
+        login_item::set_enabled(enabled)?;
+        // Replaces a launch agent written by an earlier version either way.
+        return copool_core::platform::startup(false, &executable);
+    }
+    copool_core::platform::startup(enabled, &executable)
+}
+/// Matches the login item to the saved preference at launch, as the original
+/// app did. One blocked in System Settings still counts as registered.
+#[cfg(target_os = "macos")]
+fn sync_launch_at_startup(app: &Application) {
+    if !login_item::available() {
+        return;
+    }
+    let result = app.preferences().and_then(|preferences| {
+        if login_item::is_enabled() == preferences.launch_at_startup {
+            let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+            copool_core::platform::startup(false, &executable)
+        } else {
+            set_launch_at_startup(preferences.launch_at_startup)
+        }
+    });
+    if let Err(error) = result {
+        eprintln!("{error}");
+    }
 }
 #[tauri::command]
 fn paths(app: State<'_, App>) -> Paths {
@@ -648,6 +678,8 @@ fn main() {
                 let _ = widget_tx.try_send(());
             }));
             service.enable_desktop_effects();
+            #[cfg(target_os = "macos")]
+            sync_launch_at_startup(&service);
             app.manage(service.clone());
             tauri::async_runtime::spawn(service.background());
             let open = MenuItem::with_id(app, "open", "Open Copool", true, None::<&str>)?;

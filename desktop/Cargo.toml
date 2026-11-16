@@ -22,7 +22,7 @@ tauri-plugin-dialog = "2"
 base64 = "0.22"
 block2 = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSGeometry", "NSProcessInfo"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSString", "NSGeometry", "NSProcessInfo"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSFontDescriptor", "NSMenu", "NSMenuItem", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSResponder", "NSView", "NSWindow", "NSEvent", "block2", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
