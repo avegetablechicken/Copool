@@ -51,7 +51,8 @@ test("Balance expiry tooltips handle Codex, unknown dates, and stale credits", (
 
 test("Credits and resets keep expiry tooltips while the notice opens a popover", () => {
   const fs = require("node:fs"), vm = require("node:vm");
-  const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8");
+  // Windows checkout uses CRLF; function boundaries below use LF.
+  const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8").replace(/\r\n/g, "\n");
   const start = source.indexOf("function accountBalanceText(");
   const fn = source.slice(start, source.indexOf("\n}\n", start) + 3);
   const el = (tag, className, text = "") => ({tag, className, textContent: text, children: [],
@@ -86,7 +87,8 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
 
 test("Reset popover fits the panel and toggles closed with focus restored", () => {
   const fs = require("node:fs"), vm = require("node:vm");
-  const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8");
+  // Windows checkout uses CRLF; function boundaries below use LF.
+  const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8").replace(/\r\n/g, "\n");
   const body = (name) => {
     const start = source.indexOf(`function ${name}(`);
     return source.slice(start, source.indexOf("\n}\n", start) + 3);
