@@ -732,7 +732,8 @@ async function showSayHiMenu(trigger, account) {
     const error = $("say-hi-time-error");
     const remove = $("say-hi-time-remove");
     const submit = $("say-hi-time-save");
-    input.value = previous;
+    // Populate both segments; a native time placeholder is not a valid value.
+    input.value = previous || "12:30";
     error.textContent = schedule.lastError || "";
     error.hidden = !schedule.lastError;
     remove.hidden = !previous;
