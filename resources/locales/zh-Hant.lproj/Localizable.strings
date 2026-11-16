@@ -523,3 +523,7 @@
 "accounts.card.reset_partial" = "部分重置";
 "accounts.card.reset_unknown" = "重置範圍未知";
 "accounts.card.expiry_unknown" = "到期時間未知";
+"accounts.window.pace_spent" = "額度已用完";
+"accounts.window.pace_soon" = "預計即將用完";
+"accounts.window.pace_in" = "預計 %@ 後用完";
+"accounts.window.pace_spare" = "約 %@%% 餘量";

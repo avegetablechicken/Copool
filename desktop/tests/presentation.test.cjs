@@ -401,3 +401,20 @@ test("Usage colors follow OpenQuota pacing and fallback boundaries", () => {
   assert.equal(P.usageTone(window, now+1000), "");
   assert.equal(P.windowPresentation(window, "used").tone, P.windowPresentation(window, "remaining").tone);
 });
+
+test("Usage bar tooltips report estimated time to exhaustion, not excess percent", () => {
+  const now = 1_800_000_000;
+  const quota = (usedPercent, extra = {}) => ({usedPercent, windowSeconds: 18000, resetAt: now + 9000, ...extra});
+  const message = (used, extra = {}, at = now) => P.usagePaceMessage(quota(used, extra), at);
+  assert.deepEqual(message(75), {key: "accounts.window.pace_in", args: ["50m"]});
+  assert.deepEqual(message(75, {clockOffsetSeconds: 3600}, now-3600), message(75));
+  assert.deepEqual(message(98), {key: "accounts.window.pace_soon", args: []});
+  assert.deepEqual(message(46), {key: "accounts.window.pace_spare", args: [8]});
+  assert.deepEqual(message(49.5), {key: "accounts.window.pace_spare", args: [1]});
+  for (const used of [30, 49.8, 50]) assert.equal(message(used), null);
+  assert.deepEqual(message(100), {key: "accounts.window.pace_spent", args: []});
+  assert.equal(message(90, {resetAt: null}), null);
+  assert.equal(message(4, {resetAt: now+17640}), null);
+  assert.equal(P.usagePaceMessage(null, now), null);
+  assert.equal(message(0), null);
+});

@@ -523,3 +523,7 @@
 "accounts.card.reset_partial" = "Teilweiser Reset";
 "accounts.card.reset_unknown" = "Umfang unbekannt";
 "accounts.card.expiry_unknown" = "Ablaufzeit unbekannt";
+"accounts.window.pace_spent" = "Limit erreicht";
+"accounts.window.pace_soon" = "Voraussichtlich bald aufgebraucht";
+"accounts.window.pace_in" = "Voraussichtlich in %@ aufgebraucht";
+"accounts.window.pace_spare" = "~%@%% Reserve";

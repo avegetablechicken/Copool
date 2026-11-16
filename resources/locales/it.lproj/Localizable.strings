@@ -523,3 +523,7 @@
 "accounts.card.reset_partial" = "Ripristino parziale";
 "accounts.card.reset_unknown" = "Ambito sconosciuto";
 "accounts.card.expiry_unknown" = "Scadenza sconosciuta";
+"accounts.window.pace_spent" = "Limite raggiunto";
+"accounts.window.pace_soon" = "Esaurimento previsto a breve";
+"accounts.window.pace_in" = "Esaurimento previsto tra %@";
+"accounts.window.pace_spare" = "~%@%% di margine";

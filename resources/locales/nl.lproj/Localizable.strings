@@ -523,3 +523,7 @@
 "accounts.card.reset_partial" = "Gedeeltelijke reset";
 "accounts.card.reset_unknown" = "Bereik onbekend";
 "accounts.card.expiry_unknown" = "Vervaldatum onbekend";
+"accounts.window.pace_spent" = "Limiet bereikt";
+"accounts.window.pace_soon" = "Naar verwachting binnenkort op";
+"accounts.window.pace_in" = "Naar verwachting op over %@";
+"accounts.window.pace_spare" = "~%@%% ruimte over";

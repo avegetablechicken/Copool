@@ -543,3 +543,7 @@
 "accounts.card.reset_partial" = "部分リセット";
 "accounts.card.reset_unknown" = "リセット範囲不明";
 "accounts.card.expiry_unknown" = "有効期限不明";
+"accounts.window.pace_spent" = "上限に達しました";
+"accounts.window.pace_soon" = "まもなく使い切る見込み";
+"accounts.window.pace_in" = "約 %@ 後に使い切る見込み";
+"accounts.window.pace_spare" = "約 %@%% の余裕";

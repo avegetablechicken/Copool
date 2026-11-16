@@ -553,3 +553,7 @@
 "accounts.card.reset_partial" = "Partial reset";
 "accounts.card.reset_unknown" = "Reset scope unknown";
 "accounts.card.expiry_unknown" = "Expiry unknown";
+"accounts.window.pace_spent" = "Limit reached";
+"accounts.window.pace_soon" = "Limit soon";
+"accounts.window.pace_in" = "Limit in %@";
+"accounts.window.pace_spare" = "~%@%% spare";

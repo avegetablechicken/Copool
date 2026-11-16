@@ -187,23 +187,46 @@
   }
   // OpenQuota's projectPace + QuotaMetric color rules, using Unix seconds.
   // Always judge consumption, independently of the displayed used/remaining mode.
-  function usageTone(window, now = Date.now() / 1000) {
+  function usagePace(window, now = Date.now() / 1000) {
     const used = displayPercent(window);
-    if (used === null) return "";
-    const level = () => Math.round(used) >= 90 ? "full" : Math.round(used) >= 80 ? "high" : "";
-    if (Math.round(100 - used) <= 0) return "full";
-    if (used <= 0) return level();
+    const result = (severity, projectedUsedPercent = null) => ({ severity, projectedUsedPercent });
+    if (used === null) return result("level");
+    if (Math.round(100 - used) <= 0) return result("spent", 100);
+    if (used <= 0) return result("level");
     now += window.clockOffsetSeconds ?? 0;
     const reset = window.resetAt;
     const period = window.windowSeconds;
     if (!Number.isFinite(reset) || reset <= now || !Number.isFinite(period) || period <= 0)
-      return level();
+      return result("level");
     const elapsed = Math.max(0, now - (reset - period));
-    if (elapsed < Math.max(60, period * 0.01)) return level();
+    if (elapsed < Math.max(60, period * 0.01)) return result("level");
     const projected = used / Math.min(1, elapsed / period);
-    if (projected <= 90) return "";
-    if (used < 5) return level();
-    return projected <= 100 && Math.round(100 - projected) >= 1 ? "high" : "full";
+    if (projected <= 90) return result("healthy", projected);
+    if (used < 5) return result("level");
+    return result(projected <= 100 && Math.round(100 - projected) >= 1 ? "close" : "runningOut", projected);
+  }
+  function usageTone(window, now = Date.now() / 1000) {
+    const pace = usagePace(window, now);
+    if (pace.severity === "level") {
+      const used = displayPercent(window);
+      return used === null ? "" : Math.round(used) >= 90 ? "full" : Math.round(used) >= 80 ? "high" : "";
+    }
+    return pace.severity === "healthy" ? "" : pace.severity === "close" ? "high" : "full";
+  }
+  function usagePaceMessage(window, now = Date.now() / 1000, locale = "en") {
+    const { severity, projectedUsedPercent: projected } = usagePace(window, now);
+    if (severity === "level" || severity === "healthy") return null;
+    if (severity === "spent") return { key: "accounts.window.pace_spent", args: [] };
+    if (severity === "close") return { key: "accounts.window.pace_spare", args: [Math.max(1, Math.round(100 - projected))] };
+    // OpenQuota has no pace label when there is no pre-reset exhaustion time.
+    if (projected <= 100) return null;
+    const serverNow = now + (window.clockOffsetSeconds ?? 0);
+    const start = window.resetAt - window.windowSeconds;
+    const runOutAt = start + (serverNow - start) * 100 / displayPercent(window);
+    const countdown = resetCountdown(runOutAt, serverNow, locale);
+    return countdown.soon
+      ? { key: "accounts.window.pace_soon", args: [] }
+      : { key: "accounts.window.pace_in", args: [countdown.remaining] };
   }
   function windowPresentation(
     window,
@@ -215,6 +238,7 @@
       // A missing window (e.g. no five-hour limit) has no data to show.
       available: displayPercent(window) !== null,
       tone: usageTone(window),
+      paceWindow: window,
       progressPercent: mode === "remaining" ? 100 - used : used,
       primaryKind: mode,
       primaryPercent: mode === "remaining" ? 100 - used : used,
@@ -680,6 +704,7 @@
     displayPercent,
     windowPresentation,
     usageTone,
+    usagePaceMessage,
     formatReset,
     tokenExpiry,
     refreshCountdown,

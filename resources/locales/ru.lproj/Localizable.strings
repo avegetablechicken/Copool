@@ -523,3 +523,7 @@
 "accounts.card.reset_partial" = "Частичный сброс";
 "accounts.card.reset_unknown" = "Область сброса неизвестна";
 "accounts.card.expiry_unknown" = "Срок действия неизвестен";
+"accounts.window.pace_spent" = "Лимит достигнут";
+"accounts.window.pace_soon" = "Предположительно скоро закончится";
+"accounts.window.pace_in" = "Предположительно закончится через %@";
+"accounts.window.pace_spare" = "~%@%% запаса";
