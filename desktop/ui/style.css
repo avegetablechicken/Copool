@@ -2151,7 +2151,8 @@ button.reset-warning[aria-expanded="true"] {
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 .reset-popover {
+  width: max-content;
   padding: 8px 10px;
   line-height: 1.6;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }

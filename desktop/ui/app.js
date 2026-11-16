@@ -1807,7 +1807,6 @@ function showResetPopover(trigger, lines) {
   const bounds = trigger.getBoundingClientRect();
   const panel = document.querySelector(".panel").getBoundingClientRect();
   menu.style.maxWidth = `${Math.max(0, panel.right - panel.left - 16)}px`;
-  menu.style.width = `${menu.offsetWidth}px`;
   const below = bounds.bottom + 4;
   const top = below + menu.offsetHeight <= panel.bottom - 8
     ? below : Math.max(panel.top + 8, bounds.top - menu.offsetHeight - 4);
