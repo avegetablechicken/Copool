@@ -185,6 +185,26 @@
       }).format(parts),
     };
   }
+  // OpenQuota's projectPace + QuotaMetric color rules, using Unix seconds.
+  // Always judge consumption, independently of the displayed used/remaining mode.
+  function usageTone(window, now = Date.now() / 1000) {
+    const used = displayPercent(window);
+    if (used === null) return "";
+    const level = () => Math.round(used) >= 90 ? "full" : Math.round(used) >= 80 ? "high" : "";
+    if (Math.round(100 - used) <= 0) return "full";
+    if (used <= 0) return level();
+    now += window.clockOffsetSeconds ?? 0;
+    const reset = window.resetAt;
+    const period = window.windowSeconds;
+    if (!Number.isFinite(reset) || reset <= now || !Number.isFinite(period) || period <= 0)
+      return level();
+    const elapsed = Math.max(0, now - (reset - period));
+    if (elapsed < Math.max(60, period * 0.01)) return level();
+    const projected = used / Math.min(1, elapsed / period);
+    if (projected <= 90) return "";
+    if (used < 5) return level();
+    return projected <= 100 && Math.round(100 - projected) >= 1 ? "high" : "full";
+  }
   function windowPresentation(
     window,
     mode = "used",
@@ -194,6 +214,7 @@
     return {
       // A missing window (e.g. no five-hour limit) has no data to show.
       available: displayPercent(window) !== null,
+      tone: usageTone(window),
       progressPercent: mode === "remaining" ? 100 - used : used,
       primaryKind: mode,
       primaryPercent: mode === "remaining" ? 100 - used : used,
@@ -658,6 +679,7 @@
     workspaceTag,
     displayPercent,
     windowPresentation,
+    usageTone,
     formatReset,
     tokenExpiry,
     refreshCountdown,

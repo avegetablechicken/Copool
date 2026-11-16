@@ -378,3 +378,26 @@ test("Server UTC corrects either direction of local clock skew", () => {
   }
   assert.equal(P.resetCountdown(reset, now, "en", null).remaining, "4h 48m");
 });
+
+
+test("Usage colors follow OpenQuota pacing and fallback boundaries", () => {
+  const now = 1_800_000_000;
+  const quota = (usedPercent, elapsed, extra = {}) => ({ usedPercent,
+    windowSeconds: 10000, resetAt: now + (1 - elapsed) * 10000, ...extra });
+  for (const [used, elapsed, tone] of [
+    [30, .5, ""], [46, .5, "high"], [60, .5, "full"],
+    [45, .5, ""], [49.5, .5, "high"], [49.8, .5, "full"], [50, .5, "full"],
+    [1, .009, ""], [4, .02, ""], [5, .02, "full"], [85, .95, ""],
+  ]) assert.equal(P.usageTone(quota(used, elapsed), now), tone, `${used}/${elapsed}`);
+  for (const [used, tone] of [[79.49, ""], [79.5, "high"], [89.49, "high"], [89.5, "full"], [100, "full"]]) {
+    for (const extra of [{resetAt: null}, {resetAt: now}, {windowSeconds: 0}])
+      assert.equal(P.usageTone(quota(used, .5, extra), now), tone);
+  }
+  assert.equal(P.usageTone(null, now), "");
+  assert.equal(P.usageTone(quota(20, .01, {windowSeconds: 3600, resetAt: now+3564}), now), "");
+  assert.equal(P.usageTone(quota(46, .5, {clockOffsetSeconds: 3600}), now-3600), "high");
+  const window = quota(46, .5);
+  assert.equal(P.usageTone(window, now), "high");
+  assert.equal(P.usageTone(window, now+1000), "");
+  assert.equal(P.windowPresentation(window, "used").tone, P.windowPresentation(window, "remaining").tone);
+});

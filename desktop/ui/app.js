@@ -365,10 +365,9 @@ function toggleResetDisplay() {
 }
 function usageWindow(view, title, tone) {
   const remaining = usageMode() === "remaining";
-  const used = remaining ? view.secondaryPercent : view.primaryPercent;
   const track = el(
     "div",
-    `meter${view.available && used >= 95 ? " full" : view.available && used >= 80 ? " high" : ""}`,
+    `meter${view.available && view.tone ? ` ${view.tone}` : ""}`,
   );
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", title);
@@ -905,12 +904,13 @@ function accountBalanceText(usage, credits, inventory = P.resetInventory(usage))
       full: "accounts.card.reset_full", fable: "accounts.card.reset_fable",
       partial: "accounts.card.reset_partial", unknown: "accounts.card.reset_unknown",
     };
-    const warning = el("span", "reset-warning");
-    warning.append(icon("reset-notice"));
-    warning.title = details.types.map(({ kind, count }) => `${tr(kinds[kind])} × ${count}`).join("\n");
-    warning.tabIndex = 0;
-    warning.setAttribute("aria-label", warning.title);
-    // Sibling of the reset text: its tooltip must not inherit expiry details.
+    const lines = details.types.map(({ kind, count }) => `${tr(kinds[kind])} × ${count}`);
+    const warning = button("", "reset-notice", "reset-warning", () => showResetPopover(warning, lines));
+    warning.type = "button";
+    warning.setAttribute("aria-label", lines.join("\n"));
+    warning.setAttribute("aria-haspopup", "dialog");
+    warning.setAttribute("aria-expanded", "false");
+    // Sibling of the reset text: the button has no expiry tooltip.
     footerText.append(warning);
   }
   return footerText;
@@ -1062,6 +1062,8 @@ function renderAccounts(accounts) {
     accounts,
     // Relative times change without new data.
     accounts.map(tokenLabel),
+    // Pacing colors can change even in exact-time mode without new usage.
+    accounts.map((account) => [account.usage?.fiveHour, account.usage?.oneWeek].map((window) => P.usageTone(window))),
     resetDisplay,
     resetDisplay === "countdown" &&
       accounts.map((account) => {
@@ -1784,6 +1786,34 @@ function importMenuLayout(panel, preferredLeft) {
 function menuLeft(panel, width, preferredLeft) {
   return Math.max(panel.left + 8, Math.min(preferredLeft, panel.right - width - 8));
 }
+function showResetPopover(trigger, lines) {
+  if (openMenu?.trigger === trigger) {
+    closeMenu(true);
+    return;
+  }
+  closeMenu();
+  const menu = el("div", "select-menu reset-popover");
+  menu.setAttribute("role", "dialog");
+  menu.setAttribute("aria-label", trigger.getAttribute("aria-label"));
+  menu.tabIndex = -1;
+  for (const line of lines) menu.append(el("div", "", line));
+  document.body.append(menu);
+  const bounds = trigger.getBoundingClientRect();
+  const panel = document.querySelector(".panel").getBoundingClientRect();
+  menu.style.maxWidth = `${Math.max(0, panel.right - panel.left - 16)}px`;
+  menu.style.width = `${menu.offsetWidth}px`;
+  const below = bounds.bottom + 4;
+  const top = below + menu.offsetHeight <= panel.bottom - 8
+    ? below : Math.max(panel.top + 8, bounds.top - menu.offsetHeight - 4);
+  menu.style.left = `${menuLeft(panel, menu.offsetWidth, bounds.left)}px`;
+  menu.style.top = `${top}px`;
+  menu.style.maxHeight = `${panel.bottom - top - 8}px`;
+  trigger.setAttribute("aria-expanded", "true");
+  // Share outside-click, Escape, page-change and panel-hide dismissal.
+  openMenu = { menu, trigger };
+  menu.focus();
+}
+
 function showMenu(trigger, items) {
   closeMenu();
   const menu = el("div", "select-menu action-menu");

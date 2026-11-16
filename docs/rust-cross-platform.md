@@ -1,5 +1,9 @@
 # Rust 跨平台版本
 
+2026-11-16（用量条颜色）：对齐相邻 OpenQuota 的 `pacing.ts` 和 `QuotaMetric.svelte`。按已消耗比例和窗口经过时间预测重置时用量，预测 ≤90% 为普通色、预计尚有至少 1% 余量为黄色、预计耗尽为红色；不足 5% 用量不作告警预测。窗口开始不足 max(60 秒, 1% 周期)、缺失/过期重置时间或无有效周期时，按四舍五入后的已用比例 ≥80% 黄色、≥90% 红色。已用/剩余显示共用同一颜色判断，计入服务器时钟偏移，随现有 15 秒刷新更新颜色。仅调整主界面用量条规则，不改变布局。169 项前端测试通过，并直接加载相邻 OpenQuota 的 pacing 实现对照 1,728 组用量、周期、经过时间及时钟偏移组合，颜色结果一致。尚未打包或跨平台实机验证。
+
+2026-11-16（reset 详情 popover）：普通文字色圆圈感叹号改为按钮，点击打开按类型合并数量的 popover，移除按钮 tooltip；credits / reset 文字保留到期 tooltip。复用面板浮层样式和边界定位，支持再次点击、点击外部和 Escape 关闭，关闭后可恢复按钮焦点。UI 语法检查和 168 项前端测试通过，覆盖按钮无 tooltip、类型数量、浮层边界定位及再次点击关闭。尚未打包或实机验证。
+
 2026-11-11（卡片到期 tooltip）：所有卡片的 credits / reset 文字分别提供到期时间 tooltip；非 Full reset 圆圈感叹号作为独立相邻元素，仅按类型合并数量，不含日期。Claude credits 保存 `/prepaid/credits` 的 `tranches`、`promo_tranches` 中 `expires_at` 及 `next_expires_at`，不从充值日期、月度上限或订阅续费日期推算。通过文件凭据和 `127.0.0.1:8787` 只读核实 Claude prepaid 与 Codex WHAM 响应（均 HTTP 200）：当前 Claude 无到期日期，Codex WHAM credits 只有余额、未返回到期信息。未提供日期的卡片显示“过期时间未知”；不将未知当作永不过期。167 项前端测试、credits 到期解析与原余额计算回归测试、UI 语法及独立 daemon 检查通过。未打包或实机验证悬停效果。
 
 2026-11-11（Claude reset 类型）：用量查询使用 `/api/oauth/usage?cedar_ember=1&skip_spend=1`，读取 `cedar_ember.grants` 的 `resets_left`、`ends_at`、`gives_back_weekly` 和 `clears`。Fable 周用量返还优先识别为 Fable；完整清除五小时和全模型周窗口的 grant 为 Full，其余范围为 Partial / Unknown。卡片显示未过期数量合计，包含非 Full 或范围未知项时在数字后加与文字同色的圆圈感叹号提示（macOS 使用 `exclamationmark.circle`），tooltip 仅展示 reset 类型、数量和到期时间。旧缓存与 Codex 保留原有显示，刷新后 Claude 获得类型信息。依据：[官方 Fable 说明](https://support.claude.com/en/articles/17506494-claude-fable-5-2-launch-offers)及 [Claude Code 2.1.322 字段核验记录](https://github.com/1jehuang/jcode/blob/master/docs/anthropic-fable-resets.md)。通过用户指定的 `127.0.0.1:8787` HTTP 代理和 Claude 文件凭据只读查询成功（HTTP 200）：1 次 Fable + 1 次 Full。两者 `type` 均为 `full`，已用真实响应的非敏感字段补充回归测试，确认必须依据 `gives_back_weekly` / `clears` 区分；未修改凭据、续期或消耗 reset。格式、UI 语法、164 项前端测试、8 项桌面测试及独立 daemon 检查通过；核心测试 477 通过、2 忽略，2 项既有钥匙串测试因无法访问钥匙串失败（此前文档已记录同类限制）。新增 reset 分类回归测试通过。尚未打包或进行跨平台实机验证。

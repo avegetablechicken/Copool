@@ -49,14 +49,17 @@ test("Balance expiry tooltips handle Codex, unknown dates, and stale credits", (
   assert.deepEqual(P.balanceTooltips({resetGrants: [grant("fable", 1, 100)]}, 100).types, []);
 });
 
-test("Credits, resets and the notice own separate concise tooltips", () => {
+test("Credits and resets keep expiry tooltips while the notice opens a popover", () => {
   const fs = require("node:fs"), vm = require("node:vm");
   const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8");
   const start = source.indexOf("function accountBalanceText(");
   const fn = source.slice(start, source.indexOf("\n}\n", start) + 3);
   const el = (tag, className, text = "") => ({tag, className, textContent: text, children: [],
     append(...nodes) {this.children.push(...nodes);}, setAttribute(name, value) {this[name] = value;}});
+  let opened;
   const context = {P, el, icon: (name) => ({icon: name}), locale: "en",
+    button: (label, glyph, className, onclick) => Object.assign(el("button", className), {onclick}),
+    showResetPopover: (trigger, lines) => {opened = {trigger, lines};},
     tr: (key, ...args) => `${key}:${args.join(",")}`};
   vm.createContext(context);vm.runInContext(fn, context);
   const future = Math.floor(Date.now()/1000) + 86400;
@@ -66,10 +69,53 @@ test("Credits, resets and the notice own separate concise tooltips", () => {
   assert.match(credits.title, /reset_expires_format/);
   assert.match(resets.title, /reset_expires_format/);
   assert.equal(resets.children.length, 0);
-  assert.equal(notice.title, "accounts.card.reset_full: × 1\naccounts.card.reset_fable: × 2");
-  assert.equal(notice["aria-label"], notice.title);
+  assert.equal(notice.tag, "button");
+  assert.equal(notice.type, "button");
+  assert.equal(notice.title, undefined);
+  assert.equal(notice["aria-haspopup"], "dialog");
+  assert.equal(notice["aria-expanded"], "false");
+  notice.onclick();
+  assert.equal(opened.trigger, notice);
+  assert.equal(opened.lines.join("\n"), "accounts.card.reset_full: × 1\naccounts.card.reset_fable: × 2");
   assert.equal(footer.title, undefined);
   const unknown = context.accountBalanceText({}, "--");
   assert.match(unknown.children[0].title, /expiry_unknown/);
   assert.match(unknown.children[2].title, /expiry_unknown/);
+});
+
+
+test("Reset popover fits the panel and toggles closed with focus restored", () => {
+  const fs = require("node:fs"), vm = require("node:vm");
+  const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8");
+  const body = (name) => {
+    const start = source.indexOf(`function ${name}(`);
+    return source.slice(start, source.indexOf("\n}\n", start) + 3);
+  };
+  const panel = {left: 0, right: 300, top: 0, bottom: 200};
+  let appended;
+  const context = {
+    openMenu: null, closeSubmenu() {},
+    document: {body: {append(node) {appended = node;}}, querySelector() {return {getBoundingClientRect: () => panel};}},
+    el: (tag, className, text) => ({tag, className, text, style: {}, children: [], offsetWidth: 150, offsetHeight: 60,
+      append(node) {this.children.push(node);}, setAttribute(key, value) {this[key] = value;},
+      focus() {this.focused = true;}, remove() {this.removed = true;}}),
+  };
+  const trigger = {getAttribute: () => "Full reset × 1, Fable reset × 2",
+    getBoundingClientRect: () => ({left: 270, top: 180, bottom: 192}),
+    setAttribute(key, value) {this[key] = value;}, focus() {this.focused = true;}};
+  vm.createContext(context);
+  vm.runInContext(body("closeMenu") + body("menuLeft") + body("showResetPopover"), context);
+  context.showResetPopover(trigger, ["Full reset × 1", "Fable reset × 2"]);
+  assert.equal(appended.role, "dialog");
+  assert.equal(appended.style.left, "142px");
+  assert.equal(appended.style.top, "116px");
+  assert.equal(appended.children.length, 2);
+  assert.equal(appended.focused, true);
+  assert.equal(trigger["aria-expanded"], "true");
+  assert.equal(context.openMenu.menu, appended);
+  context.showResetPopover(trigger, []);
+  assert.equal(appended.removed, true);
+  assert.equal(context.openMenu, null);
+  assert.equal(trigger["aria-expanded"], "false");
+  assert.equal(trigger.focused, true);
 });
