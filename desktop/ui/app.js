@@ -736,7 +736,11 @@ async function showSayHiMenu(trigger, account) {
     input.value = previous || "12:30";
     error.textContent = schedule.lastError || "";
     error.hidden = !schedule.lastError;
-    remove.hidden = !previous;
+    const removalTarget = () => previous || (schedule.times.includes(input.value) ? input.value : "");
+    const updateRemove = () => { remove.hidden = !removalTarget(); };
+    input.oninput = updateRemove;
+    input.onchange = updateRemove;
+    updateRemove();
     $("say-hi-time-name").textContent = account.email || account.label;
     const commit = async (times) => {
       submit.disabled = remove.disabled = true;
@@ -755,7 +759,11 @@ async function showSayHiMenu(trigger, account) {
       if (submit.disabled || !input.reportValidity()) return;
       commit([...new Set([...schedule.times.filter((t) => t !== previous), input.value])].sort());
     };
-    remove.onclick = () => commit(schedule.times.filter((t) => t !== previous));
+    remove.onclick = () => {
+      const target = removalTarget();
+      if (!target || remove.disabled) return;
+      commit(schedule.times.filter((t) => t !== target));
+    };
     $("say-hi-time-cancel").onclick = () => dialog.close();
     dialog.showModal();
     input.focus();
@@ -770,6 +778,7 @@ async function showSayHiMenu(trigger, account) {
       ...schedule.times.map((time) => ({
         label: time,
         run: () => editTime(time),
+        remove: () => save(schedule.auto, schedule.times.filter((t) => t !== time)),
       })),
       { label: `${tr("accounts.say_hi.add")}…`, run: () => editTime() },
     ] },
@@ -1895,7 +1904,48 @@ function showMenu(trigger, items) {
           closeMenu(true);
           child.run();
         };
-        submenu.append(button);
+        if (child.remove) {
+          const row = el("div", "menu-removable-row");
+          row.setAttribute("role", "presentation");
+          const remove = el("button", "menu-row-remove", "×");
+          remove.type = "button";
+          remove.setAttribute("role", "menuitem");
+          remove.setAttribute("aria-label", `${tr("common.remove")} ${child.label}`);
+          remove.title = tr("common.remove");
+          remove.onclick = async (event) => {
+            event.stopPropagation();
+            if (remove.disabled) return;
+            button.disabled = remove.disabled = true;
+            try {
+              await child.remove();
+              const hadFocus = row.contains(document.activeElement);
+              const next = row.nextElementSibling || row.previousElementSibling;
+              row.remove();
+              if (hadFocus && submenu.isConnected)
+                (next?.matches("button") ? next : next?.querySelector("button"))?.focus();
+            } catch (error) {
+              notice(error, true);
+            } finally {
+              button.disabled = remove.disabled = false;
+            }
+          };
+          button.onkeydown = (event) => {
+            if (event.key !== "ArrowRight") return;
+            event.preventDefault();
+            event.stopPropagation();
+            remove.focus();
+          };
+          remove.onkeydown = (event) => {
+            if (event.key !== "ArrowLeft") return;
+            event.preventDefault();
+            event.stopPropagation();
+            button.focus();
+          };
+          row.append(button, remove);
+          submenu.append(row);
+        } else {
+          submenu.append(button);
+        }
       }
       submenus.push(submenu);
       submenu.onkeydown = (event) => {
