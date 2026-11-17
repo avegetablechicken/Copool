@@ -150,6 +150,11 @@ pub fn set_modal(app: &AppHandle, modal: bool) {
     }
 }
 
+/// Whether a system dialog opened from the panel is open.
+pub fn is_modal(app: &AppHandle) -> bool {
+    state(app).modal.load(Ordering::SeqCst)
+}
+
 /// Resizes the panel to the frontend's content height and re-anchors it.
 pub fn fit(app: &AppHandle, height: f64) {
     if !height.is_finite() {

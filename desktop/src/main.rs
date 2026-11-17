@@ -747,7 +747,8 @@ fn main() {
                 .build(app)?;
             #[cfg(target_os = "macos")]
             {
-                let (press, begin, end) = (
+                let (press, begin, end, modal) = (
+                    app.handle().clone(),
                     app.handle().clone(),
                     app.handle().clone(),
                     app.handle().clone(),
@@ -759,7 +760,14 @@ fn main() {
                         begin: Box::new(move |focus| {
                             panel::present(&begin, panel::tray_anchor(&begin), focus)
                         }),
-                        end: Box::new(move || panel::hide(&end)),
+                        // The system may end the session while a dialog
+                        // opened from the panel holds focus; it stays open.
+                        end: Box::new(move || {
+                            if !panel::is_modal(&end) {
+                                panel::hide(&end)
+                            }
+                        }),
+                        modal: Box::new(move || panel::is_modal(&modal)),
                     },
                 );
             }

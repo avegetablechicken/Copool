@@ -37,6 +37,9 @@ pub struct Handlers {
     pub begin: Box<dyn Fn(bool) + Send>,
     /// The session ended: hide the panel.
     pub end: Box<dyn Fn() + Send>,
+    /// A system dialog opened from the panel is open; clicks in it, which
+    /// another process may receive, must not end the session.
+    pub modal: Box<dyn Fn() -> bool + Send>,
 }
 
 #[cfg(tray_icon_attached_menu)]
@@ -86,7 +89,8 @@ define_class!(
 struct Installed {
     item: Retained<NSStatusItem>,
     /// The button and the item only reference it weakly.
-    _delegate: Retained<Delegate>,
+    #[cfg_attr(not(tray_icon_attached_menu), allow(dead_code))]
+    delegate: Retained<Delegate>,
     /// The detached menu, when the panel follows sessions.
     #[cfg(tray_icon_attached_menu)]
     menu: Option<Retained<NSMenu>>,
@@ -138,7 +142,7 @@ pub fn install(tray: &TrayIcon, handlers: Handlers) {
         INSTALLED.with(|cell| {
             *cell.borrow_mut() = Some(Installed {
                 item: item.clone(),
-                _delegate: delegate,
+                delegate,
                 #[cfg(tray_icon_attached_menu)]
                 menu,
                 #[cfg(tray_icon_attached_menu)]
@@ -209,7 +213,11 @@ fn monitor() -> Option<Retained<AnyObject>> {
             .map_or(point, |window| window.convertPointToScreen(point));
         let Some((on_item, session)) = INSTALLED.with(|cell| {
             let installed = cell.borrow();
-            let item = &installed.as_ref()?.item;
+            let installed = installed.as_ref()?;
+            if (installed.delegate.ivars().modal)() {
+                return None;
+            }
+            let item = &installed.item;
             let frame = item.button(mtm)?.window()?.frame();
             let on_item = point.x >= frame.origin.x
                 && point.x <= frame.origin.x + frame.size.width
