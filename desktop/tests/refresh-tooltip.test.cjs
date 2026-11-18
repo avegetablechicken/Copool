@@ -11,7 +11,9 @@ const source = fs
   .replace(/\r\n/g, "\n");
 const body = (name) => {
   const start = source.indexOf(`function ${name}(`);
-  return source.slice(start, source.indexOf("\n}\n", start) + 3);
+  const end = source.indexOf("\n}\n", start);
+  assert(start >= 0 && end > start, name);
+  return source.slice(start, end + 3);
 };
 function load() {
   const context = {
@@ -104,4 +106,28 @@ test("Cmd+1 and Cmd+2 switch the proxy page's pool there, and the accounts page'
     scope.route({ key, preventDefault() {} }, true);
     assert.deepEqual(calls, expected, `${page} Cmd+${key}`);
   }
+});
+
+test("A visible meter changes from red to amber without a data refresh", () => {
+  const classes = new Set();
+  const track = { title: "", classList: {
+    toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); }
+  } };
+  const meterWindows = new WeakMap([[track, {
+    usedPercent: 16, windowSeconds: 18000, resetAt: 1795026520
+  }]]);
+  let now = 1795011414;
+  const context = vm.createContext({
+    P, meterWindows, document: { hidden: false }, Date: { now: () => now * 1000 },
+    $: id => id === "accounts" ? { querySelectorAll: () => [track] } : { hidden: false },
+    locale: "en", tr: (key, ...args) => [key, ...args].join(" ")
+  });
+  vm.runInContext(body("usagePaceTooltip") + body("refreshMeterPace") + body("refreshVisibleMeterPace"), context);
+  assert.match(source, /setInterval\(refreshVisibleMeterPace, 1000\)/);
+  context.refreshVisibleMeterPace();
+  assert.deepEqual([...classes], ["full"]);
+  now++;
+  context.refreshVisibleMeterPace();
+  assert.deepEqual([...classes], ["high"]);
+  assert.equal(track.title, "accounts.window.pace_spare 1");
 });

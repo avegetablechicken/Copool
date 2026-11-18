@@ -366,9 +366,24 @@ function toggleResetDisplay() {
   localStorage.setItem("copool.resetDisplay", resetDisplay);
   renderAccounts(accountsCache);
 }
-function usagePaceTooltip(window) {
-  const message = P.usagePaceMessage(window, Date.now() / 1000, locale);
+const meterWindows = new WeakMap();
+function usagePaceTooltip(window, now = Date.now() / 1000) {
+  const message = P.usagePaceMessage(window, now, locale);
   return message ? tr(message.key, ...message.args) : "";
+}
+function refreshMeterPace(track, now) {
+  const window = meterWindows.get(track);
+  const tone = P.usageTone(window, now);
+  track.classList.toggle("high", tone === "high");
+  track.classList.toggle("full", tone === "full");
+  const title = usagePaceTooltip(window, now);
+  if (track.title !== title) track.title = title;
+}
+function refreshVisibleMeterPace() {
+  if (document.hidden || $("accounts-page").hidden) return;
+  const now = Date.now() / 1000;
+  for (const track of $("accounts").querySelectorAll(".meter"))
+    refreshMeterPace(track, now);
 }
 function usageWindow(view, title, tone) {
   const remaining = usageMode() === "remaining";
@@ -376,8 +391,8 @@ function usageWindow(view, title, tone) {
     "div",
     `meter${view.available && view.tone ? ` ${view.tone}` : ""}`,
   );
+  meterWindows.set(track, view.paceWindow);
   track.title = usagePaceTooltip(view.paceWindow);
-  track.addEventListener("mouseenter", () => { track.title = usagePaceTooltip(view.paceWindow); });
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", title);
   if (view.available)
@@ -1107,8 +1122,6 @@ function renderAccounts(accounts) {
     accounts,
     // Relative times change without new data.
     accounts.map(tokenLabel),
-    // Pacing colors can change even in exact-time mode without new usage.
-    accounts.map((account) => [account.usage?.fiveHour, account.usage?.oneWeek].map((window) => [P.usageTone(window), usagePaceTooltip(window)])),
     resetDisplay,
     resetDisplay === "countdown" &&
       accounts.map((account) => {
@@ -2562,6 +2575,8 @@ document.addEventListener(
   },
   { once: true },
 );
+setInterval(refreshVisibleMeterPace, 1000);
+document.addEventListener("visibilitychange", refreshVisibleMeterPace);
 setInterval(() => {
   if (!document.hidden && !document.querySelector("dialog[open]"))
     refreshView().catch((error) => notice(error, true));
@@ -2616,6 +2631,7 @@ window.__TAURI__.event
     if (panelHiddenAt && Date.now() - panelHiddenAt > PANEL_PAGE_TIMEOUT_MS)
       showPage("accounts", false);
     panelHiddenAt = null;
+    refreshVisibleMeterPace();
     queueFit();
     if (!document.querySelector("dialog[open]"))
       refreshView().catch((error) => notice(error, true));
