@@ -711,6 +711,16 @@ main > section.page-leaving {
   pointer-events: auto;
 }
 
+/* A renewal under way shows on its card until it is done. */
+.account .card-renewal.renewing {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.card-renewal.renewing .icon {
+  animation: pulse 1200ms ease-in-out infinite;
+}
+
 /* A hi on its way, then answered, shows on its card until the 5h window does. */
 .account .card-say-hi.sent,
 .account .card-say-hi.received {

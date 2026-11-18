@@ -993,7 +993,51 @@ impl Application {
         self.refresh_usage_if_needed(id, true).await
     }
     pub async fn refresh_usage_if_needed(&self, id: &str, force: bool) -> Result<()> {
-        let _activity = self.begin_refresh(id);
+        self.refresh_account(id, force, None).await
+    }
+    /// Renews an account's tokens at once, whatever its renewal choice, which
+    /// stays as it was. Usage is not asked for, unless the account had
+    /// failed: its token expired or its usage refused; it then refreshes once
+    /// renewed, and a usage error shows on the card.
+    pub async fn renew_now(&self, id: &str) -> Result<()> {
+        if self.cached_provider_account(id)?.is_some() {
+            return Err("Token renewal is not available for this account".into());
+        }
+        let failed = {
+            let _lock = self.state.store_lock.lock().await;
+            let saved = store::load_store_from_path(&self.paths.store())?;
+            let account = saved
+                .accounts
+                .iter()
+                .find(|a| a.id == id)
+                .ok_or("Account not found")?;
+            account.usage_error.is_some()
+                || auth::access_token_expiry(&account.auth_json)
+                    .is_some_and(|at| at <= now_unix_seconds())
+        };
+        self.release_new_accounts(Some(id)).await?;
+        let mut renewed = false;
+        let result = self.refresh_account(id, true, Some(&mut renewed)).await;
+        if !renewed {
+            result?;
+            return Err("The token was not renewed".into());
+        }
+        if failed {
+            let _ = self.refresh_usage(id).await;
+        }
+        Ok(())
+    }
+    /// With `renew_now`, only the tokens are renewed, even when unexpired or
+    /// renewal is off; usage is not asked for, nor shown as refreshing, and
+    /// whether the store kept the renewal is reported.
+    async fn refresh_account(
+        &self,
+        id: &str,
+        force: bool,
+        renew_now: Option<&mut bool>,
+    ) -> Result<()> {
+        let forced = renew_now.is_some();
+        let _activity = (!forced).then(|| self.begin_refresh(id));
         if let Some((provider, account)) = self.cached_provider_account(id)? {
             return self.refresh_provider_card(&provider, account.id).await;
         }
@@ -1026,14 +1070,26 @@ impl Application {
             .flatten()
             .filter(|live| newer_login(live, &account.auth_json));
         let auth_json = live.as_ref().unwrap_or(&account.auth_json);
-        let result = crate::account_network::fetch(
-            self.network.as_ref(),
-            auth_json,
-            &self.account_proxy(&account.proxy_url)?,
-            now_unix_seconds(),
-            account.renews(),
-        )
-        .await;
+        let proxy = self.account_proxy(&account.proxy_url)?;
+        let result = if forced {
+            match self.network.refresh(auth_json, &proxy).await {
+                Ok(auth) => Ok((auth, None)),
+                Err(message) => Err(crate::account_network::FetchFailure {
+                    auth: auth_json.clone(),
+                    message,
+                }),
+            }
+        } else {
+            crate::account_network::fetch(
+                self.network.as_ref(),
+                auth_json,
+                &proxy,
+                now_unix_seconds(),
+                account.renews(),
+            )
+            .await
+            .map(|(auth, usage)| (auth, Some(usage)))
+        };
         let renewed = match &result {
             Ok((auth, _)) | Err(crate::account_network::FetchFailure { auth, .. }) => {
                 auth != auth_json
@@ -1053,8 +1109,19 @@ impl Application {
             }
             match &result {
                 Ok((auth, value)) => {
-                    target.usage = Some(value.clone());
-                    target.usage_error = None;
+                    // A renewal alone leaves the usage as it was.
+                    if let Some(value) = value {
+                        target.usage = Some(value.clone());
+                        target.usage_error = None;
+                        target
+                            .extra
+                            .insert("workspaceStatus".into(), "active".into());
+                        if target.extra.get("displayStatus").and_then(Value::as_str)
+                            != Some("deleted")
+                        {
+                            target.extra.insert("displayStatus".into(), "list".into());
+                        }
+                    }
                     // Tokens the proxy or another refresh rotated during the request
                     // are newer than the snapshot; only a newer refresh or adoption
                     // made here replaces them.
@@ -1071,13 +1138,6 @@ impl Application {
                     target.plan_type = extracted.plan_type.or(target.plan_type.clone());
                     target.email = extracted.email.or(target.email.clone());
                     target.principal_id = extracted.principal_id;
-                    target
-                        .extra
-                        .insert("workspaceStatus".into(), "active".into());
-                    if target.extra.get("displayStatus").and_then(Value::as_str) != Some("deleted")
-                    {
-                        target.extra.insert("displayStatus".into(), "list".into());
-                    }
                     // Only refresh the login Codex is still using; never revert a switch
                     // made outside Copool to the stored selection.
                     if current
@@ -1152,6 +1212,10 @@ impl Application {
                 .iter()
                 .any(|a| a.id == id && a.auth_json == *auth)
         };
+        if let Some(reported) = renew_now {
+            let (Ok((auth, _)) | Err(crate::account_network::FetchFailure { auth, .. })) = &result;
+            *reported = renewed && kept(auth);
+        }
         if let Some(auth) = live_write.filter(|auth| kept(auth)) {
             let renewable = self.current_auth().ok().flatten().is_some_and(|disk| {
                 identity(&disk).ok() == identity(auth).ok()

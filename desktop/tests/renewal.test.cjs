@@ -58,22 +58,55 @@ for (const [target, command] of [
   });
 }
 
-test("the renewal menu offers the three choices with their labels", () => {
-  assert.match(source, /const RENEWALS = \["never", "once", "always"\];/);
+test("the renewal menu offers renew now, then auto renew as a toggle", () => {
+  const start = source.indexOf("function renewalButton(");
+  assert(start >= 0, "renewalButton found");
+  const end = source.indexOf("\n}\n", start);
+  assert(end > start, "renewalButton end found");
+  const body = source.slice(start, end);
+  const now = body.indexOf('tr("accounts.renewal.now")');
+  const auto = body.indexOf('tr("accounts.renewal.auto")');
+  assert(now >= 0 && auto > now, "renew now comes first, then auto renew");
+  assert.match(body, /run: \(\) => renewNow\(account\)/);
+  assert.match(body, /checked: account\.renewal === "always",/);
+  assert.match(body, /account\.renewal === "always" \? "never" : "always"/);
+  assert(!source.includes("RENEWALS"));
   const locales = fs.readFileSync(path.join(__dirname, "../ui/locales.js"), "utf8");
-  for (const key of ["title", "never", "once", "always"])
-    assert.equal(
-      locales.split(`"accounts.renewal.${key}"`).length - 1,
-      11,
-      `accounts.renewal.${key} in every locale`,
-    );
+  for (const key of [
+    "accounts.renewal.title",
+    "accounts.renewal.now",
+    "accounts.renewal.renewing",
+    "accounts.renewal.auto",
+    "accounts.notice.token_renewed",
+  ])
+    assert.equal(locales.split(`"${key}"`).length - 1, 11, `${key} in every locale`);
+  for (const key of ["once", "never", "always"])
+    assert(!locales.includes(`"accounts.renewal.${key}"`), `accounts.renewal.${key} removed`);
 });
+
+for (const [target, command] of [
+  ["claude", "claude_renew_now"],
+  ["codex", "renew_now"],
+]) {
+  test(`renewing a ${target} account now shows as under way, then reloads its card`, async () => {
+    const { model, calls } = fixture(target);
+    let during;
+    model.onUpdate = () => (during ??= model.renewingIds.has("a"));
+    assert.equal(await model.renewNow("a"), true);
+    assert.equal(during, true);
+    assert.equal(model.renewingIds.has("a"), false);
+    const at = calls.findIndex(([name]) => name === command);
+    assert.deepEqual(calls[at], [command, { id: "a" }]);
+    assert(calls.slice(at + 1).some(([name]) => name.endsWith("accounts")), "the card reloads");
+    assert.equal(model.refreshing, false);
+  });
+}
 
 test("the card footer no longer shows the token expiry; the renewal button does", () => {
   const card = source.slice(source.indexOf("function accountCard("));
   assert(!card.slice(0, card.indexOf("\nfunction ")).includes("tokenLabel("));
   const button = source.slice(source.indexOf("function renewalButton("));
-  assert.match(button.slice(0, button.indexOf("\n}\n")), /trigger\.title = tokenLabel\(account\) \|\| tr\("accounts\.renewal\.title"\);/);
+  assert.match(button.slice(0, button.indexOf("\n}\n")), /trigger\.title = renewing\n\s+\? tr\("accounts\.renewal\.renewing"\)\n\s+: tokenLabel\(account\) \|\| tr\("accounts\.renewal\.title"\);/);
 });
 
 

@@ -488,9 +488,10 @@
 "accounts.card.say_hi.received" = "Claude replied; waiting for the 5-hour window to show";
 "accounts.notice.said_hi" = "Said hi; the 5-hour window has started";
 "error.claude.say_hi_window_not_started" = "Claude accepted the hi, but the 5-hour window has not started";
-"accounts.renewal.never" = "Never renew";
-"accounts.renewal.once" = "Renew once";
-"accounts.renewal.always" = "Always renew";
+"accounts.renewal.now" = "Renew now";
+"accounts.renewal.renewing" = "Renewing the token…";
+"accounts.notice.token_renewed" = "Token renewed";
+"accounts.renewal.auto" = "Auto renew";
 "accounts.refresh.next_format" = "Next automatic refresh in %@";
 "accounts.refresh.next_due" = "Automatic refresh due now";
 "accounts.proxy.unsupported" = "This network service does not support an account proxy.";

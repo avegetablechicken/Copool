@@ -1115,6 +1115,65 @@ async fn testTokenRenewalChoiceHoldsBackOrAllowsOneRenewal() {
     assert!(app.set_renewal("a", "sometimes").await.is_err());
     assert!(app.set_renewal("missing", "never").await.is_err());
 }
+#[tokio::test]
+async fn testRenewNowRenewsWithoutAskingUsageUnlessTheAccountFailed() {
+    let (_dir, app, network) = super::network_fixture::fixture();
+    let mut a = stored("a", "a", "account-1");
+    a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":4_000_000_000i64})).into();
+    let b = stored("b", "b", "account-2");
+    save_fixture(&app, json!({"accounts":[a, b]}));
+    let calls = || {
+        network
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|v| (v.0.clone(), v.1.clone()))
+            .collect::<Vec<_>>()
+    };
+    let call = |name: &str, account: &str| (name.to_string(), account.to_string());
+    let saved = |id: &str| {
+        crate::repository::load_accounts(&app.paths.store())
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|a| a.id == id)
+            .unwrap()
+    };
+    // An unexpired login is not renewed by a refresh.
+    app.refresh_usage("a").await.unwrap();
+    assert_eq!(calls(), [call("usage", "account-1")]);
+    // Renew now renews it even with renewal off, asks no usage, and the
+    // choice stays.
+    app.set_renewal("a", "never").await.unwrap();
+    app.renew_now("a").await.unwrap();
+    assert_eq!(calls()[1..], [call("refresh", "account-1")]);
+    assert_eq!(
+        saved("a").auth_json["tokens"]["access_token"],
+        "refreshed-test-only"
+    );
+    assert_eq!(saved("a").extra["renewal"], "never");
+    // An account that had failed refreshes its usage once renewed.
+    app.set_renewal("b", "never").await.unwrap();
+    *network.usage_error.lock().unwrap() = Some("Provided authentication token is expired".into());
+    let _ = app.refresh_usage("b").await;
+    assert_eq!(
+        saved("b").usage_error.as_deref(),
+        Some(crate::models::RENEWAL_OFF)
+    );
+    *network.usage_error.lock().unwrap() = None;
+    app.renew_now("b").await.unwrap();
+    assert_eq!(
+        calls()[3..],
+        [call("refresh", "account-2"), call("usage", "account-2")]
+    );
+    assert_eq!(saved("b").usage_error, None);
+    assert_eq!(saved("b").extra["renewal"], "never");
+    // A refused renewal is reported; a missing account too.
+    *network.refresh_error.lock().unwrap() = Some("refresh refused".into());
+    assert_eq!(app.renew_now("a").await.unwrap_err(), "refresh refused");
+    assert!(app.renew_now("missing").await.is_err());
+}
 
 #[test]
 fn testBackgroundRefreshIntervalAdaptsAsOpenQuota() {

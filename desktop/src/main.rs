@@ -346,6 +346,16 @@ async fn say_hi(app: State<'_, App>, id: String) -> Result<(), String> {
     app.say_hi(&id).await
 }
 #[tauri::command]
+async fn renew_now(app: State<'_, App>, id: String) -> Result<(), String> {
+    let _ = app.authorize_keychain().await;
+    app.renew_now(&id).await
+}
+#[tauri::command]
+async fn claude_renew_now(app: State<'_, App>, id: String) -> Result<(), String> {
+    let _ = app.claude_authorize().await;
+    app.claude_renew_now(&id).await
+}
+#[tauri::command]
 async fn claude_say_hi(app: State<'_, App>, id: String) -> Result<(), String> {
     let _ = app.claude_authorize().await;
     app.claude_release_new_accounts(Some(&id)).await?;
@@ -796,6 +806,7 @@ fn main() {
             native_icons::native_symbols,
             save_account_proxy,
             set_renewal,
+            renew_now,
             configuration,
             provider_definitions,
             current_provider,
@@ -834,6 +845,7 @@ fn main() {
             say_hi,
             claude_save_account_proxy,
             claude_set_renewal,
+            claude_renew_now,
             claude_sub2api_providers,
             claude_save_sub2api_provider,
             claude_remove_sub2api_provider,

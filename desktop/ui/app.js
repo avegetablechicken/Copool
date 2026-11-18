@@ -33,6 +33,7 @@ const CLAUDE_COMMANDS = {
   delete_account: "claude_delete_account",
   save_account_proxy: "claude_save_account_proxy",
   set_renewal: "claude_set_renewal",
+  renew_now: "claude_renew_now",
   refresh_usage: "claude_refresh_usage",
   say_hi: "claude_say_hi",
   refresh_provider: "claude_refresh_provider",
@@ -537,36 +538,66 @@ function accountManagement(account, group = null, title = null) {
   actions.append(proxyButton, remove);
   return actions;
 }
-const RENEWALS = ["never", "once", "always"];
+/// Renews the account's tokens at once; its renewal button shows the
+/// renewal under way, then a notice tells how it went, as saying hi does.
+async function renewNow(account) {
+  const controller = accountsController;
+  try {
+    if (await controller.renewNow(account.id))
+      notice(tr("accounts.notice.token_renewed"));
+  } catch (error) {
+    notice(error, true);
+  }
+}
 /// A Claude or Codex account's token renewal; shown, as the proxy button,
-/// only on the focused card.
+/// only on the focused card, and throughout a renewal under way.
 function renewalButton(account) {
-  const trigger = button("", "renewal", "icon-btn card-renewal", () => {
-    if (openMenu?.trigger === trigger) {
-      closeMenu(true);
-      return;
-    }
-    showMenu(
-      trigger,
-      RENEWALS.map((choice) => ({
-        label: tr(`accounts.renewal.${choice}`),
-        selected: account.renewal === choice,
-        run: () => {
-          if (account.renewal !== choice)
-            action(() => accountsController.setRenewal(account.id, choice));
+  const renewing = accountsController.renewingIds.has(account.id);
+  const trigger = button(
+    "",
+    "renewal",
+    `icon-btn card-renewal${renewing ? " renewing" : ""}`,
+    () => {
+      if (openMenu?.trigger === trigger) {
+        closeMenu(true);
+        return;
+      }
+      showMenu(trigger, [
+        {
+          label: tr("accounts.renewal.now"),
+          disabled:
+            accountsController.refreshingIds.has(account.id) ||
+            accountsController.remoteRefreshingIds.has(account.id) ||
+            accountsController.sayingHiIds.has(account.id),
+          run: () => renewNow(account),
         },
-      })),
-    );
-  });
+        // Auto renew toggles between renewing as needed and never.
+        {
+          label: tr("accounts.renewal.auto"),
+          checked: account.renewal === "always",
+          run: () =>
+            action(() =>
+              accountsController.setRenewal(
+                account.id,
+                account.renewal === "always" ? "never" : "always",
+              ),
+            ),
+        },
+      ]);
+    },
+  );
   // Its tooltip tells how long the access token has left; a token problem
   // shows as the card's usage error, as in the SwiftUI card.
-  trigger.title = tokenLabel(account) || tr("accounts.renewal.title");
+  trigger.title = renewing
+    ? tr("accounts.renewal.renewing")
+    : tokenLabel(account) || tr("accounts.renewal.title");
   trigger.setAttribute(
     "aria-label",
     `${tr("accounts.renewal.title")} ${account.email || account.label}: ${trigger.title}`,
   );
   trigger.setAttribute("aria-haspopup", "menu");
   trigger.setAttribute("aria-expanded", "false");
+  trigger.disabled = renewing;
   return trigger;
 }
 /// Usage warning, refresh and switch, at the card's bottom right as in the
@@ -615,7 +646,9 @@ function accountControls(account, full, view, grouped = false) {
   refresh.setAttribute("aria-label", `${tr("common.refresh_usage")} ${full}`);
   refreshTooltip(refresh, tr("common.refresh_usage"), () => account.nextRefreshAt);
   refresh.classList.toggle("spinning", refreshing);
-  refresh.disabled = accountsController.sayingHiIds.has(account.id);
+  refresh.disabled =
+    accountsController.sayingHiIds.has(account.id) ||
+    accountsController.renewingIds.has(account.id);
   actions.append(refresh);
   if (!account.isCurrent) {
     const control = button("", "switch", "icon-btn card-switch", () =>
@@ -1099,6 +1132,7 @@ function renderAccounts(accounts) {
     [...accountsController.remoteRefreshingIds],
     [...accountsController.sayingHiIds],
     [...sayingHi],
+    [...accountsController.renewingIds],
     switchingId,
     accountsController.adding,
     accountsController.authorizing,

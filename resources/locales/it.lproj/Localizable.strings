@@ -460,9 +460,10 @@
 "accounts.card.say_hi.received" = "Claude ha risposto; in attesa che compaia la finestra di 5 ore";
 "accounts.notice.said_hi" = "Saluto inviato; la finestra di 5 ore è iniziata";
 "error.claude.say_hi_window_not_started" = "Claude ha accettato il saluto, ma la finestra di 5 ore non è iniziata";
-"accounts.renewal.never" = "Non rinnovare mai";
-"accounts.renewal.once" = "Rinnova una volta";
-"accounts.renewal.always" = "Rinnova sempre";
+"accounts.renewal.now" = "Rinnova ora";
+"accounts.renewal.renewing" = "Rinnovo del token in corso…";
+"accounts.notice.token_renewed" = "Token rinnovato";
+"accounts.renewal.auto" = "Rinnova automaticamente";
 "accounts.refresh.next_format" = "Prossimo aggiornamento automatico tra %@";
 "accounts.refresh.next_due" = "Aggiornamento automatico imminente";
 "accounts.proxy.unsupported" = "Questo servizio di rete non supporta un proxy per account.";

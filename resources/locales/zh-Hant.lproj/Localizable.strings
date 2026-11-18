@@ -460,9 +460,10 @@
 "accounts.card.say_hi.received" = "已收到 Claude 回覆，等待 5 小時計時顯示";
 "accounts.notice.said_hi" = "已打招呼，5 小時計時已開始";
 "error.claude.say_hi_window_not_started" = "Claude 已接受招呼，但 5 小時計時沒有開始";
-"accounts.renewal.never" = "永不續期";
-"accounts.renewal.once" = "續期一次";
-"accounts.renewal.always" = "始終續期";
+"accounts.renewal.now" = "立即續期";
+"accounts.renewal.renewing" = "正在續期權杖…";
+"accounts.notice.token_renewed" = "權杖已續期";
+"accounts.renewal.auto" = "自動續期";
 "accounts.refresh.next_format" = "%@後自動重新整理";
 "accounts.refresh.next_due" = "即將自動重新整理";
 "accounts.proxy.unsupported" = "此網路服務不支援帳號代理。";

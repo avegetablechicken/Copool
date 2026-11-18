@@ -1969,7 +1969,7 @@ impl Application {
         let (id, label, waiting) = self.claude_import_live(live, true).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage_scoped(&id, false).await;
+            let _ = self.claude_refresh_usage_scoped(&id, false, None).await;
         }
         Ok(label)
     }
@@ -2008,7 +2008,7 @@ impl Application {
         drop(_op);
         // Should Claude reject the export, the pool's tokens take over again.
         if !waiting {
-            let _ = self.claude_refresh_usage_scoped(&id, false).await;
+            let _ = self.claude_refresh_usage_scoped(&id, false, None).await;
         }
         Ok(1)
     }
@@ -2073,7 +2073,7 @@ impl Application {
         let (id, label, waiting) = self.claude_upsert(oauth, account, false, defer).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage_scoped(&id, false).await;
+            let _ = self.claude_refresh_usage_scoped(&id, false, None).await;
         }
         Ok(label)
     }
@@ -2267,13 +2267,55 @@ impl Application {
     /// Renew pool credentials and sync an unchanged live login without showing
     /// authorization UI. External rotations take precedence over our response.
     pub async fn claude_refresh_usage(&self, id: &str) -> Result<()> {
-        self.claude_refresh_usage_scoped(id, true).await
+        self.claude_refresh_usage_scoped(id, true, None).await
     }
-    async fn claude_refresh_usage_scoped(&self, id: &str, use_account_proxy: bool) -> Result<()> {
+    /// Renews an account's tokens at once, whatever its renewal choice, which
+    /// stays as it was. Usage is not asked for, unless the account had
+    /// failed: its token expired or its usage refused; it then refreshes once
+    /// renewed, and a usage error shows on the card.
+    pub async fn claude_renew_now(&self, id: &str) -> Result<()> {
+        if sub2api::is_card(id) {
+            return Err("Token renewal is not available for this account".into());
+        }
+        let failed = {
+            let _lock = self.claude.lock.lock().await;
+            let store = self.claude_load()?;
+            let account = store
+                .accounts
+                .iter()
+                .find(|a| a.id == id)
+                .ok_or("Account not found")?;
+            let expiry = expires_at(&account.oauth);
+            account.usage_error.is_some() || (expiry != 0 && expiry <= now_unix_seconds() * 1000)
+        };
+        self.claude_release_new_accounts(Some(id)).await?;
+        let mut renewed = false;
+        let result = self
+            .claude_refresh_usage_scoped(id, true, Some(&mut renewed))
+            .await;
+        if !renewed {
+            result?;
+            return Err(CREDENTIALS_CHANGED.into());
+        }
+        if failed {
+            let _ = self.claude_refresh_usage(id).await;
+        }
+        Ok(())
+    }
+    /// With `renew_now`, only the tokens are renewed, even when unexpired or
+    /// renewal is off; usage is not asked for, nor shown as refreshing, and
+    /// whether the renewal was kept is reported.
+    async fn claude_refresh_usage_scoped(
+        &self,
+        id: &str,
+        use_account_proxy: bool,
+        mut renew_now: Option<&mut bool>,
+    ) -> Result<()> {
         if sub2api::is_card(id) {
             return self.claude_refresh_sub2api_card(id).await;
         }
-        let _activity = self.begin_refresh(id);
+        let forced = renew_now.is_some();
+        let _activity = (!forced).then(|| self.begin_refresh(id));
         // Serialize renewal with imports/switches and other pool refreshes.
         let _op = self.claude.operations.lock().await;
         let location = self.claude_location();
@@ -2303,10 +2345,13 @@ impl Application {
         }
         // Renewal off: an expired account is reported, never renewed, and
         // nothing is written back to Claude Code.
-        let held_back = (Renewal::of(account.renewal) == Renewal::Never).then_some(RENEWAL_OFF);
-        if account
-            .usage_retry_at
-            .is_some_and(|until| until > now_unix_seconds())
+        let held_back =
+            (!forced && Renewal::of(account.renewal) == Renewal::Never).then_some(RENEWAL_OFF);
+        // A usage pause does not hold back a renewal alone.
+        if !forced
+            && account
+                .usage_retry_at
+                .is_some_and(|until| until > now_unix_seconds())
         {
             return Err(account.usage_error.clone().unwrap_or_else(|| {
                 "Claude usage request failed: HTTP 429; retry paused for 5 minutes".into()
@@ -2370,7 +2415,9 @@ impl Application {
                         }
                     }
                 };
-                if expires_at(&oauth) != 0 && expires_at(&oauth) <= (now_unix_seconds() + 60) * 1000
+                if (forced && renewals == 0)
+                    || (expires_at(&oauth) != 0
+                        && expires_at(&oauth) <= (now_unix_seconds() + 60) * 1000)
                 {
                     let tokens = refresh(&oauth).await?;
                     apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
@@ -2403,6 +2450,9 @@ impl Application {
                         oauth["rateLimitTier"] = tier.into();
                     }
                     profiled = Some(named);
+                }
+                if forced {
+                    return Ok(None);
                 }
                 let token = text(&oauth["accessToken"]).unwrap_or_default();
                 let (mut status, mut body, mut after, mut clock_offset) =
@@ -2459,7 +2509,7 @@ impl Application {
                                 usage.credits = extra_usage_credits(&body["extra_usage"], &prepaid);
                             }
                         }
-                        Ok(usage)
+                        Ok(Some(usage))
                     }
                     401 => Err(SIGN_IN_EXPIRED.to_string()),
                     _ => {
@@ -2571,6 +2621,9 @@ impl Application {
         if renewed {
             alternates.clear();
         }
+        if let Some(reported) = renew_now.as_deref_mut() {
+            *reported = renewed;
+        }
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         // Each HTTP 429 in a row pauses longer; any other answer starts over.
@@ -2581,8 +2634,8 @@ impl Application {
                 .find(|a| a.id == id)
                 .map_or(account.rate_limits, |a| a.rate_limits)
                 .saturating_add(1),
-            (false, Ok(_)) => 0,
-            (false, Err(_)) => account.rate_limits,
+            (false, Ok(Some(_))) => 0,
+            (false, _) => account.rate_limits,
         };
         let pause = rate_limited.then(|| rate_limit_pause(rate_limits, retry_after));
         let result = result.map_err(|error| match pause {
@@ -2591,12 +2644,21 @@ impl Application {
         });
         if let Some(target) = store.accounts.iter_mut().find(|a| a.id == id) {
             target.updated_at = now_unix_seconds();
-            target.usage_retry_at = pause.map(|pause| now_unix_seconds() + pause);
+            // A renewal alone keeps the usage pause it found.
+            if !forced || pause.is_some() {
+                target.usage_retry_at = pause.map(|pause| now_unix_seconds() + pause);
+            }
             target.rate_limits = rate_limits;
             match &result {
-                Ok(usage) => {
+                Ok(Some(usage)) => {
                     target.usage = Some(usage.clone());
                     target.usage_error = live_sync.as_ref().err().cloned();
+                }
+                // A renewal alone leaves the usage as it was.
+                Ok(None) => {
+                    if let Err(error) = &live_sync {
+                        target.usage_error = Some(error.clone());
+                    }
                 }
                 Err(error) => target.usage_error = Some(error.clone()),
             }
@@ -4505,6 +4567,68 @@ mod tests {
         assert!(choices.contains(&json!("always")) && choices.contains(&json!("never")));
         assert!(app.claude_set_renewal(&bob, "sometimes").await.is_err());
         assert!(app.claude_set_renewal("missing", "always").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn renew_now_renews_without_asking_usage_unless_the_account_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = file_login_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let (bob, account) = login("bob", 1);
+        app.claude_import_json(&export(&bob, &account))
+            .await
+            .unwrap();
+        app.claude_release_new_accounts(None).await.unwrap();
+        let id = |user: &str| {
+            app.claude_load()
+                .unwrap()
+                .accounts
+                .into_iter()
+                .find(|a| a.label == format!("{user}@example.com"))
+                .unwrap()
+                .id
+        };
+        let (alice, bob) = (id("alice"), id("bob"));
+        let renewal = |cards: Vec<(String, Option<String>)>, label: &str| {
+            cards.into_iter().find(|c| c.0 == label).unwrap().1
+        };
+        // An unexpired login is not renewed by a refresh.
+        app.claude_refresh_usage(&alice).await.unwrap();
+        assert!(refreshes(&fake).is_empty());
+        let asked = usages(&fake).len();
+        // Renew now renews it even with renewal off, writes it back to
+        // Claude Code's login, asks no usage and leaves the choice as it was.
+        app.claude_set_renewal(&alice, "never").await.unwrap();
+        app.claude_renew_now(&alice).await.unwrap();
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
+        assert_eq!(usages(&fake).len(), asked);
+        assert_eq!(live_access(&location), "fresh-access");
+        assert_eq!(
+            renewal(renewals(&app).await, "alice@example.com").as_deref(),
+            Some("never")
+        );
+        // An account that had failed refreshes its usage once renewed.
+        app.claude_set_renewal(&bob, "never").await.unwrap();
+        assert_eq!(
+            app.claude_refresh_usage(&bob).await.unwrap_err(),
+            RENEWAL_OFF
+        );
+        app.claude_renew_now(&bob).await.unwrap();
+        assert_eq!(refreshes(&fake), ["alice-refresh", "bob-refresh"]);
+        assert_eq!(usages(&fake).len(), asked + 1);
+        let card = app
+            .claude_load()
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|a| a.id == bob)
+            .unwrap();
+        assert_eq!(card.usage_error, None);
+        // A refused renewal is reported.
+        *fake.refresh_error.lock().unwrap() = Some(SIGN_IN_EXPIRED.into());
+        assert!(app.claude_renew_now(&alice).await.is_err());
+        assert!(app.claude_renew_now("missing").await.is_err());
     }
 
     #[test]

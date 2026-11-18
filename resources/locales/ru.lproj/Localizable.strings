@@ -460,9 +460,10 @@
 "accounts.card.say_hi.received" = "Claude ответил; ждём, когда появится 5-часовое окно";
 "accounts.notice.said_hi" = "Приветствие отправлено; 5-часовое окно началось";
 "error.claude.say_hi_window_not_started" = "Claude принял приветствие, но 5-часовое окно не началось";
-"accounts.renewal.never" = "Не обновлять";
-"accounts.renewal.once" = "Обновить один раз";
-"accounts.renewal.always" = "Всегда обновлять";
+"accounts.renewal.now" = "Обновить сейчас";
+"accounts.renewal.renewing" = "Обновление токена…";
+"accounts.notice.token_renewed" = "Токен обновлён";
+"accounts.renewal.auto" = "Обновлять автоматически";
 "accounts.refresh.next_format" = "Следующее автообновление через %@";
 "accounts.refresh.next_due" = "Автообновление вот-вот начнётся";
 "accounts.proxy.unsupported" = "Эта сетевая служба не поддерживает прокси аккаунта.";

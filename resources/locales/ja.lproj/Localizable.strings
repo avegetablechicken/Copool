@@ -478,9 +478,10 @@
 "accounts.card.say_hi.received" = "Claude から返信がありました。5 時間枠の表示を待っています";
 "accounts.notice.said_hi" = "挨拶しました。5 時間枠が始まりました";
 "error.claude.say_hi_window_not_started" = "Claude は挨拶を受け付けましたが、5 時間枠は始まっていません";
-"accounts.renewal.never" = "更新しない";
-"accounts.renewal.once" = "1 回だけ更新";
-"accounts.renewal.always" = "常に更新";
+"accounts.renewal.now" = "今すぐ更新";
+"accounts.renewal.renewing" = "トークンを更新しています…";
+"accounts.notice.token_renewed" = "トークンを更新しました";
+"accounts.renewal.auto" = "自動で更新";
 "accounts.refresh.next_format" = "自動更新まで残り %@";
 "accounts.refresh.next_due" = "まもなく自動更新";
 "accounts.proxy.unsupported" = "このネットワークサービスはアカウント別のプロキシに対応していません。";

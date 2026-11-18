@@ -105,6 +105,7 @@
       this.refreshingIds = new Set();
       this.remoteRefreshingIds = new Set();
       this.sayingHiIds = new Set();
+      this.renewingIds = new Set();
       this.pendingGeneration = 0;
       this.loadGeneration = 0;
       this.loginGeneration = 0;
@@ -122,7 +123,8 @@
         this.manualRefreshing ||
         this.refreshingIds.size > 0 ||
         this.remoteRefreshingIds.size > 0 ||
-        this.sayingHiIds.size > 0
+        this.sayingHiIds.size > 0 ||
+        this.renewingIds.size > 0
       );
     }
     get spinner() {
@@ -186,7 +188,8 @@
           : this.manualRefreshing ||
             this.refreshingIds.has(id) ||
             this.remoteRefreshingIds.has(id) ||
-            this.sayingHiIds.has(id);
+            this.sayingHiIds.has(id) ||
+            this.renewingIds.has(id);
       if (busy) return false;
       if (id === null) this.manualRefreshing = true;
       else this.refreshingIds.add(id);
@@ -213,7 +216,8 @@
         this.manualRefreshing ||
         this.refreshingIds.has(id) ||
         this.remoteRefreshingIds.has(id) ||
-        this.sayingHiIds.has(id)
+        this.sayingHiIds.has(id) ||
+        this.renewingIds.has(id)
       )
         return false;
       this.sayingHiIds.add(id);
@@ -224,6 +228,27 @@
       } finally {
         await this.load().catch(() => {});
         this.sayingHiIds.delete(id);
+        this.onUpdate();
+      }
+    }
+    /// Renews an account's tokens at once; its usage refreshes with them.
+    async renewNow(id) {
+      if (
+        this.manualRefreshing ||
+        this.refreshingIds.has(id) ||
+        this.remoteRefreshingIds.has(id) ||
+        this.sayingHiIds.has(id) ||
+        this.renewingIds.has(id)
+      )
+        return false;
+      this.renewingIds.add(id);
+      this.onUpdate();
+      try {
+        await this.invoke("renew_now", { id });
+        return true;
+      } finally {
+        await this.load().catch(() => {});
+        this.renewingIds.delete(id);
         this.onUpdate();
       }
     }
