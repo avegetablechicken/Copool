@@ -2140,7 +2140,7 @@ $("import-open").onclick = () => {
   if (pool === "claude") {
     showMenu($("import-open"), [
       {
-        label: tr("accounts.action.import_current_claude"),
+        label: tr("accounts.action.import_current_auth"),
         run: () =>
           importAccounts(
             () => accountsController.importCurrent(),
