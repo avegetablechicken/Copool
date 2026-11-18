@@ -34,7 +34,11 @@ def tauri_cli():
     if subprocess.run(['cargo', 'tauri', '--version'], cwd=ROOT, capture_output=True).returncode == 0:
         return ['cargo', 'tauri']
     if shutil.which('npx'):
-        return ['npx', '--yes', '@tauri-apps/cli@^2']
+        if os.name == 'nt':
+            npx_cli = Path(shutil.which('node')).parent / 'node_modules/npm/bin/npx-cli.js'
+            if npx_cli.exists():
+                return ['node', str(npx_cli), '--yes', '@tauri-apps/cli@^2']
+        return [shutil.which('npx'), '--yes', '@tauri-apps/cli@^2']
     raise SystemExit('Tauri CLI not found. Install it with: cargo install tauri-cli --version "^2" --locked')
 
 
@@ -85,15 +89,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--debug', action='store_true', help='debug profile instead of release')
     parser.add_argument('--target', help='Rust target triple, e.g. aarch64-apple-darwin or universal-apple-darwin')
-    parser.add_argument('--no-bundle', action='store_true', help='build only the executable (default off macOS)')
+    parser.add_argument('--no-bundle', action='store_true', help='build only the executable (default on Linux)')
     parser.add_argument('--skip-checks', action='store_true', help='skip the UI syntax check and Node tests')
     args = parser.parse_args()
     profile = 'debug' if args.debug else 'release'
 
+    if os.name == 'nt':
+        import windows_build
+        args.target = windows_build.prepare(args.target)
+
     if not args.skip_checks:
         check_ui()
 
-    if args.no_bundle or not MACOS:
+    if args.no_bundle or (not MACOS and os.name != 'nt'):
         command = ['cargo', 'build', '-p', 'copool-desktop', '--locked']
         if not args.debug:
             command.append('--release')
@@ -102,6 +110,21 @@ def main():
         run(command)
         name = 'copool-desktop.exe' if os.name == 'nt' else 'copool-desktop'
         print(f'Executable: {ROOT / "target" / (args.target or "") / profile / name}')
+        return
+
+    if os.name == 'nt':
+        config = {'build': {'beforeBundleCommand': None}, 'bundle': {'active': True}}
+        command = [*tauri_cli(), 'build', '--bundles', 'nsis', '--ci', '--config', json.dumps(config)]
+        if args.debug:
+            command.append('--debug')
+        command += ['--target', args.target]
+        run(command + ['--', '--locked'], cwd=DESKTOP)
+        base = ROOT / 'target' / args.target / profile / 'bundle/nsis'
+        installers = sorted(base.glob('*-setup.exe'))
+        if not installers:
+            raise SystemExit(f'No Windows installer found in {base}')
+        for installer in installers:
+            print(f'Windows installer (unsigned): {installer}')
         return
 
     # Each build has its own build number (CFBundleVersion), shared by the app
