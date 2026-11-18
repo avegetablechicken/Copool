@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-19（Claude 本机凭据轮换）：刷新已保存账号时，如果本机登录缺少 `oauthAccount` 且令牌已轮换，Copool 使用统一账号代理查询该 access token 的 Claude profile。只有账号和组织均匹配、查询期间凭据仍属同一代，才将其用于目标卡片。macOS 隔离测试覆盖不同账号及用量请求返回 401 期间发生轮换的情况。Windows、Linux 尚未实机验证。
+
 2026-11-18（Windows 编译警告）：非 Unix 平台显式忽略 `set_private_permissions` 的参数；`panel::is_modal` 仅在 macOS 编译，与调用方平台条件一致。Windows 桌面端及独立 daemon 的 cargo check 已启动，提交时仍在编译依赖，尚未确认完成；未进行 macOS 构建验证。
 
 2026-11-16（macOS 开机启动恢复为登录项）：沿原 SwiftUI 版本的 `LaunchAtStartupService`，macOS 13 及以上从 App 包运行时用 `SMAppService.mainApp` 注册/注销，启动时按已保存偏好同步（被系统设置阻止的仍视为已注册，不重复注册），并删除早期 Rust 版本写入的 `~/Library/LaunchAgents/io.github.copool.rust.plist`。包外 plist 在系统设置中归于开发者名下，曾被禁用而导致不启动；原版（`com.alick.copool`）留下的同路径登录项不会被本应用移除，需在“登录时打开”中手动删除以免重复启动。旧版 macOS、非 App 包运行及 Windows/Linux 保持原实现。`scripts/test_rust.py` 与桌面 crate 的 clippy 通过；本机打包安装后已确认注册（系统设置中归于 Copool，状态 enabled）；尚未验证登录时启动与注销。

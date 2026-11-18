@@ -1223,6 +1223,14 @@ fn same_oauth_generation(a: &Value, b: &Value) -> bool {
         .all(|key| a[*key] == b[*key])
 }
 
+fn live_generation_changed(before: Option<&Live>, after: Option<&Live>) -> bool {
+    after.and_then(Live::oauth).is_some_and(|now| {
+        before
+            .and_then(Live::oauth)
+            .is_none_or(|old| !same_oauth_generation(old, now))
+    })
+}
+
 /// Only adopt an observed change for this account. A different live login must
 /// never replace the account being refreshed, even if its expiry is later,
 /// nor a login Claude rejected, as stored or seen in this refresh.
@@ -1971,6 +1979,57 @@ impl Application {
             ..Default::default()
         })
     }
+    /// Resolve a nameless live rotation by its own access token. Until its profile
+    /// confirms the identity, never use a particular card's proxy or its login.
+    async fn identify_live_rotation(
+        &self,
+        location: &Location,
+        live: &mut Option<Live>,
+        account: &Stored,
+    ) -> Result<()> {
+        let Some(candidate) = live.as_ref().filter(|v| v.account.is_none()) else {
+            return Ok(());
+        };
+        let Some(oauth) = candidate.oauth() else {
+            return Ok(());
+        };
+        if identity(&account.account).is_none()
+            || account.first_request_pending
+            || !holds_tokens(account)
+            || same_login(oauth, &account.oauth)
+            || account.is_rejected(oauth)
+        {
+            return Ok(());
+        }
+        if self.claude_known(oauth, None)?.is_some() {
+            return Ok(());
+        }
+        let Some(token) = text(&oauth["accessToken"]) else {
+            return Ok(());
+        };
+        let proxy = self.account_proxy("")?;
+        let Ok(profile) = self
+            .claude_network()
+            .profile(&self.claude_api_root(), &token, &proxy)
+            .await
+        else {
+            return Ok(());
+        };
+        let named = profile_account(Some(&profile), &Value::Null).0;
+        let mut latest = read_live(location).await.ok().flatten();
+        if let Some(current) = latest.as_mut() {
+            if current.account.is_none()
+                && current
+                    .oauth()
+                    .is_some_and(|v| same_oauth_generation(oauth, v))
+                && identity(&named) == identity(&account.account)
+            {
+                current.account = Some(named);
+            }
+        }
+        *live = latest;
+        Ok(())
+    }
     /// Renews pool credentials and syncs an unchanged live login without
     /// showing authorization UI; external rotations take precedence over
     /// the response. A new import asks without the shared account proxy.
@@ -1991,6 +2050,18 @@ impl Application {
         // Adopt newer external credentials when accessible, but the pool remains
         // usable even when the live login is locked, missing or unreadable.
         let mut live = read_live(&location).await.ok().flatten();
+        if live.as_ref().is_some_and(|v| v.account.is_none()) {
+            let saved = self.claude_load()?;
+            if let Some(target) = saved.accounts.iter().find(|a| {
+                a.id == id
+                    && (forced
+                        || a.usage_retry_at
+                            .is_none_or(|until| until <= now_unix_seconds()))
+            }) {
+                self.identify_live_rotation(&location, &mut live, target)
+                    .await?;
+            }
+        }
         let (account, in_use) = {
             let _lock = self.claude.lock.lock().await;
             let mut store = self.claude_load()?;
@@ -2065,11 +2136,15 @@ impl Application {
                     let before = live.as_ref();
                     async move {
                         // Another app may have renewed while our usage request ran.
-                        let latest = match read_live(location).await {
+                        let mut latest = match read_live(location).await {
                             Ok(latest) => latest,
                             Err(_) if in_use => return Err(LIVE_UNREADABLE.into()),
                             Err(_) => None,
                         };
+                        if live_generation_changed(before, latest.as_ref()) {
+                            self.identify_live_rotation(location, &mut latest, account)
+                                .await?;
+                        }
                         if changed_live_oauth(account, rejected, before, latest.as_ref()).is_some()
                         {
                             return Err(CREDENTIALS_CHANGED.into());
@@ -2212,7 +2287,11 @@ impl Application {
             // Check on success AND failure: another app may win a rotation
             // while our refresh is in flight. Never overwrite that generation
             // with our response. Retry the read with the adopted credentials once.
-            let latest = read_live(&location).await.ok().flatten();
+            let mut latest = read_live(&location).await.ok().flatten();
+            if live_generation_changed(live.as_ref(), latest.as_ref()) {
+                self.identify_live_rotation(&location, &mut latest, &account)
+                    .await?;
+            }
             if let Some(updated) =
                 changed_live_oauth(&account, &rejected, live.as_ref(), latest.as_ref())
             {
@@ -2253,6 +2332,13 @@ impl Application {
                 if let (Some(old), Some(current)) = (before.oauth(), latest.oauth()) {
                     let same_account = match latest.account.as_ref().and_then(identity) {
                         Some(named) => Some(named) == identity(&account.account),
+                        None if before.account.as_ref().and_then(identity)
+                            == identity(&account.account)
+                            && identity(&account.account).is_some()
+                            && same_oauth_generation(old, current) =>
+                        {
+                            true
+                        }
                         None => ["accessToken", "refreshToken"].iter().any(|key| {
                             text(&current[*key]).is_some()
                                 && text(&current[*key]) == text(&account.oauth[*key])
@@ -5631,6 +5717,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nameless_rotation_during_a_401_uses_the_verified_token_without_renewal() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "new", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
+        let changed = location.clone();
+        fake.usage_hooks.lock().unwrap().push(Box::new(move || {
+            sign_in_unnamed(&changed, "rotated");
+        }));
+        fake.usage.lock().unwrap().push((401, Value::Null));
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
+        assert!(fake.refreshed.lock().unwrap().is_empty());
+        assert_eq!(usages(&fake), ["new-access", "rotated-access"]);
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
+            "rotated-refresh"
+        );
+    }
+
+    #[tokio::test]
     async fn repeated_external_changes_are_saved_but_retried_only_once() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = waiting_app(&dir);
@@ -6041,6 +6151,46 @@ mod tests {
         )
         .unwrap();
         let _ = fs::remove_file(&location.global_config);
+    }
+
+    #[tokio::test]
+    async fn a_nameless_external_rotation_only_updates_the_profile_matched_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        for user in ["new", "other"] {
+            sign_in(&location, user, LATER);
+            app.claude_import_current().await.unwrap();
+        }
+        let mut preferences = app.preferences().unwrap();
+        preferences.account_proxy_url = "http://127.0.0.1:8787".into();
+        app.save_preferences(preferences).await.unwrap();
+        fake.profile_proxies.lock().unwrap().clear();
+        sign_in_unnamed(&location, "rotated");
+        let cards = app.accounts(Pool::Claude).await.unwrap();
+        for user in ["other", "new"] {
+            let card = cards
+                .iter()
+                .find(|a| a.label == format!("{user}@example.com"))
+                .unwrap();
+            app.refresh_usage(Pool::Claude, &card.id).await.unwrap();
+            let saved = app
+                .claude_load()
+                .unwrap()
+                .accounts
+                .into_iter()
+                .find(|a| a.id == card.id)
+                .unwrap();
+            let expected = if user == "new" {
+                "rotated-access"
+            } else {
+                "other-access"
+            };
+            assert_eq!(saved.oauth["accessToken"], expected);
+            assert_eq!(fake.usage_tokens.lock().unwrap().last().unwrap(), expected);
+        }
+        let checked = fake.profile_proxies.lock().unwrap();
+        assert!(!checked.is_empty());
+        assert!(checked.iter().all(|p| p == "http://127.0.0.1:8787"));
     }
 
     #[tokio::test]
