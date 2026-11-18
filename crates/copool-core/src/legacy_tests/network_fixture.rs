@@ -9,6 +9,7 @@ use std::sync::Mutex;
 pub struct Network {
     pub calls: Mutex<Vec<(String, String, String)>>,
     pub usage_error: Mutex<Option<String>>,
+    pub rejected_access_token: Mutex<Option<String>>,
     pub refresh_error: Mutex<Option<String>>,
     pub metadata: Mutex<Vec<Metadata>>,
     pub metadata_by_token: Mutex<std::collections::HashMap<String, Vec<Metadata>>>,
@@ -28,6 +29,15 @@ impl AccountNetwork for Network {
             if self.block.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 self.started.notify_one();
                 self.resume.notified().await;
+            }
+            if self
+                .rejected_access_token
+                .lock()
+                .unwrap()
+                .as_deref()
+                .is_some_and(|token| auth["tokens"]["access_token"].as_str() == Some(token))
+            {
+                return Err("token_expired".into());
             }
             if let Some(error) = self.usage_error.lock().unwrap().clone() {
                 return Err(error);

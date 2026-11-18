@@ -972,32 +972,68 @@ impl Application {
         }
         // Codex rotates the refresh token of the login it uses in auth.json;
         // the stored copy of that account is spent once the live one is newer.
-        let live = self
+        let mut selected = self
             .current_auth()
             .ok()
             .flatten()
-            .filter(|live| newer_login(live, &account.auth_json));
-        let auth_json = live.as_ref().unwrap_or(&account.auth_json);
+            .filter(|live| newer_login(live, &account.auth_json))
+            .unwrap_or_else(|| account.auth_json.clone());
         let proxy = self.account_proxy(&account.proxy_url)?;
-        let result = if forced {
-            match self.network.refresh(auth_json, &proxy).await {
-                Ok(auth) => Ok((auth, None)),
-                Err(message) => Err(crate::account_network::FetchFailure {
-                    auth: auth_json.clone(),
-                    message,
-                }),
+        let mut retried = false;
+        let result = loop {
+            let auth_json = &selected;
+            let attempt = if forced {
+                match self.network.refresh(auth_json, &proxy).await {
+                    Ok(auth) => Ok((auth, None)),
+                    Err(message) => Err(crate::account_network::FetchFailure {
+                        auth: auth_json.clone(),
+                        message,
+                    }),
+                }
+            } else {
+                crate::account_network::fetch(
+                    self.network.as_ref(),
+                    auth_json,
+                    &proxy,
+                    now_unix_seconds(),
+                    account.renews(),
+                )
+                .await
+                .map(|(auth, usage)| (auth, Some(usage)))
+            };
+            let Err(failure) = &attempt else {
+                break attempt;
+            };
+            if retried
+                || failure.auth != selected
+                || !crate::account_network::expired_error(&failure.message)
+            {
+                break attempt;
             }
-        } else {
-            crate::account_network::fetch(
-                self.network.as_ref(),
-                auth_json,
-                &proxy,
-                now_unix_seconds(),
-                account.renews(),
-            )
-            .await
-            .map(|(auth, usage)| (auth, Some(usage)))
+            // A different process can rotate the login while usage or renewal
+            // is in flight. Re-read both copies before recording a sign-in error.
+            let saved = {
+                let _lock = self.state.store_lock.lock().await;
+                store::load_store_from_path(&self.paths.store())?
+            };
+            let Some(target) = saved.accounts.iter().find(|a| a.id == id) else {
+                break attempt;
+            };
+            let mut replacement = &failure.auth;
+            if newer_login(&target.auth_json, replacement) {
+                replacement = &target.auth_json;
+            }
+            let disk = self.current_auth().ok().flatten();
+            if let Some(login) = disk.as_ref().filter(|v| newer_login(v, replacement)) {
+                replacement = login;
+            }
+            if replacement["tokens"] == failure.auth["tokens"] {
+                break attempt;
+            }
+            selected = replacement.clone();
+            retried = true;
         };
+        let auth_json = &selected;
         let renewed = match &result {
             Ok((auth, _)) | Err(crate::account_network::FetchFailure { auth, .. }) => {
                 auth != auth_json
@@ -1070,12 +1106,6 @@ impl Application {
                             || newer_login(auth, &target.auth_json))
                     {
                         target.auth_json = auth.clone();
-                    }
-                    if let Some(live) = live
-                        .as_ref()
-                        .filter(|live| newer_login(live, &target.auth_json))
-                    {
-                        target.auth_json = live.clone();
                     }
                     if current
                         && auth != auth_json
@@ -1437,6 +1467,37 @@ mod tests {
         write_json(&app.paths.codex_auth, &other).unwrap();
         app.refresh_usage(Pool::Codex, &id).await.unwrap();
         assert_eq!(stored_token(), "next-test-only");
+    }
+
+    #[tokio::test]
+    async fn refresh_recovers_when_codex_rotates_while_usage_is_in_flight() {
+        let (_dir, app, network) = crate::legacy_tests::network_fixture::fixture();
+        let mut login = document("alice");
+        login["last_refresh"] = "2026-01-01T00:00:00Z".into();
+        app.import_json(Pool::Codex, &login.to_string())
+            .await
+            .unwrap();
+        let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
+        write_json(&app.paths.codex_auth, &login).unwrap();
+        *network.rejected_access_token.lock().unwrap() = Some("test-only".into());
+        *network.refresh_error.lock().unwrap() = Some("refresh token has already been used".into());
+        network
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let rotate = async {
+            network.started.notified().await;
+            login["last_refresh"] = "2026-01-02T00:00:00Z".into();
+            login["tokens"]["access_token"] = "new-access".into();
+            login["tokens"]["refresh_token"] = "new-refresh".into();
+            write_json(&app.paths.codex_auth, &login).unwrap();
+            network.resume.notify_one();
+        };
+        let (result, ()) = tokio::join!(app.refresh_usage(Pool::Codex, &id), rotate);
+        result.unwrap();
+        let saved = store::load_store_from_path(&app.paths.store()).unwrap();
+        assert_eq!(saved.accounts[0].auth_json, login);
+        assert!(saved.accounts[0].usage_error.is_none());
+        assert!(saved.accounts[0].usage.is_some());
     }
 
     #[tokio::test]

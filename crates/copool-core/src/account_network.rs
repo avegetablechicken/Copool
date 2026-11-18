@@ -63,6 +63,7 @@ pub(crate) fn expired_error(error: &str) -> bool {
         "provided authentication token is expired",
         "token_expired",
         "refresh token has already been used",
+        "refresh_token_reused",
         "signing in again",
     ]
     .iter()
