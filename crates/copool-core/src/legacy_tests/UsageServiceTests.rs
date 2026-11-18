@@ -241,12 +241,15 @@ async fn check_sub2api(explicit: Option<&str>) {
         providers: vec![provider],
     };
     let connection = sub2api::connection(&path, &settings, None, &secrets).unwrap();
-    let accounts = connection.fetch_accounts(None, 1787431578).await.unwrap();
+    let accounts = connection
+        .fetch_accounts(crate::Pool::Codex, None, 1787431578)
+        .await
+        .unwrap();
     assert_eq!(accounts.len(), 1);
     let a = &accounts[0];
     assert_eq!(a.display_email(), "you@example.com");
-    assert_eq!(a.summary().normalized_plan_label(), "TEAM");
-    assert!(a.summary().team_name.is_none());
+    assert_eq!(a.summary(String::new()).normalized_plan_label(), "TEAM");
+    assert!(a.summary(String::new()).team_name.is_none());
     let u = a.usage.as_ref().unwrap();
     assert_eq!(u.fetched_at, 1787431578);
     assert_eq!(u.plan_type.as_deref(), Some("prolite"));
@@ -340,7 +343,10 @@ async fn testFailedSub2APIQuotaKeepsLastKnownAccount() {
         providers: vec![provider],
     };
     let connection = sub2api::connection(&path, &settings, None, &secrets).unwrap();
-    let accounts = connection.fetch_accounts(None, 1787431578).await.unwrap();
+    let accounts = connection
+        .fetch_accounts(crate::Pool::Codex, None, 1787431578)
+        .await
+        .unwrap();
     let a = &accounts[0];
     assert_eq!(a.display_email(), "you@example.com");
     assert_eq!(a.account_id.as_deref(), Some("acct-10"));
@@ -405,7 +411,11 @@ async fn testMultipleSub2APIConfigurationsUseCurrentProviderCredentialsAndBaseUR
     };
     let c = sub2api::connection(&path, &settings, None, &super::MemorySecrets::default()).unwrap();
     assert_eq!(c.admin_base, format!("{}/api/v1", server.base));
-    assert!(c.fetch_accounts(None, 1).await.unwrap().is_empty());
+    assert!(c
+        .fetch_accounts(crate::Pool::Codex, None, 1)
+        .await
+        .unwrap()
+        .is_empty());
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert_eq!(
@@ -443,7 +453,7 @@ fn testSub2APICardWithoutEmailShowsItsAccountName() {
         "usageError": "upstream timeout", "providerID": "my"
     }))
     .unwrap();
-    let card = account.summary();
+    let card = account.summary(String::new());
     assert_eq!(card.email.as_deref(), Some("team-pool"));
     assert_eq!(card.label, "team-pool");
 }

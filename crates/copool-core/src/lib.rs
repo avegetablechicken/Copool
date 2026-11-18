@@ -4,6 +4,8 @@
 mod application;
 #[path = "../../../resources/proxyd-src/src/auth.rs"]
 mod auth;
+#[path = "../../../resources/proxyd-src/src/claude_api.rs"]
+mod claude_api;
 #[path = "../../../resources/proxyd-src/src/models.rs"]
 mod models;
 mod persistence;
@@ -19,6 +21,8 @@ mod usage;
 mod utils;
 pub use application::{Application, Paths, Preferences, SmartSwitchOutcome, SwitchExecution};
 pub use models::{AccountSummary, ApiProxyStatus, CreditSnapshot, UsageSnapshot, UsageWindow};
+mod pool;
+pub use pool::Pool;
 
 #[cfg(test)]
 mod legacy_tests;

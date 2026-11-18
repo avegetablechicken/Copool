@@ -16,14 +16,14 @@ function fixture(target, cancelled = false) {
     window: {
       __TAURI__: {
         core: {
-          invoke: async (command) => {
-            calls.push(command);
-            if (command.endsWith("import_account_file")) {
+          invoke: async (command, args) => {
+            calls.push([command, args.pool]);
+            if (command === "import_account_file") {
               if (cancelled) return null;
               rows = [{ id: "imported", label: "Imported account", updatedAt: 1 }];
               return 1;
             }
-            if (command === "accounts" || command === "claude_accounts") return rows;
+            if (command === "accounts") return rows;
             return [];
           },
         },
@@ -39,13 +39,14 @@ for (const target of ["claude", "codex"]) {
   test(`${target} file import uses its own pool and reloads imported accounts`, async () => {
     const { model, calls } = fixture(target);
     assert.deepEqual(await model.importFile(), ["Imported account"]);
-    assert(calls.includes(target === "claude" ? "claude_import_account_file" : "import_account_file"));
-    assert(!calls.includes(target === "claude" ? "import_account_file" : "claude_import_account_file"));
+    assert.deepEqual(calls[0], ["import_account_file", target]);
+    // Every command, the reload included, goes to that pool alone.
+    assert(calls.every(([, sent]) => sent === target));
   });
 }
 test("cancelling a Claude file import does not reload or mutate accounts", async () => {
   const { model, calls } = fixture("claude", true);
   assert.equal(await model.importFile(), null);
-  assert.deepEqual(calls, ["claude_import_account_file"]);
+  assert.deepEqual(calls, [["import_account_file", "claude"]]);
   assert.equal(model.importing, false);
 });

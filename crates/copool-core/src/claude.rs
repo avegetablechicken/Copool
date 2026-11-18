@@ -3,9 +3,15 @@
 //! `.claude.json`), OAuth usage and switching.
 use crate::{
     account_network::Response,
-    application::{Application, SmartSwitchOutcome, SwitchExecution},
-    models::{AccountSummary, CreditSnapshot, ResetGrant, ResetKind, UsageSnapshot, UsageWindow},
+    application::{Application, SwitchExecution},
+    claude_api::{
+        apply_tokens, expires_at, number, plan, refresh_at, refresh_scope, request_error, reset_at,
+        text, usage_snapshot, UsageResponse, API_ROOT, SIGN_IN_EXPIRED, TOKEN_REFRESH_RATE_LIMITED,
+        USAGE_USER_AGENT, USER_AGENT,
+    },
+    models::{AccountSummary, CreditSnapshot, Renewal, UsageSnapshot},
     persistence::write_json,
+    pool::{Hello, Pool, PoolAccount},
     utils::now_unix_seconds,
 };
 use serde::{Deserialize, Serialize};
@@ -16,16 +22,12 @@ use std::{fs, path::PathBuf, sync::Arc};
 type Result<T> = std::result::Result<T, String>;
 
 mod provider_config;
+mod proxy;
 mod settings_source;
 mod sub2api;
-pub use sub2api::Provider as Sub2ApiProvider;
 
-// `cedar_ember=1` adds the banked usage-limit resets to the usage response.
-const USAGE_PATH: &str = "/api/oauth/usage?cedar_ember=1&skip_spend=1";
 const PROFILE_PATH: &str = "/api/oauth/profile";
 const ORGANIZATIONS_PATH: &str = "/api/oauth/organizations";
-/// Where Claude Code sends its login's requests without a base URL.
-const API_ROOT: &str = "https://api.anthropic.com";
 /// The cheapest model whose hi starts the five-hour window: a one-token
 /// Haiku hi, as Claude Code's own quota check, does not.
 pub(crate) const HELLO_MODEL: &str = "claude-sonnet-5-5";
@@ -33,16 +35,9 @@ pub(crate) const HELLO_MODEL: &str = "claude-sonnet-5-5";
 /// entrypoint (`sdk-cli`, `cli-bg`) is reportedly counted apart from the
 /// five-hour window.
 const INTERACTIVE_USER_AGENT: &str = "claude-cli/2.1.300 (external, cli)";
-const USER_AGENT: &str = "claude-code/2.1.69";
-// The banked resets are returned only to Claude Code 2.1.280 or later, by its
-// User-Agent; others read `eligible: false` with the rest of the usage intact.
-// 2.1.322 also understands Fable grants and their weekly-refund flag.
-const USAGE_USER_AGENT: &str = "claude-cli/2.1.322 (external, cli)";
 /// How long usage is asked as `claude-code/…` through a proxy after the
 /// usage endpoint refused `claude-cli/…` there.
 const CLI_REFUSAL_SECONDS: i64 = 3600;
-const SIGN_IN_EXPIRED: &str = "error.accounts.sign_in_expired";
-const TOKEN_REFRESH_RATE_LIMITED: &str = "Claude token refresh failed: HTTP 429";
 /// The pause after a first HTTP 429, doubled for each following one up to
 /// the longest; a longer `Retry-After` is honored up to six hours.
 const RATE_LIMIT_PAUSE: i64 = 300;
@@ -301,7 +296,6 @@ fn settings_are_official(location: &Location) -> bool {
         .is_ok_and(|settings| provider_config::overrides(&settings).is_empty())
 }
 
-type UsageResponse = (u16, Value, Option<u64>, Option<i64>);
 pub(crate) trait Network: Send + Sync {
     /// The HTTP status and body of the OAuth usage endpoint, with the seconds
     /// of a `Retry-After` header.
@@ -349,21 +343,6 @@ fn client(proxy: &str) -> Result<reqwest::Client> {
         },
     )
 }
-// reqwest's Display omits the cause (TLS trust, proxy connection, DNS, etc.).
-// Keep the chain without Debug-formatting requests or exposing auth headers.
-fn request_error(error: reqwest::Error) -> String {
-    use std::error::Error;
-    let mut parts = vec![error.to_string()];
-    let mut source = error.source();
-    while let Some(cause) = source {
-        let message = cause.to_string();
-        if !parts.contains(&message) {
-            parts.push(message);
-        }
-        source = cause.source();
-    }
-    parts.join(" -> ")
-}
 impl Network for Http {
     fn usage<'a>(
         &'a self,
@@ -372,30 +351,7 @@ impl Network for Http {
         agent: &'a str,
         proxy: &'a str,
     ) -> Response<'a, UsageResponse> {
-        Box::pin(async move {
-            let response = client(proxy)?
-                .get(format!("{api}{USAGE_PATH}"))
-                .header(reqwest::header::USER_AGENT, agent)
-                .bearer_auth(token.trim())
-                .header("Accept", "application/json")
-                .header("anthropic-beta", "oauth-2025-04-20")
-                .send()
-                .await
-                .map_err(request_error)?;
-            let status = response.status().as_u16();
-            let retry_after = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse().ok());
-            let clock_offset = response
-                .headers()
-                .get(reqwest::header::DATE)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| clock_offset_seconds(value, now_unix_seconds()));
-            let body = response.json().await.unwrap_or(Value::Null);
-            Ok((status, body, retry_after, clock_offset))
-        })
+        Box::pin(crate::claude_api::request_usage(api, token, agent, proxy))
     }
     fn refresh<'a>(
         &'a self,
@@ -404,7 +360,7 @@ impl Network for Http {
         proxy: &'a str,
     ) -> Response<'a, Value> {
         Box::pin(refresh_at(
-            crate::login::CLAUDE_TOKEN_URL,
+            crate::claude_api::TOKEN_URL,
             refresh_token,
             scope,
             proxy,
@@ -498,62 +454,6 @@ impl Network for Http {
             let status = response.status().as_u16();
             Ok((status, response.json().await.unwrap_or(Value::Null)))
         })
-    }
-}
-
-/// Renews a login with the request Claude Code sends: a JSON body asking
-/// again for the login's scopes, and no User-Agent of its own. The token
-/// endpoint answers HTTP 429 to some agents (`claude-code/…`, `curl/…`)
-/// whatever the token, while Claude Code's request passes.
-async fn refresh_at(url: &str, refresh_token: &str, scope: &str, proxy: &str) -> Result<Value> {
-    let response = crate::utils::with_account_proxy(reqwest::Client::builder(), proxy)?
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?
-        .post(url)
-        .json(&json!({
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": crate::login::CLAUDE_CLIENT,
-            "scope": scope,
-        }))
-        .send()
-        .await
-        .map_err(request_error)?;
-    let status = response.status();
-    let body: Value = response.json().await.unwrap_or(Value::Null);
-    if status.is_success() {
-        return Ok(body);
-    }
-    let code = body["error"]
-        .as_str()
-        .or_else(|| body["error"]["type"].as_str());
-    if matches!(status.as_u16(), 400 | 401) && code == Some("invalid_grant") {
-        return Err(SIGN_IN_EXPIRED.into());
-    }
-    if status.as_u16() == 429 {
-        return Err(TOKEN_REFRESH_RATE_LIMITED.into());
-    }
-    Err(format!(
-        "Claude token refresh failed: HTTP {}",
-        status.as_u16()
-    ))
-}
-/// The scopes a login was granted, as Claude Code asks for them on renewal;
-/// the default ones for a login that records none.
-fn refresh_scope(oauth: &Value) -> String {
-    let scopes: Vec<&str> = oauth["scopes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|scope| !scope.is_empty())
-        .collect();
-    if scopes.is_empty() {
-        crate::login::CLAUDE_SCOPES.into()
-    } else {
-        scopes.join(" ")
     }
 }
 
@@ -794,6 +694,20 @@ impl Stored {
         }
     }
 }
+impl PoolAccount for Stored {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn set_renewal(&mut self, renewal: Renewal) {
+        self.renewal = Some(renewal);
+    }
+    fn set_proxy(&mut self, proxy: String) {
+        self.proxy_url = proxy;
+    }
+    fn release(&mut self) -> bool {
+        std::mem::take(&mut self.first_request_pending)
+    }
+}
 
 /// The login Claude Code uses.
 struct Live {
@@ -801,35 +715,6 @@ struct Live {
     document: Value,
     account: Option<Value>,
     held: Held,
-}
-/// Whether Copool renews an account's tokens; without a choice, always.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Renewal {
-    Never,
-    /// Once, then never.
-    Once,
-    Always,
-}
-impl Renewal {
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "never" => Ok(Self::Never),
-            "once" => Ok(Self::Once),
-            "always" => Ok(Self::Always),
-            _ => Err(format!("Unknown token renewal: {value}")),
-        }
-    }
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Never => "never",
-            Self::Once => "once",
-            Self::Always => "always",
-        }
-    }
-    fn of(choice: Option<Self>) -> Self {
-        choice.unwrap_or(Self::Always)
-    }
 }
 /// Where a login was read: the Keychain item, or the file Claude Code reads
 /// while the item is missing.
@@ -846,13 +731,6 @@ impl Live {
     }
 }
 
-fn text(value: &Value) -> Option<String> {
-    value
-        .as_str()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_owned)
-}
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -938,22 +816,6 @@ fn merge_identified(store: &mut Store, id: &str) {
         store.current_account_id = Some(existing.id.clone());
     }
 }
-fn expires_at(oauth: &Value) -> i64 {
-    oauth["expiresAt"].as_f64().map_or(0, |v| v as i64)
-}
-/// "max 20x" from the subscription and its rate limit tier.
-fn plan(oauth: &Value) -> Option<String> {
-    let subscription = text(&oauth["subscriptionType"])?.to_lowercase();
-    let multiplier = text(&oauth["rateLimitTier"]).and_then(|tier| {
-        tier.split(|c: char| !c.is_ascii_alphanumeric())
-            .find(|p| p.ends_with('x') && p[..p.len() - 1].parse::<u32>().is_ok())
-            .map(str::to_owned)
-    });
-    Some(match multiplier {
-        Some(m) => format!("{subscription} {m}"),
-        None => subscription,
-    })
-}
 /// The credentials document, as JSON or the hexadecimal Keychain encoding.
 fn parse_credentials(bytes: &[u8]) -> Option<Value> {
     let text = std::str::from_utf8(bytes).ok()?.trim();
@@ -971,64 +833,7 @@ fn parse_credentials(bytes: &[u8]) -> Option<Value> {
         })
         .filter(Value::is_object)
 }
-fn number(value: &Value) -> Option<f64> {
-    value
-        .as_f64()
-        .or_else(|| value.as_str().and_then(|v| v.parse().ok()))
-}
-fn clock_offset_seconds(value: &str, now: i64) -> Option<i64> {
-    let server = chrono::DateTime::parse_from_rfc2822(value.trim()).ok()?;
-    server.timestamp().checked_sub(now)
-}
 
-fn reset_at(value: &Value) -> Option<i64> {
-    if let Some(text) = value.as_str() {
-        return chrono::DateTime::parse_from_rfc3339(text.trim())
-            .map(|d| d.timestamp())
-            .ok()
-            .or_else(|| {
-                chrono::NaiveDateTime::parse_from_str(text.trim(), "%Y-%m-%dT%H:%M:%S%.f")
-                    .ok()
-                    .map(|d| d.and_utc().timestamp())
-            });
-    }
-    let raw = number(value)?;
-    Some(if raw.abs() < 10_000_000_000.0 {
-        raw as i64
-    } else {
-        (raw / 1000.0) as i64
-    })
-}
-/// The five-hour and seven-day windows of the OAuth usage response.
-fn usage_snapshot(body: &Value, plan: Option<String>, now: i64) -> Result<UsageSnapshot> {
-    if !body.is_object() {
-        return Err("Invalid Claude usage response".into());
-    }
-    let window = |key: &str, seconds| {
-        body.get(key)
-            .filter(|w| w.is_object())
-            .map(|w| UsageWindow {
-                clock_offset_seconds: None,
-                used_percent: number(&w["utilization"]).unwrap_or(0.0).clamp(0.0, 100.0),
-                window_seconds: seconds,
-                reset_at: reset_at(&w["resets_at"]),
-            })
-    };
-    let (resets, reset_expiries, reset_grants) = banked_resets(&body["cedar_ember"], now).map_or(
-        (None, Vec::new(), Vec::new()),
-        |(count, expiries, grants)| (Some(count), expiries, grants),
-    );
-    Ok(UsageSnapshot {
-        remaining_reset_count: resets,
-        reset_expiries,
-        reset_grants,
-        fetched_at: now,
-        plan_type: plan,
-        five_hour: window("five_hour", 5 * 60 * 60),
-        one_week: window("seven_day", 7 * 24 * 60 * 60),
-        credits: None,
-    })
-}
 /// What extra usage has left, as Claude Code counts it: the smaller of the
 /// monthly limit's remainder and the prepaid balance. A missing limit, or a
 /// balance auto-reload tops up, is unbounded; both unbounded is unlimited.
@@ -1097,55 +902,6 @@ fn prepaid_credit_expiries(prepaid: &Value) -> Vec<i64> {
     expiries
 }
 
-/// The usage-limit resets the account has banked: what its unexpired grants
-/// have left, as claude.ai shows them. An ineligible block says nothing about
-/// the account, so it is unknown rather than zero. With the count come when
-/// its resets expire, earliest first: each reset a grant has left ends with
-/// it. Grant ids, which spend a reset, are never read.
-fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>, Vec<ResetGrant>)> {
-    if block["eligible"].as_bool() != Some(true) {
-        return None;
-    }
-    let grants = block["grants"].as_array()?;
-    let (mut count, mut expiries, mut inventory) = (0, Vec::new(), Vec::new());
-    for grant in grants {
-        let ends = reset_at(&grant["ends_at"]);
-        if ends.is_some_and(|end| end <= now) {
-            continue;
-        }
-        let Some(left) = number(&grant["resets_left"]).map(|left| left.max(0.0) as i64) else {
-            continue;
-        };
-        if left == 0 {
-            continue;
-        }
-        // Claude Code classifies the weekly Fable refund by this flag.
-        // It does not clear other models' weekly usage, even when it clears 5h.
-        let kind = if grant["gives_back_weekly"].as_bool() == Some(true) {
-            ResetKind::Fable
-        } else if let Some(clears) = grant["clears"].as_array() {
-            if clears.iter().any(|v| v == "seven_day") && clears.iter().any(|v| v == "five_hour") {
-                ResetKind::Full
-            } else {
-                ResetKind::Partial
-            }
-        } else {
-            ResetKind::Unknown
-        };
-        inventory.push(ResetGrant {
-            count: left,
-            kind,
-            expires_at: ends,
-        });
-        count += left;
-        expiries.extend(
-            ends.into_iter()
-                .flat_map(|end| std::iter::repeat_n(end, left as usize)),
-        );
-    }
-    expiries.sort_unstable();
-    Some((count, expiries, inventory))
-}
 /// Usage of a Claude account as Sub2api reports it. Sub2api reports an idle
 /// five-hour window as zero without a reset, which is no window at all.
 pub(crate) fn sub2api_usage(body: &Value, now: i64) -> Result<UsageSnapshot> {
@@ -1165,25 +921,6 @@ pub(crate) fn sub2api_usage(body: &Value, now: i64) -> Result<UsageSnapshot> {
     }
     let plan = text(&body["subscription_tier"]).map(|t| t.to_lowercase());
     usage_snapshot(&body, plan, now)
-}
-/// Applies a token response to a `claudeAiOauth` entry.
-fn apply_tokens(oauth: &mut Value, tokens: &Value, now_ms: i64) -> Result<()> {
-    let access = text(&tokens["access_token"]).ok_or("Claude returned no access token")?;
-    oauth["accessToken"] = access.into();
-    if let Some(refresh) = text(&tokens["refresh_token"]) {
-        oauth["refreshToken"] = refresh.into();
-    }
-    if let Some(seconds) = number(&tokens["expires_in"]) {
-        oauth["expiresAt"] = (now_ms + (seconds * 1000.0) as i64).into();
-    }
-    if let Some(scope) = text(&tokens["scope"]) {
-        oauth["scopes"] = scope.split_whitespace().collect::<Vec<_>>().into();
-    }
-    // Claude Code records when the refresh token itself expires.
-    if let Some(seconds) = number(&tokens["refresh_token_expires_in"]) {
-        oauth["refreshTokenExpiresAt"] = (now_ms + (seconds * 1000.0) as i64).into();
-    }
-    Ok(())
 }
 /// `oauthAccount` and the subscription from the OAuth profile, else from the
 /// account and organization of a token response.
@@ -1526,7 +1263,8 @@ fn changed_live_oauth(
     Some(oauth.clone())
 }
 
-const CREDENTIALS_CHANGED: &str = "Claude credentials changed during refresh; retry usage";
+pub(crate) const CREDENTIALS_CHANGED: &str =
+    "Claude credentials changed during refresh; retry usage";
 use crate::models::RENEWAL_OFF;
 /// Claude refused a refresh token; shown as an expired sign-in.
 const REFRESH_REJECTED: &str = "Claude rejected the refresh token";
@@ -1677,7 +1415,7 @@ impl Application {
     }
     /// Lets a user action ask for the vault's Keychain item when background
     /// work could not read it, as after a build changed Copool's signature.
-    pub async fn claude_authorize(&self) -> Result<()> {
+    pub(crate) async fn claude_authorize(&self) -> Result<()> {
         self.claude_unlock().await?;
         // The item holds the providers' passwords as well; read once already
         // when the pool's tokens are there.
@@ -1807,11 +1545,11 @@ impl Application {
             .accounts
             .iter()
             .map(|a| a.summary(false))
-            .chain(sub2api::summaries(&store, None))
+            .chain(self.provider_cards(Pool::Claude, None)?)
             .collect())
     }
     /// The Claude pool, following the login Claude Code uses.
-    pub async fn claude_accounts(&self) -> Result<Vec<AccountSummary>> {
+    pub(crate) async fn claude_accounts(&self) -> Result<Vec<AccountSummary>> {
         let location = self.claude_location();
         let saved = self.claude_load()?;
         // A pool without account logins never reads the Keychain.
@@ -1841,10 +1579,10 @@ impl Application {
                 }
                 card
             })
-            .chain(sub2api::summaries(&store, provider))
+            .chain(self.provider_cards(Pool::Claude, provider)?)
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
-        if let Some(schedule) = self.claude_refresh_schedule() {
+        if let Some(schedule) = self.schedule(Pool::Claude) {
             for card in &mut summaries {
                 // Every round asks for all cards, subject to freshness and
                 // rate limit pauses for official accounts.
@@ -1960,7 +1698,7 @@ impl Application {
         })
     }
     /// Imports the login Claude Code uses; returns the account label.
-    pub async fn claude_import_current(&self) -> Result<String> {
+    pub(crate) async fn claude_import_current(&self) -> Result<String> {
         let _op = self.claude.operations.lock().await;
         let _ = self.claude_unlock().await;
         let live = read_live_with_access(&self.claude_location(), KeychainAccess::Interactive)
@@ -1974,10 +1712,7 @@ impl Application {
         Ok(label)
     }
     /// Imports an exported Claude Code credentials JSON without selecting it.
-    pub async fn claude_import_json(&self, content: &str) -> Result<usize> {
-        if content.len() > 16 * 1024 * 1024 {
-            return Err("Import exceeds 16 MiB".into());
-        }
+    pub(crate) async fn claude_import_json(&self, content: &str) -> Result<usize> {
         let invalid = "error.claude.credentials_json_invalid";
         let document: Value =
             serde_json::from_str(content.trim_start_matches('\u{feff}')).map_err(|_| invalid)?;
@@ -2043,7 +1778,7 @@ impl Application {
         self.claude_upsert(oauth, account, current, defer).await
     }
     /// Stores a browser sign-in without changing Claude Code's login.
-    pub async fn claude_import_login(&self, tokens: Value) -> Result<String> {
+    pub(crate) async fn claude_import_login(&self, tokens: Value) -> Result<String> {
         let mut oauth = json!({});
         apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
         let token = text(&oauth["accessToken"]).unwrap_or_default();
@@ -2077,13 +1812,9 @@ impl Application {
         }
         Ok(label)
     }
-    pub async fn claude_delete_account(&self, id: &str) -> Result<()> {
+    pub(crate) async fn claude_delete_account(&self, id: &str) -> Result<()> {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
-        if sub2api::is_card(id) {
-            self.claude_remove_sub2api_card(&mut store, id)?;
-            return self.claude_save(&store);
-        }
         let before = store.accounts.len();
         store.accounts.retain(|a| a.id != id);
         if store.accounts.len() == before {
@@ -2094,36 +1825,36 @@ impl Application {
         }
         self.claude_save(&store)
     }
-    pub async fn claude_save_account_proxy(&self, id: &str, value: &str) -> Result<()> {
-        crate::utils::validate_account_proxy(value)?;
+    /// Edits the stored accounts; their tokens stay where they are kept.
+    pub(crate) async fn claude_edit_accounts(
+        &self,
+        edit: impl FnOnce(&mut [&mut dyn PoolAccount]) -> Result<bool>,
+    ) -> Result<()> {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
-        if sub2api::is_card(id) {
-            self.claude_sub2api_card_proxy(&mut store, id, value)?;
-            return self.claude_save(&store);
+        let changed = {
+            let mut accounts: Vec<&mut dyn PoolAccount> = store
+                .accounts
+                .iter_mut()
+                .map(|a| a as &mut dyn PoolAccount)
+                .collect();
+            edit(&mut accounts)?
+        };
+        if changed {
+            self.claude_save(&store)?;
         }
-        store
-            .accounts
-            .iter_mut()
-            .find(|a| a.id == id)
-            .ok_or("Account not found")?
-            .proxy_url = value.trim().into();
-        self.claude_save(&store)
+        Ok(())
     }
-    /// Gives Claude Code this account's login and identity. A previous login
-    /// outside the pool is kept in `claude-before-switch.json`; a failed step
-    /// is rolled back.
-    pub async fn claude_switch_account(&self, id: &str) -> Result<SwitchExecution> {
-        self.claude_switch_with_access(id, KeychainAccess::Interactive)
-            .await
-    }
-    async fn claude_switch_with_access(
+    /// Gives Claude Code this account's login and identity, or a Sub2api
+    /// card's provider. A previous login outside the pool is kept in
+    /// `claude-before-switch.json`; a failed step is rolled back.
+    pub(crate) async fn claude_switch_account(
         &self,
         id: &str,
         access: KeychainAccess,
     ) -> Result<SwitchExecution> {
         let _op = self.claude.operations.lock().await;
-        if sub2api::is_card(id) {
+        if crate::sub2api::is_card(Pool::Claude, id) {
             return self.claude_switch_sub2api(id).await;
         }
         if access == KeychainAccess::Interactive {
@@ -2240,80 +1971,18 @@ impl Application {
             ..Default::default()
         })
     }
-    /// As the Codex pool's Smart Switch, over the Claude accounts.
-    pub async fn claude_smart_switch(&self) -> Result<SmartSwitchOutcome> {
-        let accounts = self.claude_accounts().await?;
-        let score = crate::ranking::remaining_score;
-        let best =
-            accounts
-                .iter()
-                .filter(|a| a.available)
-                .fold(None::<&AccountSummary>, |best, a| match best {
-                    Some(b) if score(a) <= score(b) => Some(b),
-                    _ => Some(a),
-                });
-        let Some(best) = best else {
-            return Ok(SmartSwitchOutcome::NoTarget);
-        };
-        if best.is_current {
-            return Ok(SmartSwitchOutcome::AlreadyBest);
-        }
-        let execution = self.claude_switch_account(&best.id).await?;
-        Ok(SmartSwitchOutcome::Switched {
-            label: best.label.clone(),
-            execution,
-        })
-    }
-    /// Renew pool credentials and sync an unchanged live login without showing
-    /// authorization UI. External rotations take precedence over our response.
-    pub async fn claude_refresh_usage(&self, id: &str) -> Result<()> {
-        self.claude_refresh_usage_scoped(id, true, None).await
-    }
-    /// Renews an account's tokens at once, whatever its renewal choice, which
-    /// stays as it was. Usage is not asked for, unless the account had
-    /// failed: its token expired or its usage refused; it then refreshes once
-    /// renewed, and a usage error shows on the card.
-    pub async fn claude_renew_now(&self, id: &str) -> Result<()> {
-        if sub2api::is_card(id) {
-            return Err("Token renewal is not available for this account".into());
-        }
-        let failed = {
-            let _lock = self.claude.lock.lock().await;
-            let store = self.claude_load()?;
-            let account = store
-                .accounts
-                .iter()
-                .find(|a| a.id == id)
-                .ok_or("Account not found")?;
-            let expiry = expires_at(&account.oauth);
-            account.usage_error.is_some() || (expiry != 0 && expiry <= now_unix_seconds() * 1000)
-        };
-        self.claude_release_new_accounts(Some(id)).await?;
-        let mut renewed = false;
-        let result = self
-            .claude_refresh_usage_scoped(id, true, Some(&mut renewed))
-            .await;
-        if !renewed {
-            result?;
-            return Err(CREDENTIALS_CHANGED.into());
-        }
-        if failed {
-            let _ = self.claude_refresh_usage(id).await;
-        }
-        Ok(())
-    }
+    /// Renews pool credentials and syncs an unchanged live login without
+    /// showing authorization UI; external rotations take precedence over
+    /// the response. A new import asks without the shared account proxy.
     /// With `renew_now`, only the tokens are renewed, even when unexpired or
     /// renewal is off; usage is not asked for, nor shown as refreshing, and
     /// whether the renewal was kept is reported.
-    async fn claude_refresh_usage_scoped(
+    pub(crate) async fn claude_refresh_usage_scoped(
         &self,
         id: &str,
         use_account_proxy: bool,
         mut renew_now: Option<&mut bool>,
     ) -> Result<()> {
-        if sub2api::is_card(id) {
-            return self.claude_refresh_sub2api_card(id).await;
-        }
         let forced = renew_now.is_some();
         let _activity = (!forced).then(|| self.begin_refresh(id));
         // Serialize renewal with imports/switches and other pool refreshes.
@@ -2673,8 +2342,8 @@ impl Application {
                 .collect();
             target.alternates = alternates;
             // A single renewal allowed has been used.
-            if renewals > 0 && target.renewal == Some(Renewal::Once) {
-                target.renewal = Some(Renewal::Never);
+            if renewals > 0 {
+                target.renewal = target.renewal.map(Renewal::after_renewal);
             }
             if oauth != account.oauth {
                 let previous = std::mem::replace(&mut target.oauth, oauth);
@@ -2754,6 +2423,10 @@ impl Application {
     /// on leaving them; a base URL beside a credential that replaces the
     /// login is that credential's gateway.
     fn claude_messages_url(&self) -> String {
+        format!("{}/v1/messages", self.claude_messages_base())
+    }
+    /// The root of `claude_messages_url`.
+    pub(crate) fn claude_messages_base(&self) -> String {
         let applied = self
             .claude_load()
             .is_ok_and(|store| store.settings_provider.is_some());
@@ -2770,177 +2443,67 @@ impl Application {
             .filter(|settings| provider_config::overrides(settings).is_empty())
             .and_then(|settings| text(&settings["env"][BASE_URL]))
             .unwrap_or_else(|| API_ROOT.into());
-        format!("{}/v1/messages", base.trim_end_matches('/'))
+        base.trim_end_matches('/').to_owned()
     }
-    /// Says hi with an account, through its proxy, so that its five-hour
-    /// window starts now; the usage Claude reports shows it only later. A
-    /// login Claude does not accept is renewed by a refresh, as its renewal
-    /// allows, and says hi once more. A Sub2api card says hi through Sub2api.
-    pub async fn claude_say_hi(&self, id: &str) -> Result<()> {
-        let _greeting = self.begin_greeting(true, id)?;
-        if sub2api::is_card(id) {
-            return self.claude_say_hi_sub2api(id).await;
-        }
-        let network = self.claude_network();
-        let mut renewed = false;
-        loop {
-            let account = {
-                let _lock = self.claude.lock.lock().await;
-                self.claude_load()?
-                    .accounts
-                    .into_iter()
-                    .find(|a| a.id == id)
-                    .ok_or("Account not found")?
-            };
-            if !holds_tokens(&account) {
-                return Err(self.claude_locked());
-            }
-            let expired = expires_at(&account.oauth) != 0
-                && expires_at(&account.oauth) <= (now_unix_seconds() + 60) * 1000;
-            let (status, body) = if expired {
-                (401, Value::Null)
-            } else {
-                let token = text(&account.oauth["accessToken"]).unwrap_or_default();
-                let proxy = self.account_proxy(&account.proxy_url)?;
-                let uuid = text(&account.account["accountUuid"]).unwrap_or_default();
-                network
-                    .hello(&self.claude_messages_url(), &token, &uuid, &proxy)
-                    .await?
-            };
-            match status {
-                200..=299 => break,
-                401 if !renewed => {
-                    renewed = true;
-                    self.claude_refresh_usage(id).await?;
-                }
-                401 => return Err(SIGN_IN_EXPIRED.into()),
-                _ => {
-                    let message = body["error"]["message"].as_str().unwrap_or_default();
-                    return Err(
-                        format!("Claude message request failed: HTTP {status} {message}")
-                            .trim()
-                            .to_owned(),
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-    /// Sets whether Copool renews an account's tokens: "never", "once" (then
-    /// never) or "always".
-    pub async fn claude_set_renewal(&self, id: &str, renewal: &str) -> Result<()> {
-        let renewal = Renewal::parse(renewal)?;
+    /// Whether the stored account failed: its usage refused, or its token
+    /// expired.
+    pub(crate) async fn claude_login_failed(&self, id: &str) -> Result<bool> {
         let _lock = self.claude.lock.lock().await;
-        let mut store = self.claude_load()?;
+        let store = self.claude_load()?;
         let account = store
             .accounts
-            .iter_mut()
+            .iter()
             .find(|a| a.id == id)
             .ok_or("Account not found")?;
-        account.renewal = Some(renewal);
-        self.claude_save(&store)
+        let expiry = expires_at(&account.oauth);
+        Ok(account.usage_error.is_some() || (expiry != 0 && expiry <= now_unix_seconds() * 1000))
     }
-    /// A manual refresh lets new accounts contact upstream: one account, or
-    /// all of them without an id.
-    pub async fn claude_release_new_accounts(&self, id: Option<&str>) -> Result<()> {
-        let _lock = self.claude.lock.lock().await;
-        let mut store = self.claude_load()?;
-        let mut changed = false;
-        for account in store
-            .accounts
-            .iter_mut()
-            .filter(|a| id.is_none_or(|id| a.id == id))
-        {
-            changed |= std::mem::take(&mut account.first_request_pending);
-        }
-        if changed {
-            self.claude_save(&store)?;
-        }
-        Ok(())
-    }
-    /// Every account and every provider, or only the ids between full refreshes.
-    pub async fn claude_refresh(&self, ids: Option<Vec<String>>) -> Result<()> {
-        self.claude_refresh_scoped(ids.clone(), ids.as_deref())
-            .await
-    }
-    /// Accounts by `ids`, provider cards by their own set: `None` refreshes
-    /// every provider, an empty slice none at all.
-    async fn claude_refresh_scoped(
-        &self,
-        ids: Option<Vec<String>>,
-        cards: Option<&[String]>,
-    ) -> Result<()> {
-        let accounts = self.claude_accounts().await?;
-        let refreshes = accounts
-            .iter()
-            .filter(|a| !sub2api::is_card(&a.id))
-            .filter(|a| ids.as_ref().is_none_or(|ids| ids.contains(&a.id)))
-            .map(|a| async move {
-                self.claude_refresh_usage(&a.id)
-                    .await
-                    .map_err(|error| format!("{}: {error}", a.label))
-            });
-        let (accounts, providers) = tokio::join!(
-            futures_util::future::join_all(refreshes),
-            self.claude_refresh_sub2api_cards(cards)
-        );
-        let errors: Vec<String> = accounts
-            .into_iter()
-            .filter_map(Result::err)
-            .chain(providers)
-            .collect();
-        self.claude_auto_switch_if_needed().await?;
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join("\n"))
-        }
-    }
-    /// Every adaptive round refreshes the whole pool, including inactive providers.
-    pub async fn claude_refresh_recurring(&self, _tick: u64) -> Result<()> {
-        let accounts = self.claude_accounts().await?;
-        if accounts.is_empty() {
-            return Ok(());
-        }
-        // An account asked within the current adaptive interval (by a
-        // manual refresh, say) waits for the next round.
-        let now = now_unix_seconds();
-        let interval = self.claude_refresh_interval().as_secs() as i64;
-        let due = |a: &&AccountSummary| !sub2api::is_card(&a.id) && now - a.updated_at >= interval;
-        let ids: Vec<String> = accounts.iter().filter(due).map(|a| a.id.clone()).collect();
-        self.claude_refresh_scoped(Some(ids), None).await
-    }
-    /// The Codex pool's automatic switch rules, over the Claude accounts.
-    async fn claude_auto_switch_if_needed(&self) -> Result<Option<String>> {
-        if !self.preferences()?.auto_switch {
-            return Ok(None);
-        }
-        let accounts = self.claude_accounts().await?;
-        let fresh = |a: &AccountSummary| {
-            a.usage_error.is_none()
-                && a.usage
-                    .as_ref()
-                    .is_some_and(|u| (0..=900).contains(&(now_unix_seconds() - u.fetched_at)))
+    /// One hi with an account, through its proxy, without switching to it.
+    pub(crate) async fn claude_hello(&self, id: &str) -> Result<Hello> {
+        let account = {
+            let _lock = self.claude.lock.lock().await;
+            self.claude_load()?
+                .accounts
+                .into_iter()
+                .find(|a| a.id == id)
+                .ok_or("Account not found")?
         };
-        if !accounts.iter().any(|a| a.is_current && fresh(a)) {
-            return Ok(None);
+        if !holds_tokens(&account) {
+            return Err(self.claude_locked());
         }
-        let candidates: Vec<_> = accounts
-            .into_iter()
-            .filter(|a| a.is_current || crate::application::eligible(a))
-            .collect();
-        if let Some(target) = crate::ranking::auto_switch_target(&candidates) {
-            self.claude_switch_with_access(&target.id, KeychainAccess::Background)
-                .await?;
-            return Ok(Some(target.id.clone()));
+        let expired = expires_at(&account.oauth) != 0
+            && expires_at(&account.oauth) <= (now_unix_seconds() + 60) * 1000;
+        let (status, body) = if expired {
+            (401, Value::Null)
+        } else {
+            let token = text(&account.oauth["accessToken"]).unwrap_or_default();
+            let proxy = self.account_proxy(&account.proxy_url)?;
+            let uuid = text(&account.account["accountUuid"]).unwrap_or_default();
+            self.claude_network()
+                .hello(&self.claude_messages_url(), &token, &uuid, &proxy)
+                .await?
+        };
+        match status {
+            200..=299 => Ok(Hello::Said),
+            401 => Ok(Hello::Expired(SIGN_IN_EXPIRED.into())),
+            _ => {
+                let message = body["error"]["message"].as_str().unwrap_or_default();
+                Err(
+                    format!("Claude message request failed: HTTP {status} {message}")
+                        .trim()
+                        .to_owned(),
+                )
+            }
         }
-        Ok(None)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::SmartSwitchOutcome;
+    use crate::claude_api::*;
+    use crate::models::ResetKind;
     use crate::Preferences;
     use std::sync::Mutex;
 
@@ -3178,10 +2741,10 @@ mod tests {
         let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
-        let id = app.claude_accounts().await.unwrap()[0].id.clone();
+        let id = app.accounts(Pool::Claude).await.unwrap()[0].id.clone();
         for offset in [Some(6 * 3600), Some(-6 * 3600), None] {
             *fake.usage_clock_offset.lock().unwrap() = offset;
-            app.claude_refresh_usage(&id).await.unwrap();
+            app.refresh_usage(Pool::Claude, &id).await.unwrap();
             let stored = app.claude_load().unwrap();
             let usage = stored.accounts[0].usage.as_ref().unwrap();
             assert_eq!(
@@ -3205,13 +2768,13 @@ mod tests {
         let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
-        let id = app.claude_accounts().await.unwrap()[0].id.clone();
+        let id = app.accounts(Pool::Claude).await.unwrap()[0].id.clone();
         let usage = json!({"five_hour":{"utilization":5},"extra_usage":{"is_enabled":true,
             "monthly_limit":4000,"used_credits":1285,"currency":"USD","decimal_places":2}});
         *fake.prepaid.lock().unwrap() = Some(json!({"amount":-1,"balance":{"money":null,
             "credits":{"amount_minor":1500,"exponent":2}}}));
         fake.usage.lock().unwrap().push((200, usage.clone()));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let credits = |app: &Application| {
             app.claude_load().unwrap().accounts[0]
                 .usage
@@ -3228,13 +2791,13 @@ mod tests {
         // A failed balance is unknown, and without extra usage it is not asked for.
         *fake.prepaid.lock().unwrap() = None;
         fake.usage.lock().unwrap().push((200, usage));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(credits(&app), None);
         fake.usage
             .lock()
             .unwrap()
             .push((200, json!({"five_hour":{"utilization":5}})));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(fake.prepaid_requests.lock().unwrap().len(), 2);
     }
 
@@ -3292,7 +2855,7 @@ mod tests {
                 .unwrap()
                 .push((429, json!({"error":{"message":"Rate limited"}})));
             let before = now_unix_seconds();
-            let error = app.claude_refresh_usage(&id).await.unwrap_err();
+            let error = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
             assert_eq!(
                 error,
                 format!("Claude usage request failed: HTTP 429 Rate limited; retry paused for {minutes} minutes")
@@ -3309,11 +2872,14 @@ mod tests {
             assert_eq!(account.usage_error.as_deref(), Some(error.as_str()));
             // While paused, nothing is requested.
             let requests = usages(&fake).len();
-            assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), error);
+            assert_eq!(
+                app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
+                error
+            );
             assert_eq!(usages(&fake).len(), requests);
             end_pause(&app);
         }
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let account = stored();
         assert_eq!(account.rate_limits, 0);
         assert_eq!(account.usage_retry_at, None);
@@ -3323,7 +2889,7 @@ mod tests {
         assert!(!saved.contains("rateLimits"));
         // A first rate limit after a success pauses briefly again.
         fake.usage.lock().unwrap().push((429, Value::Null));
-        app.claude_refresh_usage(&id).await.unwrap_err();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
         assert_eq!(stored().rate_limits, 1);
     }
 
@@ -3337,12 +2903,12 @@ mod tests {
         let id = app.claude_load().unwrap().accounts[0].id.clone();
         for _ in 0..2 {
             fake.usage.lock().unwrap().push((429, Value::Null));
-            app.claude_refresh_usage(&id).await.unwrap_err();
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
             end_pause(&app);
         }
         fake.usage.lock().unwrap().push((500, Value::Null));
         assert_eq!(
-            app.claude_refresh_usage(&id).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
             "Claude usage request failed: HTTP 500"
         );
         let account = app.claude_load().unwrap().accounts[0].clone();
@@ -3350,7 +2916,7 @@ mod tests {
         assert_eq!(account.usage_retry_at, None);
         fake.usage.lock().unwrap().push((429, Value::Null));
         assert!(app
-            .claude_refresh_usage(&id)
+            .refresh_usage(Pool::Claude, &id)
             .await
             .unwrap_err()
             .ends_with("retry paused for 20 minutes"));
@@ -3368,7 +2934,7 @@ mod tests {
             *fake.usage_retry_after.lock().unwrap() = retry_after;
             fake.usage.lock().unwrap().push((429, Value::Null));
             let before = now_unix_seconds();
-            let error = app.claude_refresh_usage(&id).await.unwrap_err();
+            let error = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
             assert!(
                 error.ends_with(&format!("retry paused for {minutes} minutes")),
                 "{error}"
@@ -3381,7 +2947,7 @@ mod tests {
         }
         // A Retry-After on a successful response sets no pause.
         *fake.usage_retry_after.lock().unwrap() = Some(9999);
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let account = app.claude_load().unwrap().accounts[0].clone();
         assert_eq!(account.usage_retry_at, None);
         assert_eq!(account.rate_limits, 0);
@@ -3399,42 +2965,42 @@ mod tests {
         let (five, one) = (Duration::from_secs(300), Duration::from_secs(60));
         let usage = |hour: u32| (200, json!({"five_hour": {"utilization": hour}}));
         // Codex runs independently and never requests Claude.
-        assert_eq!(app.background_round(0, false).await.as_secs(), 10);
-        let codex = app.refresh_schedule().unwrap();
+        assert_eq!(app.background_round(0, Pool::Codex).await.as_secs(), 10);
+        let codex = app.schedule(Pool::Codex).unwrap();
         // Asked at import: the first round waits, and nothing changed.
-        assert_eq!(app.background_round(0, true).await, five);
+        assert_eq!(app.background_round(0, Pool::Claude).await, five);
         assert_eq!(usages(&fake).len(), 1);
         fake.usage.lock().unwrap().push(usage(25));
         age(&app, 300);
-        assert_eq!(app.background_round(1, true).await, one);
-        assert_eq!(app.claude_refresh_interval(), one);
+        assert_eq!(app.background_round(1, Pool::Claude).await, one);
+        assert_eq!(app.round_interval(Pool::Claude), one);
         assert_eq!(usages(&fake).len(), 2);
         // At one minute, an account asked under a minute ago waits...
         age(&app, 45);
-        assert_eq!(app.background_round(2, true).await, one);
+        assert_eq!(app.background_round(2, Pool::Claude).await, one);
         assert_eq!(usages(&fake).len(), 2);
         // ...and the second unchanged round slows down again.
         fake.usage.lock().unwrap().push(usage(25));
         age(&app, 60);
-        assert_eq!(app.background_round(3, true).await, five);
+        assert_eq!(app.background_round(3, Pool::Claude).await, five);
         assert_eq!(usages(&fake).len(), 3);
-        assert_eq!(app.claude_refresh_interval(), five);
+        assert_eq!(app.round_interval(Pool::Claude), five);
         // At five minutes, a minute-old request is not due.
         age(&app, 60);
-        assert_eq!(app.background_round(4, true).await, five);
+        assert_eq!(app.background_round(4, Pool::Claude).await, five);
         assert_eq!(usages(&fake).len(), 3);
         // A change while slow speeds up at once.
         fake.usage.lock().unwrap().push(usage(30));
         age(&app, 300);
-        assert_eq!(app.background_round(6, true).await, one);
+        assert_eq!(app.background_round(6, Pool::Claude).await, one);
         assert_eq!(usages(&fake).len(), 4);
         // A rate limit is no change in usage.
         fake.usage.lock().unwrap().push((429, Value::Null));
         age(&app, 60);
-        assert_eq!(app.background_round(7, true).await, one);
-        assert_eq!(app.refresh_schedule(), Some(codex));
-        assert_eq!(app.background_round(1, false).await.as_secs(), 10);
-        assert_eq!(app.claude_refresh_interval(), one);
+        assert_eq!(app.background_round(7, Pool::Claude).await, one);
+        assert_eq!(app.schedule(Pool::Codex), Some(codex));
+        assert_eq!(app.background_round(1, Pool::Codex).await.as_secs(), 10);
+        assert_eq!(app.round_interval(Pool::Claude), one);
         assert_eq!(usages(&fake).len(), 5);
     }
 
@@ -3449,28 +3015,28 @@ mod tests {
         assert_eq!(usages(&fake), ["bob-access", "alice-access"]);
         // Every round skips accounts asked within the interval.
         for tick in 0..12 {
-            app.claude_refresh_recurring(tick).await.unwrap();
+            app.refresh_recurring(Pool::Claude, tick).await.unwrap();
         }
         assert_eq!(usages(&fake).len(), 2);
         age(&app, REFRESH_SECONDS - 5);
-        app.claude_refresh_recurring(0).await.unwrap();
+        app.refresh_recurring(Pool::Claude, 0).await.unwrap();
         assert_eq!(usages(&fake).len(), 2);
         // Once due, every round asks both current and inactive accounts.
         age(&app, REFRESH_SECONDS);
-        app.claude_refresh_recurring(1).await.unwrap();
+        app.refresh_recurring(Pool::Claude, 1).await.unwrap();
         let mut refreshed = usages(&fake)[2..].to_vec();
         refreshed.sort();
         assert_eq!(refreshed, ["alice-access", "bob-access"]);
-        app.claude_refresh_recurring(2).await.unwrap();
+        app.refresh_recurring(Pool::Claude, 2).await.unwrap();
         assert_eq!(usages(&fake).len(), 4);
-        app.claude_refresh_recurring(6).await.unwrap();
+        app.refresh_recurring(Pool::Claude, 6).await.unwrap();
         assert_eq!(usages(&fake).len(), 4);
         // A manual refresh is not held back by the interval.
-        app.claude_refresh(None).await.unwrap();
+        app.refresh_all(Pool::Claude).await.unwrap();
         let mut manual = usages(&fake)[4..].to_vec();
         manual.sort();
         assert_eq!(manual, ["alice-access", "bob-access"]);
-        app.claude_refresh_usage(&app.claude_load().unwrap().accounts[0].id)
+        app.refresh_usage(Pool::Claude, &app.claude_load().unwrap().accounts[0].id)
             .await
             .unwrap();
         assert_eq!(usages(&fake).len(), 7);
@@ -3492,32 +3058,32 @@ mod tests {
             tick: 2,
             interval: REFRESH_SECONDS,
         };
-        app.set_claude_refresh_schedule(round(now + REFRESH_SECONDS - 60));
-        app.claude_refresh(None).await.unwrap();
+        app.set_schedule(Pool::Claude, round(now + REFRESH_SECONDS - 60));
+        app.refresh_all(Pool::Claude).await.unwrap();
         let now = now_unix_seconds();
-        assert!(next(app.claude_accounts().await.unwrap()) > now + REFRESH_SECONDS);
+        assert!(next(app.accounts(Pool::Claude).await.unwrap()) > now + REFRESH_SECONDS);
         // Deferred, the next round asks for her an interval from now.
-        app.defer_background_round(true);
-        let schedule = app.claude_refresh_schedule().unwrap();
+        app.defer_background_round(Pool::Claude);
+        let schedule = app.schedule(Pool::Claude).unwrap();
         assert!((now..=now + 1).contains(&(schedule.at - REFRESH_SECONDS)));
         assert_eq!(schedule.tick, 2);
-        assert_eq!(next(app.claude_accounts().await.unwrap()), schedule.at);
+        assert_eq!(next(app.accounts(Pool::Claude).await.unwrap()), schedule.at);
         // A round under way schedules the next itself; the other pool stays.
-        app.set_claude_refresh_schedule(round(now - 1));
-        app.defer_background_round(true);
-        assert_eq!(app.claude_refresh_schedule(), Some(round(now - 1)));
-        assert_eq!(app.refresh_schedule(), None);
+        app.set_schedule(Pool::Claude, round(now - 1));
+        app.defer_background_round(Pool::Claude);
+        assert_eq!(app.schedule(Pool::Claude), Some(round(now - 1)));
+        assert_eq!(app.schedule(Pool::Codex), None);
         let codex = Schedule {
             at: now + 5,
             tick: 3,
             interval: 10,
         };
-        app.set_refresh_schedule(codex);
-        app.defer_background_round(false);
-        let deferred = app.refresh_schedule().unwrap();
+        app.set_schedule(Pool::Codex, codex);
+        app.defer_background_round(Pool::Codex);
+        let deferred = app.schedule(Pool::Codex).unwrap();
         assert!((now + 10..=now + 11).contains(&deferred.at));
         assert_eq!((deferred.tick, deferred.interval), (3, 10));
-        assert_eq!(app.claude_refresh_schedule(), Some(round(now - 1)));
+        assert_eq!(app.schedule(Pool::Claude), Some(round(now - 1)));
     }
 
     #[tokio::test]
@@ -3547,15 +3113,15 @@ mod tests {
                 .unwrap()
                 .next_refresh_at
         };
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(next(&accounts, &alice), None);
-        app.background_round(1, true).await;
-        let schedule = app.claude_refresh_schedule().unwrap();
+        app.background_round(1, Pool::Claude).await;
+        let schedule = app.schedule(Pool::Claude).unwrap();
         assert_eq!((schedule.tick, schedule.interval), (2, REFRESH_SECONDS));
         // Inactive accounts have the same next round as the current one.
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(next(&accounts, &bob), Some(schedule.at));
-        assert_eq!(app.claude_next_full_refresh_at(), Some(schedule.at));
+        assert_eq!(app.next_full_refresh_at(Pool::Claude), Some(schedule.at));
         // A rate limit pause holds Bob; Carol waits for a manual refresh.
         let mut store = app.claude_load().unwrap();
         for account in &mut store.accounts {
@@ -3566,7 +3132,7 @@ mod tests {
             }
         }
         app.claude_save(&store).unwrap();
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         // Paused accounts return on the first round after their pause.
         assert_eq!(next(&accounts, &alice), Some(schedule.at));
         assert_eq!(
@@ -3583,12 +3149,12 @@ mod tests {
         refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
-        let id = app.claude_accounts().await.unwrap()[0].id.clone();
+        let id = app.accounts(Pool::Claude).await.unwrap()[0].id.clone();
         fake.usage
             .lock()
             .unwrap()
             .push((429, json!({"error":{"message":"Rate limited"}})));
-        let error = app.claude_refresh_usage(&id).await.unwrap_err();
+        let error = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
         assert!(error.contains("HTTP 429"));
         let until = app.claude_load().unwrap().accounts[0]
             .usage_retry_at
@@ -3602,14 +3168,17 @@ mod tests {
             error,
             "Claude usage request failed: HTTP 429 Rate limited; retry paused for 5 minutes"
         );
-        assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), error);
+        assert_eq!(
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
+            error
+        );
         age(&app, REFRESH_SECONDS);
-        assert!(app.claude_refresh_recurring(0).await.is_err());
+        assert!(app.refresh_recurring(Pool::Claude, 0).await.is_err());
         assert_eq!(fake.usage.lock().unwrap().len(), 1);
         let mut store = app.claude_load().unwrap();
         store.accounts[0].usage_retry_at = Some(now_unix_seconds() - 1);
         app.claude_save(&store).unwrap();
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let stored = app.claude_load().unwrap();
         assert!(stored.accounts[0].usage_retry_at.is_none());
         assert!(stored.accounts[0].usage_error.is_none());
@@ -3624,7 +3193,9 @@ mod tests {
             sign_in(&location, "alice", expires);
             app.claude_import_current().await.unwrap();
             let id = app.claude_load().unwrap().accounts[0].id.clone();
-            app.claude_release_new_accounts(Some(&id)).await.unwrap();
+            app.release_new_accounts(Pool::Claude, Some(&id))
+                .await
+                .unwrap();
             let credentials = fs::read(location.credentials_file()).unwrap();
             if expires == LATER {
                 fake.usage.lock().unwrap().push((401, Value::Null));
@@ -3632,7 +3203,10 @@ mod tests {
             *fake.refresh_error.lock().unwrap() = Some(TOKEN_REFRESH_RATE_LIMITED.into());
             let before = now_unix_seconds();
             let paused = format!("{TOKEN_REFRESH_RATE_LIMITED}; retry paused for 5 minutes");
-            assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), paused);
+            assert_eq!(
+                app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
+                paused
+            );
             let stored = app.claude_load().unwrap();
             let retry_at = stored.accounts[0].usage_retry_at.unwrap();
             assert!((before + 300..=now_unix_seconds() + 300).contains(&retry_at));
@@ -3644,10 +3218,13 @@ mod tests {
             drop(app);
             let (app, _, _) = waiting_app(&dir);
             app.set_claude_network(fake.clone());
-            assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), paused);
-            assert!(app.claude_refresh(None).await.is_err());
+            assert_eq!(
+                app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
+                paused
+            );
+            assert!(app.refresh_all(Pool::Claude).await.is_err());
             age(&app, REFRESH_SECONDS);
-            assert!(app.claude_refresh_recurring(0).await.is_err());
+            assert!(app.refresh_recurring(Pool::Claude, 0).await.is_err());
             assert_eq!(fake.refreshed.lock().unwrap().len(), 1);
             assert_eq!(fake.usage_tokens.lock().unwrap().len(), usage_calls);
             let mut store = app.claude_load().unwrap();
@@ -3656,7 +3233,7 @@ mod tests {
             if expires == LATER {
                 fake.usage.lock().unwrap().push((401, Value::Null));
             }
-            app.claude_refresh_usage(&id).await.unwrap();
+            app.refresh_usage(Pool::Claude, &id).await.unwrap();
             assert_eq!(fake.refreshed.lock().unwrap().len(), 2);
             let stored = app.claude_load().unwrap();
             assert!(stored.accounts[0].usage_retry_at.is_none());
@@ -3673,9 +3250,14 @@ mod tests {
             sign_in(&location, "alice", 1);
             app.claude_import_current().await.unwrap();
             let id = app.claude_load().unwrap().accounts[0].id.clone();
-            app.claude_release_new_accounts(Some(&id)).await.unwrap();
+            app.release_new_accounts(Pool::Claude, Some(&id))
+                .await
+                .unwrap();
             *fake.refresh_error.lock().unwrap() = Some(error.into());
-            assert_eq!(app.claude_refresh_usage(&id).await.unwrap_err(), error);
+            assert_eq!(
+                app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
+                error
+            );
             assert!(app.claude_load().unwrap().accounts[0]
                 .usage_retry_at
                 .is_none());
@@ -3810,7 +3392,7 @@ mod tests {
                 json!({
                     "grant_type": "refresh_token",
                     "refresh_token": format!("rt-{}", n + 1),
-                    "client_id": crate::login::CLAUDE_CLIENT,
+                    "client_id": crate::claude_api::CLIENT,
                     "scope": scope,
                 })
             );
@@ -3819,7 +3401,7 @@ mod tests {
 
     #[test]
     fn renewal_asks_again_for_the_scopes_the_login_holds() {
-        let default = crate::login::CLAUDE_SCOPES;
+        let default = crate::claude_api::SCOPES;
         assert_eq!(
             refresh_scope(&json!({"scopes": ["user:inference", "user:profile"]})),
             "user:inference user:profile"
@@ -3850,8 +3432,10 @@ mod tests {
         .await
         .unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(
             *fake.refresh_scopes.lock().unwrap(),
             ["user:inference user:profile"]
@@ -3871,11 +3455,13 @@ mod tests {
             .find(|a| a.label == "carol@example.com")
             .unwrap()
             .id;
-        app.claude_release_new_accounts(Some(&carol)).await.unwrap();
-        app.claude_refresh_usage(&carol).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&carol))
+            .await
+            .unwrap();
+        app.refresh_usage(Pool::Claude, &carol).await.unwrap();
         assert_eq!(
             fake.refresh_scopes.lock().unwrap()[1],
-            crate::login::CLAUDE_SCOPES
+            crate::claude_api::SCOPES
         );
         let mut renewed = json!({});
         let now = 1_000_000;
@@ -3903,9 +3489,9 @@ mod tests {
     async fn the_live_token_endpoint_accepts_the_refresh_request() {
         let proxy = std::env::var("COPOOL_LIVE_CLAUDE_PROXY").unwrap_or_default();
         let error = refresh_at(
-            crate::login::CLAUDE_TOKEN_URL,
+            crate::claude_api::TOKEN_URL,
             "sk-ant-ort01-copool-invalid-probe",
-            crate::login::CLAUDE_SCOPES,
+            crate::claude_api::SCOPES,
             &proxy,
         )
         .await
@@ -3931,7 +3517,7 @@ mod tests {
             .lock()
             .unwrap()
             .push((429, json!({"error": {"type": "rate_limit_error"}})));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(agents(&fake)[1..], [cli, code]);
         let account = app.claude_load().unwrap().accounts[0].clone();
         assert_eq!(account.usage_error, None);
@@ -3940,7 +3526,7 @@ mod tests {
         // Through that proxy, only claude-code is asked for the next hour...
         let until = app.claude.cli_refused.lock().unwrap()[""];
         assert!((now_unix_seconds() + 3590..=now_unix_seconds() + 3600).contains(&until));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(agents(&fake)[3..], [code]);
         // ...and claude-cli again after it.
         app.claude
@@ -3948,11 +3534,11 @@ mod tests {
             .lock()
             .unwrap()
             .insert(String::new(), now_unix_seconds() - 1);
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(agents(&fake)[4..], [cli]);
         // Any other answer to claude-cli is final.
         fake.usage.lock().unwrap().push((500, Value::Null));
-        assert!(app.claude_refresh_usage(&id).await.is_err());
+        assert!(app.refresh_usage(Pool::Claude, &id).await.is_err());
         assert_eq!(agents(&fake)[5..], [cli]);
     }
 
@@ -3973,17 +3559,17 @@ mod tests {
                 .unwrap()
                 .id
         };
-        app.claude_save_account_proxy(&id("alice"), "http://127.0.0.1:7001")
+        app.save_account_proxy(Pool::Claude, &id("alice"), "http://127.0.0.1:7001")
             .await
             .unwrap();
-        app.claude_save_account_proxy(&id("bob"), "http://127.0.0.1:7002")
+        app.save_account_proxy(Pool::Claude, &id("bob"), "http://127.0.0.1:7002")
             .await
             .unwrap();
         let (cli, code) = (USAGE_USER_AGENT, USER_AGENT);
         let start = agents(&fake).len();
         fake.usage.lock().unwrap().push((429, Value::Null));
-        app.claude_refresh_usage(&id("alice")).await.unwrap();
-        app.claude_refresh_usage(&id("bob")).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id("alice")).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id("bob")).await.unwrap();
         assert_eq!(agents(&fake)[start..], [cli, code, cli]);
         assert_eq!(
             fake.usage_proxies.lock().unwrap()[start..],
@@ -4000,7 +3586,10 @@ mod tests {
             .unwrap()
             .push((429, json!({"error": {"message": "Rate limited"}})));
         *fake.usage_retry_after.lock().unwrap() = Some(5400);
-        let error = app.claude_refresh_usage(&id("bob")).await.unwrap_err();
+        let error = app
+            .refresh_usage(Pool::Claude, &id("bob"))
+            .await
+            .unwrap_err();
         assert_eq!(agents(&fake)[start + 3..], [cli, code]);
         assert_eq!(
             error,
@@ -4023,10 +3612,12 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         fake.usage.lock().unwrap().push((401, Value::Null));
         fake.usage.lock().unwrap().push((429, Value::Null));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(
             agents(&fake),
             [USAGE_USER_AGENT, USAGE_USER_AGENT, USER_AGENT]
@@ -4145,15 +3736,17 @@ mod tests {
         // Read once, asking the user; written, and read back, as tokens change.
         assert_eq!(vault.reads(), [Interactive, Background, Background]);
         assert_eq!(vault.writes(), 2);
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
-        app.claude_accounts().await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(vault.writes(), 2);
         assert_eq!(vault.reads().len(), 3);
         // Reopened, the tokens come back from the vault without asking.
         drop(app);
         let (app, _, fake) = vault_app(&dir, &vault);
-        assert_eq!(app.claude_accounts().await.unwrap().len(), 1);
-        app.claude_refresh_usage(&id).await.unwrap();
+        assert_eq!(app.accounts(Pool::Claude).await.unwrap().len(), 1);
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(usages(&fake), ["bob-newer"]);
         assert_eq!(vault.reads()[3..], [Background]);
     }
@@ -4190,13 +3783,15 @@ mod tests {
             .await
             .unwrap();
         let bob = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&bob)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&bob))
+            .await
+            .unwrap();
         let held = vault.secrets();
         drop(app);
         // Reopened without access to the vault (a new build not yet allowed).
         vault.set(&vault.unreadable, true);
         let (app, _, fake) = vault_app(&dir, &vault);
-        let cards = app.claude_accounts().await.unwrap();
+        let cards = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(cards.len(), 1);
         // The card shows its tokens are out of reach, as its error.
         let locked = |error: &Option<String>| {
@@ -4206,7 +3801,7 @@ mod tests {
         };
         assert!(locked(&cards[0].usage_error));
         assert!(app
-            .claude_refresh_usage(&bob)
+            .refresh_usage(Pool::Claude, &bob)
             .await
             .unwrap_err()
             .starts_with(VAULT_LOCKED));
@@ -4223,13 +3818,13 @@ mod tests {
         assert_eq!(vault.writes(), 1);
         // Claude Code is never handed a login without its tokens.
         assert!(app
-            .claude_switch_account(&bob)
+            .switch_account(Pool::Claude, &bob)
             .await
             .unwrap_err()
             .starts_with(VAULT_LOCKED));
         assert!(!location.credentials_file().exists());
         // The account whose tokens stayed in the store is not locked.
-        let cards = app.claude_accounts().await.unwrap();
+        let cards = app.accounts(Pool::Claude).await.unwrap();
         let card = |label: &str| cards.iter().find(|c| c.label == label).unwrap();
         let account_locked = |label: &str| locked(&card(label).usage_error);
         assert!(account_locked("bob@example.com"));
@@ -4241,7 +3836,7 @@ mod tests {
         app.claude_authorize().await.unwrap();
         assert_eq!(vault.reads()[asked..].first(), Some(&Interactive));
         assert!(app
-            .claude_accounts()
+            .accounts(Pool::Claude)
             .await
             .unwrap()
             .iter()
@@ -4256,7 +3851,7 @@ mod tests {
         app.claude_authorize_at_startup().await.unwrap();
         assert_no_tokens(&app, &["bob-refresh", "carol-refresh"]);
         assert_eq!(vault.secrets().as_object().unwrap().len(), 2);
-        app.claude_refresh_usage(&bob).await.unwrap();
+        app.refresh_usage(Pool::Claude, &bob).await.unwrap();
         assert_eq!(usages(&fake), ["bob-access"]);
     }
 
@@ -4278,13 +3873,15 @@ mod tests {
         vault.set(&vault.unwritable, false);
         vault.set(&vault.lost_writes, true);
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         assert!(vault.writes() >= 1);
         assert!(store_text(&app).contains("bob-refresh"));
         assert_eq!(vault.secrets(), json!({}));
         // The next save that sticks moves them.
         vault.set(&vault.lost_writes, false);
-        app.claude_save_account_proxy(&id, "http://127.0.0.1:7001")
+        app.save_account_proxy(Pool::Claude, &id, "http://127.0.0.1:7001")
             .await
             .unwrap();
         assert_no_tokens(&app, &["bob-access", "bob-refresh"]);
@@ -4327,9 +3924,9 @@ mod tests {
                 .id
         };
         let (alice, bob) = (ids("alice"), ids("bob"));
-        app.claude_release_new_accounts(None).await.unwrap();
+        app.release_new_accounts(Pool::Claude, None).await.unwrap();
         // A renewal rotates the tokens in the vault, never in the store.
-        app.claude_refresh_usage(&bob).await.unwrap();
+        app.refresh_usage(Pool::Claude, &bob).await.unwrap();
         assert_eq!(refreshes(&fake), ["bob-refresh"]);
         assert_eq!(vault.secrets()[&bob]["refreshToken"], "fresh-refresh");
         assert_no_tokens(&app, &["fresh-access", "fresh-refresh", "alice-refresh"]);
@@ -4340,7 +3937,7 @@ mod tests {
         *fake.refresh_response.lock().unwrap() = Some(
             json!({"access_token": "next-access", "refresh_token": "next-refresh", "expires_in": 3600}),
         );
-        app.claude_refresh_usage(&bob).await.unwrap();
+        app.refresh_usage(Pool::Claude, &bob).await.unwrap();
         assert_eq!(refreshes(&fake), ["bob-refresh", "fresh-refresh"]);
         assert!(store_text(&app).contains("next-refresh"));
         assert_eq!(vault.secrets()[&bob]["refreshToken"], "fresh-refresh");
@@ -4349,13 +3946,13 @@ mod tests {
         assert_eq!(held.oauth["refreshToken"], "next-refresh");
         vault.set(&vault.unwritable, false);
         // A switch hands Claude Code the tokens from the vault.
-        app.claude_switch_account(&bob).await.unwrap();
+        app.switch_account(Pool::Claude, &bob).await.unwrap();
         assert_eq!(live_access(&location), "next-access");
         assert_no_tokens(&app, &["next-access", "next-refresh", "alice-access"]);
         assert_eq!(vault.secrets()[&bob]["refreshToken"], "next-refresh");
         assert_eq!(vault.secrets()[&alice]["refreshToken"], "alice-refresh");
         // A deleted account leaves the vault too.
-        app.claude_delete_account(&alice).await.unwrap();
+        app.delete_account(Pool::Claude, &alice).await.unwrap();
         assert_eq!(
             vault
                 .secrets()
@@ -4388,13 +3985,15 @@ mod tests {
         let (app, _, fake) = vault_app(&dir, &vault);
         // Claude Code renewed its login meanwhile.
         external_update(location.clone(), "alice", "alice-renewed")();
-        app.claude_accounts().await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         let account = app.claude_load().unwrap().accounts[0].clone();
         assert_eq!(account.oauth["accessToken"], "alice-renewed");
         // The tokens it could not read are no generation to fall back on.
         assert!(account.alternates.is_empty());
-        app.claude_release_new_accounts(Some(&alice)).await.unwrap();
-        app.claude_refresh_usage(&alice).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&alice))
+            .await
+            .unwrap();
+        app.refresh_usage(Pool::Claude, &alice).await.unwrap();
         assert_eq!(usages(&fake), ["alice-renewed"]);
         // Readable again: the store's newer alice tokens win over the vault's
         // older ones, and bob's come from the vault.
@@ -4438,22 +4037,26 @@ mod tests {
         sign_in(&location, "alice", 1);
         app.claude_import_current().await.unwrap();
         let alice = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&alice)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&alice))
+            .await
+            .unwrap();
         // By default renewed, and the renewal goes back to the file it was
         // read from, never to a new Keychain item.
-        app.claude_refresh_usage(&alice).await.unwrap();
+        app.refresh_usage(Pool::Claude, &alice).await.unwrap();
         assert_eq!(refreshes(&fake), ["alice-refresh"]);
         assert_eq!(live_access(&location), "fresh-access");
         let document: Value =
             serde_json::from_slice(&fs::read(location.credentials_file()).unwrap()).unwrap();
         assert_eq!(document["mcpOAuth"]["kept"], true);
         // Renewal turned off: the file is followed, not renewed nor written.
-        app.claude_set_renewal(&alice, "never").await.unwrap();
+        app.set_renewal(Pool::Claude, &alice, "never")
+            .await
+            .unwrap();
         external_update(location.clone(), "alice", "alice-synced")();
         let synced = fs::read(location.credentials_file()).unwrap();
         fake.usage.lock().unwrap().push((401, Value::Null));
         assert_eq!(
-            app.claude_refresh_usage(&alice).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &alice).await.unwrap_err(),
             RENEWAL_OFF
         );
         assert_eq!(refreshes(&fake), ["alice-refresh"]);
@@ -4480,7 +4083,7 @@ mod tests {
         (app, location, fake)
     }
     async fn renewals(app: &Application) -> Vec<(String, Option<String>)> {
-        app.claude_accounts()
+        app.accounts(Pool::Claude)
             .await
             .unwrap()
             .into_iter()
@@ -4498,7 +4101,7 @@ mod tests {
         app.claude_import_json(&export(&bob, &account))
             .await
             .unwrap();
-        app.claude_release_new_accounts(None).await.unwrap();
+        app.release_new_accounts(Pool::Claude, None).await.unwrap();
         let id = |user: &str| {
             app.claude_load()
                 .unwrap()
@@ -4520,14 +4123,14 @@ mod tests {
             ]
         );
         // Never: an expired account is reported, not renewed.
-        app.claude_set_renewal(&bob, "never").await.unwrap();
+        app.set_renewal(Pool::Claude, &bob, "never").await.unwrap();
         assert_eq!(
-            app.claude_refresh_usage(&bob).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &bob).await.unwrap_err(),
             RENEWAL_OFF
         );
         assert!(refreshes(&fake).is_empty());
         // Once: renewed once, then never again.
-        app.claude_set_renewal(&bob, "once").await.unwrap();
+        app.set_renewal(Pool::Claude, &bob, "once").await.unwrap();
         let card = |label: &str, cards: Vec<(String, Option<String>)>| {
             cards.into_iter().find(|c| c.0 == label).unwrap().1
         };
@@ -4535,7 +4138,7 @@ mod tests {
             card("bob@example.com", renewals(&app).await).as_deref(),
             Some("once")
         );
-        app.claude_refresh_usage(&bob).await.unwrap();
+        app.refresh_usage(Pool::Claude, &bob).await.unwrap();
         assert_eq!(refreshes(&fake), ["bob-refresh"]);
         assert_eq!(
             card("bob@example.com", renewals(&app).await).as_deref(),
@@ -4543,13 +4146,15 @@ mod tests {
         );
         fake.usage.lock().unwrap().push((401, Value::Null));
         assert_eq!(
-            app.claude_refresh_usage(&bob).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &bob).await.unwrap_err(),
             RENEWAL_OFF
         );
         assert_eq!(refreshes(&fake), ["bob-refresh"]);
         // Always, chosen or by default, renews the file login into its file.
-        app.claude_set_renewal(&alice, "always").await.unwrap();
-        app.claude_refresh_usage(&alice).await.unwrap();
+        app.set_renewal(Pool::Claude, &alice, "always")
+            .await
+            .unwrap();
+        app.refresh_usage(Pool::Claude, &alice).await.unwrap();
         assert_eq!(refreshes(&fake), ["bob-refresh", "alice-refresh"]);
         assert_eq!(live_access(&location), "fresh-access");
         assert_eq!(
@@ -4565,8 +4170,14 @@ mod tests {
             .map(|a| a["renewal"].clone())
             .collect();
         assert!(choices.contains(&json!("always")) && choices.contains(&json!("never")));
-        assert!(app.claude_set_renewal(&bob, "sometimes").await.is_err());
-        assert!(app.claude_set_renewal("missing", "always").await.is_err());
+        assert!(app
+            .set_renewal(Pool::Claude, &bob, "sometimes")
+            .await
+            .is_err());
+        assert!(app
+            .set_renewal(Pool::Claude, "missing", "always")
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -4579,7 +4190,7 @@ mod tests {
         app.claude_import_json(&export(&bob, &account))
             .await
             .unwrap();
-        app.claude_release_new_accounts(None).await.unwrap();
+        app.release_new_accounts(Pool::Claude, None).await.unwrap();
         let id = |user: &str| {
             app.claude_load()
                 .unwrap()
@@ -4594,13 +4205,15 @@ mod tests {
             cards.into_iter().find(|c| c.0 == label).unwrap().1
         };
         // An unexpired login is not renewed by a refresh.
-        app.claude_refresh_usage(&alice).await.unwrap();
+        app.refresh_usage(Pool::Claude, &alice).await.unwrap();
         assert!(refreshes(&fake).is_empty());
         let asked = usages(&fake).len();
         // Renew now renews it even with renewal off, writes it back to
         // Claude Code's login, asks no usage and leaves the choice as it was.
-        app.claude_set_renewal(&alice, "never").await.unwrap();
-        app.claude_renew_now(&alice).await.unwrap();
+        app.set_renewal(Pool::Claude, &alice, "never")
+            .await
+            .unwrap();
+        app.renew_now(Pool::Claude, &alice).await.unwrap();
         assert_eq!(refreshes(&fake), ["alice-refresh"]);
         assert_eq!(usages(&fake).len(), asked);
         assert_eq!(live_access(&location), "fresh-access");
@@ -4609,12 +4222,12 @@ mod tests {
             Some("never")
         );
         // An account that had failed refreshes its usage once renewed.
-        app.claude_set_renewal(&bob, "never").await.unwrap();
+        app.set_renewal(Pool::Claude, &bob, "never").await.unwrap();
         assert_eq!(
-            app.claude_refresh_usage(&bob).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &bob).await.unwrap_err(),
             RENEWAL_OFF
         );
-        app.claude_renew_now(&bob).await.unwrap();
+        app.renew_now(Pool::Claude, &bob).await.unwrap();
         assert_eq!(refreshes(&fake), ["alice-refresh", "bob-refresh"]);
         assert_eq!(usages(&fake).len(), asked + 1);
         let card = app
@@ -4627,8 +4240,8 @@ mod tests {
         assert_eq!(card.usage_error, None);
         // A refused renewal is reported.
         *fake.refresh_error.lock().unwrap() = Some(SIGN_IN_EXPIRED.into());
-        assert!(app.claude_renew_now(&alice).await.is_err());
-        assert!(app.claude_renew_now("missing").await.is_err());
+        assert!(app.renew_now(Pool::Claude, &alice).await.is_err());
+        assert!(app.renew_now(Pool::Claude, "missing").await.is_err());
     }
 
     #[test]
@@ -4664,18 +4277,20 @@ mod tests {
             .await
             .unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         let held = vault.secrets();
         let writes = vault.writes();
         drop(app);
         // Reported missing although bob's tokens were moved there.
         vault.set(&vault.hidden, true);
         let (app, _, fake) = vault_app(&dir, &vault);
-        let card = app.claude_accounts().await.unwrap().remove(0);
+        let card = app.accounts(Pool::Claude).await.unwrap().remove(0);
         let error = card.usage_error.unwrap();
         assert!(error.starts_with(VAULT_LOCKED), "{error}");
         assert!(error.contains("reports the item missing"), "{error}");
-        let refused = app.claude_refresh_usage(&id).await.unwrap_err();
+        let refused = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
         assert!(refused.contains("reports the item missing"), "{refused}");
         assert!(usages(&fake).is_empty());
         // Saving, importing or asking writes nothing over it.
@@ -4693,7 +4308,7 @@ mod tests {
         vault.set(&vault.hidden, false);
         let text = vault.text.lock().unwrap().clone();
         *vault.text.lock().unwrap() = Some(r#"{"someone-else":{}}"#.into());
-        let error = app.claude_refresh_usage(&id).await.unwrap_err();
+        let error = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
         assert!(
             error.contains("lacks the tokens of 1 account(s)"),
             "{error}"
@@ -4702,7 +4317,7 @@ mod tests {
         // Once it reads back as written, everything is there again.
         *vault.text.lock().unwrap() = text;
         app.claude_authorize().await.unwrap();
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(usages(&fake), ["bob-access"]);
         assert_no_tokens(&app, &["bob-refresh", "carol-refresh"]);
     }
@@ -4715,13 +4330,15 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         drop(app);
         let (app, _, _) = vault_app(&dir, &vault);
         let start = vault.reads().len();
-        app.background_round(1, true).await;
-        app.claude_refresh(None).await.unwrap();
-        app.claude_accounts().await.unwrap();
+        app.background_round(1, Pool::Claude).await;
+        app.refresh_all(Pool::Claude).await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert!(vault.reads()[start..].iter().all(|a| *a == Background));
         assert!(!vault.reads()[start..].is_empty());
         // A refusal is not asked again in the background, nor cached. (With
@@ -4732,7 +4349,7 @@ mod tests {
         let (app, _, _) = vault_app(&dir, &vault);
         let start = vault.reads().len();
         assert!(app
-            .claude_refresh(None)
+            .refresh_all(Pool::Claude)
             .await
             .unwrap_err()
             .contains(VAULT_LOCKED));
@@ -5007,7 +4624,7 @@ mod tests {
         assert!(repeated.accounts.iter().any(|a| a.id == bob_id));
         assert_eq!(fs::read(location.credentials_file()).unwrap(), credentials);
         assert_eq!(fs::read(location.account_file()).unwrap(), config);
-        app.claude_switch_account(&bob_id).await.unwrap();
+        app.switch_account(Pool::Claude, &bob_id).await.unwrap();
         assert_eq!(live_access(&location), "bob-access");
         let live = read_live(&location).await.unwrap().unwrap();
         assert_eq!(live.document["mcpOAuth"], json!({"kept": true}));
@@ -5095,7 +4712,7 @@ mod tests {
         );
         sign_in(&location, "bob", LATER);
         app.claude_import_current().await.unwrap();
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(accounts.len(), 2);
         assert_eq!(accounts.iter().filter(|a| a.is_current).count(), 1);
         let bob = accounts.iter().find(|a| a.is_current).unwrap();
@@ -5107,7 +4724,7 @@ mod tests {
         assert!(!serde_json::to_string(&accounts).unwrap().contains("access"));
 
         let alice = accounts.iter().find(|a| !a.is_current).unwrap().id.clone();
-        app.claude_switch_account(&alice).await.unwrap();
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
         assert_eq!(live_access(&location), "alice-access");
         let document: Value =
             serde_json::from_slice(&fs::read(location.credentials_file()).unwrap()).unwrap();
@@ -5120,7 +4737,7 @@ mod tests {
         // Bob is in the pool: only a login outside it is backed up.
         let backup = app.paths.data_dir.join("claude-before-switch.json");
         assert!(!backup.exists());
-        let current = app.claude_accounts().await.unwrap();
+        let current = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(current.iter().find(|a| a.is_current).unwrap().id, alice);
 
         // A login made in Claude Code is followed, with the tokens it refreshed.
@@ -5132,7 +4749,7 @@ mod tests {
         )
         .unwrap();
         write_account(&location, &account).unwrap();
-        let current = app.claude_accounts().await.unwrap();
+        let current = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(current.iter().find(|a| a.is_current).unwrap().id, bob.id);
         let stored = app.claude_load().unwrap();
         let bob_stored = stored.accounts.iter().find(|a| a.id == bob.id).unwrap();
@@ -5140,14 +4757,14 @@ mod tests {
 
         // A login outside the pool is backed up, and stays so across switches.
         sign_in(&location, "carol", LATER);
-        app.claude_switch_account(&alice).await.unwrap();
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
         let read_backup = || serde_json::from_slice::<Value>(&fs::read(&backup).unwrap()).unwrap();
         let backed_up = read_backup();
         assert_eq!(
             backed_up["credentials"]["claudeAiOauth"]["accessToken"],
             "carol-access"
         );
-        app.claude_switch_account(&bob.id).await.unwrap();
+        app.switch_account(Pool::Claude, &bob.id).await.unwrap();
         assert_eq!(read_backup(), backed_up);
     }
 
@@ -5286,7 +4903,7 @@ mod tests {
         )
         .unwrap();
         write_account(&location, &account).unwrap();
-        app.claude_accounts().await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(stored().oauth, oauth);
         // Claude Code renewed the generation it held: nothing is kept.
         assert!(stored().alternates.is_empty());
@@ -5314,7 +4931,9 @@ mod tests {
             |oauth: &Value| json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string();
         app.claude_import_json(&export(&oauth)).await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         let stored = || app.claude_load().unwrap().accounts[0].clone();
         // A later expiry does not make a rotated refresh token valid.
         let (mut rotated, _) = login("bob", LATER + 1);
@@ -5343,7 +4962,7 @@ mod tests {
         assert_eq!(stored().alternates, [oauth.clone()]);
         // Its access token worked, but Claude later refuses its refresh token.
         reject_next(&fake);
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(refreshes(&fake), ["bob-export", "bob-valid-refresh"]);
         assert_eq!(
             usages(&fake),
@@ -5380,15 +4999,17 @@ mod tests {
         .await
         .unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         reject_next(&fake);
         assert_eq!(
-            app.claude_refresh_usage(&id).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
             SIGN_IN_EXPIRED
         );
         fake.usage.lock().unwrap().push((401, Value::Null));
         assert_eq!(
-            app.claude_refresh_usage(&id).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
             SIGN_IN_EXPIRED
         );
         assert_eq!(refreshes(&fake), ["bob-refresh"]);
@@ -5399,7 +5020,7 @@ mod tests {
         assert_eq!(stored.rejected, [print("bob-refresh")]);
         assert_eq!(stored.usage_error.as_deref(), Some(SIGN_IN_EXPIRED));
         // A usable access token still reports usage until it expires.
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(refreshes(&fake), ["bob-refresh"]);
     }
 
@@ -5410,7 +5031,9 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         // Copool renewed alice, but the renewal never reached Claude Code.
         let mut pool = app.claude_load().unwrap();
         let renewed = &mut pool.accounts[0].oauth;
@@ -5421,13 +5044,13 @@ mod tests {
         pool.accounts[0].in_live = false;
         app.claude_save(&pool).unwrap();
         let stored = || app.claude_load().unwrap().accounts[0].clone();
-        app.claude_accounts().await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(stored().oauth["refreshToken"], "alice-refresh");
         assert_eq!(stored().alternates, [renewed.clone()]);
         assert!(stored().in_live);
 
         reject_next(&fake);
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(refreshes(&fake), ["alice-refresh"]);
         assert_eq!(usages(&fake), ["alice-access", "pool-access"]);
         let after = stored();
@@ -5444,7 +5067,7 @@ mod tests {
 
         // Claude Code holding the rejected login again is not followed...
         sign_in(&location, "alice", LATER);
-        app.claude_accounts().await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(stored().oauth, renewed);
         assert!(!stored().in_live);
         assert_eq!(
@@ -5452,7 +5075,7 @@ mod tests {
             Some(id.clone())
         );
         // ...and the next refresh repairs it without sending the rejected token.
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(refreshes(&fake), ["alice-refresh"]);
         assert_eq!(live_access(&location), "pool-access");
         assert!(stored().in_live);
@@ -5467,7 +5090,9 @@ mod tests {
             |oauth: &Value| json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string();
         app.claude_import_json(&export(&oauth)).await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         let (mut expiring, _) = login("bob", 1);
         expiring["accessToken"] = "bob-new".into();
         expiring["refreshToken"] = "bob-new-refresh".into();
@@ -5532,20 +5157,20 @@ mod tests {
         };
         assert!(account("bob").in_live);
         assert!(!account("alice").in_live);
-        app.claude_switch_account(&account("alice").id)
+        app.switch_account(Pool::Claude, &account("alice").id)
             .await
             .unwrap();
         assert!(account("alice").in_live);
         assert!(!account("bob").in_live);
         // Claude Code renews alice: the generation it held is gone.
         external_update(location.clone(), "alice", "alice-renewed")();
-        app.claude_accounts().await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(account("alice").oauth["accessToken"], "alice-renewed");
         assert!(account("alice").alternates.is_empty());
         // A sign-in to bob there keeps bob's pool tokens, which it did not hold.
         let bob = account("bob").oauth;
         external_update(location.clone(), "bob", "bob-login")();
-        app.claude_accounts().await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(account("bob").oauth["accessToken"], "bob-login");
         assert_eq!(account("bob").alternates, [bob]);
         assert!(account("bob").in_live);
@@ -5569,7 +5194,9 @@ mod tests {
         .await
         .unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         // Unreadable when the refresh starts, an older login once it renews.
         fs::create_dir_all(&location.config_dir).unwrap();
         fs::write(location.credentials_file(), "not json").unwrap();
@@ -5578,7 +5205,7 @@ mod tests {
             "alice",
             "stale",
         ));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(refreshes(&fake), ["alice-refresh"]);
         assert_eq!(usages(&fake), ["fresh-access", "stale"]);
         let stored = || app.claude_load().unwrap().accounts[0].clone();
@@ -5588,7 +5215,7 @@ mod tests {
         // When Claude refuses that login, the renewal takes over and reaches
         // Claude Code.
         reject_next(&fake);
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(refreshes(&fake), ["alice-refresh", "stale-refresh"]);
         assert_eq!(live_access(&location), "fresh-access");
         assert_eq!(stored().oauth["refreshToken"], "fresh-refresh");
@@ -5608,7 +5235,9 @@ mod tests {
         .await
         .unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         let (mut other, _) = login("bob", LATER);
         other["accessToken"] = "bob-other".into();
         other["refreshToken"] = "bob-other-refresh".into();
@@ -5618,7 +5247,7 @@ mod tests {
             assert!(store.accounts[0].adopt(&adopted, false));
             write_json(&path, &store).unwrap();
         }));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let stored = app.claude_load().unwrap().accounts[0].clone();
         assert_eq!(stored.oauth, other);
         assert_eq!(stored.alternates, [oauth]);
@@ -5637,13 +5266,15 @@ mod tests {
         let valid = pool.accounts[0].oauth.clone();
         pool.accounts[0].reject(print("stale-refresh"));
         app.claude_save(&pool).unwrap();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         // Claude Code's login turns back to a generation Claude rejected.
         fake.usage_hooks
             .lock()
             .unwrap()
             .push(external_update(location.clone(), "alice", "stale"));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let stored = app.claude_load().unwrap().accounts[0].clone();
         assert_eq!(stored.oauth, valid);
         assert!(stored.alternates.is_empty());
@@ -5652,7 +5283,7 @@ mod tests {
         // Nothing is written over a login that changed during the request.
         assert_eq!(live_access(&location), "stale");
         // Later reads keep ignoring it.
-        app.claude_accounts().await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(app.claude_load().unwrap().accounts[0].oauth, valid);
     }
 
@@ -5669,7 +5300,9 @@ mod tests {
         renewed["refreshToken"] = "pool-refresh".into();
         pool.accounts[0].alternates = vec![renewed.clone()];
         app.claude_save(&pool).unwrap();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         // Claude refuses the login; while it does, Claude Code rewrites the
         // same rejected generation with another expiry.
         reject_next(&fake);
@@ -5677,7 +5310,7 @@ mod tests {
             let location = location.clone();
             move || sign_in(&location, "alice", LATER + 5)
         }));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let stored = app.claude_load().unwrap().accounts[0].clone();
         assert_eq!(stored.oauth, renewed);
         assert_eq!(stored.rejected, [print("alice-refresh")]);
@@ -5700,7 +5333,9 @@ mod tests {
             };
             app.claude_import_json(&export(&oauth)).await.unwrap();
             let id = app.claude_load().unwrap().accounts[0].id.clone();
-            app.claude_release_new_accounts(Some(&id)).await.unwrap();
+            app.release_new_accounts(Pool::Claude, Some(&id))
+                .await
+                .unwrap();
             let (mut other, _) = login("bob", LATER);
             other["accessToken"] = "bob-other".into();
             other["refreshToken"] = "bob-other-refresh".into();
@@ -5732,7 +5367,7 @@ mod tests {
         // The identity cannot be written after the credentials are.
         fs::remove_file(location.account_file()).unwrap();
         fs::create_dir(location.account_file()).unwrap();
-        assert!(app.claude_switch_account(&id).await.is_err());
+        assert!(app.switch_account(Pool::Claude, &id).await.is_err());
         assert!(!location.credentials_file().exists());
     }
 
@@ -5746,8 +5381,13 @@ mod tests {
         let config_before = fs::read(location.account_file()).unwrap();
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
-        let (a, b) = tokio::join!(app.claude_refresh_usage(&id), app.claude_refresh_usage(&id));
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
+        let (a, b) = tokio::join!(
+            app.refresh_usage(Pool::Claude, &id),
+            app.refresh_usage(Pool::Claude, &id)
+        );
         a.unwrap();
         b.unwrap();
         assert_eq!(*fake.refreshed.lock().unwrap(), vec!["alice-refresh"]);
@@ -5756,13 +5396,13 @@ mod tests {
             "fresh-access"
         );
         // The active login and pool share the refreshed generation.
-        app.claude_accounts().await.unwrap();
+        app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(
             app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
             "fresh-refresh"
         );
         fake.usage.lock().unwrap().push((401, Value::Null));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(
             *fake.refreshed.lock().unwrap(),
             vec!["alice-refresh", "fresh-refresh"]
@@ -5784,10 +5424,12 @@ mod tests {
         sign_in(&location, "alice", 1);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         fake.usage.lock().unwrap().push((500, Value::Null));
         assert!(app
-            .claude_refresh_usage(&id)
+            .refresh_usage(Pool::Claude, &id)
             .await
             .unwrap_err()
             .contains("HTTP 500"));
@@ -5805,10 +5447,12 @@ mod tests {
         sign_in(&location, "alice", 1);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         fs::write(location.credentials_file(), "{").unwrap();
         assert_eq!(
-            app.claude_refresh_usage(&id).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
             LIVE_UNREADABLE
         );
         assert!(fake.refreshed.lock().unwrap().is_empty());
@@ -5827,8 +5471,13 @@ mod tests {
         let id = app.claude_load().unwrap().accounts[0].id.clone();
         sign_in(&location, "bob", LATER);
         let before = fs::read(location.credentials_file()).unwrap();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
-        let (a, b) = tokio::join!(app.claude_refresh_usage(&id), app.claude_refresh_usage(&id));
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
+        let (a, b) = tokio::join!(
+            app.refresh_usage(Pool::Claude, &id),
+            app.refresh_usage(Pool::Claude, &id)
+        );
         a.unwrap();
         b.unwrap();
         assert_eq!(*fake.refreshed.lock().unwrap(), vec!["alice-refresh"]);
@@ -5842,7 +5491,7 @@ mod tests {
             .unwrap()
             .extend([(401, Value::Null), (401, Value::Null)]);
         assert_eq!(
-            app.claude_refresh_usage(&id).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
             SIGN_IN_EXPIRED
         );
     }
@@ -5854,14 +5503,16 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         // Only the account Claude Code uses waits for its login to be readable.
         sign_in(&location, "bob", LATER);
         app.claude_import_current().await.unwrap();
         fs::write(location.credentials_file(), "invalid").unwrap();
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         fake.usage.lock().unwrap().push((401, Value::Null));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(*fake.refreshed.lock().unwrap(), vec!["alice-refresh"]);
         assert_eq!(
             app.claude_load().unwrap().accounts[0].oauth["refreshToken"],
@@ -5887,7 +5538,7 @@ mod tests {
         )
         .unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert_eq!(app.claude_load().unwrap().accounts[0].oauth, oauth);
         assert!(fake.refreshed.lock().unwrap().is_empty());
     }
@@ -5916,7 +5567,9 @@ mod tests {
             sign_in(&location, "alice", 1);
             app.claude_import_current().await.unwrap();
             let id = app.claude_load().unwrap().accounts[0].id.clone();
-            app.claude_release_new_accounts(Some(&id)).await.unwrap();
+            app.release_new_accounts(Pool::Claude, Some(&id))
+                .await
+                .unwrap();
             fake.refresh_hooks.lock().unwrap().push(external_update(
                 location.clone(),
                 "alice",
@@ -5925,7 +5578,7 @@ mod tests {
             if failed {
                 *fake.refresh_error.lock().unwrap() = Some(SIGN_IN_EXPIRED.into());
             }
-            app.claude_refresh_usage(&id).await.unwrap();
+            app.refresh_usage(Pool::Claude, &id).await.unwrap();
             let stored = app.claude_load().unwrap();
             assert_eq!(stored.accounts[0].oauth["accessToken"], "external");
             assert_eq!(stored.accounts[0].oauth["refreshToken"], "external-refresh");
@@ -5956,14 +5609,16 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         fake.usage_hooks.lock().unwrap().push(external_update(
             location.clone(),
             "alice",
             "external",
         ));
         fake.usage.lock().unwrap().push((401, Value::Null));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert!(fake.refreshed.lock().unwrap().is_empty());
         assert_eq!(
             *fake.usage_tokens.lock().unwrap(),
@@ -5982,13 +5637,15 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         fake.usage_hooks.lock().unwrap().extend([
             external_update(location.clone(), "alice", "first"),
             external_update(location.clone(), "alice", "second"),
         ]);
         assert_eq!(
-            app.claude_refresh_usage(&id).await.unwrap_err(),
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
             CREDENTIALS_CHANGED
         );
         assert_eq!(
@@ -6009,13 +5666,15 @@ mod tests {
         sign_in(&location, "alice", 1);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_release_new_accounts(Some(&id)).await.unwrap();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
         fake.refresh_hooks.lock().unwrap().push(external_update(
             location.clone(),
             "bob",
             "bob-new",
         ));
-        app.claude_refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let stored = app.claude_load().unwrap();
         assert_eq!(stored.accounts[0].oauth["accessToken"], "fresh-access");
         assert_eq!(stored.accounts[0].account["accountUuid"], "acct-alice");
@@ -6043,13 +5702,13 @@ mod tests {
             .unwrap();
         assert_eq!(label, "new@example.com");
         assert_eq!(live_access(&location), "alice-access");
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(accounts.len(), 1);
         assert!(!accounts[0].is_current);
         assert_eq!(accounts[0].plan_type.as_deref(), Some("max 5x"));
         // The only stored account is not Claude Code's, so Smart Switch takes it.
         assert_eq!(
-            app.claude_smart_switch().await.unwrap(),
+            app.smart_switch(Pool::Claude).await.unwrap(),
             SmartSwitchOutcome::Switched {
                 label: "new@example.com".into(),
                 execution: SwitchExecution::default(),
@@ -6125,7 +5784,7 @@ mod tests {
             let (app, fake, id) = (&app, &fake, &id);
             async move {
                 fake.api_roots.lock().unwrap().clear();
-                app.claude_refresh_usage(id).await.unwrap();
+                app.refresh_usage(Pool::Claude, id).await.unwrap();
                 let roots = fake.api_roots.lock().unwrap().clone();
                 assert!(roots.len() >= 2, "usage and prepaid: {roots:?}");
                 roots.into_iter().collect::<std::collections::BTreeSet<_>>()
@@ -6163,7 +5822,7 @@ mod tests {
         let settings =
             |env: Value| put_settings(&location, Some(&json!({ "env": env }).to_string())).unwrap();
         async fn said(app: &Application, fake: &Fake, id: &str) -> String {
-            app.claude_say_hi(id).await.unwrap();
+            app.say_hi(Pool::Claude, id).await.unwrap();
             fake.hello_urls.lock().unwrap().pop().unwrap()
         }
         assert_eq!(
@@ -6205,11 +5864,11 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts.remove(0).id;
-        app.claude_save_account_proxy(&id, "socks5://127.0.0.1:7891")
+        app.save_account_proxy(Pool::Claude, &id, "socks5://127.0.0.1:7891")
             .await
             .unwrap();
         let usages = fake.usage_tokens.lock().unwrap().len();
-        app.claude_say_hi(&id).await.unwrap();
+        app.say_hi(Pool::Claude, &id).await.unwrap();
         assert_eq!(
             *fake.hello_requests.lock().unwrap(),
             vec![("alice-access".into(), "socks5://127.0.0.1:7891".into())]
@@ -6222,7 +5881,7 @@ mod tests {
         fake.hello_requests.lock().unwrap().clear();
         fake.hellos.lock().unwrap().push((401, Value::Null));
         fake.usage.lock().unwrap().push((401, Value::Null));
-        app.claude_say_hi(&id).await.unwrap();
+        app.say_hi(Pool::Claude, &id).await.unwrap();
         let tokens: Vec<String> = fake
             .hello_requests
             .lock()
@@ -6239,7 +5898,7 @@ mod tests {
             .unwrap()
             .push((529, json!({"error": {"message": "Overloaded"}})));
         assert_eq!(
-            app.claude_say_hi(&id).await.unwrap_err(),
+            app.say_hi(Pool::Claude, &id).await.unwrap_err(),
             "Claude message request failed: HTTP 529 Overloaded"
         );
         assert_eq!(fake.hello_requests.lock().unwrap().len(), 1);
@@ -6263,15 +5922,15 @@ mod tests {
         assert_eq!(*fake.usage_proxies.lock().unwrap(), vec![""]);
         let account = app.claude_load().unwrap().accounts.remove(0);
         assert!(account.proxy_url.is_empty());
-        app.claude_refresh_usage(&account.id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &account.id).await.unwrap();
         assert_eq!(
             fake.usage_proxies.lock().unwrap().last().unwrap(),
             "http://127.0.0.1:7890"
         );
-        app.claude_save_account_proxy(&account.id, "socks5://127.0.0.1:7891")
+        app.save_account_proxy(Pool::Claude, &account.id, "socks5://127.0.0.1:7891")
             .await
             .unwrap();
-        app.claude_refresh_usage(&account.id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &account.id).await.unwrap();
         assert_eq!(
             fake.usage_proxies.lock().unwrap().last().unwrap(),
             "socks5://127.0.0.1:7891"
@@ -6279,7 +5938,7 @@ mod tests {
         let mut preferences = app.preferences().unwrap();
         preferences.account_proxy_url.clear();
         app.save_preferences(preferences).await.unwrap();
-        app.claude_refresh_usage(&account.id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &account.id).await.unwrap();
         assert_eq!(
             fake.usage_proxies.lock().unwrap().last().unwrap(),
             "socks5://127.0.0.1:7891"
@@ -6294,7 +5953,7 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let alice = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_save_account_proxy(&alice, "http://127.0.0.1:8001")
+        app.save_account_proxy(Pool::Claude, &alice, "http://127.0.0.1:8001")
             .await
             .unwrap();
         let (oauth, account) = login("new", LATER);
@@ -6302,7 +5961,7 @@ mod tests {
             .claude_upsert(oauth, account, false, false)
             .await
             .unwrap();
-        app.claude_save_account_proxy(&id, "socks5://127.0.0.1:8002")
+        app.save_account_proxy(Pool::Claude, &id, "socks5://127.0.0.1:8002")
             .await
             .unwrap();
         app.claude_import_login(json!({
@@ -6329,7 +5988,7 @@ mod tests {
             sign_in(&location, "new", LATER);
             app.claude_import_current().await.unwrap();
             let id = app.claude_load().unwrap().accounts[0].id.clone();
-            app.claude_save_account_proxy(&id, "http://127.0.0.1:8002")
+            app.save_account_proxy(Pool::Claude, &id, "http://127.0.0.1:8002")
                 .await
                 .unwrap();
             let (mut oauth, _) = login("new", LATER);
@@ -6361,7 +6020,7 @@ mod tests {
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
-        app.claude_save_account_proxy(&id, "http://127.0.0.1:8001")
+        app.save_account_proxy(Pool::Claude, &id, "http://127.0.0.1:8001")
             .await
             .unwrap();
         app.claude_import_login(json!({
@@ -6390,7 +6049,7 @@ mod tests {
         let (app, location, _) = waiting_app(&dir);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(accounts[0].token_expires_at, Some(LATER / 1000));
     }
 
@@ -6401,24 +6060,24 @@ mod tests {
         sign_in_unnamed(&location, "probe");
         assert_eq!(app.claude_import_current().await.unwrap(), "Claude Code");
         app.claude_import_current().await.unwrap();
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(accounts.len(), 1);
         let card = &accounts[0];
         assert!(card.is_current && card.awaiting_first_request && card.email.is_none());
         assert!(fake.profile_proxies.lock().unwrap().is_empty());
 
-        app.claude_save_account_proxy(&card.id, "http://127.0.0.1:8003")
+        app.save_account_proxy(Pool::Claude, &card.id, "http://127.0.0.1:8003")
             .await
             .unwrap();
-        app.claude_release_new_accounts(Some(&card.id))
+        app.release_new_accounts(Pool::Claude, Some(&card.id))
             .await
             .unwrap();
-        app.claude_refresh_usage(&card.id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &card.id).await.unwrap();
         assert_eq!(
             *fake.profile_proxies.lock().unwrap(),
             vec!["http://127.0.0.1:8003"]
         );
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(accounts.len(), 1);
         let card = &accounts[0];
         assert_eq!(card.label, "new@example.com");
@@ -6440,7 +6099,7 @@ mod tests {
         .unwrap();
         sign_in_unnamed(&location, "probe");
         app.claude_import_current().await.unwrap();
-        assert_eq!(app.claude_accounts().await.unwrap().len(), 2);
+        assert_eq!(app.accounts(Pool::Claude).await.unwrap().len(), 2);
         let mut pool = app.claude_load().unwrap();
         let probe = pool
             .accounts
@@ -6450,9 +6109,9 @@ mod tests {
         probe.alternates = vec![json!({"accessToken": "old", "refreshToken": "probe-old"})];
         probe.rejected = vec![print("probe-rejected")];
         app.claude_save(&pool).unwrap();
-        app.claude_release_new_accounts(None).await.unwrap();
-        app.claude_refresh(None).await.unwrap();
-        let accounts = app.claude_accounts().await.unwrap();
+        app.release_new_accounts(Pool::Claude, None).await.unwrap();
+        app.refresh_all(Pool::Claude).await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].label, "new@example.com");
         assert!(accounts[0].is_current);
@@ -6484,8 +6143,8 @@ mod tests {
         .await
         .unwrap();
         // Neither import, nor the background refresh, reached upstream.
-        app.claude_refresh_recurring(0).await.unwrap();
-        let accounts = app.claude_accounts().await.unwrap();
+        app.refresh_recurring(Pool::Claude, 0).await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(accounts.len(), 2);
         assert!(accounts
             .iter()
@@ -6499,18 +6158,18 @@ mod tests {
             .iter()
             .find(|a| a.label == "new@example.com")
             .unwrap();
-        app.claude_save_account_proxy(&new.id, "socks5://127.0.0.1:8002")
+        app.save_account_proxy(Pool::Claude, &new.id, "socks5://127.0.0.1:8002")
             .await
             .unwrap();
-        app.claude_release_new_accounts(Some(&new.id))
+        app.release_new_accounts(Pool::Claude, Some(&new.id))
             .await
             .unwrap();
-        app.claude_refresh_usage(&new.id).await.unwrap();
+        app.refresh_usage(Pool::Claude, &new.id).await.unwrap();
         assert_eq!(
             *fake.profile_proxies.lock().unwrap(),
             vec!["socks5://127.0.0.1:8002"]
         );
-        let accounts = app.claude_accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         let new = accounts.iter().find(|a| a.id == new.id).unwrap();
         assert!(!new.awaiting_first_request);
         assert!(new.usage.is_some());
@@ -6799,5 +6458,244 @@ mod tests {
         let document = json!({"claudeAiOauth": {"accessToken": "t"}});
         let encoded = hex(&serde_json::to_vec(&document).unwrap());
         assert_eq!(parse_credentials(encoded.as_bytes()), Some(document));
+    }
+
+    /// An Anthropic API stand-in: it records each request (path and query,
+    /// credential, betas, body) and answers the queued statuses, then 200.
+    async fn messages_upstream(
+        statuses: Arc<Mutex<Vec<u16>>>,
+    ) -> (String, Arc<Mutex<Vec<[String; 4]>>>) {
+        use axum::{body::to_bytes, extract::Request, routing::any, Router};
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let router = Router::new().fallback(any(move |request: Request| {
+            let (log, statuses) = (log.clone(), statuses.clone());
+            async move {
+                let (parts, body) = request.into_parts();
+                let header = |name: &str| {
+                    parts
+                        .headers
+                        .get(name)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                let credential = match header("x-api-key") {
+                    key if !key.is_empty() => format!("x-api-key {key}"),
+                    _ => header("authorization"),
+                };
+                let beta = header("anthropic-beta");
+                let path = parts.uri.path_and_query().unwrap().to_string();
+                let body = to_bytes(body, usize::MAX).await.unwrap();
+                log.lock().unwrap().push([
+                    path,
+                    credential,
+                    beta,
+                    String::from_utf8_lossy(&body).into_owned(),
+                ]);
+                let status = {
+                    let mut queued = statuses.lock().unwrap();
+                    if queued.is_empty() { 200 } else { queued.remove(0) }
+                };
+                let body = if status == 200 {
+                    json!({"type": "message", "content": [{"type": "text", "text": "hi"}]})
+                } else {
+                    json!({"type": "error", "error": {"type": "rate_limit_error", "message": "rate limit reached"}})
+                };
+                (
+                    axum::http::StatusCode::from_u16(status).unwrap(),
+                    [("content-type", "application/json")],
+                    body.to_string(),
+                )
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        (base, seen)
+    }
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+    /// Two pool logins (Bob in use) and the Claude proxy started in front of
+    /// the stand-in, which Claude Code's official settings name.
+    async fn claude_proxy(
+        dir: &tempfile::TempDir,
+        statuses: Arc<Mutex<Vec<u16>>>,
+    ) -> (
+        Arc<Application>,
+        Location,
+        Arc<Fake>,
+        Arc<Mutex<Vec<[String; 4]>>>,
+        crate::ApiProxyStatus,
+    ) {
+        let (app, location, fake) = app(dir).await;
+        let app = app.into_shared();
+        let (base, seen) = messages_upstream(statuses).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        fs::write(
+            settings_file(&location),
+            json!({"env": {BASE_URL: base}}).to_string(),
+        )
+        .unwrap();
+        let mut preferences = app.preferences().unwrap();
+        preferences.claude_proxy_port = free_port();
+        app.save_preferences(preferences).await.unwrap();
+        let status = app.start_proxy(Pool::Claude).await.unwrap();
+        (app, location, fake, seen, status)
+    }
+    async fn send(status: &crate::ApiProxyStatus, key: &str) -> (u16, Value) {
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/v1/messages?beta=true",
+                status.base_url.as_deref().unwrap()
+            ))
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", "claude-code-20250219")
+            .body(r#"{"model":"claude-sonnet-5-5","max_tokens":1,"messages":[]}"#)
+            .send()
+            .await
+            .unwrap();
+        let code = response.status().as_u16();
+        (code, response.json().await.unwrap_or(Value::Null))
+    }
+
+    #[tokio::test]
+    async fn the_claude_proxy_passes_messages_through_with_the_login_in_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _, seen, status) = claude_proxy(&dir, Default::default()).await;
+        let key = status.api_key.clone().unwrap();
+        assert!(status.running);
+        // Claude Code takes `/anthropic` as its base URL and adds the rest.
+        assert!(status.base_url.as_deref().unwrap().ends_with("/anthropic"));
+        assert_eq!(
+            app.proxy_status(Pool::Claude)
+                .await
+                .unwrap()
+                .available_accounts,
+            2
+        );
+        // Independent of the Codex proxy, which stays stopped.
+        assert!(!app.proxy_status(Pool::Codex).await.unwrap().running);
+        assert_ne!(
+            app.proxy_status(Pool::Codex).await.unwrap().api_key,
+            Some(key.clone())
+        );
+        let (code, body) = send(&status, &key).await;
+        assert_eq!(
+            (code, body["content"][0]["text"].as_str()),
+            (200, Some("hi"))
+        );
+        let [path, credential, beta, body] = seen.lock().unwrap()[0].clone();
+        assert_eq!(path, "/v1/messages?beta=true");
+        assert_eq!(credential, "Bearer bob-access");
+        assert_eq!(beta, "claude-code-20250219,oauth-2025-04-20");
+        assert!(body.contains("claude-sonnet-5-5"));
+        assert_eq!(
+            app.proxy_status(Pool::Claude)
+                .await
+                .unwrap()
+                .active_account_id
+                .as_deref(),
+            Some("acct-bob")
+        );
+        // A wrong key reaches no account.
+        assert_eq!(send(&status, "sk-wrong").await.0, 401);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        app.stop_proxy(Pool::Claude).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_login_fails_over_and_claude_code_follows_unless_hosting_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let statuses = Arc::new(Mutex::new(vec![429]));
+        let (app, location, _, seen, status) = claude_proxy(&dir, statuses.clone()).await;
+        let key = status.api_key.clone().unwrap();
+        assert_eq!(send(&status, &key).await.0, 200);
+        let credentials: Vec<String> = seen.lock().unwrap().iter().map(|r| r[1].clone()).collect();
+        assert_eq!(credentials, ["Bearer bob-access", "Bearer alice-access"]);
+        // As the Codex proxy's account, the one serving becomes Claude Code's.
+        assert_eq!(live_access(&location), "alice-access");
+        // Bob cools down; Alice keeps serving.
+        assert_eq!(send(&status, &key).await.0, 200);
+        assert_eq!(
+            seen.lock().unwrap().last().unwrap()[1],
+            "Bearer alice-access"
+        );
+        // Hosting the API only, the proxy leaves Claude Code's login alone.
+        let mut preferences = app.preferences().unwrap();
+        preferences.host_api_only = true;
+        app.save_preferences(preferences).await.unwrap();
+        sign_in(&location, "bob", LATER);
+        app.accounts(Pool::Claude).await.unwrap();
+        assert_eq!(send(&status, &key).await.0, 200);
+        assert_eq!(live_access(&location), "bob-access");
+        app.stop_proxy(Pool::Claude).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_refused_login_is_renewed_through_the_pool_and_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let statuses = Arc::new(Mutex::new(vec![401]));
+        let (app, location, fake, seen, status) = claude_proxy(&dir, statuses).await;
+        let key = status.api_key.clone().unwrap();
+        assert_eq!(send(&status, &key).await.0, 200);
+        let credentials: Vec<String> = seen.lock().unwrap().iter().map(|r| r[1].clone()).collect();
+        assert_eq!(credentials, ["Bearer bob-access", "Bearer fresh-access"]);
+        assert_eq!(*fake.refreshed.lock().unwrap(), ["bob-refresh"]);
+        // The pool keeps the renewal, and Claude Code's login with it.
+        assert_eq!(live_access(&location), "fresh-access");
+        let bob = app
+            .claude_load()
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|a| a.label.contains("bob"))
+            .unwrap();
+        assert_eq!(bob.oauth["accessToken"], "fresh-access");
+        app.stop_proxy(Pool::Claude).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remote_servers_get_the_official_logins_and_their_renewals_come_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let payload: Value = serde_json::from_slice(&app.claude_remote_payload().unwrap()).unwrap();
+        let accounts = payload["accounts"].as_array().unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(
+            accounts[0]["authJson"]["claudeAiOauth"]["accessToken"],
+            "alice-access"
+        );
+        assert!(accounts[0].get("copoolCurrent").is_none());
+        // The daemon renewed the login: the pool takes the later generation.
+        let mut remote = payload.clone();
+        remote["accounts"][0]["authJson"]["claudeAiOauth"] = json!({
+            "accessToken": "remote-access", "refreshToken": "remote-refresh", "expiresAt": LATER + 1
+        });
+        app.claude_adopt_remote_logins(&remote).await.unwrap();
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["accessToken"],
+            "remote-access"
+        );
+        // An older one is not.
+        remote["accounts"][0]["authJson"]["claudeAiOauth"] = json!({
+            "accessToken": "stale-access", "refreshToken": "stale-refresh", "expiresAt": 1
+        });
+        app.claude_adopt_remote_logins(&remote).await.unwrap();
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].oauth["accessToken"],
+            "remote-access"
+        );
     }
 }

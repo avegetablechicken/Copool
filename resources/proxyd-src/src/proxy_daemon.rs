@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::runtime::Builder;
 use tokio::sync::Mutex;
 
+use crate::models::Pool;
 use crate::proxy_service::new_proxy_storage_context;
 use crate::proxy_service::start_api_proxy_with_runtime;
 use crate::proxy_service::stop_api_proxy_with_runtime;
@@ -18,6 +19,8 @@ pub struct ProxyDaemonOptions {
     pub host: String,
     pub port: Option<u16>,
     pub sync_current_auth: bool,
+    /// The pool whose accounts `accounts.json` holds, and whose API is served.
+    pub pool: Pool,
 }
 
 pub fn run_cli_from_env() -> Result<(), String> {
@@ -40,12 +43,13 @@ pub async fn run_proxy_daemon(options: ProxyDaemonOptions) -> Result<(), String>
     let store_lock = Arc::new(Mutex::new(()));
     let runtime_slot = Mutex::<Option<ApiProxyRuntimeHandle>>::new(None);
 
-    if options.sync_current_auth {
+    if options.sync_current_auth && options.pool == Pool::Codex {
         let store_path = account_store_path_from_data_dir(&options.data_dir);
         sync_current_auth_account_on_startup_in_path(&store_path)?;
     }
 
-    let storage = new_proxy_storage_context(options.data_dir.clone(), store_lock, false);
+    let mut storage = new_proxy_storage_context(options.data_dir.clone(), store_lock, false);
+    storage.pool = options.pool;
     let status =
         start_api_proxy_with_runtime(&storage, &runtime_slot, options.port, &options.host).await?;
     let port = status
@@ -54,11 +58,15 @@ pub async fn run_proxy_daemon(options: ProxyDaemonOptions) -> Result<(), String>
 
     println!("codex-tools-proxyd started");
     println!("data_dir={}", options.data_dir.display());
-    println!("listen=http://{}:{port}/v1", options.host);
+    println!(
+        "listen=http://{}:{port}{}",
+        options.host,
+        options.pool.base_path()
+    );
     if let Some(api_key) = status.api_key.as_deref() {
         println!("api_key={api_key}");
     }
-    println!("upstream=codex");
+    println!("upstream={}", options.pool.name());
 
     wait_for_shutdown_signal().await?;
 
@@ -82,6 +90,7 @@ fn parse_cli_args(args: Vec<String>) -> Result<CliAction, String> {
     let mut port = None;
     let mut data_dir = default_daemon_data_dir()?;
     let mut sync_current_auth = true;
+    let mut pool = Pool::Codex;
 
     let mut index = 1usize;
     while index < args.len() {
@@ -113,6 +122,17 @@ fn parse_cli_args(args: Vec<String>) -> Result<CliAction, String> {
                 port = Some(parsed);
                 index += 2;
             }
+            "--pool" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("Missing value for --pool\n\n{}", usage_text(&program)))?;
+                pool = match value.as_str() {
+                    "codex" => Pool::Codex,
+                    "claude" => Pool::Claude,
+                    _ => return Err(format!("Unknown pool: {value}\n\n{}", usage_text(&program))),
+                };
+                index += 2;
+            }
             "--no-sync-current-auth" => {
                 sync_current_auth = false;
                 index += 1;
@@ -131,6 +151,7 @@ fn parse_cli_args(args: Vec<String>) -> Result<CliAction, String> {
         host,
         port,
         sync_current_auth,
+        pool,
     }))
 }
 
@@ -166,6 +187,6 @@ async fn wait_for_shutdown_signal() -> Result<(), String> {
 
 fn usage_text(program: &str) -> String {
     format!(
-        "Usage:\n  {program} serve [--data-dir PATH] [--host HOST] [--port PORT] [--no-sync-current-auth]\n\nDefaults:\n  --data-dir ~/.codex-tools-proxyd\n  --host 0.0.0.0\n  --port 8787"
+        "Usage:\n  {program} serve [--data-dir PATH] [--host HOST] [--port PORT] [--pool codex|claude] [--no-sync-current-auth]\n\nDefaults:\n  --data-dir ~/.codex-tools-proxyd\n  --host 0.0.0.0\n  --port 8787\n  --pool codex"
     )
 }

@@ -1,5 +1,6 @@
 use super::{fixture, save_fixture, stored};
 use crate::proxy_service;
+use crate::Pool;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[tokio::test]
@@ -9,7 +10,7 @@ async fn testStartThrowsWhenPortAlreadyInUse() {
     let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = occupied.local_addr().unwrap().port();
     let error = proxy_service::start_api_proxy_with_runtime(
-        &app.storage(),
+        &app.proxy_storage(Pool::Codex),
         &app.state.api_proxy,
         Some(port),
         "127.0.0.1",
@@ -17,7 +18,7 @@ async fn testStartThrowsWhenPortAlreadyInUse() {
     .await
     .unwrap_err();
     assert!(!error.is_empty());
-    assert!(!app.proxy_status().await.unwrap().running);
+    assert!(!app.proxy_status(Pool::Codex).await.unwrap().running);
 }
 #[tokio::test]
 async fn testStreamingResponseUsesChunkedEncoding() {
@@ -29,7 +30,7 @@ async fn testStreamingResponseUsesChunkedEncoding() {
     });
     let (_dir, app) = fixture();
     save_fixture(&app, json!({"accounts":[stored("a","a","a")]}));
-    let mut storage = app.storage();
+    let mut storage = app.proxy_storage(Pool::Codex);
     storage.upstream_base_url = Some(format!("http://{address}"));
     let started = proxy_service::start_api_proxy_with_runtime(
         &storage,
@@ -68,6 +69,6 @@ async fn testStreamingResponseUsesChunkedEncoding() {
             || text.contains("\r\ne\r\ndata: second\n\n\r\n0\r\n\r\n"),
         "{text}"
     );
-    app.stop_proxy().await.unwrap();
+    app.stop_proxy(Pool::Codex).await.unwrap();
     task.abort();
 }

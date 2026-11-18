@@ -2,25 +2,18 @@
 use crate::{
     models::{AccountSummary, UsageWindow},
     persistence::write_json,
+    pool::Pool,
     ranking::{remaining_score, sort_for_display},
 };
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// An account pool; its cards follow the app's tags for that pool.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pool {
-    Codex,
-    Claude,
-}
-impl Pool {
-    /// The tag naming the pool on a card of the widget showing both.
-    fn label(self) -> &'static str {
-        match self {
-            Self::Codex => "CODEX",
-            Self::Claude => "CLAUDE",
-        }
+/// The tag naming a pool on a card of the widget showing both.
+fn pool_label(pool: Pool) -> &'static str {
+    match pool {
+        Pool::Codex => "CODEX",
+        Pool::Claude => "CLAUDE",
     }
 }
 /// A widget the app publishes; each has its own WidgetKit kind and snapshot.
@@ -293,7 +286,7 @@ pub fn build_all(
         .into_iter()
         .chain(others)
         .map(|(pool, a)| CardSnapshot {
-            pool_label: Some(pool.label().into()),
+            pool_label: Some(pool_label(pool).into()),
             ..card(pool, &a, offset_seconds)
         })
         .collect();

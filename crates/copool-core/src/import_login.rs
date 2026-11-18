@@ -100,7 +100,7 @@ impl Application {
         let mut account:StoredAccount=serde_json::from_value(json!({"id":uuid::Uuid::new_v4().to_string(),"label":extracted.email.clone().unwrap_or(extracted.account_id.clone()),"email":extracted.email,"accountId":extracted.account_id,"planType":extracted.plan_type,"authJson":document,"addedAt":now,"updatedAt":now,"usage":usage,"usageError":usage_error,"teamName":name,"usageStateUpdatedAt":now,"workspaceStatus":"active","displayStatus":"list"})).map_err(|e|e.to_string())?;
         account.proxy_url = proxy;
         let count = self
-            .import_json(&serde_json::to_string(&account).map_err(|e| e.to_string())?)
+            .codex_import_json(&serde_json::to_string(&account).map_err(|e| e.to_string())?)
             .await?;
         if !consent.is_empty() {
             let _op = self.operations.lock().await;

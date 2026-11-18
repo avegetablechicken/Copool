@@ -29,9 +29,9 @@ pub(crate) fn visible(metadata: &workspaces::Metadata) -> bool {
 }
 impl Application {
     pub async fn accounts_with_metadata(&self) -> Result<Vec<crate::AccountSummary>, String> {
-        self.accounts().await?;
+        self.codex_accounts().await?;
         self.reconcile_workspace_names(false).await?;
-        self.accounts().await
+        self.codex_accounts().await
     }
     pub(crate) async fn reconcile_workspace_names(&self, force: bool) -> Result<(), String> {
         let snapshot = repository::load_accounts(&self.paths.store())?;

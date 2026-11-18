@@ -13,7 +13,6 @@ const source = fs
 function fixture(target) {
   const calls = [];
   let renewal = "always";
-  const list = target === "claude" ? "claude_accounts" : "accounts";
   const scope = {
     navigator: { userAgent: "Linux" },
     localStorage: { getItem: () => target },
@@ -21,9 +20,10 @@ function fixture(target) {
       __TAURI__: {
         core: {
           invoke: async (command, args) => {
-            calls.push([command, args]);
-            if (command.endsWith("set_renewal")) renewal = args.renewal;
-            if (command === list)
+            // Arguments built inside the app's context, as plain data.
+            calls.push([command, JSON.parse(JSON.stringify(args))]);
+            if (command === "set_renewal") renewal = args.renewal;
+            if (command === "accounts" && args.pool === target)
               return [{ id: "a", label: "Alice", updatedAt: 1, renewal }];
             return [];
           },
@@ -36,10 +36,9 @@ function fixture(target) {
   return { calls, model: new Accounts(vm.runInContext(`poolInvoke("${target}")`, scope)) };
 }
 
-for (const [target, command] of [
-  ["claude", "claude_set_renewal"],
-  ["codex", "set_renewal"],
-]) {
+// Every command of a pool's cards names that pool, and only that pool.
+const onlyTo = (calls, target) => calls.every(([, args]) => args.pool === target);
+for (const target of ["claude", "codex"]) {
   test(`a ${target} renewal choice goes to its own pool and the cards reload`, async () => {
     const { model, calls } = fixture(target);
     let mutations = 0;
@@ -48,13 +47,12 @@ for (const [target, command] of [
       const before = calls.length;
       await model.setRenewal("a", choice);
       const sent = calls.slice(before);
-      assert.deepEqual(sent[0], [command, { id: "a", renewal: choice }]);
-      assert(sent.slice(1).some(([name]) => name.endsWith("accounts")), "the cards reload");
+      assert.deepEqual(sent[0], ["set_renewal", { id: "a", renewal: choice, pool: target }]);
+      assert(sent.slice(1).some(([name]) => name === "accounts"), "the cards reload");
       assert.equal(model.accounts[0].renewal, choice);
     }
     assert.equal(mutations, 3);
-    const other = command === "set_renewal" ? "claude_set_renewal" : "set_renewal";
-    assert(!calls.some(([sent]) => sent === other));
+    assert(onlyTo(calls, target));
   });
 }
 
@@ -84,10 +82,7 @@ test("the renewal menu offers renew now, then auto renew as a toggle", () => {
     assert(!locales.includes(`"accounts.renewal.${key}"`), `accounts.renewal.${key} removed`);
 });
 
-for (const [target, command] of [
-  ["claude", "claude_renew_now"],
-  ["codex", "renew_now"],
-]) {
+for (const target of ["claude", "codex"]) {
   test(`renewing a ${target} account now shows as under way, then reloads its card`, async () => {
     const { model, calls } = fixture(target);
     let during;
@@ -95,9 +90,10 @@ for (const [target, command] of [
     assert.equal(await model.renewNow("a"), true);
     assert.equal(during, true);
     assert.equal(model.renewingIds.has("a"), false);
-    const at = calls.findIndex(([name]) => name === command);
-    assert.deepEqual(calls[at], [command, { id: "a" }]);
-    assert(calls.slice(at + 1).some(([name]) => name.endsWith("accounts")), "the card reloads");
+    const at = calls.findIndex(([name]) => name === "renew_now");
+    assert.deepEqual(calls[at], ["renew_now", { id: "a", pool: target }]);
+    assert(calls.slice(at + 1).some(([name]) => name === "accounts"), "the card reloads");
+    assert(onlyTo(calls, target));
     assert.equal(model.refreshing, false);
   });
 }
@@ -117,9 +113,10 @@ test("saying hi goes to the Claude pool, locks the card's refresh without spinni
   assert.equal(await model.sayHi("a"), true);
   assert.deepEqual(locked, [true, false]);
   assert.equal(model.sayingHiIds.has("a"), false);
-  const at = calls.findIndex(([name]) => name === "claude_say_hi");
-  assert.deepEqual(calls[at], ["claude_say_hi", { id: "a" }]);
-  assert(calls.slice(at + 1).some(([name]) => name === "claude_accounts"), "the cards reload");
+  const at = calls.findIndex(([name]) => name === "say_hi");
+  assert.deepEqual(calls[at], ["say_hi", { id: "a", pool: "claude" }]);
+  assert(calls.slice(at + 1).some(([name]) => name === "accounts"), "the cards reload");
+  assert(onlyTo(calls, "claude"));
   const locales = fs.readFileSync(path.join(__dirname, "../ui/locales.js"), "utf8");
   for (const key of [
     "accounts.card.say_hi",
@@ -210,7 +207,7 @@ test("Codex Plus greetings route to their own account command", async () => {
   const { model, calls } = fixture("codex");
   assert.equal(await model.sayHi("a"), true);
   assert(calls.some(([name, args]) => name === "say_hi" && args.id === "a"));
-  assert(!calls.some(([name]) => name === "claude_say_hi"));
+  assert(onlyTo(calls, "codex"));
 });
 
 test("Codex greetings are limited to idle official Plus cards", () => {

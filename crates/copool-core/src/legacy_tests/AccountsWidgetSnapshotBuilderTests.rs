@@ -1,3 +1,4 @@
+use crate::Pool;
 use crate::{models::AccountSummary, widgets::*};
 fn account(id: &str, current: bool, email: &str, hour: f64, week: f64) -> AccountSummary {
     let mut a = super::account(id, week, hour, current);

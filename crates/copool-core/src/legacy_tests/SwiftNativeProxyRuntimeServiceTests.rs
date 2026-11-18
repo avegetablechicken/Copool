@@ -1,4 +1,5 @@
 use super::{fixture, http_fixture::serve, save_fixture, stored};
+use crate::Pool;
 use crate::{
     proxy_integration, proxy_service as proxy, settings::Provider, ApiProxyStatus, Application,
 };
@@ -84,7 +85,7 @@ async fn testLoadCandidatesIncludesSub2APIProviderFromProfileConfig() {
     assert_eq!(c.auth_json["copoolProvider"]["apiKey"], "provider-api-key");
 }
 async fn start(app: &Application, upstream: Option<&str>) -> ApiProxyStatus {
-    let mut storage = app.storage();
+    let mut storage = app.proxy_storage(Pool::Codex);
     // Only an explicit upstream replaces the one resolved for this app: clearing
     // it would send the usage refresh to whatever `~/.codex/config.toml` names.
     if let Some(upstream) = upstream {
@@ -120,7 +121,7 @@ async fn testModelProviderCandidateUsesProviderResponsesEndpointWithoutChatGPTAc
     })
     .await;
     setup_provider(&app, "my", &format!("{}/v1", server.base), false);
-    let mut storage = app.storage();
+    let mut storage = app.proxy_storage(Pool::Codex);
     let paths = app.paths.clone();
     storage.provider_candidates = Some(Arc::new(move || {
         proxy_integration::candidates_with_keys(&paths, |_| Some("provider-api-key".into()))
@@ -136,7 +137,7 @@ async fn testModelProviderCandidateUsesProviderResponsesEndpointWithoutChatGPTAc
     assert_eq!(records[0].1["authorization"], "Bearer provider-api-key");
     assert!(!records[0].1.contains_key("chatgpt-account-id"));
     drop(records);
-    app.stop_proxy().await.unwrap();
+    app.stop_proxy(Pool::Codex).await.unwrap();
 }
 #[tokio::test]
 async fn testRecordSuccessfulProviderCandidateUsesProviderSwitchHandler() {
@@ -148,7 +149,7 @@ async fn testRecordSuccessfulProviderCandidateUsesProviderSwitchHandler() {
         counter.fetch_add(1, Ordering::SeqCst);
     }));
     let auth = json!({"copoolProvider":{"id":"my"}});
-    app.storage().on_selected.unwrap()("sub2api-provider:my".into(), auth.clone())
+    app.proxy_storage(Pool::Codex).on_selected.unwrap()("sub2api-provider:my".into(), auth.clone())
         .await
         .unwrap();
     assert_eq!(
@@ -167,11 +168,11 @@ async fn testRecordSuccessfulCandidateCallsStoreChangeHandler() {
     app.on_change(Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
     }));
-    app.storage().on_selected.unwrap()("a".into(), super::auth("a", "a"))
+    app.proxy_storage(Pool::Codex).on_selected.unwrap()("a".into(), super::auth("a", "a"))
         .await
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(app.accounts().await.unwrap()[0].is_current, true);
+    assert_eq!(app.accounts(Pool::Codex).await.unwrap()[0].is_current, true);
 }
 #[tokio::test]
 async fn testRecordSuccessfulCandidateUsesSuccessfulCandidateAsCurrentSelection() {
@@ -180,7 +181,7 @@ async fn testRecordSuccessfulCandidateUsesSuccessfulCandidateAsCurrentSelection(
         &app,
         json!({"accounts":[stored("a","a","a"),stored("b","b","b")],"currentAccountId":"a"}),
     );
-    app.storage().on_selected.unwrap()("b".into(), super::auth("b", "b"))
+    app.proxy_storage(Pool::Codex).on_selected.unwrap()("b".into(), super::auth("b", "b"))
         .await
         .unwrap();
     let store = crate::repository::load_accounts(&app.paths.store()).unwrap();
@@ -214,14 +215,14 @@ async fn testHostAPIOnlyRecordsActiveCandidateWithoutSwitchingSelection() {
     let server = serve(|_| (axum::http::StatusCode::OK, complete())).await;
     let status = start(&app, Some(&server.base)).await;
     assert_eq!(request(&status).await.status(), 200);
-    let state = app.proxy_status().await.unwrap();
+    let state = app.proxy_status(Pool::Codex).await.unwrap();
     assert_eq!(state.active_account_id.as_deref(), Some("a"));
     assert!(!app.paths.codex_auth.exists());
     assert!(crate::repository::load_accounts(&app.paths.store())
         .unwrap()
         .current_selection
         .is_none());
-    app.stop_proxy().await.unwrap();
+    app.stop_proxy(Pool::Codex).await.unwrap();
 }
 #[tokio::test]
 async fn testRepeatedSuccessForCurrentAccountDoesNotResyncSelection() {
@@ -232,7 +233,7 @@ async fn testRepeatedSuccessForCurrentAccountDoesNotResyncSelection() {
     app.on_change(Arc::new(move || {
         count.fetch_add(1, Ordering::SeqCst);
     }));
-    let storage = app.storage();
+    let storage = app.proxy_storage(Pool::Codex);
     let callback = storage.on_selected.unwrap();
     callback("a".into(), super::auth("a", "a")).await.unwrap();
     let before = std::fs::read(&app.paths.codex_auth).unwrap();
@@ -251,7 +252,7 @@ async fn testRepeatedSuccessForCurrentProviderDoesNotResyncProvider() {
         count.fetch_add(1, Ordering::SeqCst);
     }));
     for _ in 0..2 {
-        app.storage().on_selected.unwrap()(
+        app.proxy_storage(Pool::Codex).on_selected.unwrap()(
             "sub2api-provider:my".into(),
             json!({"copoolProvider":{"id":"my"}}),
         )
@@ -284,7 +285,7 @@ async fn testHealthAndModelsEndpoints() {
         .as_array()
         .unwrap()
         .is_empty());
-    app.stop_proxy().await.unwrap();
+    app.stop_proxy(Pool::Codex).await.unwrap();
 }
 #[tokio::test]
 async fn testStartKeepsLegacyPersistedAPIKey() {
@@ -293,10 +294,10 @@ async fn testStartKeepsLegacyPersistedAPIKey() {
     std::fs::write(app.paths.data_dir.join("api-proxy.key"), "sk-legacy-test\n").unwrap();
     let started = start(&app, None).await;
     assert_eq!(started.api_key.as_deref(), Some("sk-legacy-test"));
-    app.stop_proxy().await.unwrap();
+    app.stop_proxy(Pool::Codex).await.unwrap();
     let restarted = start(&app, None).await;
     assert_eq!(restarted.api_key.as_deref(), Some("sk-legacy-test"));
-    app.stop_proxy().await.unwrap();
+    app.stop_proxy(Pool::Codex).await.unwrap();
 }
 #[tokio::test]
 async fn testResponsesRejectsMissingModel() {
@@ -320,5 +321,5 @@ async fn testResponsesRejectsMissingModel() {
         .unwrap()
         .get("error")
         .is_some());
-    app.stop_proxy().await.unwrap();
+    app.stop_proxy(Pool::Codex).await.unwrap();
 }

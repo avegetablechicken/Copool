@@ -1,4 +1,5 @@
 use crate::widgets::*;
+use crate::Pool;
 #[test]
 fn testDisplayModeStorePersistsSharedMode() {
     let dir = tempfile::tempdir().unwrap();

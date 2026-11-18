@@ -2,6 +2,7 @@ use crate::{
     auth::{self, newer_login},
     models::*,
     persistence::write_json,
+    pool::Pool,
     proxy_service,
     state::AppState,
     store,
@@ -13,6 +14,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 type Result<T> = std::result::Result<T, String>;
+pub(crate) const SAY_HI_REQUIRES_PLUS: &str = "Say hi requires a ChatGPT Plus account";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +56,9 @@ pub struct Preferences {
     pub auto_switch: bool,
     pub auto_start_proxy: bool,
     pub proxy_port: u16,
+    /// The Claude pool's API proxy, independent of the Codex one.
+    pub claude_auto_start_proxy: bool,
+    pub claude_proxy_port: u16,
     pub locale: String,
     pub usage_display: String,
     pub launch_at_startup: bool,
@@ -85,6 +90,8 @@ impl Default for Preferences {
             auto_switch: false,
             auto_start_proxy: false,
             proxy_port: 8787,
+            claude_auto_start_proxy: false,
+            claude_proxy_port: 8788,
             locale: String::new(),
             usage_display: "used".into(),
             launch_at_startup: false,
@@ -144,6 +151,18 @@ impl Preferences {
                 .unwrap_or("8787")
                 .parse()
                 .map_err(|_| "Invalid proxy port")?,
+            claude_auto_start_proxy: settings
+                .extra
+                .get("claudeAutoStartProxy")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            claude_proxy_port: match settings.extra.get("claudeProxyPort") {
+                None => 8788,
+                Some(port) => port
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok())
+                    .ok_or("Invalid proxy port")?,
+            },
             locale: settings.locale,
             usage_display: settings.usage_progress_display_mode,
             launch_at_startup: settings.launch_at_startup,
@@ -192,13 +211,10 @@ pub struct Application {
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
     pub(crate) changes: Arc<std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
     pub(crate) claude: crate::claude::State,
-    /// The next background round; none before the first starts.
-    refresh_schedule: std::sync::Mutex<Option<crate::refresh_policy::Schedule>>,
-    claude_refresh_schedule: std::sync::Mutex<Option<crate::refresh_policy::Schedule>>,
-    claude_unchanged_rounds: std::sync::Mutex<u8>,
-    /// Each pool's wait for its next round, started over by a manual refresh.
-    round_deferred: tokio::sync::Notify,
-    claude_round_deferred: tokio::sync::Notify,
+    /// Each pool's background refresh rounds, by `Pool`.
+    pub(crate) rounds: [crate::pool::Rounds; 2],
+    /// Itself, once shared (`into_shared`).
+    this: std::sync::OnceLock<std::sync::Weak<Application>>,
 }
 pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
@@ -271,11 +287,8 @@ impl Application {
             refreshing: Default::default(),
             changes: Arc::new(std::sync::RwLock::new(None)),
             claude: Default::default(),
-            claude_refresh_schedule: Default::default(),
-            claude_unchanged_rounds: Default::default(),
-            refresh_schedule: Default::default(),
-            round_deferred: Default::default(),
-            claude_round_deferred: Default::default(),
+            rounds: Default::default(),
+            this: Default::default(),
         };
         app.migrate_provider_credentials()?;
         app.preferences()?;
@@ -348,7 +361,7 @@ impl Application {
             Ok(SwitchExecution::default())
         }
     }
-    pub(crate) fn storage(&self) -> proxy_service::ProxyStorageContext {
+    fn storage(&self) -> proxy_service::ProxyStorageContext {
         let mut storage = proxy_service::new_proxy_storage_context(
             self.paths.data_dir.clone(),
             self.state.store_lock.clone(),
@@ -463,6 +476,12 @@ impl Application {
         s.locale = p.locale.clone();
         s.usage_progress_display_mode = p.usage_display.clone();
         s.proxy_configuration["preferredPortText"] = p.proxy_port.to_string().into();
+        s.extra.insert(
+            "claudeAutoStartProxy".into(),
+            p.claude_auto_start_proxy.into(),
+        );
+        s.extra
+            .insert("claudeProxyPort".into(), p.claude_proxy_port.into());
         s.launch_at_startup = p.launch_at_startup;
         s.launch_codex_after_switch = p.launch_codex_after_switch;
         s.sync_opencode_openai_auth = p.sync_opencode_openai_auth;
@@ -503,7 +522,8 @@ impl Application {
             Err(e) => Err(e.to_string()),
         }
     }
-    pub async fn accounts(&self) -> Result<Vec<AccountSummary>> {
+    /// The Codex pool, following the login Codex uses in auth.json.
+    pub(crate) async fn codex_accounts(&self) -> Result<Vec<AccountSummary>> {
         let _lock = self.state.store_lock.lock().await;
         let mut store = store::load_store_from_path(&self.paths.store())?;
         let before = serde_json::to_value(&store).map_err(|e| e.to_string())?;
@@ -576,7 +596,7 @@ impl Application {
             .map(|a| {
                 let mut summary = a.to_summary(None);
                 summary.is_current = selected.as_ref().is_some_and(|id| *id == a.id);
-                summary.renewal = Some(a.renewal().into());
+                summary.renewal = Some(a.renewal().as_str().into());
                 // Codex renews the login it uses in auth.json; until a refresh
                 // adopts it, that token's expiry is the one in effect.
                 if let Some(live) = live.as_ref().filter(|l| newer_login(l, &a.auth_json)) {
@@ -592,20 +612,11 @@ impl Application {
                 a.is_current = false;
             }
         }
-        for p in self.configuration()?.sub2_api_provider.providers {
-            for raw in p.cached_accounts {
-                if let Ok(mut account) = serde_json::from_value::<crate::sub2api::Account>(raw) {
-                    account.provider_id = Some(p.provider_id.clone());
-                    let mut summary = account.summary();
-                    summary.proxy_url = p.proxy_url.clone();
-                    summary.is_current =
-                        !provider.is_official() && provider.id.eq_ignore_ascii_case(&p.provider_id);
-                    summaries.push(summary);
-                }
-            }
-        }
+        // Sub2api cards are current while Codex uses their provider.
+        let current = (!provider.is_official()).then_some(provider.id.as_str());
+        summaries.extend(self.provider_cards(Pool::Codex, current)?);
         crate::ranking::sort_for_display(&mut summaries);
-        if let Some(schedule) = self.refresh_schedule() {
+        if let Some(schedule) = self.schedule(Pool::Codex) {
             let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
             for card in &mut summaries {
                 // Sub2api cards refresh with their provider: every round while
@@ -622,37 +633,20 @@ impl Application {
         }
         Ok(summaries)
     }
-    pub async fn import_current(&self) -> Result<usize> {
-        self.import_current_as(None).await
-    }
-    pub async fn import_current_as(&self, label: Option<&str>) -> Result<usize> {
+    /// Imports the login Codex uses.
+    pub(crate) async fn codex_import_current(&self) -> Result<usize> {
         let value = self
             .current_auth()?
             .ok_or("Codex auth.json not found; log in with Codex first")?;
         let count = self
-            .import_json(&serde_json::to_string(&value).map_err(|e| e.to_string())?)
+            .codex_import_json(&serde_json::to_string(&value).map_err(|e| e.to_string())?)
             .await?;
-        if let Some(label) = label {
-            let identity = identity(&value)?;
-            let _op = self.operations.lock().await;
-            let _lock = self.state.store_lock.lock().await;
-            let mut saved = store::load_store_from_path(&self.paths.store())?;
-            if let Some(account) = saved.accounts.iter_mut().find(|a| {
-                crate::auth::account_identity(&a.auth_json).ok().as_ref() == Some(&identity)
-            }) {
-                account.label = label.to_owned();
-            }
-            self.persist_accounts(&saved)?;
-        }
         self.reconcile_workspace_names(true).await?;
         Ok(count)
     }
     /// Accept auth.json, arrays of auth documents, or a Swift/Rust accounts.json.
     /// Validate the complete batch before changing the destination; keep metadata.
-    pub async fn import_json(&self, content: &str) -> Result<usize> {
-        if content.len() > 16 * 1024 * 1024 {
-            return Err("Import exceeds 16 MiB".into());
-        }
+    pub(crate) async fn codex_import_json(&self, content: &str) -> Result<usize> {
         let value: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
         let entries: Vec<Value> = if let Some(accounts) = value.get("accounts") {
             accounts
@@ -772,54 +766,29 @@ impl Application {
         self.persist_accounts(&saved)?;
         Ok(count)
     }
-    pub async fn update_account(&self, id: &str, label: &str, proxy_url: &str) -> Result<()> {
-        if label.trim().is_empty() {
-            return Err("Account label is required".into());
-        }
-        validate_proxy(proxy_url)?;
+    /// Edits the stored accounts under the locks the store's writers hold.
+    pub(crate) async fn codex_edit_accounts(
+        &self,
+        edit: impl FnOnce(&mut [&mut dyn crate::pool::PoolAccount]) -> Result<bool>,
+    ) -> Result<()> {
         let _op = self.operations.lock().await;
         let _lock = self.state.store_lock.lock().await;
         let mut saved = store::load_store_from_path(&self.paths.store())?;
-        let account = saved
-            .accounts
-            .iter_mut()
-            .find(|a| a.id == id)
-            .ok_or("Account not found")?;
-        account.label = label.trim().to_string();
-        account.proxy_url = proxy_url.trim().to_string();
-        self.persist_accounts(&saved)
-    }
-    /// Sets whether Copool renews an account's tokens: "never", "once" (then
-    /// never) or "always".
-    pub async fn set_renewal(&self, id: &str, renewal: &str) -> Result<()> {
-        if !crate::models::RENEWALS.contains(&renewal) {
-            return Err(format!("Unknown token renewal: {renewal}"));
-        }
-        let _lock = self.state.store_lock.lock().await;
-        let mut saved = store::load_store_from_path(&self.paths.store())?;
-        let account = saved
-            .accounts
-            .iter_mut()
-            .find(|a| a.id == id)
-            .ok_or("Account not found")?;
-        account.extra.insert("renewal".into(), renewal.into());
-        self.persist_accounts(&saved)
-    }
-    pub async fn delete_account(&self, id: &str) -> Result<()> {
-        if let Some((provider, account)) = self.cached_provider_account(id)? {
-            let _op = self.operations.lock().await;
-            let mut settings = self.configuration()?;
-            let p = settings
-                .sub2_api_provider
-                .providers
+        let changed = {
+            let mut accounts: Vec<&mut dyn crate::pool::PoolAccount> = saved
+                .accounts
                 .iter_mut()
-                .find(|p| p.id == provider.id)
-                .ok_or("Provider not found")?;
-            p.imported_account_ids.retain(|v| *v != account.id);
-            p.cached_accounts
-                .retain(|v| v["id"].as_i64() != Some(account.id));
-            return self.persist_configuration(&settings);
+                .map(|a| a as &mut dyn crate::pool::PoolAccount)
+                .collect();
+            edit(&mut accounts)?
+        };
+        if changed {
+            self.persist_accounts(&saved)?;
         }
+        Ok(())
+    }
+    /// Removes an account; a deactivated workspace's stays listed as deleted.
+    pub(crate) async fn codex_delete_account(&self, id: &str) -> Result<()> {
         let _op = self.operations.lock().await;
         let _lock = self.state.store_lock.lock().await;
         let mut saved = store::load_store_from_path(&self.paths.store())?;
@@ -851,17 +820,19 @@ impl Application {
         saved.accounts.retain(|a| a.id != id);
         self.persist_accounts(&saved)
     }
-    pub async fn switch_account(&self, id: &str) -> Result<SwitchExecution> {
-        if let Some((provider, account)) = self.cached_provider_account(id)? {
+    /// Gives Codex this account's login, or a Sub2api card's provider.
+    pub(crate) async fn codex_switch_account(&self, id: &str) -> Result<SwitchExecution> {
+        if crate::sub2api::is_card(Pool::Codex, id) {
+            let (provider, account) = self.card(Pool::Codex, id)?;
             if !account.status.eq_ignore_ascii_case("active") {
                 return Err("Account is deactivated".into());
             }
             let _op = self.operations.lock().await;
-            crate::codex_config::switch(&self.codex_config_path(), &provider.provider_id)?;
+            crate::codex_config::switch(&self.codex_config_path(), &provider.key)?;
             self.publish();
             drop(_op);
             let mut execution = self.after_switch(None).await?;
-            execution.provider = Some(provider.provider_id);
+            execution.provider = Some(provider.key);
             return Ok(execution);
         }
         let _op = self.operations.lock().await;
@@ -909,128 +880,68 @@ impl Application {
         drop(_op);
         self.after_switch(Some(&normalized)).await
     }
-    /// As Swift's AccountsPageModel.smartSwitch: the account with the most
-    /// remaining quota, and no switch when that is already the current one.
-    pub async fn smart_switch(&self) -> Result<SmartSwitchOutcome> {
-        let accounts = self.accounts().await?;
-        // Swift's max(by:) keeps the first of equal scores, so a tie with the
-        // current account (listed first) is no reason to switch.
-        let best =
-            accounts
-                .iter()
-                .filter(|a| a.available)
-                .fold(None::<&AccountSummary>, |best, a| match best {
-                    Some(b) if score(a) <= score(b) => Some(b),
-                    _ => Some(a),
-                });
-        let Some(best) = best else {
-            return Ok(SmartSwitchOutcome::NoTarget);
-        };
-        if best.is_current {
-            return Ok(SmartSwitchOutcome::AlreadyBest);
-        }
-        let execution = self.switch_account(&best.id).await?;
-        Ok(SmartSwitchOutcome::Switched {
-            label: best.label.clone(),
-            execution,
-        })
+    /// Whether the stored account failed: its usage refused, or its token
+    /// expired.
+    pub(crate) async fn codex_login_failed(&self, id: &str) -> Result<bool> {
+        let _lock = self.state.store_lock.lock().await;
+        let saved = store::load_store_from_path(&self.paths.store())?;
+        let account = saved
+            .accounts
+            .iter()
+            .find(|a| a.id == id)
+            .ok_or("Account not found")?;
+        Ok(account.usage_error.is_some()
+            || auth::access_token_expiry(&account.auth_json)
+                .is_some_and(|at| at <= now_unix_seconds()))
     }
-    /// Send one small request with this card's login, without switching accounts.
-    pub async fn say_hi(&self, id: &str) -> Result<()> {
-        let _greeting = self.begin_greeting(false, id)?;
-        if self.cached_provider_account(id)?.is_some() {
-            return Err("Say hi requires a ChatGPT Plus account".into());
-        }
-        let mut renewed = false;
-        loop {
-            let account = {
-                let _lock = self.state.store_lock.lock().await;
-                store::load_store_from_path(&self.paths.store())?
-                    .accounts
-                    .into_iter()
-                    .find(|a| a.id == id)
-                    .ok_or("Account not found")?
-            };
-            let plan = account
-                .usage
-                .as_ref()
-                .and_then(|u| u.plan_type.as_deref())
-                .filter(|p| !p.trim().is_empty())
-                .or(account.plan_type.as_deref())
-                .unwrap_or_default();
-            if !plan.trim().eq_ignore_ascii_case("plus") {
-                return Err("Say hi requires a ChatGPT Plus account".into());
-            }
-            let live = self
-                .current_auth()
-                .ok()
-                .flatten()
-                .filter(|live| newer_login(live, &account.auth_json));
-            let auth = live.as_ref().unwrap_or(&account.auth_json);
-            let expired =
-                auth::access_token_expiry(auth).is_some_and(|at| at <= now_unix_seconds());
-            let result = if expired {
-                Err("Provided authentication token is expired".into())
-            } else {
-                let base = crate::usage::chatgpt_base_origin(
-                    crate::codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
-                );
-                proxy_service::say_hi(&base, auth, &self.account_proxy(&account.proxy_url)?).await
-            };
-            match result {
-                // Like Claude, renew only when authentication requires it.
-                // An explicit greeting never preflights or skips based on usage.
-                Err(error) if !renewed && crate::account_network::expired_error(&error) => {
-                    renewed = true;
-                    self.refresh_usage(id).await?;
-                }
-                result => return result,
-            }
-        }
-    }
-
-    pub async fn refresh_usage(&self, id: &str) -> Result<()> {
-        self.refresh_usage_if_needed(id, true).await
-    }
-    pub async fn refresh_usage_if_needed(&self, id: &str, force: bool) -> Result<()> {
-        self.refresh_account(id, force, None).await
-    }
-    /// Renews an account's tokens at once, whatever its renewal choice, which
-    /// stays as it was. Usage is not asked for, unless the account had
-    /// failed: its token expired or its usage refused; it then refreshes once
-    /// renewed, and a usage error shows on the card.
-    pub async fn renew_now(&self, id: &str) -> Result<()> {
-        if self.cached_provider_account(id)?.is_some() {
-            return Err("Token renewal is not available for this account".into());
-        }
-        let failed = {
+    /// One hi with this account's login, without switching to it.
+    pub(crate) async fn codex_hello(&self, id: &str) -> Result<crate::pool::Hello> {
+        let account = {
             let _lock = self.state.store_lock.lock().await;
-            let saved = store::load_store_from_path(&self.paths.store())?;
-            let account = saved
+            store::load_store_from_path(&self.paths.store())?
                 .accounts
-                .iter()
+                .into_iter()
                 .find(|a| a.id == id)
-                .ok_or("Account not found")?;
-            account.usage_error.is_some()
-                || auth::access_token_expiry(&account.auth_json)
-                    .is_some_and(|at| at <= now_unix_seconds())
+                .ok_or("Account not found")?
         };
-        self.release_new_accounts(Some(id)).await?;
-        let mut renewed = false;
-        let result = self.refresh_account(id, true, Some(&mut renewed)).await;
-        if !renewed {
-            result?;
-            return Err("The token was not renewed".into());
+        let plan = account
+            .usage
+            .as_ref()
+            .and_then(|u| u.plan_type.as_deref())
+            .filter(|p| !p.trim().is_empty())
+            .or(account.plan_type.as_deref())
+            .unwrap_or_default();
+        if !plan.trim().eq_ignore_ascii_case("plus") {
+            return Err(SAY_HI_REQUIRES_PLUS.into());
         }
-        if failed {
-            let _ = self.refresh_usage(id).await;
+        let live = self
+            .current_auth()
+            .ok()
+            .flatten()
+            .filter(|live| newer_login(live, &account.auth_json));
+        let auth = live.as_ref().unwrap_or(&account.auth_json);
+        let expired = auth::access_token_expiry(auth).is_some_and(|at| at <= now_unix_seconds());
+        let result = if expired {
+            Err("Provided authentication token is expired".into())
+        } else {
+            let base = crate::usage::chatgpt_base_origin(
+                crate::codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
+            );
+            proxy_service::say_hi(&base, auth, &self.account_proxy(&account.proxy_url)?).await
+        };
+        // An explicit greeting never preflights or skips based on usage.
+        match result {
+            Ok(()) => Ok(crate::pool::Hello::Said),
+            Err(error) if crate::account_network::expired_error(&error) => {
+                Ok(crate::pool::Hello::Expired(error))
+            }
+            Err(error) => Err(error),
         }
-        Ok(())
     }
     /// With `renew_now`, only the tokens are renewed, even when unexpired or
     /// renewal is off; usage is not asked for, nor shown as refreshing, and
     /// whether the store kept the renewal is reported.
-    async fn refresh_account(
+    pub(crate) async fn codex_refresh_account(
         &self,
         id: &str,
         force: bool,
@@ -1038,9 +949,6 @@ impl Application {
     ) -> Result<()> {
         let forced = renew_now.is_some();
         let _activity = (!forced).then(|| self.begin_refresh(id));
-        if let Some((provider, account)) = self.cached_provider_account(id)? {
-            return self.refresh_provider_card(&provider, account.id).await;
-        }
         // Read a snapshot, perform IO without locks, then merge into the latest store.
         // Proxy edits, manual switches and account removal must remain responsive.
         let account = {
@@ -1230,300 +1138,65 @@ impl Application {
         }
         result.map(|_| ()).map_err(|failure| failure.message)
     }
-    /// A manual refresh lets new accounts contact upstream: one account, or
-    /// all of them without an id.
-    pub async fn release_new_accounts(&self, id: Option<&str>) -> Result<()> {
-        let _lock = self.state.store_lock.lock().await;
-        let mut saved = store::load_store_from_path(&self.paths.store())?;
-        let mut changed = false;
-        for account in saved
-            .accounts
-            .iter_mut()
-            .filter(|a| id.is_none_or(|id| a.id == id))
-        {
-            changed |= account
-                .extra
-                .remove(crate::models::FIRST_REQUEST_PENDING)
-                .is_some();
-        }
-        if changed {
-            self.persist_accounts(&saved)?;
-        }
-        Ok(())
-    }
-    pub async fn refresh_accounts(&self, ids: Option<&[String]>, force: bool) -> Result<()> {
-        let accounts = self.accounts().await?;
-        let mut errors = vec![];
-        for a in accounts
-            .into_iter()
-            .filter(|a| ids.map_or(true, |ids| ids.contains(&a.id)))
-        {
-            if let Err(error) = self.refresh_usage_if_needed(&a.id, force).await {
-                errors.push(error);
-            }
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join(" | "))
+    /// The pool's API proxy, as the engine runs it for that pool.
+    pub(crate) fn proxy_storage(&self, pool: Pool) -> proxy_service::ProxyStorageContext {
+        match pool {
+            Pool::Codex => self.storage(),
+            Pool::Claude => self.claude_proxy_storage(),
         }
     }
-    pub async fn refresh_all(&self) -> Result<()> {
-        // Accounts refresh concurrently: one slow or unreachable endpoint must
-        // not hold back the rest of the pool.
-        let accounts = self.accounts().await?;
-        let refreshes = accounts
-            .iter()
-            .filter(|a| a.source_tag.as_deref() != Some("SUB2API"))
-            .map(|account| async move {
-                self.refresh_usage(&account.id)
-                    .await
-                    .map_err(|error| format!("{}: {error}", account.label))
-            });
-        let providers = self.configuration()?.sub2_api_provider.providers;
-        let provider_refreshes = providers.iter().map(|p| async move {
-            self.refresh_provider(&p.provider_id, false)
-                .await
-                .map(|_| ())
-                .map_err(|error| format!("{}: {error}", p.provider_id))
-        });
-        let (accounts, providers) = tokio::join!(
-            futures_util::future::join_all(refreshes),
-            futures_util::future::join_all(provider_refreshes)
-        );
-        let errors: Vec<String> = accounts
-            .into_iter()
-            .chain(providers)
-            .filter_map(Result::err)
-            .collect();
-        self.auto_switch_if_needed().await?;
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join("\n"))
+    fn proxy_slot(&self, pool: Pool) -> &Mutex<Option<crate::state::ApiProxyRuntimeHandle>> {
+        match pool {
+            Pool::Codex => &self.state.api_proxy,
+            Pool::Claude => &self.state.claude_api_proxy,
         }
     }
-    pub async fn auto_switch_if_needed(&self) -> Result<Option<String>> {
-        if !self.preferences()?.auto_switch {
-            return Ok(None);
-        }
-        let accounts = self.accounts().await?;
-        // A Sub2api provider's accounts, on its one card, are current together;
-        // any fresh one will do, as in the Claude pool.
-        if !accounts.iter().any(|a| {
-            a.is_current
-                && a.usage_error.is_none()
-                && a.usage
-                    .as_ref()
-                    .is_some_and(|u| (0..=900).contains(&(now_unix_seconds() - u.fetched_at)))
-        }) {
-            return Ok(None);
-        }
-        let candidates: Vec<_> = accounts
-            .into_iter()
-            .filter(|a| a.is_current || eligible(a))
-            .collect();
-        if let Some(target) = crate::ranking::auto_switch_target(&candidates) {
-            self.switch_account(&target.id).await?;
-            return Ok(Some(target.id.clone()));
-        }
-        Ok(None)
+    pub(crate) fn proxy_port(&self, pool: Pool) -> Result<u16> {
+        let preferences = self.preferences()?;
+        Ok(match pool {
+            Pool::Codex => preferences.proxy_port,
+            Pool::Claude => preferences.claude_proxy_port,
+        })
     }
-    pub async fn proxy_status(&self) -> Result<ApiProxyStatus> {
-        proxy_service::get_api_proxy_status_with_runtime(&self.storage(), &self.state.api_proxy)
-            .await
+    pub async fn proxy_status(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        proxy_service::get_api_proxy_status_with_runtime(
+            &self.proxy_storage(pool),
+            self.proxy_slot(pool),
+        )
+        .await
     }
-    pub async fn start_proxy(&self) -> Result<ApiProxyStatus> {
+    pub async fn start_proxy(&self, pool: Pool) -> Result<ApiProxyStatus> {
         let _op = self.proxy_operations.lock().await;
         proxy_service::start_api_proxy_with_runtime(
-            &self.storage(),
-            &self.state.api_proxy,
-            Some(self.preferences()?.proxy_port),
+            &self.proxy_storage(pool),
+            self.proxy_slot(pool),
+            Some(self.proxy_port(pool)?),
             "127.0.0.1",
         )
         .await
     }
-    pub async fn stop_proxy(&self) -> Result<ApiProxyStatus> {
+    pub async fn stop_proxy(&self, pool: Pool) -> Result<ApiProxyStatus> {
         let _op = self.proxy_operations.lock().await;
-        proxy_service::stop_api_proxy_with_runtime(&self.storage(), &self.state.api_proxy).await
-    }
-    pub async fn rotate_proxy_key(&self) -> Result<ApiProxyStatus> {
-        let _op = self.proxy_operations.lock().await;
-        proxy_service::refresh_api_proxy_key_with_runtime(&self.storage(), &self.state.api_proxy)
+        proxy_service::stop_api_proxy_with_runtime(&self.proxy_storage(pool), self.proxy_slot(pool))
             .await
     }
-    pub async fn refresh_recurring(&self, tick: u64) -> Result<()> {
-        let accounts = self.accounts().await?;
-        let ids = crate::refresh_policy::recurring_ids(tick, &accounts);
-        let refreshes = accounts
-            .iter()
-            .filter(|a| {
-                a.source_tag.as_deref() != Some("SUB2API")
-                    && ids.as_ref().is_none_or(|ids| ids.contains(&a.id))
-            })
-            .map(|account| self.refresh_usage(&account.id));
-        // Sub2api providers: the one in use every round, all of them on a
-        // round that refreshes the whole pool.
-        let current = crate::codex_config::resolve_path(&self.codex_config_path());
-        let providers: Vec<String> = self
-            .configuration()?
-            .sub2_api_provider
-            .providers
-            .into_iter()
-            .map(|p| p.provider_id)
-            .filter(|id| ids.is_none() || id.eq_ignore_ascii_case(&current.id))
-            .collect();
-        let provider_refreshes = providers.iter().map(|id| async move {
-            self.refresh_provider(id, false)
-                .await
-                .map(|_| ())
-                .map_err(|error| format!("{id}: {error}"))
-        });
-        let (accounts, providers) = tokio::join!(
-            futures_util::future::join_all(refreshes),
-            futures_util::future::join_all(provider_refreshes)
-        );
-        let errors: Vec<String> = accounts
-            .into_iter()
-            .chain(providers)
-            .filter_map(Result::err)
-            .collect();
-        self.auto_switch_if_needed().await?;
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join(" | "))
-        }
+    pub async fn rotate_proxy_key(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        let _op = self.proxy_operations.lock().await;
+        proxy_service::refresh_api_proxy_key_with_runtime(
+            &self.proxy_storage(pool),
+            self.proxy_slot(pool),
+        )
+        .await
     }
-    pub async fn background(self: Arc<Self>) {
-        if self.preferences().is_ok_and(|p| p.auto_start_proxy) {
-            let _ = self.start_proxy().await;
-        }
-        // Independent loops keep a slow provider from delaying the other pool.
-        tokio::join!(
-            self.background_pool(false),
-            self.background_pool(true),
-            self.clone().background_greetings()
-        );
+    /// The application shared by its callers; the Claude proxy reaches the
+    /// pool through it while it runs.
+    pub fn into_shared(self) -> Arc<Self> {
+        let shared = Arc::new(self);
+        let _ = shared.this.set(Arc::downgrade(&shared));
+        shared
     }
-    async fn background_pool(&self, claude: bool) {
-        let mut tick = 0u64;
-        loop {
-            let mut wait = self.background_round(tick, claude).await;
-            let deferred = if claude {
-                &self.claude_round_deferred
-            } else {
-                &self.round_deferred
-            };
-            // Refreshing the whole pool starts the wait over.
-            while tokio::select! {
-                _ = tokio::time::sleep(wait) => false,
-                _ = deferred.notified() => true,
-            } {
-                wait = self.round_interval(claude);
-            }
-            tick = tick.wrapping_add(1);
-        }
-    }
-    fn round_interval(&self, claude: bool) -> std::time::Duration {
-        if claude {
-            self.claude_refresh_interval()
-        } else {
-            crate::refresh_policy::CODEX_REFRESH_INTERVAL
-        }
-    }
-    /// Refreshing the whole pool stands in for a background round: its next
-    /// round waits a whole interval from now. A round under way is left to
-    /// schedule the next itself.
-    pub fn defer_background_round(&self, claude: bool) {
-        let (schedule, deferred) = if claude {
-            (&self.claude_refresh_schedule, &self.claude_round_deferred)
-        } else {
-            (&self.refresh_schedule, &self.round_deferred)
-        };
-        let now = now_unix_seconds();
-        if let Some(next) = schedule.lock().unwrap().as_mut().filter(|s| s.at > now) {
-            next.at = now + next.interval;
-            // Kept until the loop waits, should it not wait yet.
-            deferred.notify_one();
-        }
-    }
-    pub(crate) async fn background_round(&self, tick: u64, claude: bool) -> std::time::Duration {
-        let interval = self.round_interval(claude);
-        let schedule = if claude {
-            &self.claude_refresh_schedule
-        } else {
-            &self.refresh_schedule
-        };
-        let set_schedule = |at, tick, interval: std::time::Duration| {
-            *schedule.lock().unwrap() = Some(crate::refresh_policy::Schedule {
-                at,
-                tick,
-                interval: interval.as_secs() as i64,
-            });
-        };
-        set_schedule(now_unix_seconds(), tick, interval);
-        let before = if claude {
-            crate::refresh_policy::usage_values(&self.claude_usage_cards().unwrap_or_default())
-        } else {
-            Default::default()
-        };
-        if claude {
-            if tick == 0 {
-                let _ = self.claude_authorize_at_startup().await;
-            }
-            let _ = self.claude_refresh_recurring(tick).await;
-        } else {
-            let _ = self.refresh_recurring(tick).await;
-        }
-        let interval = if claude {
-            let after =
-                crate::refresh_policy::usage_values(&self.claude_usage_cards().unwrap_or_default());
-            crate::refresh_policy::refresh_interval_for(
-                interval,
-                crate::refresh_policy::usage_changed(&before, &after),
-                &mut self.claude_unchanged_rounds.lock().unwrap(),
-            )
-        } else {
-            interval
-        };
-        set_schedule(
-            now_unix_seconds() + interval.as_secs() as i64,
-            tick.wrapping_add(1),
-            interval,
-        );
-        self.publish();
-        interval
-    }
-    pub(crate) fn claude_refresh_interval(&self) -> std::time::Duration {
-        self.claude_refresh_schedule()
-            .map(|s| std::time::Duration::from_secs(s.interval as u64))
-            .unwrap_or(crate::refresh_policy::CLAUDE_REFRESH_INTERVAL)
-    }
-    pub(crate) fn claude_refresh_schedule(&self) -> Option<crate::refresh_policy::Schedule> {
-        *self.claude_refresh_schedule.lock().unwrap()
-    }
-    pub fn claude_next_full_refresh_at(&self) -> Option<i64> {
-        self.claude_refresh_schedule()
-            .map(|s| s.next_refresh_at(true, 0))
-    }
-    #[cfg(test)]
-    pub(crate) fn set_claude_refresh_schedule(&self, schedule: crate::refresh_policy::Schedule) {
-        *self.claude_refresh_schedule.lock().unwrap() = Some(schedule);
-    }
-    pub(crate) fn refresh_schedule(&self) -> Option<crate::refresh_policy::Schedule> {
-        *self.refresh_schedule.lock().unwrap()
-    }
-    /// When the next background round that refreshes the whole pool starts
-    /// (Unix seconds), should the interval stay as it is; none before the
-    /// first round.
-    pub fn next_full_refresh_at(&self) -> Option<i64> {
-        self.refresh_schedule()
-            .map(|schedule| schedule.next_refresh_at(false, 0))
-    }
-    #[cfg(test)]
-    pub(crate) fn set_refresh_schedule(&self, schedule: crate::refresh_policy::Schedule) {
-        *self.refresh_schedule.lock().unwrap() = Some(schedule);
+    pub(crate) fn shared(&self) -> Option<Arc<Self>> {
+        self.this.get()?.upgrade()
     }
 }
 fn validate_preferences(p: &Preferences) -> Result<()> {
@@ -1538,7 +1211,7 @@ fn validate_preferences(p: &Preferences) -> Result<()> {
     {
         return Err("Unsupported locale".into());
     }
-    if p.proxy_port == 0 {
+    if p.proxy_port == 0 || p.claude_proxy_port == 0 {
         return Err("Proxy port must be 1–65535".into());
     }
     Ok(())
@@ -1551,17 +1224,13 @@ fn identity(document: &Value) -> Result<(String, String)> {
     auth::account_identity(document)
 }
 
-fn score(a: &AccountSummary) -> f64 {
-    crate::ranking::remaining_score(a)
-}
-fn exhausted(a: &AccountSummary) -> bool {
-    crate::ranking::exhausted(a)
-}
+/// Whether automatic switching may choose this card: available, fresh and
+/// with quota left.
 pub(crate) fn eligible(a: &AccountSummary) -> bool {
     a.available
         && a.usage_error.is_none()
-        && !exhausted(a)
-        && score(a) > 0.0
+        && !crate::ranking::exhausted(a)
+        && crate::ranking::remaining_score(a) > 0.0
         && a.usage
             .as_ref()
             .is_some_and(|u| (0..=900).contains(&(now_unix_seconds() - u.fetched_at)))
@@ -1621,8 +1290,8 @@ mod tests {
         app.import_authorized(document("alice"), None, &[])
             .await
             .unwrap();
-        let account = app.accounts().await.unwrap().remove(0);
-        app.update_account(&account.id, &account.label, "socks5://127.0.0.1:7891")
+        let account = app.accounts(Pool::Codex).await.unwrap().remove(0);
+        app.save_account_proxy(Pool::Codex, &account.id, "socks5://127.0.0.1:7891")
             .await
             .unwrap();
         let mut preferences = app.preferences().unwrap();
@@ -1636,7 +1305,7 @@ mod tests {
         preferences.account_proxy_url = "ftp://127.0.0.1:7890".into();
         assert!(app.save_preferences(preferences).await.is_err());
         network.calls.lock().unwrap().clear();
-        app.refresh_usage(&account.id).await.unwrap();
+        app.refresh_usage(Pool::Codex, &account.id).await.unwrap();
         assert_eq!(
             network.calls.lock().unwrap()[0].2,
             "socks5://127.0.0.1:7891"
@@ -1655,7 +1324,7 @@ mod tests {
             .unwrap();
         assert_eq!(network.calls.lock().unwrap()[0].2, "");
         assert_eq!(
-            app.accounts()
+            app.accounts(Pool::Codex)
                 .await
                 .unwrap()
                 .iter()
@@ -1665,16 +1334,16 @@ mod tests {
             "socks5://127.0.0.1:7891"
         );
         let bob = app
-            .accounts()
+            .accounts(Pool::Codex)
             .await
             .unwrap()
             .into_iter()
             .find(|a| a.id != account.id)
             .unwrap();
         network.calls.lock().unwrap().clear();
-        app.refresh_usage(&bob.id).await.unwrap();
+        app.refresh_usage(Pool::Codex, &bob.id).await.unwrap();
         assert_eq!(network.calls.lock().unwrap()[0].2, "http://127.0.0.1:7890");
-        let storage = app.storage();
+        let storage = app.proxy_storage(Pool::Codex);
         assert_eq!(
             storage.account_proxy.as_ref().unwrap()().unwrap(),
             "http://127.0.0.1:7890"
@@ -1684,10 +1353,10 @@ mod tests {
         app.save_preferences(preferences).await.unwrap();
         assert_eq!(storage.account_proxy.as_ref().unwrap()().unwrap(), "");
         network.calls.lock().unwrap().clear();
-        app.refresh_usage(&bob.id).await.unwrap();
+        app.refresh_usage(Pool::Codex, &bob.id).await.unwrap();
         assert_eq!(network.calls.lock().unwrap()[0].2, "");
         network.calls.lock().unwrap().clear();
-        app.refresh_usage(&account.id).await.unwrap();
+        app.refresh_usage(Pool::Codex, &account.id).await.unwrap();
         assert_eq!(
             network.calls.lock().unwrap()[0].2,
             "socks5://127.0.0.1:7891"
@@ -1704,10 +1373,12 @@ mod tests {
         let mut login = document("alice");
         login["tokens"]["access_token"] = token(1_800_000_000).into();
         login["last_refresh"] = "2026-10-02T10:29:58Z".into();
-        app.import_json(&login.to_string()).await.unwrap();
-        let id = app.accounts().await.unwrap()[0].id.clone();
-        app.switch_account(&id).await.unwrap();
-        let expiry = || async { app.accounts().await.unwrap()[0].token_expires_at };
+        app.import_json(Pool::Codex, &login.to_string())
+            .await
+            .unwrap();
+        let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
+        app.switch_account(Pool::Codex, &id).await.unwrap();
+        let expiry = || async { app.accounts(Pool::Codex).await.unwrap()[0].token_expires_at };
         assert_eq!(expiry().await, Some(1_800_000_000));
 
         let mut live = login.clone();
@@ -1731,9 +1402,11 @@ mod tests {
         let mut login = document("alice");
         login["tokens"]["refresh_token"] = "stored-test-only".into();
         login["last_refresh"] = "2026-10-02T10:29:58.182Z".into();
-        app.import_json(&login.to_string()).await.unwrap();
-        let id = app.accounts().await.unwrap()[0].id.clone();
-        app.switch_account(&id).await.unwrap();
+        app.import_json(Pool::Codex, &login.to_string())
+            .await
+            .unwrap();
+        let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
+        app.switch_account(Pool::Codex, &id).await.unwrap();
         let stored_token = || {
             let store = store::load_store_from_path(&app.paths.store()).unwrap();
             store.accounts[0].auth_json["tokens"]["refresh_token"].clone()
@@ -1746,23 +1419,23 @@ mod tests {
         };
         // An older login in auth.json does not replace the stored one.
         live("older-test-only", "2000-01-01T00:00:00Z");
-        app.refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Codex, &id).await.unwrap();
         assert_eq!(stored_token(), "stored-test-only");
         // A rotation is adopted, and kept even when the request fails.
         live("rotated-test-only", "2099-01-01T00:00:00.5+00:00");
         *network.usage_error.lock().unwrap() = Some("offline".into());
-        assert!(app.refresh_usage(&id).await.is_err());
+        assert!(app.refresh_usage(Pool::Codex, &id).await.is_err());
         assert_eq!(stored_token(), "rotated-test-only");
         *network.usage_error.lock().unwrap() = None;
         live("next-test-only", "2099-01-02T00:00:00Z");
-        app.refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Codex, &id).await.unwrap();
         assert_eq!(stored_token(), "next-test-only");
         // Another account's login is never taken.
         let mut other = document("bob");
         other["tokens"]["refresh_token"] = "bob-test-only".into();
         other["last_refresh"] = "2099-01-03T00:00:00Z".into();
         write_json(&app.paths.codex_auth, &other).unwrap();
-        app.refresh_usage(&id).await.unwrap();
+        app.refresh_usage(Pool::Codex, &id).await.unwrap();
         assert_eq!(stored_token(), "next-test-only");
     }
 
@@ -1773,24 +1446,40 @@ mod tests {
         app.import_authorized(document("alice"), None, &[])
             .await
             .unwrap();
-        app.import_json(&document("bob").to_string()).await.unwrap();
-        let accounts = app.accounts().await.unwrap();
+        app.import_json(Pool::Codex, &document("bob").to_string())
+            .await
+            .unwrap();
+        let accounts = app.accounts(Pool::Codex).await.unwrap();
         assert!(accounts.iter().all(|a| a.awaiting_first_request));
         // No import, background or workspace refresh, nor the proxy, uses them.
-        app.refresh_recurring(0).await.unwrap();
+        app.refresh_recurring(Pool::Codex, 0).await.unwrap();
         app.sync_workspace_directory().await.unwrap();
-        assert_eq!(app.proxy_status().await.unwrap().available_accounts, 0);
+        assert_eq!(
+            app.proxy_status(Pool::Codex)
+                .await
+                .unwrap()
+                .available_accounts,
+            0
+        );
         assert!(network.calls.lock().unwrap().is_empty());
         // A manual refresh releases one account.
         let alice = accounts
             .iter()
             .find(|a| a.email.as_deref() == Some("alice@example.com"))
             .unwrap();
-        app.release_new_accounts(Some(&alice.id)).await.unwrap();
-        app.refresh_usage(&alice.id).await.unwrap();
+        app.release_new_accounts(Pool::Codex, Some(&alice.id))
+            .await
+            .unwrap();
+        app.refresh_usage(Pool::Codex, &alice.id).await.unwrap();
         assert_eq!(network.calls.lock().unwrap().len(), 1);
-        assert_eq!(app.proxy_status().await.unwrap().available_accounts, 1);
-        let accounts = app.accounts().await.unwrap();
+        assert_eq!(
+            app.proxy_status(Pool::Codex)
+                .await
+                .unwrap()
+                .available_accounts,
+            1
+        );
+        let accounts = app.accounts(Pool::Codex).await.unwrap();
         let alice = accounts.iter().find(|a| a.id == alice.id).unwrap();
         assert!(!alice.awaiting_first_request && alice.usage.is_some());
         // Signing in again to an account still waiting does not contact upstream.
@@ -1803,14 +1492,15 @@ mod tests {
     async fn cards_show_when_the_background_refresh_asks_for_them_next() {
         let (_dir, app, _network) = crate::legacy_tests::network_fixture::waiting_fixture();
         app.import_json(
+            Pool::Codex,
             &json!([document("alice"), document("bob"), document("carol")]).to_string(),
         )
         .await
         .unwrap();
-        let accounts = app.accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Codex).await.unwrap();
         // Nothing is scheduled before the first background round.
         assert!(accounts.iter().all(|a| a.next_refresh_at.is_none()));
-        assert_eq!(app.next_full_refresh_at(), None);
+        assert_eq!(app.next_full_refresh_at(Pool::Codex), None);
         let id = |name: &str| {
             let email = format!("{name}@example.com");
             accounts
@@ -1821,15 +1511,20 @@ mod tests {
                 .clone()
         };
         for name in ["alice", "bob"] {
-            app.release_new_accounts(Some(&id(name))).await.unwrap();
+            app.release_new_accounts(Pool::Codex, Some(&id(name)))
+                .await
+                .unwrap();
         }
-        app.switch_account(&id("alice")).await.unwrap();
-        app.set_refresh_schedule(crate::refresh_policy::Schedule {
-            at: 1_000,
-            tick: 2,
-            interval: 300,
-        });
-        let accounts = app.accounts().await.unwrap();
+        app.switch_account(Pool::Codex, &id("alice")).await.unwrap();
+        app.set_schedule(
+            Pool::Codex,
+            crate::refresh_policy::Schedule {
+                at: 1_000,
+                tick: 2,
+                interval: 300,
+            },
+        );
+        let accounts = app.accounts(Pool::Codex).await.unwrap();
         let next = |name: &str| {
             accounts
                 .iter()
@@ -1843,27 +1538,34 @@ mod tests {
         assert_eq!(next("bob"), Some(2_200));
         assert_eq!(next("carol"), None);
         // The refresh of the whole pool keeps its own schedule.
-        assert_eq!(app.next_full_refresh_at(), Some(2_200));
+        assert_eq!(app.next_full_refresh_at(Pool::Codex), Some(2_200));
     }
     #[tokio::test]
     async fn shared_workspace_keeps_principals_distinct_and_switch_is_exact() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
-        app.import_json(&json!([document("alice"), document("bob")]).to_string())
+        app.import_json(
+            Pool::Codex,
+            &json!([document("alice"), document("bob")]).to_string(),
+        )
+        .await
+        .unwrap();
+        app.import_json(Pool::Codex, &document("alice").to_string())
             .await
             .unwrap();
-        app.import_json(&document("alice").to_string())
-            .await
-            .unwrap();
-        let accounts = app.accounts().await.unwrap();
+        let accounts = app.accounts(Pool::Codex).await.unwrap();
         assert_eq!(accounts.len(), 2);
-        app.switch_account(&accounts[0].id).await.unwrap();
-        let summaries = app.accounts().await.unwrap();
+        app.switch_account(Pool::Codex, &accounts[0].id)
+            .await
+            .unwrap();
+        let summaries = app.accounts(Pool::Codex).await.unwrap();
         assert_eq!(summaries.iter().filter(|a| a.is_current).count(), 1);
         let serialized = serde_json::to_string(&summaries).unwrap();
         assert!(!serialized.contains("test-only"));
         assert!(!serialized.contains("id_token"));
-        app.switch_account(&accounts[1].id).await.unwrap();
+        app.switch_account(Pool::Codex, &accounts[1].id)
+            .await
+            .unwrap();
         assert!(app.paths.data_dir.join("auth-before-switch.json").exists());
     }
     #[tokio::test]
@@ -1871,16 +1573,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
         assert_eq!(
-            app.smart_switch().await.unwrap(),
+            app.smart_switch(Pool::Codex).await.unwrap(),
             SmartSwitchOutcome::NoTarget
         );
-        app.import_json(&json!([document("alice"), document("bob")]).to_string())
+        app.import_json(
+            Pool::Codex,
+            &json!([document("alice"), document("bob")]).to_string(),
+        )
+        .await
+        .unwrap();
+        let accounts = app.accounts(Pool::Codex).await.unwrap();
+        app.switch_account(Pool::Codex, &accounts[1].id)
             .await
             .unwrap();
-        let accounts = app.accounts().await.unwrap();
-        app.switch_account(&accounts[1].id).await.unwrap();
         assert_eq!(
-            app.smart_switch().await.unwrap(),
+            app.smart_switch(Pool::Codex).await.unwrap(),
             SmartSwitchOutcome::AlreadyBest
         );
     }
@@ -1888,26 +1595,41 @@ mod tests {
     async fn proxy_status_counts_the_routable_candidates() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
-        assert_eq!(app.proxy_status().await.unwrap().available_accounts, 0);
-        app.import_json(&json!([document("alice"), document("bob")]).to_string())
-            .await
-            .unwrap();
-        assert_eq!(app.proxy_status().await.unwrap().available_accounts, 2);
+        assert_eq!(
+            app.proxy_status(Pool::Codex)
+                .await
+                .unwrap()
+                .available_accounts,
+            0
+        );
+        app.import_json(
+            Pool::Codex,
+            &json!([document("alice"), document("bob")]).to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            app.proxy_status(Pool::Codex)
+                .await
+                .unwrap()
+                .available_accounts,
+            2
+        );
     }
     #[tokio::test]
     async fn invalid_batch_is_atomic_and_corruption_has_a_private_backup() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
-        app.import_json(&document("alice").to_string())
+        app.import_json(Pool::Codex, &document("alice").to_string())
             .await
             .unwrap();
         assert!(app
-            .import_json(&json!([document("bob"), {}]).to_string())
+            .import_json(Pool::Codex, &json!([document("bob"), {}]).to_string())
             .await
             .is_err());
-        assert_eq!(app.accounts().await.unwrap().len(), 1);
+        assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 1);
         fs::write(app.paths.store(), b"broken").unwrap();
-        assert!(app.accounts().await.unwrap().is_empty());
+        assert!(app.accounts(Pool::Codex).await.unwrap().is_empty());
         let backup = fs::read_dir(&app.paths.data_dir)
             .unwrap()
             .filter_map(|e| e.ok())
@@ -1924,7 +1646,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
         let entry = json!({"id":"old-id", "label":"Alice", "accountId":"shared-team", "authJson":document("alice"), "addedAt":1, "updatedAt":1, "workspaceName":"Research", "workspaceDirectory":[{"workspaceId":"x"}]});
-        app.import_json(&json!({"accounts":[entry]}).to_string())
+        app.import_json(Pool::Codex, &json!({"accounts":[entry]}).to_string())
             .await
             .unwrap();
         let saved: Value = serde_json::from_slice(&fs::read(app.paths.store()).unwrap()).unwrap();
@@ -2066,11 +1788,11 @@ mod tests {
     async fn proxy_authentication_rotation_and_stop() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
-        app.import_json(&document("alice").to_string())
+        app.import_json(Pool::Codex, &document("alice").to_string())
             .await
             .unwrap();
         let status = proxy_service::start_api_proxy_with_runtime(
-            &app.storage(),
+            &app.proxy_storage(Pool::Codex),
             &app.state.api_proxy,
             Some(0),
             "127.0.0.1",
@@ -2090,7 +1812,7 @@ mod tests {
                 .status(),
             200
         );
-        let rotated = app.rotate_proxy_key().await.unwrap();
+        let rotated = app.rotate_proxy_key(Pool::Codex).await.unwrap();
         assert_ne!(status.api_key, rotated.api_key);
         assert_eq!(
             client
@@ -2102,6 +1824,6 @@ mod tests {
                 .status(),
             401
         );
-        assert!(!app.stop_proxy().await.unwrap().running);
+        assert!(!app.stop_proxy(Pool::Codex).await.unwrap().running);
     }
 }

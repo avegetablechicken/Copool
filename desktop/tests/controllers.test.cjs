@@ -1,8 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { Settings } = require("../ui/controllers.js");
+const { Settings, Providers } = require("../ui/controllers.js");
 const legacy = (suite, name, fn) => test(`${suite}.${name}`, fn);
-const settings = (providers = []) => ({ sub2APIProvider: { providers } });
 const p = (id, extra = {}) => ({
   id,
   providerID: id,
@@ -29,27 +28,23 @@ legacy(
   "SettingsPageModelTests",
   "testBackgroundCacheUpdatePreservesEditedSub2APICredentials",
   () => {
-    const model = new Settings();
-    model.accept(
-      settings([
-        p("id", {
-          providerID: "one",
-          cachedAccounts: [{ id: 42 }],
-          importedAccountIDs: [42],
-        }),
-      ]),
-    );
+    const model = new Providers();
+    model.accept([
+      p("id", {
+        providerID: "one",
+        cachedAccounts: [{ id: 42 }],
+        importedAccountIDs: [42],
+      }),
+    ]);
     model.providers.get("id").username = "edited@example.test";
     model.providers.get("id").password = "unsaved-secret";
-    model.accept(
-      settings([
-        p("different-config-id", {
-          providerID: "one",
-          cachedAccounts: [{ id: 42, usage: { fetchedAt: 10 } }],
-          importedAccountIDs: [42],
-        }),
-      ]),
-    );
+    model.accept([
+      p("different-config-id", {
+        providerID: "one",
+        cachedAccounts: [{ id: 42, usage: { fetchedAt: 10 } }],
+        importedAccountIDs: [42],
+      }),
+    ]);
     assert.equal(model.providers.size, 1);
     const draft = model.providers.get("id");
     assert.equal(draft.username, "edited@example.test");
@@ -62,8 +57,8 @@ legacy(
   "testSettingsPageAcceptsProviderChangedByAccountCard",
   () => {
     const model = new Settings();
-    model.accept(settings(), "openai");
-    model.accept(settings(), "ShareCoder");
+    model.accept("openai");
+    model.accept("ShareCoder");
     assert.equal(model.currentProvider, "ShareCoder");
   },
 );
@@ -108,7 +103,8 @@ legacy(
   async () => {
     const persisted = [p("first"), p("second")];
     const removed = [];
-    const model = new Settings(async (command, args) => {
+    const model = new Providers(async (command, args) => {
+      assert.equal(args.pool, "codex");
       if (command === "save_provider") {
         const saved = structuredClone(args.value);
         if (
@@ -132,7 +128,7 @@ legacy(
       }
       throw Error(command);
     });
-    model.accept(settings(structuredClone(persisted)));
+    model.accept(structuredClone(persisted));
     model.providers.get("first").adminBaseURL = "https://admin.example.test";
     model.providers.get("second").username = "";
     model.providers.get("second").password = "unsaved-password";

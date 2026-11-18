@@ -1,6 +1,6 @@
 use copool_core::{
     widgets::{Snapshot, Widget},
-    AccountSummary, Application,
+    AccountSummary, Application, Pool,
 };
 use std::sync::Arc;
 
@@ -24,8 +24,8 @@ pub async fn publish(app: &Arc<Application>) -> Result<(), String> {
             .filter(|a| a.display_status == "list")
             .collect::<Vec<_>>()
     };
-    let codex = app.accounts().await.map(listed);
-    let claude = app.claude_accounts().await.map(listed);
+    let codex = app.accounts(Pool::Codex).await.map(listed);
+    let claude = app.accounts(Pool::Claude).await.map(listed);
     let preferences = app.preferences()?;
     let now = chrono::Local::now().timestamp();
     let mut errors = vec![];

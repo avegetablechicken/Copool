@@ -6,16 +6,10 @@ use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{oneshot, watch, Mutex};
 const CLIENT: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-/// Claude Code's public OAuth client, which Claude Code accepts as its own login.
-pub(crate) const CLAUDE_CLIENT: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-pub(crate) const CLAUDE_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-pub(crate) const CLAUDE_SCOPES: &str =
-    "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
-#[derive(Clone, Copy, PartialEq)]
-enum Flow {
-    Codex,
-    Claude,
-}
+use crate::claude_api::{
+    CLIENT as CLAUDE_CLIENT, SCOPES as CLAUDE_SCOPES, TOKEN_URL as CLAUDE_TOKEN_URL,
+};
+use crate::pool::Pool;
 fn nonce() -> String {
     URL_SAFE_NO_PAD.encode(
         [
@@ -35,7 +29,7 @@ pub struct Login {
     state: String,
     redirect: String,
     workspace: Option<String>,
-    flow: Flow,
+    pool: Pool,
 }
 impl Drop for Login {
     fn drop(&mut self) {
@@ -43,14 +37,23 @@ impl Drop for Login {
     }
 }
 impl Login {
-    pub fn is_claude(&self) -> bool {
-        self.flow == Flow::Claude
+    /// The pool the sign-in adds an account to.
+    pub fn pool(&self) -> Pool {
+        self.pool
     }
     pub fn workspace(&self) -> Option<&str> {
         self.workspace.as_deref()
     }
+    /// A browser sign-in to the pool's service; a Codex one may be pinned to
+    /// a workspace.
+    pub async fn begin(pool: Pool, workspace: Option<String>) -> Result<Arc<Self>, String> {
+        match pool {
+            Pool::Codex => Self::begin_codex(workspace).await,
+            Pool::Claude => Self::begin_claude().await,
+        }
+    }
     /// A Claude Code sign-in on claude.ai; Claude accepts any loopback port.
-    pub async fn begin_claude() -> Result<Arc<Self>, String> {
+    async fn begin_claude() -> Result<Arc<Self>, String> {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .map_err(|e| e.to_string())?;
@@ -80,10 +83,10 @@ impl Login {
             state,
             redirect,
             None,
-            Flow::Claude,
+            Pool::Claude,
         ))
     }
-    pub async fn begin(workspace: Option<String>) -> Result<Arc<Self>, String> {
+    async fn begin_codex(workspace: Option<String>) -> Result<Arc<Self>, String> {
         let mut listener = None;
         for port in 1455..=1467 {
             if let Ok(bound) =
@@ -129,7 +132,7 @@ impl Login {
             state,
             redirect,
             workspace,
-            Flow::Codex,
+            Pool::Codex,
         ))
     }
     #[allow(clippy::too_many_arguments)]
@@ -141,7 +144,7 @@ impl Login {
         state: String,
         redirect: String,
         workspace: Option<String>,
-        flow: Flow,
+        pool: Pool,
     ) -> Arc<Self> {
         let (sender, receiver) = oneshot::channel();
         let sender = Arc::new(Mutex::new(Some(sender)));
@@ -200,7 +203,7 @@ impl Login {
             state,
             redirect,
             workspace,
-            flow,
+            pool,
         })
     }
     pub async fn cancelled(&self) {
@@ -230,7 +233,7 @@ impl Login {
             let code = receiver
                 .await
                 .map_err(|_| "error.oauth.request_cancelled")??;
-            if self.flow == Flow::Claude {
+            if self.pool == Pool::Claude {
                 return self.exchange_claude(&code).await;
             }
             let response = crate::utils::with_account_proxy(reqwest::Client::builder(), "")?

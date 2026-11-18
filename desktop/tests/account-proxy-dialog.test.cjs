@@ -107,12 +107,17 @@ test("a blank card proxy is described as the shared account proxy when one is se
   assert.equal(help({}), "settings.sub2api.proxy_help");
 });
 test("Sub2api cards group by the provider in their id, even before the provider list knows them", () => {
-  const scope = {
-    pool: "claude",
-    // Read before card 2 was synced.
-    claudeProvidersSaved: [{ id: "srv", name: "myServer", cachedAccounts: [{ id: 1 }] }],
-    providerController: { persisted: [{ providerID: "Team-A", cachedAccounts: [] }] },
+  const { Providers } = require("../ui/controllers.js");
+  const providerControllers = {
+    claude: new Providers(null, "claude"),
+    codex: new Providers(null, "codex"),
   };
+  // Read before card 2 was synced.
+  providerControllers.claude.persisted = [
+    { id: "srv", name: "myServer", cachedAccounts: [{ id: 1 }] },
+  ];
+  providerControllers.codex.persisted = [{ id: "x", providerID: "Team-A", cachedAccounts: [] }];
+  const scope = { pool: "claude", providerControllers };
   vm.createContext(scope);
   vm.runInContext(source.slice(source.indexOf("function providerKey("),
     source.indexOf("function accountUsesExplicitProxy(")), scope);

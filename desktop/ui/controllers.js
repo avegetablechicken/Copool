@@ -9,45 +9,136 @@
   else root.CopoolControllers = api;
 })(globalThis, function (P) {
   const messageOf = (error) => error?.message || error?.code || String(error);
-  class Settings {
-    constructor(invoke, onUpdate = () => {}) {
+  /// The Sub2api provider forms of each pool: what they show and how their
+  /// cards name them. Everything else about them is the same.
+  const PROVIDER_FORMS = {
+    codex: {
+      // Cards name a Codex provider by its provider ID, in any case.
+      key: "providerID",
+      name: "providerID",
+      fields: [
+        ["providerID", "provider_id"],
+        ["adminBaseURL", "admin_base_url"],
+        ["username", "username"],
+        ["password", "password", "password"],
+      ],
+      secrets: ["password"],
+      blank: () => ({
+        providerID: "",
+        username: "",
+        password: "",
+        proxyURL: "",
+        adminBaseURL: "",
+        importedAccountIDs: [],
+        cachedAccounts: [],
+        allowInsecureTLS: false,
+      }),
+    },
+    claude: {
+      key: "id",
+      name: "name",
+      // Settings name a Claude Code settings file to search for, or its path.
+      fields: [
+        ["settings", "claude_settings"],
+        ["adminBaseURL", "admin_base_url"],
+        ["username", "username"],
+        ["password", "password", "password"],
+      ],
+      secrets: ["password", "apiKey"],
+      blank: () => ({
+        name: "",
+        settings: "",
+        adminBaseURL: "",
+        username: "",
+        password: "",
+        apiKey: "",
+        allowInsecureTLS: false,
+      }),
+    },
+  };
+  /// One pool's Sub2api providers: those saved, and the forms editing them.
+  class Providers {
+    constructor(invoke, pool = "codex", onUpdate = () => {}) {
       this.invoke = invoke;
+      this.pool = pool;
+      this.form = PROVIDER_FORMS[pool];
       this.onUpdate = onUpdate;
       this.providers = new Map();
       this.persisted = [];
-      this.currentProvider = "openai";
       this.notice = null;
       this.saving = false;
     }
-    accept(settings, currentProvider = this.currentProvider) {
-      this.currentProvider = currentProvider;
-      this.persisted = settings.sub2APIProvider.providers;
-      for (const saved of this.persisted) {
+    /// A form's draft of a saved provider, its secrets blank: a blank one
+    /// keeps the saved secret.
+    draft(saved) {
+      const draft = structuredClone(saved);
+      for (const key of this.form.secrets) draft[key] = "";
+      return draft;
+    }
+    /// The key naming a provider in its cards' ids.
+    key(provider) {
+      return provider?.[this.form.key] ?? "";
+    }
+    name(provider) {
+      return provider?.[this.form.name] || "";
+    }
+    /// The saved provider whose cards carry this key.
+    find(key) {
+      const wanted = String(key).trim().toLowerCase();
+      return (
+        this.persisted.find(
+          (p) => this.key(p).trim().toLowerCase() === wanted,
+        ) || null
+      );
+    }
+    isSaved(id) {
+      return this.persisted.some((p) => p.id === id);
+    }
+    /// Takes the saved providers. A form being edited keeps its edits,
+    /// taking only its provider's cards.
+    accept(persisted) {
+      this.persisted = persisted;
+      for (const saved of persisted) {
+        const name = this.name(saved).trim().toLowerCase();
         const draft = [...this.providers.values()].find(
           (p) =>
             p.id === saved.id ||
-            p.providerID.trim().toLowerCase() ===
-              saved.providerID.trim().toLowerCase(),
+            (name && this.name(p).trim().toLowerCase() === name),
         );
         if (draft) {
           for (const key of ["cachedAccounts", "importedAccountIDs"])
             draft[key] = structuredClone(saved[key] || []);
-        } else
-          this.providers.set(saved.id, {
-            ...structuredClone(saved),
-            password: "",
-          });
+        } else this.providers.set(saved.id, this.draft(saved));
       }
+    }
+    async load() {
+      this.accept(await this.invoke("providers", { pool: this.pool }));
+      return this.persisted;
+    }
+    /// A new, unsaved form; returns its id.
+    add() {
+      const id = crypto.randomUUID();
+      this.providers.set(id, { id, ...this.form.blank() });
+      return id;
+    }
+    /// Replaces a form, in its place, by its saved provider.
+    replace(id, saved) {
+      const entries = [...this.providers].map(([key, value]) =>
+        key === id ? [saved.id, this.draft(saved)] : [key, value],
+      );
+      this.providers.clear();
+      for (const [key, value] of entries) this.providers.set(key, value);
     }
     async save(id) {
       if (this.saving) return;
       this.saving = true;
       try {
         const saved = await this.invoke("save_provider", {
+          pool: this.pool,
           value: structuredClone(this.providers.get(id)),
         });
-        this.providers.set(id, { ...saved, password: "" });
-        const index = this.persisted.findIndex((p) => p.id === id);
+        this.replace(id, saved);
+        const index = this.persisted.findIndex((p) => p.id === saved.id);
         if (index >= 0) this.persisted[index] = saved;
         else this.persisted.push(saved);
         this.notice = "settings.notice.sub2api_saved";
@@ -64,8 +155,8 @@
       if (this.saving) return;
       this.saving = true;
       try {
-        if (this.persisted.some((p) => p.id === id))
-          await this.invoke("remove_provider", { id });
+        if (this.isSaved(id))
+          await this.invoke("remove_provider", { pool: this.pool, id });
         this.providers.delete(id);
         this.persisted = this.persisted.filter((p) => p.id !== id);
         this.notice = "settings.notice.sub2api_saved";
@@ -76,6 +167,18 @@
       } finally {
         this.saving = false;
       }
+    }
+  }
+  class Settings {
+    constructor(invoke, onUpdate = () => {}) {
+      this.invoke = invoke;
+      this.onUpdate = onUpdate;
+      this.currentProvider = "openai";
+      this.notice = null;
+    }
+    /// The Codex provider in use, as the account cards last changed it.
+    accept(currentProvider = this.currentProvider) {
+      this.currentProvider = currentProvider;
     }
     async savePreferences(current, patch) {
       const updated = { ...current, ...patch };
@@ -381,7 +484,7 @@
       await this.load();
       this.onMutation();
     }
-    /// Claude only: "never", "once" or "always".
+    /// "never", "once" or "always".
     async setRenewal(id, renewal) {
       await this.invoke("set_renewal", { id, renewal });
       await this.load();
@@ -454,14 +557,18 @@
       return this.invoke("cancel_login");
     }
   }
+  /// Each pool's API proxy: its own port and key, public tunnel and remote
+  /// servers. `options.pool` names the pool; the invoke names it to the app.
+  const DEFAULT_PROXY_PORTS = { codex: "8787", claude: "8788" };
   class Proxy {
     constructor(invoke, onUpdate = () => {}, options = {}) {
       this.invoke = invoke;
       this.onUpdate = onUpdate;
+      this.pool = options.pool || "codex";
       this.loading = false;
       this.proxyStatus = { running: false };
       this.tunnelStatus = { installed: false, running: false };
-      this.preferredPortText = "8787";
+      this.preferredPortText = DEFAULT_PROXY_PORTS[this.pool];
       this.tunnelConfiguration = {
         enabled: false,
         tunnelMode: "quick",
@@ -488,12 +595,26 @@
       this.identityPicker =
         options.identityPicker || (() => this.invoke("pick_identity_file"));
     }
+    /// The pool's part of the app's settings: its port and tunnel.
+    localConfiguration(settings) {
+      const proxy = settings.proxyConfiguration || {};
+      if (this.pool === "codex") return proxy;
+      return {
+        preferredPortText: String(settings.claudeProxyPort ?? DEFAULT_PROXY_PORTS.claude),
+        cloudflared: proxy.claudeCloudflared || {},
+      };
+    }
+    /// The remote servers of the pool.
+    ownServers(servers = []) {
+      return servers.filter((server) => (server.pool || "codex") === this.pool);
+    }
     applyLocal(proxy, configuration, tunnel) {
       const cf = configuration.cloudflared || {};
       return this.applySnapshot({
         syncedAt: Date.now(),
         proxyStatus: proxy,
-        preferredProxyPortText: configuration.preferredPortText || "8787",
+        preferredProxyPortText:
+          configuration.preferredPortText || DEFAULT_PROXY_PORTS[this.pool],
         cloudflaredStatus: tunnel || this.tunnelStatus,
         publicAccessEnabled: cf.enabled ?? this.tunnelConfiguration.enabled,
         cloudflaredTunnelMode:
@@ -535,7 +656,7 @@
       this.tunnelStatus = snapshot.cloudflaredStatus || this.tunnelStatus;
       this.preferredPortText =
         snapshot.preferredProxyPortText ||
-        String(snapshot.preferredProxyPort || 8787);
+        String(snapshot.preferredProxyPort || DEFAULT_PROXY_PORTS[this.pool]);
       const named = snapshot.cloudflaredNamedInput || {};
       Object.assign(this.tunnelConfiguration, {
         enabled: !!snapshot.publicAccessEnabled,
@@ -614,8 +735,8 @@
         this.invoke("configuration"),
         this.invoke("tunnel_action", { action: "status", value: null }),
       ]);
-      this.remoteServers = configuration.remoteServers;
-      this.applyLocal(proxy, configuration.proxyConfiguration, tunnel);
+      this.remoteServers = this.ownServers(configuration.remoteServers);
+      this.applyLocal(proxy, this.localConfiguration(configuration), tunnel);
       return proxy;
     }
     /// The Refresh button: the local status, under the proxy's loading state.
@@ -732,7 +853,7 @@
     }
     async saveRemote(server, previousId = null) {
       const saved = await this.invoke("save_remote", {
-        value: structuredClone(server),
+        value: { ...structuredClone(server), pool: this.pool },
         previousId,
       });
       this.remoteServers = this.remoteServers.filter(
@@ -861,5 +982,5 @@
       }
     }
   }
-  return { Settings, Accounts, Proxy };
+  return { Settings, Providers, Accounts, Proxy };
 });

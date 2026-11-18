@@ -8,6 +8,8 @@ mod repository;
 mod endpoint;
 #[path = "../../src/auth.rs"]
 mod auth;
+#[path = "../../src/claude_api.rs"]
+mod claude_api;
 #[path = "../../src/models.rs"]
 mod models;
 #[path = "../../src/proxy_daemon.rs"]

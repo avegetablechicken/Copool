@@ -1,11 +1,12 @@
 use super::{auth, fixture, save_fixture, stored};
+use crate::Pool;
 use serde_json::{json, Value};
 #[tokio::test]
 async fn testImportCurrentAuthKeepsDistinctPrincipalsForSameAccountID() {
     let (_dir, app) = fixture();
     for p in ["principal-1", "principal-2"] {
         crate::persistence::write_json(&app.paths.codex_auth, &auth(p, "shared-account")).unwrap();
-        app.import_current().await.unwrap();
+        app.import_current(Pool::Codex).await.unwrap();
     }
     let saved: Value =
         serde_json::from_slice(&std::fs::read(app.paths.data_dir.join("accounts.json")).unwrap())
@@ -37,7 +38,7 @@ async fn testListAccountsMarksOnlyCurrentMatchingVariant() {
     );
     crate::persistence::write_json(&app.paths.codex_auth, &auth("second", "shared-account"))
         .unwrap();
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts.iter().filter(|a| a.is_current).count(), 1);
     assert_eq!(
         accounts
@@ -56,7 +57,7 @@ async fn testListAccountsKeepsCurrentCardIDWhenSelectionIsStale() {
         &app,
         json!({"accounts":[stored("acct-1","first","account-1"),stored("acct-2","second","account-2")],"currentAccountId":"acct-1","currentSelection":{"cardId":"acct-2","selectedAt":2000,"sourceDeviceId":"macos-local"}}),
     );
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts.iter().filter(|a| a.is_current).count(), 1);
     assert_eq!(accounts.iter().find(|a| a.is_current).unwrap().id, "acct-1");
 }
@@ -68,7 +69,7 @@ async fn testListAccountsFollowsAuthChangedOutsideCopool() {
         json!({"accounts":[stored("acct-1","first","account-1"),stored("acct-2","second","account-2")],"currentAccountId":"acct-1","currentSelection":{"cardId":"acct-1","selectedAt":2000,"sourceDeviceId":"macos-local"}}),
     );
     crate::persistence::write_json(&app.paths.codex_auth, &auth("second", "account-2")).unwrap();
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts.iter().filter(|a| a.is_current).count(), 1);
     assert_eq!(accounts.iter().find(|a| a.is_current).unwrap().id, "acct-2");
     let saved: Value =
@@ -85,7 +86,7 @@ async fn testListAccountsMarksNoneCurrentForUnknownAuth() {
         json!({"accounts":[stored("acct-1","first","account-1")],"currentAccountId":"acct-1"}),
     );
     crate::persistence::write_json(&app.paths.codex_auth, &auth("other", "account-9")).unwrap();
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert!(accounts.iter().all(|a| !a.is_current));
 }
 #[tokio::test]
@@ -103,15 +104,15 @@ async fn testImportCurrentAuthPrefersExactPrincipalMatchOverLegacyWildcardRow() 
         &auth("principal-2", "shared-account"),
     )
     .unwrap();
-    app.import_current_as(Some("Updated Exact")).await.unwrap();
+    app.import_current(Pool::Codex).await.unwrap();
     let saved: Value =
         serde_json::from_slice(&std::fs::read(app.paths.data_dir.join("accounts.json")).unwrap())
             .unwrap();
     let accounts = saved["accounts"].as_array().unwrap();
     assert_eq!(accounts.len(), 2);
-    assert_eq!(
-        accounts.iter().find(|a| a["id"] == "exact").unwrap()["label"],
-        "Updated Exact"
-    );
+    // The import updated the exact principal's row, not the legacy one.
+    let updated = |id: &str| accounts.iter().find(|a| a["id"] == id).unwrap()["updatedAt"] != 1;
+    assert!(updated("exact"));
+    assert!(!updated("legacy"));
     assert!(accounts.iter().find(|a| a["id"] == "legacy").unwrap()["email"].is_null());
 }

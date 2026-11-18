@@ -218,7 +218,7 @@ pub(crate) struct CurrentAuthStatus {
     pub(crate) fingerprint: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ExtractedAuth {
     pub(crate) principal_id: Option<String>,
     pub(crate) team_name: Option<String>,
@@ -301,6 +301,9 @@ pub(crate) struct RemoteServerConfig {
     pub(crate) password: Option<String>,
     pub(crate) remote_dir: String,
     pub(crate) listen_port: u16,
+    /// The pool whose accounts the server's daemon serves.
+    #[serde(default)]
+    pub(crate) pool: Pool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -450,25 +453,94 @@ pub(crate) struct AppSettingsPatch {
     pub(crate) locale: Option<AppLocale>,
 }
 
-/// Whether Copool renews an account's tokens. Without a choice it always
-/// does; "once" turns into "never" after a renewal.
-pub(crate) const RENEWALS: [&str; 3] = ["never", "once", "always"];
+/// An account pool. Each has its own accounts and its own API proxy.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Pool {
+    #[default]
+    Codex,
+    Claude,
+}
+impl Pool {
+    #[allow(dead_code)]
+    pub const ALL: [Self; 2] = [Self::Codex, Self::Claude];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+        }
+    }
+    /// The path of a proxy's base URL, as its clients take it: OpenAI
+    /// clients name the `/v1` root, Claude Code (`ANTHROPIC_BASE_URL`) the
+    /// `/anthropic` one and adds `/v1/messages` itself.
+    pub fn base_path(self) -> &'static str {
+        match self {
+            Self::Codex => "/v1",
+            Self::Claude => "/anthropic",
+        }
+    }
+}
+/// Whether Copool renews an account's tokens, in either pool. Without a
+/// choice it always does; "once" turns into "never" after a renewal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Renewal {
+    Never,
+    /// Once, then never.
+    Once,
+    Always,
+}
+impl Renewal {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "never" => Ok(Self::Never),
+            "once" => Ok(Self::Once),
+            "always" => Ok(Self::Always),
+            _ => Err(format!("Unknown token renewal: {value}")),
+        }
+    }
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::Once => "once",
+            Self::Always => "always",
+        }
+    }
+    /// The choice in effect: without one, always.
+    pub(crate) fn of(choice: Option<Self>) -> Self {
+        choice.unwrap_or(Self::Always)
+    }
+    /// After a renewal: a single one allowed is used.
+    pub(crate) fn after_renewal(self) -> Self {
+        match self {
+            Self::Once => Self::Never,
+            other => other,
+        }
+    }
+}
 pub(crate) const RENEWAL_OFF: &str = "Token renewal is off for this account";
 impl StoredAccount {
-    pub(crate) fn renewal(&self) -> &'static str {
-        let chosen = self.extra.get("renewal").and_then(Value::as_str);
-        RENEWALS
-            .into_iter()
-            .find(|choice| Some(*choice) == chosen)
-            .unwrap_or("always")
+    pub(crate) fn renewal(&self) -> Renewal {
+        Renewal::of(
+            self.extra
+                .get("renewal")
+                .and_then(Value::as_str)
+                .and_then(|chosen| Renewal::parse(chosen).ok()),
+        )
+    }
+    pub(crate) fn set_renewal(&mut self, renewal: Renewal) {
+        self.extra.insert("renewal".into(), renewal.as_str().into());
     }
     pub(crate) fn renews(&self) -> bool {
-        self.renewal() != "never"
+        self.renewal() != Renewal::Never
     }
     /// After a renewal: a single one allowed is used.
     pub(crate) fn renewed(&mut self) {
-        if self.renewal() == "once" {
-            self.extra.insert("renewal".into(), "never".into());
+        let (before, after) = (self.renewal(), self.renewal().after_renewal());
+        if after != before {
+            self.set_renewal(after);
         }
     }
     /// Newly imported and not yet released by a manual refresh: no request

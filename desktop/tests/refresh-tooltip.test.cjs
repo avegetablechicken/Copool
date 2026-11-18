@@ -49,7 +49,7 @@ test("The toolbar follows the full refresh; a provider its first card due", () =
   );
   // The toolbar shows the background's own schedule, not the cards'.
   assert.match(body("renderToolbar"), /refreshTooltip\([\s\S]*\$\("refresh-all"\)[\s\S]*\(\) => fullRefreshAt/);
-  assert.match(body("refreshView"), /invoke\("next_full_refresh_at", \{ claude: pool === "claude" \}\)/);
+  assert.match(body("refreshView"), /invoke\("next_full_refresh_at", \{ pool \}\)/);
   assert.match(source, /refreshTooltip\(refresh, tr\("common\.refresh_usage"\), \(\) => account\.nextRefreshAt\)/);
   assert.match(body("providerControls"), /nextRefreshAt\(group\.accounts\)/);
 });
@@ -74,4 +74,34 @@ test("Refreshing a provider's only account refreshes the entire provider", () =>
     ["account", "official"],
     ["account", null],
   ]);
+});
+
+test("Cmd+1 and Cmd+2 switch the proxy page's pool there, and the accounts page's elsewhere", () => {
+  const app = fs
+    .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
+    .replace(/\r\n/g, "\n");
+  const start = app.indexOf('  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2"]');
+  const end = app.indexOf('  } else if (mod && event.key === ",") {', start);
+  assert(start >= 0 && end > start, "pool shortcut branch found");
+  for (const [page, key, expected] of [
+    ["proxy", "2", [["proxy", "claude"]]],
+    ["proxy", "1", [["proxy", "codex"]]],
+    ["accounts", "2", [["accounts", "claude"]]],
+    ["settings", "1", [["page", "accounts"], ["accounts", "codex"]]],
+  ]) {
+    const calls = [];
+    const scope = {
+      selectedPage: page,
+      showProxyPool: (target) => calls.push(["proxy", target]),
+      showPool: (target) => calls.push(["accounts", target]),
+      showPage: (target) => calls.push(["page", target]),
+    };
+    vm.createContext(scope);
+    vm.runInContext(
+      `function route(event, mod) { if (false) {\n${app.slice(start, end)}  } }`,
+      scope,
+    );
+    scope.route({ key, preventDefault() {} }, true);
+    assert.deepEqual(calls, expected, `${page} Cmd+${key}`);
+  }
 });

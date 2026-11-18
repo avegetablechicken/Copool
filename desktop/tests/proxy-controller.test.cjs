@@ -496,3 +496,45 @@ test("Saving a remote card locks only that card", async () => {
   assert.equal(model.activeActions["server-1"], undefined);
   assert.equal(model.notice.key, "settings.notice.remote_servers_saved");
 });
+
+test("each pool's proxy page shows its own proxy, tunnel and remote servers", async () => {
+  const calls = [];
+  const settings = {
+    claudeProxyPort: 9900,
+    proxyConfiguration: {
+      preferredPortText: "8787",
+      cloudflared: { enabled: true, tunnelMode: "quick" },
+      claudeCloudflared: { enabled: false, tunnelMode: "named", namedHostname: "claude.example.test" },
+    },
+    remoteServers: [
+      { id: "codex-server", label: "A" },
+      { id: "claude-server", label: "B", pool: "claude" },
+    ],
+  };
+  // As the app's poolInvoke: every command names the pool.
+  const invoke = (target) => async (command, args = {}) => {
+    calls.push([command, { ...args, pool: target }]);
+    if (command === "configuration") return settings;
+    if (command === "save_remote") return args.value;
+    return { running: false };
+  };
+  const claude = new Proxy(invoke("claude"), () => {}, { pool: "claude" });
+  const codex = new Proxy(invoke("codex"), () => {}, { pool: "codex" });
+  await claude.refresh();
+  await codex.refresh();
+  assert.deepEqual(claude.remoteServers.map((s) => s.id), ["claude-server"]);
+  assert.deepEqual(codex.remoteServers.map((s) => s.id), ["codex-server"]);
+  assert.equal(claude.preferredPortText, "9900");
+  assert.equal(codex.preferredPortText, "8787");
+  assert.equal(claude.tunnelConfiguration.namedHostname, "claude.example.test");
+  assert.equal(claude.tunnelConfiguration.enabled, false);
+  assert.equal(codex.tunnelConfiguration.enabled, true);
+  // A server added on the Claude page serves the Claude pool.
+  const saved = await claude.saveRemote({ id: "new", label: "new-server" });
+  assert.equal(saved.pool, "claude");
+  await claude.startProxy();
+  assert.deepEqual(
+    calls.find(([command]) => command === "start_proxy"),
+    ["start_proxy", { port: 9900, pool: "claude" }],
+  );
+});

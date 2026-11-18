@@ -1,5 +1,5 @@
 //! Persistent, per-account greetings. Timers belong to the service, not the webview.
-use crate::{persistence::write_json, AccountSummary, Application};
+use crate::{persistence::write_json, AccountSummary, Application, Pool};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
@@ -16,8 +16,8 @@ pub struct GreetingSchedule {
     last_times: BTreeMap<String, String>,
 }
 type Schedules = BTreeMap<String, GreetingSchedule>;
-fn key(claude: bool, id: &str) -> String {
-    format!("{}:{id}", if claude { "claude" } else { "codex" })
+fn key(pool: Pool, id: &str) -> String {
+    format!("{}:{id}", pool.name())
 }
 fn normalize_times(times: &mut Vec<String>) -> Result<()> {
     if times.len() > 48 {
@@ -38,10 +38,11 @@ fn normalize_times(times: &mut Vec<String>) -> Result<()> {
     times.dedup();
     Ok(())
 }
-fn eligible(account: &AccountSummary, claude: bool) -> bool {
+/// A card that may say hi: any Claude card; an official Codex Plus card.
+fn eligible(account: &AccountSummary, pool: Pool) -> bool {
     !account.awaiting_first_request
-        && (claude
-            || (account.source_tag.as_deref() != Some("SUB2API")
+        && (pool == Pool::Claude
+            || (!crate::sub2api::is_card(pool, &account.id)
                 && account
                     .usage
                     .as_ref()
@@ -95,8 +96,8 @@ impl Drop for GreetingGuard<'_> {
     }
 }
 impl Application {
-    pub(crate) fn begin_greeting(&self, claude: bool, id: &str) -> Result<GreetingGuard<'_>> {
-        let key = key(claude, id);
+    pub(crate) fn begin_greeting(&self, pool: Pool, id: &str) -> Result<GreetingGuard<'_>> {
+        let key = key(pool, id);
         if !self.greetings_inflight.lock().unwrap().insert(key.clone()) {
             return Err("A greeting is already in progress for this account".into());
         }
@@ -112,32 +113,28 @@ impl Application {
     fn save_greetings(&self, schedules: &Schedules) -> Result<()> {
         write_json(&self.paths.data_dir.join("greetings.json"), schedules)
     }
-    pub async fn greeting_schedule(&self, claude: bool, id: &str) -> Result<GreetingSchedule> {
+    pub async fn greeting_schedule(&self, pool: Pool, id: &str) -> Result<GreetingSchedule> {
         let _lock = self.operations.lock().await;
         Ok(self
             .load_greetings()?
-            .remove(&key(claude, id))
+            .remove(&key(pool, id))
             .unwrap_or_default())
     }
     pub async fn set_greeting_schedule(
         &self,
-        claude: bool,
+        pool: Pool,
         id: &str,
         auto: bool,
         mut times: Vec<String>,
     ) -> Result<()> {
         normalize_times(&mut times)?;
-        let accounts = if claude {
-            self.claude_accounts().await?
-        } else {
-            self.accounts().await?
-        };
-        if !accounts.iter().any(|a| a.id == id && eligible(a, claude)) {
+        let accounts = self.accounts(pool).await?;
+        if !accounts.iter().any(|a| a.id == id && eligible(a, pool)) {
             return Err("Account is not eligible for scheduled greetings; refresh it first".into());
         }
         let _lock = self.operations.lock().await;
         let mut all = self.load_greetings()?;
-        let schedule = all.entry(key(claude, id)).or_default();
+        let schedule = all.entry(key(pool, id)).or_default();
         schedule.auto = auto;
         schedule.times = times;
         self.save_greetings(&all)
@@ -157,18 +154,18 @@ impl Application {
                         let _lock = self.operations.lock().await;
                         self.load_greetings().unwrap_or_default()
                     };
-                    for claude in [false, true] {
-                        let prefix = if claude { "claude:" } else { "codex:" };
-                        if !enabled.iter().any(|(key, s)| key.starts_with(prefix) && (s.auto || !s.times.is_empty())) { continue; }
-                        let accounts = if claude { self.claude_accounts().await } else { self.accounts().await };
+                    for pool in Pool::ALL {
+                        let prefix = key(pool, "");
+                        if !enabled.iter().any(|(key, s)| key.starts_with(&prefix) && (s.auto || !s.times.is_empty())) { continue; }
+                        let accounts = self.accounts(pool).await;
                         let Ok(accounts) = accounts else { continue };
                         let now = Local::now();
                         let day = now.format("%Y-%m-%d").to_string();
                         let time = now.format("%H:%M").to_string();
                         let _lock = self.operations.lock().await;
                         let Ok(mut all) = self.load_greetings() else { continue };
-                        for account in accounts.iter().filter(|a| eligible(a, claude)) {
-                            let key = key(claude, &account.id);
+                        for account in accounts.iter().filter(|a| eligible(a, pool)) {
+                            let key = key(pool, &account.id);
                             if running.contains(&key) { continue; }
                             let Some(schedule) = all.get_mut(&key) else { continue };
                             let (auto, timed) = schedule.due(account, now.timestamp(), &day, &time);
@@ -182,7 +179,7 @@ impl Application {
                             let id = account.id.clone();
                             tasks.spawn(async move {
                                 let result = tokio::time::timeout(std::time::Duration::from_secs(120), async {
-                                    if claude { app.claude_say_hi(&id).await } else { app.say_hi(&id).await }
+                                    app.say_hi(pool, &id).await
                                 }).await.unwrap_or_else(|_| Err("Scheduled greeting timed out".into()));
                                 {
                                     let _lock = app.operations.lock().await;
@@ -199,8 +196,8 @@ impl Application {
                                     tokio::spawn(async move {
                                     for delay in [0, 10, 20, 60, 90] {
                                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                                        let _ = if claude { app.claude_refresh_usage(&id).await } else { app.refresh_usage(&id).await };
-                                        let cards = if claude { app.claude_accounts().await } else { app.accounts().await };
+                                        let _ = app.refresh_usage(pool, &id).await;
+                                        let cards = app.accounts(pool).await;
                                         if cards.is_ok_and(|cards| cards.iter().any(|a| a.id == id && a.usage.as_ref()
                                             .and_then(|u| u.five_hour.as_ref()).and_then(|w| w.reset_at)
                                             .is_some_and(|r| r > chrono::Utc::now().timestamp()))) { break; }
@@ -307,23 +304,23 @@ mod tests {
             }]}),
         )
         .unwrap();
-        app.set_greeting_schedule(false, "a", true, vec!["09:00".into(), "08:00".into()])
+        app.set_greeting_schedule(Pool::Codex, "a", true, vec!["09:00".into(), "08:00".into()])
             .await
             .unwrap();
-        let guard = app.begin_greeting(false, "a").unwrap();
-        assert!(app.begin_greeting(false, "a").is_err());
-        assert!(app.begin_greeting(true, "a").is_ok());
+        let guard = app.begin_greeting(Pool::Codex, "a").unwrap();
+        assert!(app.begin_greeting(Pool::Codex, "a").is_err());
+        assert!(app.begin_greeting(Pool::Claude, "a").is_ok());
         drop(guard);
-        assert!(app.begin_greeting(false, "a").is_ok());
+        assert!(app.begin_greeting(Pool::Codex, "a").is_ok());
         drop(app);
         let app = Application::open_with_secrets(paths, Arc::new(NoSecrets)).unwrap();
-        let schedule = app.greeting_schedule(false, "a").await.unwrap();
+        let schedule = app.greeting_schedule(Pool::Codex, "a").await.unwrap();
         assert!(schedule.auto);
         assert_eq!(schedule.times, ["08:00", "09:00"]);
-        assert!(!app.greeting_schedule(true, "a").await.unwrap().auto);
-        app.set_greeting_schedule(false, "a", false, vec![])
+        assert!(!app.greeting_schedule(Pool::Claude, "a").await.unwrap().auto);
+        app.set_greeting_schedule(Pool::Codex, "a", false, vec![])
             .await
             .unwrap();
-        assert!(!app.greeting_schedule(false, "a").await.unwrap().auto);
+        assert!(!app.greeting_schedule(Pool::Codex, "a").await.unwrap().auto);
     }
 }

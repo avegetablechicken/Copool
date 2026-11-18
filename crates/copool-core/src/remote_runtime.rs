@@ -2,7 +2,7 @@
 use crate::{
     application::Application,
     deployment,
-    models::{RemoteAuthMode, RemoteServerConfig},
+    models::{Pool, RemoteAuthMode, RemoteServerConfig},
     remote,
 };
 use serde_json::{json, Value};
@@ -130,12 +130,16 @@ async fn status(server: &RemoteServerConfig, unit: &str) -> Result<Value, String
         .await?,
     );
     Ok(
-        json!({"installed":raw["installed"]=="1","serviceInstalled":raw["service_installed"]=="1","running":raw["running"]=="1","enabled":raw["enabled"]=="1","pid":raw["pid"].as_str().and_then(|s|s.parse::<u32>().ok()),"apiKey":raw["api_key"].as_str().filter(|s|!s.is_empty()),"serviceName":unit,"baseURL":format!("http://{}:{}/v1",server.host,server.listen_port),"lastError":null}),
+        json!({"installed":raw["installed"]=="1","serviceInstalled":raw["service_installed"]=="1","running":raw["running"]=="1","enabled":raw["enabled"]=="1","pid":raw["pid"].as_str().and_then(|s|s.parse::<u32>().ok()),"apiKey":raw["api_key"].as_str().filter(|s|!s.is_empty()),"serviceName":unit,"baseURL":format!("http://{}:{}{}",server.host,server.listen_port,server.pool.base_path()),"lastError":null}),
     )
 }
 impl Application {
     /// Logins the remote daemon renewed replace the older local copies.
-    async fn adopt_remote_logins(&self, remote: &Value) -> Result<(), String> {
+    /// Takes the logins a server's daemon renewed since the last upload.
+    async fn adopt_remote_logins(&self, pool: Pool, remote: &Value) -> Result<(), String> {
+        if pool == Pool::Claude {
+            return self.claude_adopt_remote_logins(remote).await;
+        }
         let _lock = self.state.store_lock.lock().await;
         let mut store = crate::store::load_store_from_path(&self.paths.store())?;
         if remote::adopt_newer_logins(&mut store.accounts, remote) {
@@ -248,10 +252,26 @@ impl Application {
                     20,
                 )
                 .await?;
+                // Each instance's base URL, as its pool's proxy gives it.
                 Ok(Value::Array(
                     out.split("__COPool_DISCOVERY__")
                         .filter(|s| s.contains("service_name="))
-                        .map(parse)
+                        .map(|found| {
+                            let mut found = parse(found);
+                            let pool = if found["pool"] == "claude" {
+                                Pool::Claude
+                            } else {
+                                Pool::Codex
+                            };
+                            found["base_url"] = format!(
+                                "http://{}:{}{}",
+                                server.host,
+                                found["listen_port"].as_str().unwrap_or_default(),
+                                pool.base_path()
+                            )
+                            .into();
+                            found
+                        })
                         .collect(),
                 ))
             }
@@ -351,12 +371,16 @@ impl Application {
                         .await?;
                         let (checksum, remote_accounts) = remote::parse_snapshot(&snapshot);
                         if let Some(remote_accounts) = &remote_accounts {
-                            self.adopt_remote_logins(remote_accounts).await?;
+                            self.adopt_remote_logins(server.pool, remote_accounts)
+                                .await?;
                         }
-                        let payload = remote::accounts_payload(
-                            &self.paths.store(),
-                            remote_accounts.as_ref(),
-                        )?;
+                        let payload = match server.pool {
+                            Pool::Codex => remote::accounts_payload(
+                                &self.paths.store(),
+                                remote_accounts.as_ref(),
+                            )?,
+                            Pool::Claude => self.claude_remote_payload()?,
+                        };
                         ssh(
                             &server,
                             &format!("cat > {}", remote::quote(&format!("{stage}/accounts.json"))),

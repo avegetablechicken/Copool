@@ -1,7 +1,10 @@
+//! Sub2api providers, whose OAuth accounts join a pool as cards: one
+//! client for both pools, and what both do with their providers' cards.
 use crate::{
     codex_config::{self, Definition},
     credentials::SecretStore,
     models::{AccountSummary, UsageSnapshot},
+    pool::Pool,
     proxy_session,
     settings::{Provider, Providers},
     usage,
@@ -28,13 +31,6 @@ pub struct Account {
     pub provider_id: Option<String>,
 }
 impl Account {
-    pub fn card_id(&self) -> String {
-        format!(
-            "sub2api-{}-{}",
-            self.provider_id.as_deref().unwrap_or("unknown").trim(),
-            self.id
-        )
-    }
     pub fn display_email(&self) -> &str {
         self.email
             .as_deref()
@@ -52,7 +48,8 @@ impl Account {
             .find(|s| !s.is_empty())
             .map(str::to_owned)
     }
-    pub fn summary(&self) -> AccountSummary {
+    /// The account's card, by its id in the pool.
+    pub fn summary(&self, id: String) -> AccountSummary {
         AccountSummary {
             display_status: "list".into(),
             workspace_status: if self.status.eq_ignore_ascii_case("active") {
@@ -61,7 +58,7 @@ impl Account {
                 "deactivated"
             }
             .into(),
-            id: self.card_id(),
+            id,
             label: self.shown_email().unwrap_or_else(|| "--".into()),
             email: self.shown_email(),
             account_id: self
@@ -86,18 +83,150 @@ impl Account {
     }
 }
 /// The upstream platform whose OAuth accounts a pool shows.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Platform {
-    OpenAi,
-    Anthropic,
+fn platform(pool: Pool) -> &'static str {
+    match pool {
+        Pool::Codex => "openai",
+        Pool::Claude => "anthropic",
+    }
 }
-impl Platform {
-    fn name(self) -> &'static str {
-        match self {
-            Self::OpenAi => "openai",
-            Self::Anthropic => "anthropic",
+/// A card's id: its pool, provider and account.
+pub(crate) fn card_id(pool: Pool, provider: &str, account: i64) -> String {
+    format!("{}{}-{account}", card_prefix(pool), provider.trim())
+}
+fn card_prefix(pool: Pool) -> &'static str {
+    match pool {
+        Pool::Codex => "sub2api-",
+        Pool::Claude => "claude-sub2api-",
+    }
+}
+/// Whether a card of the pool is a Sub2api account's.
+pub(crate) fn is_card(pool: Pool, id: &str) -> bool {
+    id.starts_with(card_prefix(pool))
+}
+/// Where the keyring keeps a provider's administrator password.
+pub(crate) fn password_secret(pool: Pool, id: &str) -> String {
+    match pool {
+        Pool::Codex => id.to_owned(),
+        Pool::Claude => format!("claude-sub2api-password:{id}"),
+    }
+}
+/// A provider's accounts in a pool: those imported, as last fetched.
+#[derive(Clone, Debug)]
+pub(crate) struct Member {
+    /// The provider as its cards' ids name it.
+    pub(crate) key: String,
+    /// The provider as shown, and in its errors.
+    pub(crate) name: String,
+    /// The proxy of every request for the provider and its accounts.
+    pub(crate) proxy_url: String,
+    pub(crate) imported: Vec<i64>,
+    pub(crate) cached: Vec<Account>,
+}
+impl Member {
+    pub(crate) fn card_id(&self, pool: Pool, account: i64) -> String {
+        card_id(pool, &self.key, account)
+    }
+    /// The provider's cards; current while its pool uses the provider.
+    pub(crate) fn summaries(&self, pool: Pool, current: bool) -> Vec<AccountSummary> {
+        self.cached
+            .iter()
+            .map(|a| {
+                let mut summary = a.summary(self.card_id(pool, a.id));
+                summary.is_current = current;
+                summary.proxy_url = self.proxy_url.clone();
+                summary
+            })
+            .collect()
+    }
+    /// Takes a refresh's accounts: a sync's are the provider's accounts from
+    /// then on. A refresh adds those it discovers; when it answered for all
+    /// it asked about (`ids`, every one without), an account it no longer
+    /// lists leaves the Codex pool, and in the Claude pool says so instead
+    /// of its last error.
+    pub(crate) fn adopt(
+        &mut self,
+        pool: Pool,
+        fetched: Vec<Account>,
+        ids: Option<&[i64]>,
+        complete: bool,
+        sync: bool,
+    ) -> usize {
+        if sync {
+            self.imported = fetched.iter().map(|a| a.id).collect();
+            self.cached = fetched;
+            return self.cached.len();
+        }
+        // Respect a removal made while the request ran.
+        if self.imported.is_empty() {
+            return 0;
+        }
+        let missing = |a: &Account| {
+            complete
+                && ids.is_none_or(|ids| ids.contains(&a.id))
+                && !fetched.iter().any(|f| f.id == a.id)
+        };
+        match pool {
+            Pool::Codex => {
+                let gone: Vec<i64> = self
+                    .cached
+                    .iter()
+                    .filter(|a| missing(a))
+                    .map(|a| a.id)
+                    .collect();
+                self.cached.retain(|a| !gone.contains(&a.id));
+                self.imported.retain(|id| !gone.contains(id));
+            }
+            Pool::Claude => {
+                for cached in self.cached.iter_mut().filter(|a| missing(a)) {
+                    cached.status = "missing".into();
+                    cached.usage = None;
+                    cached.usage_error = Some("The account is no longer in Sub2api".into());
+                }
+            }
+        }
+        for account in fetched {
+            if !self.imported.contains(&account.id) {
+                self.imported.push(account.id);
+            }
+            match self.cached.iter_mut().find(|a| a.id == account.id) {
+                Some(cached) => *cached = account,
+                None => self.cached.push(account),
+            }
+        }
+        self.cached.len()
+    }
+}
+/// Checks a provider form: its name unique in the pool, its sign-in
+/// complete (a saved provider keeps its password), and its proxy and URLs.
+pub(crate) fn validate_form(
+    name: &str,
+    duplicate: bool,
+    username: &str,
+    password: &str,
+    saved: bool,
+    proxy: &str,
+    urls: &[&str],
+) -> Result<(), String> {
+    if duplicate {
+        return Err("error.sub2api.duplicate_provider".into());
+    }
+    if name.is_empty() || username.is_empty() || (password.is_empty() && !saved) {
+        return Err("error.sub2api.configuration_incomplete".into());
+    }
+    crate::utils::validate_account_proxy(proxy)?;
+    for url in urls.iter().filter(|url| !url.is_empty()) {
+        let url = reqwest::Url::parse(url).map_err(|_| "error.sub2api.invalid_base_url")?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("error.sub2api.invalid_base_url".into());
         }
     }
+    Ok(())
 }
 pub struct Connection {
     pub configuration: Provider,
@@ -190,38 +319,30 @@ impl Connection {
             },
         )
     }
+    /// The pool's OAuth accounts, with their usage.
     pub async fn fetch_accounts(
         &self,
-        ids: Option<&[i64]>,
-        now: i64,
-    ) -> Result<Vec<Account>, String> {
-        self.fetch_platform_accounts(Platform::OpenAi, ids, now)
-            .await
-    }
-    /// Active OAuth accounts of a platform, with their usage.
-    pub async fn fetch_platform_accounts(
-        &self,
-        platform: Platform,
+        pool: Pool,
         ids: Option<&[i64]>,
         now: i64,
     ) -> Result<Vec<Account>, String> {
         Ok(self
-            .fetch_platform_accounts_via(platform, ids, now)
+            .fetch_accounts_via(pool, ids, now)
             .await?
             .into_iter()
             .filter(|a| ids.is_none_or(|ids| ids.contains(&a.id)))
             .collect())
     }
     /// Logs in and lists the provider's accounts once, with their usage.
-    pub async fn refresh_platform_accounts(
+    pub async fn refresh_accounts(
         &self,
-        platform: Platform,
+        pool: Pool,
         ids: Option<&[i64]>,
         now: i64,
     ) -> Result<Refresh, String> {
         let mut accounts = std::collections::BTreeMap::new();
         let mut errors = vec![];
-        match self.fetch_platform_accounts_via(platform, ids, now).await {
+        match self.fetch_accounts_via(pool, ids, now).await {
             Ok(fetched) => {
                 for account in fetched {
                     if ids.is_none_or(|ids| ids.contains(&account.id)) {
@@ -301,9 +422,9 @@ impl Connection {
             .filter_map(|raw| serde_json::from_value::<Account>(raw.clone()).ok())
             .find(|a| a.id == id)
     }
-    async fn fetch_platform_accounts_via(
+    async fn fetch_accounts_via(
         &self,
-        platform: Platform,
+        pool: Pool,
         ids: Option<&[i64]>,
         now: i64,
     ) -> Result<Vec<Account>, String> {
@@ -312,7 +433,7 @@ impl Connection {
         // A Claude card Sub2api stopped serving, such as one whose token
         // expired, says why; the Codex pool drops it.
         let inactive_shown = |id: i64| {
-            platform == Platform::Anthropic
+            pool == Pool::Claude
                 && ids
                     .unwrap_or(&self.configuration.imported_account_ids)
                     .contains(&id)
@@ -323,13 +444,13 @@ impl Connection {
             let mut query = vec![
                 ("page", page.to_string()),
                 ("page_size", "200".into()),
-                ("platform", platform.name().into()),
+                ("platform", platform(pool).into()),
                 ("type", "oauth".into()),
                 ("lite", "1".into()),
                 ("sort_by", "name".into()),
                 ("sort_order", "asc".into()),
             ];
-            if platform != Platform::Anthropic
+            if pool != Pool::Claude
                 || (ids.is_none() && self.configuration.imported_account_ids.is_empty())
             {
                 query.push(("status", "active".into()));
@@ -368,7 +489,7 @@ impl Connection {
             if !item["parent_account_id"].is_null()
                 || !["platform", "type"]
                     .into_iter()
-                    .zip([platform.name(), "oauth"])
+                    .zip([platform(pool), "oauth"])
                     .all(|(key, value)| {
                         item[key]
                             .as_str()
@@ -425,9 +546,9 @@ impl Connection {
                 accounts.push(account);
                 continue;
             }
-            let quota_url = match platform {
-                Platform::OpenAi => format!("{}/admin/openai/accounts/{id}/quota", self.admin_base),
-                Platform::Anthropic => format!("{}/admin/accounts/{id}/usage", self.admin_base),
+            let quota_url = match pool {
+                Pool::Codex => format!("{}/admin/openai/accounts/{id}/quota", self.admin_base),
+                Pool::Claude => format!("{}/admin/accounts/{id}/usage", self.admin_base),
             };
             let quota = async {
                 let response = client
@@ -440,7 +561,7 @@ impl Connection {
             }
             .await;
             match quota {
-                Ok(value) if platform == Platform::Anthropic => {
+                Ok(value) if pool == Pool::Claude => {
                     match crate::claude::sub2api_usage(&value, now) {
                         Ok(usage) => {
                             account.plan_type = usage.plan_type.clone();

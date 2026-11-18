@@ -20,38 +20,29 @@ let nativeIcons = {};
 let iconFrame = 0;
 // The account pool on the accounts page: Codex or Claude Code.
 let pool = localStorage.getItem("copool.pool") === "claude" ? "claude" : "codex";
+// The pool whose API proxy the proxy page shows; each has its own.
+let proxyPool =
+  localStorage.getItem("copool.proxyPool") === "claude" ? "claude" : "codex";
+/// The preferences of each pool's proxy on the proxy page.
+const PROXY_PREFERENCES = {
+  codex: { port: "proxyPort", autoStart: "autoStartProxy" },
+  claude: { port: "claudeProxyPort", autoStart: "claudeAutoStartProxy" },
+};
 // Reset times as the date and time or as the time left, as OpenQuota toggles
 // them by clicking either.
 let resetDisplay =
   localStorage.getItem("copool.resetDisplay") === "countdown"
     ? "countdown"
     : "exact";
-const CLAUDE_COMMANDS = {
-  accounts: "claude_accounts",
-  import_current: "claude_import_current",
-  import_account_file: "claude_import_account_file",
-  delete_account: "claude_delete_account",
-  save_account_proxy: "claude_save_account_proxy",
-  set_renewal: "claude_set_renewal",
-  renew_now: "claude_renew_now",
-  refresh_usage: "claude_refresh_usage",
-  say_hi: "claude_say_hi",
-  refresh_provider: "claude_refresh_provider",
-  switch_account: "claude_switch_account",
-  smart_switch: "claude_smart_switch",
-  begin_login: "begin_claude_login",
-};
-function poolCommand(command, target = pool) {
-  return target === "claude" ? CLAUDE_COMMANDS[command] || command : command;
-}
-/// The commands of one pool. Claude has no workspaces or remote servers.
+/// The commands of one pool: every one names the pool it acts on. Claude
+/// has no workspaces or remote servers.
 function poolInvoke(target) {
   return (command, args = {}) => {
     if (target === "claude" && command === "workspace_directory")
       return Promise.resolve([]);
     if (target === "claude" && command === "cancel_workspace_refresh")
       return Promise.resolve(null);
-    return invoke(poolCommand(command, target), args);
+    return invoke(command, { ...args, pool: target });
   };
 }
 const ICONS = {
@@ -205,12 +196,19 @@ function translate() {
   document
     .querySelector("#top-sub .back")
     .setAttribute("aria-label", tr("tab.accounts"));
-  document.querySelectorAll(".pool-btn").forEach((button) => {
+  document.querySelectorAll("#pool-switch .pool-btn").forEach((button) => {
     button.title = withShortcut(
       tr(`pool.${button.dataset.pool}`),
       button.dataset.pool === "codex" ? "1" : "2",
     );
     button.setAttribute("aria-label", tr(`pool.${button.dataset.pool}`));
+  });
+  document.querySelectorAll("#proxy-pool-switch .pool-btn").forEach((button) => {
+    button.title = withShortcut(
+      tr(`pool.${button.dataset.proxyPool}`),
+      button.dataset.proxyPool === "codex" ? "1" : "2",
+    );
+    button.setAttribute("aria-label", tr(`pool.${button.dataset.proxyPool}`));
   });
   // features.js defines the controllers after this script's first translate().
   if (typeof accountsController !== "undefined") renderToolbar();
@@ -466,17 +464,11 @@ function providerKey(account) {
 /// The saved Sub2api provider a card belongs to, if any.
 function accountProvider(account) {
   const key = providerKey(account);
-  if (key === null) return null;
-  return pool === "claude"
-    ? claudeProvidersSaved.find((p) => p.id === key) || null
-    : providerController.persisted.find(
-        (p) => p.providerID.trim().toLowerCase() === key.toLowerCase(),
-      ) || null;
+  return key === null ? null : providerControllers[pool].find(key);
 }
 function providerTitle(account) {
-  const provider = accountProvider(account);
   return (
-    (pool === "claude" ? provider?.name : provider?.providerID) ||
+    providerControllers[pool].name(accountProvider(account)) ||
     providerKey(account) ||
     "Sub2api"
   );
@@ -754,7 +746,7 @@ async function showSayHiMenu(trigger, account) {
     return;
   }
   const targetPool = pool;
-  const args = { claude: targetPool === "claude", id: account.id };
+  const args = { pool: targetPool, id: account.id };
   const schedule = await invoke("greeting_schedule", args);
   if (pool !== targetPool || !trigger.isConnected) return;
   const save = async (auto, times) => {
@@ -1481,13 +1473,13 @@ function renderProxy() {
 }
 async function refreshView() {
   const controller = accountsController;
+  const proxies = proxyController;
   const [accounts, proxy, fullRefresh] = await Promise.all([
     controller.load(),
-    invoke("proxy_status"),
-    invoke("next_full_refresh_at", { claude: pool === "claude" }),
+    proxies.invoke("proxy_status"),
+    invoke("next_full_refresh_at", { pool }),
     refreshFeatureState(),
   ]);
-  proxyCache = proxy;
   // A pool switched during the load renders through its own refresh.
   if (controller === accountsController) {
     fullRefreshAt = fullRefresh;
@@ -1495,10 +1487,11 @@ async function refreshView() {
     renderAccounts(accounts);
     await renderPendingWorkspaces();
   }
-  proxyController.applyLocal(
+  // The proxy page switched pools meanwhile renders through its own refresh.
+  proxies.applyLocal(
     proxy,
-    configurationCache.proxyConfiguration,
-    proxyController.tunnelStatus,
+    proxies.localConfiguration(configurationCache),
+    proxies.tunnelStatus,
   );
   syncButtons();
 }
@@ -1523,14 +1516,14 @@ function renderPreferences() {
   $("restart-target").value = controls.restartPicker.selectedValue || "";
   // An edit still waiting to be saved is not overwritten.
   if (document.activeElement !== $("proxy-port"))
-    $("proxy-port").value = preferences.proxyPort;
+    $("proxy-port").value = preferences[PROXY_PREFERENCES[proxyPool].port];
 }
 let preferenceSave = Promise.resolve();
 /// Every save of the preferences runs in turn, each over the preferences the
 /// previous one stored: each writes all of them.
 function queuePreferenceSave(patch) {
   const save = preferenceSave.then(async () => {
-    preferences = await providerController.savePreferences(preferences, patch);
+    preferences = await settingsController.savePreferences(preferences, patch);
   });
   preferenceSave = save.catch(() => {});
   return save;
@@ -1552,7 +1545,6 @@ async function savePreference(patch) {
     translate();
     renderPreferences();
     renderProviders();
-    renderClaudeProviders();
     renderRemotes();
     renderTunnelControls();
   }, () => tr(updatedKey));
@@ -1641,6 +1633,8 @@ function showPage(page, animated = true) {
       .refresh()
       .then(() => proxyController.loadRemoteStatuses())
       .catch((error) => notice(error, true));
+  // The proxy page chooses its pool beside its title.
+  $("proxy-pool-switch").hidden = selectedPage !== "proxy";
   closeMenu();
   // Into a subpage the new page comes from the right; back, from the left.
   const direction = PAGES.indexOf(page) > PAGES.indexOf(previous) ? 1 : -1;
@@ -1732,7 +1726,7 @@ function slidePoolIn(direction) {
 function showPool(next) {
   if (next !== "codex" && next !== "claude") return;
   document
-    .querySelectorAll(".pool-btn")
+    .querySelectorAll("#pool-switch .pool-btn")
     .forEach((button) =>
       button.setAttribute("aria-selected", String(button.dataset.pool === next)),
     );
@@ -1753,8 +1747,53 @@ function showPool(next) {
   refreshView().catch((error) => notice(error, true));
 }
 document
-  .querySelectorAll(".pool-btn")
+  .querySelectorAll("#pool-switch .pool-btn")
   .forEach((button) => (button.onclick = () => showPool(button.dataset.pool)));
+/// The proxy page's pool switch: the header's pool icons, each copy with
+/// its own gradient, as `brandIcon` copies them.
+for (const original of document.querySelectorAll("#pool-switch .pool-btn")) {
+  const copy = original.cloneNode(true);
+  const target = copy.dataset.pool;
+  delete copy.dataset.pool;
+  copy.dataset.proxyPool = target;
+  for (const gradient of copy.querySelectorAll("[id]")) {
+    const id = `${gradient.id}-proxy`;
+    for (const node of copy.querySelectorAll(`[fill="url(#${gradient.id})"]`))
+      node.setAttribute("fill", `url(#${id})`);
+    gradient.id = id;
+  }
+  copy.onclick = () => showProxyPool(target);
+  $("proxy-pool-switch").append(copy);
+}
+/// Shows the Codex or the Claude pool's API proxy; each keeps its state.
+function showProxyPool(next) {
+  if (next !== "codex" && next !== "claude") return;
+  document
+    .querySelectorAll("#proxy-pool-switch .pool-btn")
+    .forEach((button) =>
+      button.setAttribute(
+        "aria-selected",
+        String(button.dataset.proxyPool === next),
+      ),
+    );
+  $("proxy-auto-start").dataset.preference = PROXY_PREFERENCES[next].autoStart;
+  if (next === proxyPool && proxyController === proxyControllers[next]) return;
+  proxyPool = next;
+  localStorage.setItem("copool.proxyPool", next);
+  closeMenu();
+  proxyController = proxyControllers[next];
+  tunnelConfiguration = proxyController.tunnelConfiguration;
+  proxyCache = proxyController.proxyStatus;
+  if (preferences) renderPreferences();
+  renderProxy();
+  renderRemotes();
+  renderTunnelControls();
+  syncButtons();
+  proxyController
+    .refresh()
+    .then(() => proxyController.loadRemoteStatuses())
+    .catch((error) => notice(error, true));
+}
 $("collapse-all").onclick = () => {
   collapsed = !collapsed;
   renderAccounts(accountsCache);
@@ -2175,27 +2214,6 @@ $("import-open").onclick = () => {
     closeMenu(true);
     return;
   }
-  if (pool === "claude") {
-    showMenu($("import-open"), [
-      {
-        label: tr("accounts.action.import_current_auth"),
-        run: () =>
-          importAccounts(
-            () => accountsController.importCurrent(),
-            "accounts.notice.imported_format",
-          ),
-      },
-      {
-        label: tr("accounts.action.import_auth_file"),
-        run: () => importAccountFile(),
-      },
-      {
-        label: tr("accounts.action.import_sub2api"),
-        children: providerSyncChoices("claude"),
-      },
-    ]);
-    return;
-  }
   showMenu($("import-open"), [
     {
       label: tr("accounts.action.import_current_auth"),
@@ -2211,7 +2229,7 @@ $("import-open").onclick = () => {
     },
     {
       label: tr("accounts.action.import_sub2api"),
-      children: providerSyncChoices("codex"),
+      children: providerSyncChoices(pool),
     },
   ]);
 };
@@ -2258,11 +2276,16 @@ document.addEventListener("keydown", (event) => {
     if (selectedPage !== "accounts") showPage("accounts");
   } else if (mod && event.key === "q") {
     event.preventDefault();
-    providerController.quit().catch((error) => notice(error, true));
+    settingsController.quit().catch((error) => notice(error, true));
   } else if (mod && !event.altKey && !event.shiftKey && ["1", "2"].includes(event.key)) {
     event.preventDefault();
-    if (selectedPage !== "accounts") showPage("accounts");
-    showPool(event.key === "1" ? "codex" : "claude");
+    const target = event.key === "1" ? "codex" : "claude";
+    // The proxy page switches its own pool; elsewhere, the accounts page's.
+    if (selectedPage === "proxy") showProxyPool(target);
+    else {
+      if (selectedPage !== "accounts") showPage("accounts");
+      showPool(target);
+    }
   } else if (mod && event.key === ",") {
     event.preventDefault();
     showPage("settings");
@@ -2413,7 +2436,7 @@ async function switchAccount(account) {
   syncButtons();
   try {
     const result = switchNotice(
-      await invoke(poolCommand("switch_account"), { id: account.id }),
+      await invoke("switch_account", { pool, id: account.id }),
     );
     notice(result.text, result.error);
   } catch (error) {
@@ -2428,7 +2451,7 @@ $("smart-switch").onclick = async () => {
   switchingId = "";
   syncButtons();
   try {
-    const outcome = await invoke(poolCommand("smart_switch"));
+    const outcome = await invoke("smart_switch", { pool });
     if (outcome.kind === "noTarget")
       notice(tr("accounts.notice.no_switch_target"));
     else if (outcome.kind === "alreadyBest")
@@ -2468,8 +2491,8 @@ $("proxy-port").oninput = () => {
   const port = Number($("proxy-port").value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return;
   portSaveTimer = setTimeout(() => {
-    queuePreferenceSave({ proxyPort: port }).catch((error) =>
-      notice(error, true),
+    queuePreferenceSave({ [PROXY_PREFERENCES[proxyPool].port]: port }).catch(
+      (error) => notice(error, true),
     );
   }, 350);
 };
@@ -2516,7 +2539,7 @@ $("language").onchange = () => {
   savePreference({ locale: $("language").value });
 };
 $("quit").onclick = () =>
-  providerController.quit().catch((error) => notice(error, true));
+  settingsController.quit().catch((error) => notice(error, true));
 document.addEventListener(
   "DOMContentLoaded",
   async () => {
@@ -2527,6 +2550,7 @@ document.addEventListener(
       ]);
       applyNativeIcons();
       showPool(pool);
+      showProxyPool(proxyPool);
       locale = appLocale();
       translate();
       await initializeFeatures();

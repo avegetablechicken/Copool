@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use copool_core::{
-    AccountSummary, ApiProxyStatus, Application, Paths, Preferences, SmartSwitchOutcome,
+    AccountSummary, ApiProxyStatus, Application, Paths, Pool, Preferences, SmartSwitchOutcome,
     SwitchExecution,
 };
 use std::sync::Arc;
@@ -22,13 +22,19 @@ mod status_item;
 mod widget_support;
 type App = Arc<Application>;
 
-fn sync_remote_after_mutation(handle: tauri::AppHandle, app: App) {
+/// Uploads a pool's accounts to its remote servers after they changed.
+fn sync_remote_after_mutation(handle: tauri::AppHandle, app: App, pool: Pool) {
     tauri::async_runtime::spawn(async move {
         let Ok(settings) = app.configuration() else {
             return;
         };
         let mut failures = vec![];
         for server in settings.remote_servers {
+            let server_pool =
+                serde_json::from_value::<Pool>(server["pool"].clone()).unwrap_or_default();
+            if server_pool != pool {
+                continue;
+            }
             if let Some(id) = server["id"].as_str() {
                 if let Err(error) = app.remote_action(id, "sync", None).await {
                     failures.push(format!(
@@ -44,95 +50,144 @@ fn sync_remote_after_mutation(handle: tauri::AppHandle, app: App) {
     });
 }
 #[tauri::command]
-async fn sync_remote_accounts(handle: tauri::AppHandle, app: State<'_, App>) -> Result<(), String> {
-    sync_remote_after_mutation(handle, app.inner().clone());
+async fn sync_remote_accounts(
+    handle: tauri::AppHandle,
+    app: State<'_, App>,
+    pool: Pool,
+) -> Result<(), String> {
+    sync_remote_after_mutation(handle, app.inner().clone(), pool);
     Ok(())
 }
 #[tauri::command]
-async fn accounts(app: State<'_, App>) -> Result<Vec<AccountSummary>, String> {
-    app.accounts().await
+async fn accounts(app: State<'_, App>, pool: Pool) -> Result<Vec<AccountSummary>, String> {
+    app.accounts(pool).await
 }
 #[tauri::command]
-async fn import_json(app: State<'_, App>, content: String) -> Result<usize, String> {
-    let result = app.import_json(&content).await?;
-    Ok(result)
+async fn import_json(app: State<'_, App>, pool: Pool, content: String) -> Result<usize, String> {
+    app.import_json(pool, &content).await
 }
 #[tauri::command]
-async fn import_current(app: State<'_, App>) -> Result<usize, String> {
-    let result = app.import_current().await?;
-    Ok(result)
+async fn import_current(app: State<'_, App>, pool: Pool) -> Result<usize, String> {
+    app.import_current(pool).await
 }
+/// Imports a login file the user picks; none when the picker is cancelled,
+/// which reports nothing, as in Swift.
 #[tauri::command]
-async fn delete_account(app: State<'_, App>, id: String) -> Result<(), String> {
-    app.delete_account(&id).await
-}
-#[tauri::command]
-async fn switch_account(app: State<'_, App>, id: String) -> Result<SwitchExecution, String> {
-    app.switch_account(&id).await
-}
-#[tauri::command]
-async fn update_account(
+async fn import_account_file(
+    handle: tauri::AppHandle,
     app: State<'_, App>,
+    pool: Pool,
+) -> Result<Option<usize>, String> {
+    let Some(path) = pick_file(&handle, Some(("JSON", &["json"])), None).await? else {
+        return Ok(None);
+    };
+    app.import_file(pool, &path).await.map(Some)
+}
+#[tauri::command]
+async fn delete_account(app: State<'_, App>, pool: Pool, id: String) -> Result<(), String> {
+    app.delete_account(pool, &id).await
+}
+#[tauri::command]
+async fn switch_account(
+    app: State<'_, App>,
+    pool: Pool,
     id: String,
-    label: String,
-    proxy_url: String,
+) -> Result<SwitchExecution, String> {
+    app.switch_account(pool, &id).await
+}
+#[tauri::command]
+async fn smart_switch(app: State<'_, App>, pool: Pool) -> Result<SmartSwitchOutcome, String> {
+    app.smart_switch(pool).await
+}
+#[tauri::command]
+async fn refresh_usage(app: State<'_, App>, pool: Pool, id: Option<String>) -> Result<(), String> {
+    app.refresh_now(pool, id.as_deref()).await
+}
+/// The next background refresh of the whole pool.
+#[tauri::command]
+fn next_full_refresh_at(app: State<'_, App>, pool: Pool) -> Option<i64> {
+    app.next_full_refresh_at(pool)
+}
+#[tauri::command]
+async fn say_hi(app: State<'_, App>, pool: Pool, id: String) -> Result<(), String> {
+    let _ = app.authorize(pool).await;
+    app.release_new_accounts(pool, Some(&id)).await?;
+    app.say_hi(pool, &id).await
+}
+#[tauri::command]
+async fn renew_now(app: State<'_, App>, pool: Pool, id: String) -> Result<(), String> {
+    let _ = app.authorize(pool).await;
+    app.renew_now(pool, &id).await
+}
+#[tauri::command]
+async fn save_account_proxy(
+    app: State<'_, App>,
+    pool: Pool,
+    id: String,
+    value: String,
 ) -> Result<(), String> {
-    app.update_account(&id, &label, &proxy_url).await
+    app.save_account_proxy(pool, &id, &value).await
 }
 #[tauri::command]
-async fn refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), String> {
-    // A manual refresh may ask for Copool's Keychain item, which holds the
-    // providers' passwords, when a request was refused before.
-    let _ = app.authorize_keychain().await;
-    // A manual refresh is what lets a new account contact upstream.
-    app.release_new_accounts(id.as_deref()).await?;
-    match id {
-        Some(id) => app.refresh_usage(&id).await,
-        None => {
-            let result = app.refresh_all().await;
-            // Refreshing the whole pool stands in for its next round.
-            app.defer_background_round(false);
-            result
-        }
-    }
-}
-/// The next background refresh of the selected pool.
-#[tauri::command]
-fn next_full_refresh_at(app: State<'_, App>, claude: Option<bool>) -> Option<i64> {
-    if claude.unwrap_or(false) {
-        app.claude_next_full_refresh_at()
-    } else {
-        app.next_full_refresh_at()
-    }
+async fn set_renewal(
+    app: State<'_, App>,
+    pool: Pool,
+    id: String,
+    renewal: String,
+) -> Result<(), String> {
+    app.set_renewal(pool, &id, &renewal).await
 }
 #[tauri::command]
-async fn smart_switch(app: State<'_, App>) -> Result<SmartSwitchOutcome, String> {
-    app.smart_switch().await
+async fn greeting_schedule(
+    app: State<'_, App>,
+    pool: Pool,
+    id: String,
+) -> Result<copool_core::GreetingSchedule, String> {
+    app.greeting_schedule(pool, &id).await
 }
 #[tauri::command]
-async fn proxy_status(app: State<'_, App>) -> Result<ApiProxyStatus, String> {
-    app.proxy_status().await
+async fn set_greeting_schedule(
+    app: State<'_, App>,
+    pool: Pool,
+    id: String,
+    auto: bool,
+    times: Vec<String>,
+) -> Result<(), String> {
+    app.set_greeting_schedule(pool, &id, auto, times).await
 }
 #[tauri::command]
-async fn start_proxy(app: State<'_, App>, port: Option<u16>) -> Result<ApiProxyStatus, String> {
+async fn proxy_status(app: State<'_, App>, pool: Pool) -> Result<ApiProxyStatus, String> {
+    app.proxy_status(pool).await
+}
+#[tauri::command]
+async fn start_proxy(
+    app: State<'_, App>,
+    pool: Pool,
+    port: Option<u16>,
+) -> Result<ApiProxyStatus, String> {
     if let Some(port) = port {
         let mut preferences = app.preferences()?;
-        preferences.proxy_port = port;
+        match pool {
+            Pool::Codex => preferences.proxy_port = port,
+            Pool::Claude => preferences.claude_proxy_port = port,
+        }
         app.save_preferences(preferences).await?;
     }
-    app.start_proxy().await
+    app.start_proxy(pool).await
 }
+/// Stops a pool's proxy, and its public tunnel with it.
 #[tauri::command]
 async fn stop_proxy(
     app: State<'_, App>,
-    tunnel: State<'_, TunnelState>,
+    tunnels: State<'_, TunnelState>,
+    pool: Pool,
 ) -> Result<ApiProxyStatus, String> {
-    tunnel.0.lock().await.stop().await?;
-    app.stop_proxy().await
+    tunnels.get(pool).lock().await.stop().await?;
+    app.stop_proxy(pool).await
 }
 #[tauri::command]
-async fn rotate_proxy_key(app: State<'_, App>) -> Result<ApiProxyStatus, String> {
-    app.rotate_proxy_key().await
+async fn rotate_proxy_key(app: State<'_, App>, pool: Pool) -> Result<ApiProxyStatus, String> {
+    app.rotate_proxy_key(pool).await
 }
 #[tauri::command]
 fn preferences(app: State<'_, App>) -> Result<Preferences, String> {
@@ -182,14 +237,6 @@ fn paths(app: State<'_, App>) -> Paths {
     app.paths.clone()
 }
 #[tauri::command]
-async fn save_account_proxy(app: State<'_, App>, id: String, value: String) -> Result<(), String> {
-    app.save_account_proxy(&id, &value).await
-}
-#[tauri::command]
-async fn set_renewal(app: State<'_, App>, id: String, renewal: String) -> Result<(), String> {
-    app.set_renewal(&id, &renewal).await
-}
-#[tauri::command]
 fn configuration(app: State<'_, App>) -> Result<copool_core::settings::Settings, String> {
     app.configuration()
 }
@@ -201,21 +248,38 @@ fn current_provider(app: State<'_, App>) -> copool_core::codex_config::Definitio
 fn provider_definitions(app: State<'_, App>) -> Vec<copool_core::codex_config::Definition> {
     app.provider_definitions()
 }
+/// A pool's Sub2api providers, without their secrets.
+#[tauri::command]
+async fn providers(app: State<'_, App>, pool: Pool) -> Result<serde_json::Value, String> {
+    let app = app.inner().clone();
+    // Resolving Claude settings may scan directories; never on the UI thread.
+    tokio::task::spawn_blocking(move || app.providers(pool))
+        .await
+        .map_err(|error| error.to_string())?
+}
 #[tauri::command]
 async fn save_provider(
     app: State<'_, App>,
-    value: copool_core::settings::Provider,
-) -> Result<copool_core::settings::Provider, String> {
-    app.save_provider(value).await
+    pool: Pool,
+    value: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    app.save_provider(pool, value).await
 }
 #[tauri::command]
-async fn remove_provider(app: State<'_, App>, id: String) -> Result<(), String> {
-    app.remove_provider(&id).await
+async fn remove_provider(app: State<'_, App>, pool: Pool, id: String) -> Result<(), String> {
+    app.remove_provider(pool, &id).await
 }
+/// Refreshes a provider's cards; a sync adopts its accounts as they are.
 #[tauri::command]
-async fn refresh_provider(app: State<'_, App>, id: String, sync: bool) -> Result<usize, String> {
+async fn refresh_provider(
+    app: State<'_, App>,
+    pool: Pool,
+    id: String,
+    sync: bool,
+) -> Result<usize, String> {
+    // Copool's Keychain item holds the providers' passwords.
     let _ = app.authorize_keychain().await;
-    app.refresh_provider(&id, sync).await
+    app.refresh_provider(pool, &id, sync).await
 }
 #[tauri::command]
 fn installed_editors() -> Vec<copool_core::platform::Editor> {
@@ -223,16 +287,18 @@ fn installed_editors() -> Vec<copool_core::platform::Editor> {
 }
 #[derive(Default)]
 struct LoginState(tokio::sync::Mutex<Option<Arc<copool_core::login::Login>>>);
+/// A browser sign-in to the pool; finish_login and cancel_login complete it.
 #[tauri::command]
 async fn begin_login(
     state: State<'_, LoginState>,
+    pool: Pool,
     workspace: Option<String>,
 ) -> Result<String, String> {
     let mut current = state.0.lock().await;
     if current.is_some() {
         return Err("Login already in progress".into());
     }
-    let login = copool_core::login::Login::begin(workspace).await?;
+    let login = copool_core::login::Login::begin(pool, workspace).await?;
     copool_core::platform::open_url(&login.url)?;
     let id = login.id.clone();
     *current = Some(login);
@@ -254,15 +320,11 @@ async fn finish_login(
         .cloned()
         .ok_or("Login not found")?;
     let result = tokio::select! {
-        result=async {
-            let document=login.finish().await?;
-            if login.is_claude() {
-                return app.claude_import_login(document).await.map(|_| 1);
-            }
-            let consent=document.get("consentWorkspaces").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-            app.import_authorized(document,login.workspace(),&consent).await
-        }=>result,
-        _=login.cancelled()=>Err("error.oauth.request_cancelled".into())
+        result = async {
+            let document = login.finish().await?;
+            app.import_sign_in(login.pool(), document, login.workspace()).await
+        } => result,
+        _ = login.cancelled() => Err("error.oauth.request_cancelled".into())
     };
     let mut current = state.0.lock().await;
     if current.as_ref().is_some_and(|l| l.id == id) {
@@ -273,141 +335,6 @@ async fn finish_login(
     }
     result
 }
-/// A Claude Code sign-in; finish_login and cancel_login complete it.
-#[tauri::command]
-async fn begin_claude_login(state: State<'_, LoginState>) -> Result<String, String> {
-    let mut current = state.0.lock().await;
-    if current.is_some() {
-        return Err("Login already in progress".into());
-    }
-    let login = copool_core::login::Login::begin_claude().await?;
-    copool_core::platform::open_url(&login.url)?;
-    let id = login.id.clone();
-    *current = Some(login);
-    Ok(id)
-}
-#[tauri::command]
-async fn claude_accounts(app: State<'_, App>) -> Result<Vec<AccountSummary>, String> {
-    app.claude_accounts().await
-}
-#[tauri::command]
-async fn claude_import_current(app: State<'_, App>) -> Result<usize, String> {
-    app.claude_import_current().await.map(|_| 1)
-}
-#[tauri::command]
-async fn claude_delete_account(app: State<'_, App>, id: String) -> Result<(), String> {
-    app.claude_delete_account(&id).await
-}
-#[tauri::command]
-async fn claude_switch_account(app: State<'_, App>, id: String) -> Result<SwitchExecution, String> {
-    app.claude_switch_account(&id).await
-}
-#[tauri::command]
-async fn claude_smart_switch(app: State<'_, App>) -> Result<SmartSwitchOutcome, String> {
-    app.claude_smart_switch().await
-}
-#[tauri::command]
-async fn claude_refresh_usage(app: State<'_, App>, id: Option<String>) -> Result<(), String> {
-    // A manual refresh may ask for the pool's Keychain item a startup missed.
-    let _ = app.claude_authorize().await;
-    app.claude_release_new_accounts(id.as_deref()).await?;
-    match id {
-        Some(id) => app.claude_refresh_usage(&id).await,
-        None => {
-            let result = app.claude_refresh(None).await;
-            // Refreshing the whole pool stands in for its next round.
-            app.defer_background_round(true);
-            result
-        }
-    }
-}
-#[tauri::command]
-async fn greeting_schedule(
-    app: State<'_, App>,
-    claude: bool,
-    id: String,
-) -> Result<copool_core::GreetingSchedule, String> {
-    app.greeting_schedule(claude, &id).await
-}
-#[tauri::command]
-async fn set_greeting_schedule(
-    app: State<'_, App>,
-    claude: bool,
-    id: String,
-    auto: bool,
-    times: Vec<String>,
-) -> Result<(), String> {
-    app.set_greeting_schedule(claude, &id, auto, times).await
-}
-#[tauri::command]
-async fn say_hi(app: State<'_, App>, id: String) -> Result<(), String> {
-    let _ = app.authorize_keychain().await;
-    app.release_new_accounts(Some(&id)).await?;
-    app.say_hi(&id).await
-}
-#[tauri::command]
-async fn renew_now(app: State<'_, App>, id: String) -> Result<(), String> {
-    let _ = app.authorize_keychain().await;
-    app.renew_now(&id).await
-}
-#[tauri::command]
-async fn claude_renew_now(app: State<'_, App>, id: String) -> Result<(), String> {
-    let _ = app.claude_authorize().await;
-    app.claude_renew_now(&id).await
-}
-#[tauri::command]
-async fn claude_say_hi(app: State<'_, App>, id: String) -> Result<(), String> {
-    let _ = app.claude_authorize().await;
-    app.claude_release_new_accounts(Some(&id)).await?;
-    app.claude_say_hi(&id).await
-}
-#[tauri::command]
-async fn claude_save_account_proxy(
-    app: State<'_, App>,
-    id: String,
-    value: String,
-) -> Result<(), String> {
-    app.claude_save_account_proxy(&id, &value).await
-}
-#[tauri::command]
-async fn claude_set_renewal(
-    app: State<'_, App>,
-    id: String,
-    renewal: String,
-) -> Result<(), String> {
-    app.claude_set_renewal(&id, &renewal).await
-}
-#[tauri::command]
-async fn claude_sub2api_providers(
-    app: State<'_, App>,
-) -> Result<Vec<copool_core::claude::Sub2ApiProvider>, String> {
-    let app = app.inner().clone();
-    // Resolving settings may scan directories; never do it on the UI thread.
-    tokio::task::spawn_blocking(move || app.claude_sub2api_providers())
-        .await
-        .map_err(|error| error.to_string())?
-}
-#[tauri::command]
-async fn claude_save_sub2api_provider(
-    app: State<'_, App>,
-    value: copool_core::claude::Sub2ApiProvider,
-) -> Result<copool_core::claude::Sub2ApiProvider, String> {
-    app.claude_save_sub2api_provider(value).await
-}
-#[tauri::command]
-async fn claude_remove_sub2api_provider(app: State<'_, App>, id: String) -> Result<(), String> {
-    app.claude_remove_sub2api_provider(&id).await
-}
-#[tauri::command]
-async fn claude_refresh_provider(app: State<'_, App>, id: String) -> Result<(), String> {
-    let _ = app.authorize_keychain().await;
-    app.claude_refresh_sub2api_provider(&id).await
-}
-#[tauri::command]
-async fn claude_sync_sub2api(app: State<'_, App>, id: String) -> Result<usize, String> {
-    let _ = app.authorize_keychain().await;
-    app.claude_sync_sub2api_selection(Some(&id)).await
-}
 #[tauri::command]
 async fn cancel_login(state: State<'_, LoginState>) -> Result<(), String> {
     if let Some(login) = state.0.lock().await.take() {
@@ -415,24 +342,38 @@ async fn cancel_login(state: State<'_, LoginState>) -> Result<(), String> {
     }
     Ok(())
 }
-#[tauri::command]
-async fn pick_identity_file(handle: tauri::AppHandle) -> Result<Option<String>, String> {
+/// A file the user picks in the native dialog, which keeps the panel open.
+async fn pick_file(
+    handle: &tauri::AppHandle,
+    filter: Option<(&str, &[&str])>,
+    directory: Option<std::path::PathBuf>,
+) -> Result<Option<std::path::PathBuf>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    panel::set_modal(&handle, true);
-    handle.dialog().file().pick_file(move |file| {
-        let _ = tx.send(file);
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let mut dialog = handle.dialog().file();
+    if let Some((name, extensions)) = filter {
+        dialog = dialog.add_filter(name, extensions);
+    }
+    if let Some(directory) = directory {
+        dialog = dialog.set_directory(directory);
+    }
+    panel::set_modal(handle, true);
+    dialog.pick_file(move |file| {
+        let _ = sender.send(file);
     });
-    let picked = rx.await;
-    panel::set_modal(&handle, false);
+    let picked = receiver.await;
+    panel::set_modal(handle, false);
     picked
         .map_err(|e| e.to_string())?
-        .map(|file| {
-            file.into_path()
-                .map(|p| p.to_string_lossy().into_owned())
-                .map_err(|e| e.to_string())
-        })
+        .map(|file| file.into_path().map_err(|e| e.to_string()))
         .transpose()
+}
+fn path_text(path: Option<std::path::PathBuf>) -> Option<String> {
+    path.map(|p| p.to_string_lossy().into_owned())
+}
+#[tauri::command]
+async fn pick_identity_file(handle: tauri::AppHandle) -> Result<Option<String>, String> {
+    pick_file(&handle, None, None).await.map(path_text)
 }
 /// A provider settings file, chosen from the Claude configuration directory.
 #[tauri::command]
@@ -440,74 +381,10 @@ async fn pick_settings_file(
     handle: tauri::AppHandle,
     app: State<'_, App>,
 ) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    panel::set_modal(&handle, true);
-    handle
-        .dialog()
-        .file()
-        .add_filter("JSON", &["json"])
-        .set_directory(app.claude_location().config_dir)
-        .pick_file(move |file| {
-            let _ = tx.send(file);
-        });
-    let picked = rx.await;
-    panel::set_modal(&handle, false);
-    picked
-        .map_err(|e| e.to_string())?
-        .map(|file| {
-            file.into_path()
-                .map(|p| p.to_string_lossy().into_owned())
-                .map_err(|e| e.to_string())
-        })
-        .transpose()
-}
-#[tauri::command]
-async fn import_account_file(
-    handle: tauri::AppHandle,
-    app: State<'_, App>,
-) -> Result<Option<usize>, String> {
-    import_account_file_for_pool(handle, app, false).await
-}
-#[tauri::command]
-async fn claude_import_account_file(
-    handle: tauri::AppHandle,
-    app: State<'_, App>,
-) -> Result<Option<usize>, String> {
-    import_account_file_for_pool(handle, app, true).await
-}
-async fn import_account_file_for_pool(
-    handle: tauri::AppHandle,
-    app: State<'_, App>,
-    claude: bool,
-) -> Result<Option<usize>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    panel::set_modal(&handle, true);
-    handle
-        .dialog()
-        .file()
-        .add_filter("JSON", &["json"])
-        .pick_file(move |file| {
-            let _ = sender.send(file);
-        });
-    let picked = receiver.await;
-    panel::set_modal(&handle, false);
-    // A cancelled picker imports nothing and reports nothing, as in Swift.
-    let Some(file) = picked.map_err(|e| e.to_string())? else {
-        return Ok(None);
-    };
-    let path = file.into_path().map_err(|e| e.to_string())?;
-    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
-        return Err("File exceeds 16 MiB".into());
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let count = if claude {
-        app.claude_import_json(&content).await?
-    } else {
-        app.import_json(&content).await?
-    };
-    Ok(Some(count))
+    let directory = app.claude_location().config_dir;
+    pick_file(&handle, Some(("JSON", &["json"])), Some(directory))
+        .await
+        .map(path_text)
 }
 #[tauri::command]
 async fn save_remote(
@@ -536,27 +413,45 @@ async fn remote_action(
     app.remote_action(&id, &action, handle.path().resource_dir().ok())
         .await
 }
-#[derive(Default)]
-struct TunnelState(tokio::sync::Mutex<copool_core::tunnel::Tunnel>);
+/// Each pool's public tunnel to its proxy.
+struct TunnelState([tokio::sync::Mutex<copool_core::tunnel::Tunnel>; 2]);
+impl Default for TunnelState {
+    fn default() -> Self {
+        Self(Pool::ALL.map(|pool| tokio::sync::Mutex::new(copool_core::tunnel::Tunnel::new(pool))))
+    }
+}
+impl TunnelState {
+    fn get(&self, pool: Pool) -> &tokio::sync::Mutex<copool_core::tunnel::Tunnel> {
+        &self.0[pool as usize]
+    }
+    /// Stops every tunnel, for quitting.
+    async fn stop_all(&self) {
+        for tunnel in &self.0 {
+            let _ = tunnel.lock().await.stop().await;
+        }
+    }
+}
 #[tauri::command]
 async fn save_tunnel_configuration(
     app: State<'_, App>,
+    pool: Pool,
     value: copool_core::tunnel::Configuration,
 ) -> Result<(), String> {
-    app.save_tunnel_configuration(&value).await
+    app.save_tunnel_configuration(pool, &value).await
 }
 #[tauri::command]
 async fn tunnel_action(
     app: State<'_, App>,
-    state: State<'_, TunnelState>,
+    tunnels: State<'_, TunnelState>,
+    pool: Pool,
     action: String,
     value: Option<copool_core::tunnel::Configuration>,
 ) -> Result<copool_core::tunnel::Status, String> {
-    let mut tunnel = state.0.lock().await;
+    let mut tunnel = tunnels.get(pool).lock().await;
     match action.as_str() {
         "install" => copool_core::tunnel::install(&app.paths.data_dir).await?,
         "start" => {
-            let proxy = app.proxy_status().await?;
+            let proxy = app.proxy_status(pool).await?;
             if !proxy.running {
                 return Err("error.cloudflared.start_api_proxy_first".into());
             }
@@ -564,9 +459,9 @@ async fn tunnel_action(
             if !config.enabled {
                 return Err("Enable public access first".into());
             }
-            app.save_tunnel_configuration(&config).await?;
+            app.save_tunnel_configuration(pool, &config).await?;
             let _ = app.authorize_keychain().await;
-            let config = app.with_tunnel_token(config)?;
+            let config = app.with_tunnel_token(pool, config)?;
             return tunnel
                 .start(
                     &app.paths.data_dir,
@@ -634,11 +529,8 @@ async fn dismiss_workspace(app: State<'_, App>, id: String) -> Result<(), String
     app.dismiss_workspace(&id).await
 }
 #[tauri::command]
-async fn quit_app(app: tauri::AppHandle, tunnel: State<'_, TunnelState>) -> Result<(), String> {
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        tunnel.0.lock().await.stop().await
-    })
-    .await;
+async fn quit_app(app: tauri::AppHandle, tunnels: State<'_, TunnelState>) -> Result<(), String> {
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), tunnels.stop_all()).await;
     app.exit(0);
     Ok(())
 }
@@ -669,8 +561,9 @@ fn main() {
         .setup(|app| {
             appearance::configure(app)?;
             app.manage(native_icons::load().map_err(std::io::Error::other)?);
-            let service =
-                Arc::new(Application::open(Paths::discover()?).map_err(std::io::Error::other)?);
+            let service = Application::open(Paths::discover()?)
+                .map_err(std::io::Error::other)?
+                .into_shared();
             let handle = app.handle().clone();
             let (widget_tx, mut widget_rx) = tokio::sync::mpsc::channel::<()>(1);
             let widget_app = service.clone();
@@ -745,11 +638,11 @@ fn main() {
                     "quit" => {
                         let handle = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ =
-                                tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                                    handle.state::<TunnelState>().0.lock().await.stop().await
-                                })
-                                .await;
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                handle.state::<TunnelState>().stop_all(),
+                            )
+                            .await;
                             handle.exit(0);
                         });
                     }
@@ -790,12 +683,18 @@ fn main() {
             sync_remote_accounts,
             import_json,
             import_current,
+            import_account_file,
             delete_account,
             switch_account,
-            update_account,
+            smart_switch,
             refresh_usage,
             next_full_refresh_at,
-            smart_switch,
+            say_hi,
+            renew_now,
+            save_account_proxy,
+            set_renewal,
+            greeting_schedule,
+            set_greeting_schedule,
             proxy_status,
             start_proxy,
             stop_proxy,
@@ -805,22 +704,19 @@ fn main() {
             paths,
             quit_app,
             native_icons::native_symbols,
-            save_account_proxy,
-            set_renewal,
-            renew_now,
             configuration,
             provider_definitions,
             current_provider,
+            providers,
             save_provider,
             remove_provider,
             refresh_provider,
             installed_editors,
             begin_login,
-            begin_claude_login,
             finish_login,
             cancel_login,
-            import_account_file,
             pick_identity_file,
+            pick_settings_file,
             save_remote,
             remove_remote,
             remote_action,
@@ -832,27 +728,7 @@ fn main() {
             refresh_workspace_names,
             dismiss_workspace,
             fit_panel,
-            hide_panel,
-            claude_accounts,
-            claude_import_current,
-            claude_import_account_file,
-            claude_delete_account,
-            claude_switch_account,
-            claude_smart_switch,
-            claude_refresh_usage,
-            greeting_schedule,
-            set_greeting_schedule,
-            claude_say_hi,
-            say_hi,
-            claude_save_account_proxy,
-            claude_set_renewal,
-            claude_renew_now,
-            claude_sub2api_providers,
-            claude_save_sub2api_provider,
-            claude_remove_sub2api_provider,
-            claude_refresh_provider,
-            pick_settings_file,
-            claude_sync_sub2api
+            hide_panel
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build Copool");
@@ -893,9 +769,10 @@ fn main() {
                 {
                     task.abort();
                 }
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                    handle.state::<TunnelState>().0.lock().await.stop().await
-                })
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    handle.state::<TunnelState>().stop_all(),
+                )
                 .await;
                 handle.exit(0);
             });

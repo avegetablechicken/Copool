@@ -160,8 +160,8 @@ pub(crate) fn candidates_with_keys(
             .filter_map(|raw| serde_json::from_value::<crate::sub2api::Account>(raw.clone()).ok())
             .filter(|a| ids.contains(&a.id))
             .max_by(|a, b| {
-                crate::ranking::remaining_score(&a.summary())
-                    .total_cmp(&crate::ranking::remaining_score(&b.summary()))
+                crate::ranking::remaining_score(&a.summary(String::new()))
+                    .total_cmp(&crate::ranking::remaining_score(&b.summary(String::new())))
             });
         let route = format!("sub2api-provider:{}", provider.provider_id.to_lowercase());
         let auth = json!({"tokens":{"access_token":key,"account_id":route,"id_token":""},"copoolProvider":{"id":provider.provider_id,"baseUrl":base,"apiKey":key,"allowInsecureTLS":provider.allow_insecure_tls,"preferred":current.id.eq_ignore_ascii_case(&provider.provider_id)}});
@@ -269,6 +269,7 @@ pub(crate) fn sync_refreshed_auth(
 #[cfg(test)]
 mod refresh_tests {
     use super::*;
+    use crate::Pool;
     #[test]
     fn provider_keys_are_read_from_the_codex_dotenv() {
         let dir = tempfile::tempdir().unwrap();
@@ -299,9 +300,11 @@ mod refresh_tests {
         })
         .unwrap();
         let document = json!({"tokens":{"id_token":"","access_token":"old","refresh_token":"refresh","account_id":"workspace"}});
-        app.import_json(&document.to_string()).await.unwrap();
-        let id = app.accounts().await.unwrap()[0].id.clone();
-        app.switch_account(&id).await.unwrap();
+        app.import_json(Pool::Codex, &document.to_string())
+            .await
+            .unwrap();
+        let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
+        app.switch_account(Pool::Codex, &id).await.unwrap();
         let read =
             || serde_json::from_slice::<Value>(&fs::read(&app.paths.codex_auth).unwrap()).unwrap();
         let from = read();

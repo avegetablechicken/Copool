@@ -1,20 +1,19 @@
 //! Sub2api in the Claude pool: its Claude (anthropic) OAuth accounts as cards,
 //! and Claude Code pointed at its gateway by merging the provider's settings
-//! file over the official settings, as `claude --settings` would.
+//! file over the official settings, as `claude --settings` would. What the
+//! two pools do alike with their providers is in `providers.rs`; here is
+//! where the Claude pool keeps them and how it uses one.
 use super::{
     login_overrides, official_base, parse_settings, provider_config, put_settings, read_settings,
-    render_settings, settings_source, without_login_replacement, Official, Result, Store,
+    render_settings, settings_source, without_login_replacement, Official, Result,
 };
 use crate::{
     application::{Application, SwitchExecution},
     codex_config::Definition,
-    models::AccountSummary,
-    sub2api::{self, Account, Platform},
-    utils::now_unix_seconds,
+    pool::Pool,
+    sub2api::{self, Account, Member},
 };
 use serde::{Deserialize, Serialize};
-
-const CARD_PREFIX: &str = "claude-sub2api-";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -65,11 +64,8 @@ impl Provider {
     fn gateway(&self) -> String {
         gateway(&self.base_url)
     }
-    fn card_id(&self, account: i64) -> String {
-        format!("{CARD_PREFIX}{}-{account}", self.id)
-    }
 }
-fn gateway(url: &str) -> String {
+pub(super) fn gateway(url: &str) -> String {
     let url = url.trim().trim_end_matches('/');
     url.strip_suffix("/api/v1")
         .or_else(|| url.strip_suffix("/v1"))
@@ -77,40 +73,20 @@ fn gateway(url: &str) -> String {
         .trim_end_matches('/')
         .to_owned()
 }
-fn password_secret(id: &str) -> String {
-    format!("claude-sub2api-password:{id}")
-}
-pub(super) fn is_card(id: &str) -> bool {
-    id.starts_with(CARD_PREFIX)
-}
-/// The provider index and account of a card.
-fn card(store: &Store, id: &str) -> Option<(usize, Account)> {
-    store.providers.iter().enumerate().find_map(|(i, p)| {
-        p.cached_accounts
-            .iter()
-            .find(|a| p.card_id(a.id) == id)
-            .map(|a| (i, a.clone()))
-    })
-}
-
-/// The cards of every provider; those of the `current` provider are current.
-pub(super) fn summaries(store: &Store, current: Option<&str>) -> Vec<AccountSummary> {
-    let mut result = vec![];
-    for p in &store.providers {
-        for a in &p.cached_accounts {
-            let mut summary = a.summary();
-            summary.id = p.card_id(a.id);
-            summary.is_current = current == Some(p.id.as_str());
-            summary.proxy_url = p.proxy_url.clone();
-            result.push(summary);
-        }
+/// A Claude provider's cards, named by its id.
+fn claude_member(p: &Provider) -> Member {
+    Member {
+        key: p.id.clone(),
+        name: p.name.clone(),
+        proxy_url: p.proxy_url.clone(),
+        imported: p.imported_account_ids.clone(),
+        cached: p.cached_accounts.clone(),
     }
-    result
 }
 
 impl Application {
-    /// Claude Sub2api providers, without their secrets.
-    pub fn claude_sub2api_providers(&self) -> Result<Vec<Provider>> {
+    /// The Claude providers for the settings, without their secrets.
+    pub(crate) fn claude_providers(&self) -> Result<Vec<Provider>> {
         let location = self.claude_location();
         // Provider metadata does not need the official accounts' vault tokens.
         let mut providers = self.claude_store_file()?.providers;
@@ -120,7 +96,7 @@ impl Application {
         }
         Ok(providers)
     }
-    pub async fn claude_save_sub2api_provider(&self, mut draft: Provider) -> Result<Provider> {
+    pub(crate) async fn claude_save_provider(&self, mut draft: Provider) -> Result<Provider> {
         // A path is kept; a name found by searching is searched for again.
         let input = match draft.settings.trim() {
             "" => draft.settings_input(),
@@ -128,7 +104,6 @@ impl Application {
         };
         (draft.name, draft.settings_path) = settings_source::parse(&input)?;
         draft.username = draft.username.trim().into();
-        draft.base_url = draft.base_url.trim().trim_end_matches('/').into();
         draft.admin_base_url = draft.admin_base_url.trim().trim_end_matches('/').into();
         draft.proxy_url = draft.proxy_url.trim().into();
         let source =
@@ -137,77 +112,105 @@ impl Application {
         if draft.id.trim().is_empty() {
             draft.id = uuid::Uuid::new_v4().to_string();
         }
-        crate::utils::validate_account_proxy(&draft.proxy_url)?;
-        for base in [&draft.base_url, &draft.admin_base_url] {
-            if base.is_empty() {
-                continue;
+        self.claude_edit_providers(|providers| {
+            let existing = providers.iter().position(|p| p.id == draft.id);
+            sub2api::validate_form(
+                &draft.name,
+                providers
+                    .iter()
+                    .any(|p| p.id != draft.id && p.name.eq_ignore_ascii_case(&draft.name)),
+                &draft.username,
+                &draft.password,
+                existing.is_some(),
+                &draft.proxy_url,
+                &[&draft.base_url, &draft.admin_base_url],
+            )?;
+            if let Some(old) = existing.map(|i| &providers[i]) {
+                draft.imported_account_ids = old.imported_account_ids.clone();
+                draft.cached_accounts = old.cached_accounts.clone();
+                // The provider's card sets its proxy, not its settings.
+                draft.proxy_url = old.proxy_url.clone();
             }
-            let url = reqwest::Url::parse(base).map_err(|_| "error.sub2api.invalid_base_url")?;
-            if !matches!(url.scheme(), "http" | "https")
-                || url.host_str().is_none()
-                || !url.username().is_empty()
-                || url.password().is_some()
-                || url.query().is_some()
-                || url.fragment().is_some()
-            {
-                return Err("error.sub2api.invalid_base_url".into());
+            self.store_provider_password(Pool::Claude, &draft.id, &draft.password)?;
+            // Model credentials remain in the source JSON, never inferred from
+            // the current main settings or substituted with the admin token.
+            draft.password.clear();
+            draft.api_key.clear();
+            draft.has_api_key = true;
+            draft.settings.clear();
+            match existing {
+                Some(i) => providers[i] = draft.clone(),
+                None => providers.push(draft.clone()),
             }
-        }
-        let _lock = self.claude.lock.lock().await;
-        let mut store = self.claude_load()?;
-        if store
-            .providers
-            .iter()
-            .any(|p| p.id != draft.id && p.name.eq_ignore_ascii_case(&draft.name))
-        {
-            return Err("error.sub2api.duplicate_provider".into());
-        }
-        let existing = store.providers.iter().position(|p| p.id == draft.id);
-        if draft.name.is_empty()
-            || draft.username.is_empty()
-            || (draft.password.is_empty() && existing.is_none())
-        {
-            return Err("error.sub2api.configuration_incomplete".into());
-        }
-        if let Some(old) = existing.map(|i| &store.providers[i]) {
-            draft.imported_account_ids = old.imported_account_ids.clone();
-            draft.cached_accounts = old.cached_accounts.clone();
-            // The provider's card sets its proxy, not its settings.
-            draft.proxy_url = old.proxy_url.clone();
-        }
-        // Empty secrets keep the stored ones, as for the Codex providers.
-        if !draft.password.is_empty() {
-            self.secrets
-                .set(&password_secret(&draft.id), &draft.password)?;
-        }
-        // Model credentials remain in the source JSON, never inferred from
-        // the current main settings or substituted with the admin token.
-        draft.password.clear();
-        draft.api_key.clear();
-        draft.has_api_key = true;
-        draft.settings.clear();
-        match existing {
-            Some(i) => store.providers[i] = draft.clone(),
-            None => store.providers.push(draft.clone()),
-        }
-        self.claude_save(&store)?;
+            Ok(())
+        })
+        .await?;
         draft.settings = draft.settings_input();
         Ok(draft)
     }
-    pub async fn claude_remove_sub2api_provider(&self, id: &str) -> Result<()> {
-        {
-            let _lock = self.claude.lock.lock().await;
-            let mut store = self.claude_load()?;
-            store.providers.retain(|p| p.id != id);
-            self.claude_save(&store)?;
-        }
-        self.secrets.remove(&password_secret(id))
+    pub(crate) async fn claude_remove_provider(&self, id: &str) -> Result<()> {
+        self.claude_edit_providers(|providers| {
+            providers.retain(|p| p.id != id);
+            Ok(())
+        })
+        .await
+    }
+    /// Edits the providers alone: the official accounts' tokens stay as
+    /// stored, the vault neither read nor rewritten.
+    async fn claude_edit_providers<T>(
+        &self,
+        edit: impl FnOnce(&mut Vec<Provider>) -> Result<T>,
+    ) -> Result<T> {
+        let _lock = self.claude.lock.lock().await;
+        let mut store = self.claude_store_file()?;
+        let result = edit(&mut store.providers)?;
+        crate::persistence::write_json(&self.claude_store_path(), &store)?;
+        self.publish();
+        Ok(result)
+    }
+    pub(crate) fn claude_members(&self) -> Result<Vec<Member>> {
+        Ok(self
+            .claude_store_file()?
+            .providers
+            .iter()
+            .map(claude_member)
+            .collect())
+    }
+    pub(crate) async fn claude_edit_member<T>(
+        &self,
+        key: &str,
+        edit: impl FnOnce(&mut Member) -> T,
+    ) -> Result<Option<T>> {
+        self.claude_edit_providers(|providers| {
+            let Some(p) = providers
+                .iter_mut()
+                .find(|p| p.id.eq_ignore_ascii_case(key))
+            else {
+                return Ok(None);
+            };
+            let mut member = claude_member(p);
+            let result = edit(&mut member);
+            p.imported_account_ids = member.imported;
+            p.cached_accounts = member.cached;
+            p.proxy_url = member.proxy_url;
+            Ok(Some(result))
+        })
+        .await
+    }
+    pub(crate) fn claude_member_connection(&self, key: &str) -> Result<sub2api::Connection> {
+        let p = self
+            .claude_store_file()?
+            .providers
+            .into_iter()
+            .find(|p| p.id.eq_ignore_ascii_case(key))
+            .ok_or("Provider not found")?;
+        self.claude_sub2api_connection(&p)
     }
     fn claude_sub2api_connection(&self, p: &Provider) -> Result<sub2api::Connection> {
         let source = settings_source::load(&self.claude_location(), &p.name, &p.settings_path)?;
         let password = self
             .secrets
-            .get(&password_secret(&p.id))?
+            .get(&sub2api::password_secret(Pool::Claude, &p.id))?
             .ok_or("error.sub2api.configuration_incomplete")?;
         Ok(sub2api::Connection {
             configuration: crate::settings::Provider {
@@ -240,246 +243,36 @@ impl Application {
             })?,
         })
     }
-    async fn claude_fetch_sub2api(
-        &self,
-        p: &Provider,
-        ids: Option<&[i64]>,
-        refresh: bool,
-    ) -> Result<sub2api::Refresh> {
-        let connection = self.claude_sub2api_connection(p)?;
-        let mut fetched = if refresh {
-            connection
-                .refresh_platform_accounts(Platform::Anthropic, ids, now_unix_seconds())
-                .await?
-        } else {
-            sub2api::Refresh {
-                accounts: connection
-                    .fetch_platform_accounts(Platform::Anthropic, ids, now_unix_seconds())
-                    .await?,
-                errors: vec![],
-            }
-        };
-        for a in &mut fetched.accounts {
-            a.provider_id = Some(p.name.clone());
-        }
-        Ok(fetched)
-    }
-    /// Every card of one provider, in a single pass as the Codex pool's
-    /// `refresh_provider`.
-    pub async fn claude_refresh_sub2api_provider(&self, provider: &str) -> Result<()> {
-        self.claude_refresh_sub2api(provider, None).await
-    }
-    /// Imports every active Claude OAuth account of each provider; returns how many.
-    pub async fn claude_sync_sub2api(&self) -> Result<usize> {
-        self.claude_sync_sub2api_selection(None).await
-    }
-    /// Explicit sync of one provider, including restoring its removed cards.
-    pub async fn claude_sync_sub2api_selection(&self, id: Option<&str>) -> Result<usize> {
-        let providers: Vec<_> = self
-            .claude_store_file()?
-            .providers
-            .into_iter()
-            .filter(|provider| id.is_none_or(|id| provider.id == id))
-            .collect();
-        if providers.is_empty() {
-            return Err("error.claude.sub2api_not_configured".into());
-        }
-        let mut count = 0;
-        let mut errors = vec![];
-        for p in providers {
-            match self.claude_fetch_sub2api(&p, None, false).await {
-                Ok(fetched) => {
-                    let fetched = fetched.accounts;
-                    count += fetched.len();
-                    let _lock = self.claude.lock.lock().await;
-                    let mut store = self.claude_store_file()?;
-                    if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
-                        saved.imported_account_ids = fetched.iter().map(|a| a.id).collect();
-                        saved.cached_accounts = fetched;
-                    }
-                    // Only provider metadata changed. Preserve official account
-                    // tokens exactly as stored without reading or rewriting the vault.
-                    crate::persistence::write_json(&self.claude_store_path(), &store)?;
-                    self.publish();
-                }
-                Err(error) => errors.push(format!("{}: {error}", p.name)),
-            }
-        }
-        if errors.is_empty() {
-            Ok(count)
-        } else {
-            Err(errors.join("\n"))
-        }
-    }
-    /// Refreshes upstream usage, adopting newly discovered accounts on a provider refresh.
-    pub(super) async fn claude_refresh_sub2api(
-        &self,
-        provider: &str,
-        ids: Option<Vec<i64>>,
-    ) -> Result<()> {
-        let Some(p) = self
-            .claude_load()?
-            .providers
-            .into_iter()
-            .find(|p| p.id == provider)
-        else {
-            return Err("Provider not found".into());
-        };
-        // Only explicit sync may restore a removed provider card.
-        if p.imported_account_ids.is_empty() {
-            return Ok(());
-        }
-        let cards: Vec<_> = p
-            .cached_accounts
-            .iter()
-            .filter(|a| ids.as_ref().is_none_or(|ids| ids.contains(&a.id)))
-            .map(|a| p.card_id(a.id))
-            .collect();
-        let _activity: Vec<_> = cards.iter().map(|id| self.begin_refresh(id)).collect();
-        let fetched = match self.claude_fetch_sub2api(&p, ids.as_deref(), true).await {
-            Ok(accounts) => accounts,
-            Err(error) => {
-                let _lock = self.claude.lock.lock().await;
-                let mut store = self.claude_load()?;
-                if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
-                    for account in &mut saved.cached_accounts {
-                        if ids.as_ref().is_none_or(|ids| ids.contains(&account.id)) {
-                            account.usage_error = Some(error.clone());
-                        }
-                    }
-                    self.claude_save(&store)?;
-                }
-                return Err(error);
-            }
-        };
-        let _lock = self.claude.lock.lock().await;
-        let mut store = self.claude_load()?;
-        if let Some(saved) = store.providers.iter_mut().find(|s| s.id == p.id) {
-            // Respect removal even if it happened during the network request.
-            if saved.imported_account_ids.is_empty() {
-                return Ok(());
-            }
-            // A card Sub2api no longer lists says so, not its last error.
-            if fetched.errors.is_empty() {
-                for cached in &mut saved.cached_accounts {
-                    if ids.as_ref().is_none_or(|ids| ids.contains(&cached.id))
-                        && !fetched.accounts.iter().any(|a| a.id == cached.id)
-                    {
-                        cached.status = "missing".into();
-                        cached.usage = None;
-                        cached.usage_error = Some("The account is no longer in Sub2api".into());
-                    }
-                }
-            }
-            for account in fetched.accounts {
-                if !saved.imported_account_ids.contains(&account.id) {
-                    saved.imported_account_ids.push(account.id);
-                }
-                match saved
-                    .cached_accounts
-                    .iter_mut()
-                    .find(|a| a.id == account.id)
-                {
-                    Some(cached) => *cached = account,
-                    None => saved.cached_accounts.push(account),
-                }
-            }
-            self.claude_save(&store)?;
-        }
-        if fetched.errors.is_empty() {
-            Ok(())
-        } else {
-            Err(fetched.errors.join("\n"))
-        }
-    }
-    pub(super) async fn claude_refresh_sub2api_card(&self, id: &str) -> Result<()> {
-        let store = self.claude_load()?;
-        let (i, account) = card(&store, id).ok_or("Account not found")?;
-        self.claude_refresh_sub2api(&store.providers[i].id, Some(vec![account.id]))
-            .await
-    }
-    /// Says hi through Sub2api's connection test of the card's account.
-    pub(super) async fn claude_say_hi_sub2api(&self, id: &str) -> Result<()> {
-        let store = self.claude_load()?;
-        let (i, account) = card(&store, id).ok_or("Account not found")?;
-        self.claude_sub2api_connection(&store.providers[i])?
-            .test_account(account.id, super::HELLO_MODEL)
-            .await
-    }
-    /// Refreshes the providers of these cards, or every provider.
-    pub(super) async fn claude_refresh_sub2api_cards(&self, ids: Option<&[String]>) -> Vec<String> {
-        let Ok(store) = self.claude_load() else {
-            return vec![];
-        };
-        let refreshes = store.providers.iter().filter_map(|p| {
-            let wanted = match ids {
-                None => None,
-                Some(ids) => {
-                    let wanted: Vec<i64> = p
-                        .cached_accounts
-                        .iter()
-                        .filter(|a| ids.contains(&p.card_id(a.id)))
-                        .map(|a| a.id)
-                        .collect();
-                    if wanted.is_empty() {
-                        return None;
-                    }
-                    Some(wanted)
-                }
-            };
-            Some(async move {
-                self.claude_refresh_sub2api(&p.id, wanted)
-                    .await
-                    .map_err(|error| format!("{}: {error}", p.name))
-            })
-        });
-        futures_util::future::join_all(refreshes)
-            .await
-            .into_iter()
-            .filter_map(Result::err)
-            .collect()
-    }
-    pub(super) fn claude_remove_sub2api_card(&self, store: &mut Store, id: &str) -> Result<()> {
-        let (i, account) = card(store, id).ok_or("Account not found")?;
-        let p = &mut store.providers[i];
-        p.imported_account_ids.retain(|v| *v != account.id);
-        p.cached_accounts.retain(|a| a.id != account.id);
-        Ok(())
-    }
-    pub(super) fn claude_sub2api_card_proxy(
-        &self,
-        store: &mut Store,
-        id: &str,
-        value: &str,
-    ) -> Result<()> {
-        let (i, _) = card(store, id).ok_or("Account not found")?;
-        store.providers[i].proxy_url = value.trim().into();
-        Ok(())
-    }
     /// Merges the provider's settings file over the official main settings,
     /// recording these when leaving them; the file is read again each time.
     pub(super) async fn claude_switch_sub2api(&self, id: &str) -> Result<SwitchExecution> {
         let location = self.claude_location();
         // The settings file is found before the pool is locked.
-        let found = {
-            let store = self.claude_load()?;
-            let (i, _) = card(&store, id).ok_or("Account not found")?;
-            store.providers[i].clone()
-        };
+        let (member, account) = self.card(Pool::Claude, id)?;
+        let found = self
+            .claude_store_file()?
+            .providers
+            .into_iter()
+            .find(|p| p.id == member.key)
+            .ok_or("Account not found")?;
         let source = settings_source::load_off_runtime(
             location.clone(),
             found.name.clone(),
             found.settings_path.clone(),
         )
         .await?;
-        let _lock = self.claude.lock.lock().await;
-        let mut store = self.claude_load()?;
-        let (i, account) = card(&store, id).ok_or("Account not found")?;
         if !account.status.eq_ignore_ascii_case("active") {
             return Err("Account is deactivated".into());
         }
-        let p = store.providers[i].clone();
-        if (&p.id, &p.name, &p.settings_path) != (&found.id, &found.name, &found.settings_path) {
+        let _lock = self.claude.lock.lock().await;
+        let mut store = self.claude_load()?;
+        let p = store
+            .providers
+            .iter()
+            .find(|p| p.id == found.id)
+            .ok_or("Account not found")?
+            .clone();
+        if (&p.name, &p.settings_path) != (&found.name, &found.settings_path) {
             return Err("The Claude provider changed during the switch; switch again".into());
         }
         let settings = read_settings(&location)?;
@@ -536,6 +329,15 @@ impl Application {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::AccountSummary;
+    /// Syncs every provider, as choosing each in the import menu would.
+    async fn sync_all(app: &Application) {
+        for p in app.claude_providers().unwrap() {
+            app.refresh_provider(Pool::Claude, &p.id, true)
+                .await
+                .unwrap();
+        }
+    }
     use super::super::{tests::sign_in, tests::Fake, Location};
     use super::*;
     use serde_json::{json, Value};
@@ -679,11 +481,11 @@ mod tests {
         let before = serde_json::to_value(&other).unwrap();
         store.providers.push(other);
         app.claude_save(&store).unwrap();
-        app.claude_sync_sub2api_selection(Some(&id)).await.unwrap();
+        app.refresh_provider(Pool::Claude, &id, true).await.unwrap();
         let after = app.claude_load().unwrap();
         assert_eq!(serde_json::to_value(&after.providers[1]).unwrap(), before);
         assert!(app
-            .claude_sync_sub2api_selection(Some("missing"))
+            .refresh_provider(Pool::Claude, "missing", true)
             .await
             .is_err());
     }
@@ -709,8 +511,8 @@ mod tests {
         crate::persistence::write_json(&app.claude_store_path(), &store).unwrap();
         let before = serde_json::to_value(&store.accounts).unwrap();
         app.set_claude_vault(std::sync::Arc::new(UnavailableVault));
-        let providers = app.claude_sub2api_providers().unwrap();
-        app.claude_sync_sub2api_selection(Some(&providers[0].id))
+        let providers = app.claude_providers().unwrap();
+        app.refresh_provider(Pool::Claude, &providers[0].id, true)
             .await
             .unwrap();
         let after = app.claude_store_file().unwrap();
@@ -743,7 +545,7 @@ mod tests {
         let base = server(requests.clone()).await;
         let path = source_file(dir, &base, AUTH_TOKEN, "sk-team");
         let saved = app
-            .claude_save_sub2api_provider(Provider {
+            .claude_save_provider(Provider {
                 settings: path.to_str().unwrap().into(),
                 username: "admin@example.com".into(),
                 password: "secret".into(),
@@ -751,12 +553,12 @@ mod tests {
             })
             .await
             .unwrap();
-        app.claude_sync_sub2api().await.unwrap();
+        sync_all(&app).await;
         app.set_claude_network(std::sync::Arc::new(Fake::default()));
         sign_in(&location, "alice", 4_000_000_000_000);
         app.claude_import_current().await.unwrap();
         let alice = app
-            .claude_accounts()
+            .accounts(Pool::Claude)
             .await
             .unwrap()
             .into_iter()
@@ -768,7 +570,7 @@ mod tests {
             location,
             base,
             path,
-            saved.card_id(7),
+            crate::sub2api::card_id(Pool::Claude, &saved.id, 7),
             alice,
             secrets,
             requests,
@@ -790,7 +592,7 @@ mod tests {
         )
         .unwrap();
         let saved = app
-            .claude_save_sub2api_provider(Provider {
+            .claude_save_provider(Provider {
                 settings: path.to_str().unwrap().into(),
                 username: "other@example.com".into(),
                 password: password.into(),
@@ -798,7 +600,7 @@ mod tests {
             })
             .await
             .unwrap();
-        app.claude_sync_sub2api().await.unwrap();
+        sync_all(&app).await;
         (saved, requests)
     }
     fn logins(requests: &std::sync::Arc<Mutex<Vec<String>>>) -> usize {
@@ -840,7 +642,7 @@ mod tests {
         let (app, _) = open(dir.path());
         let path = source_file(dir.path(), &base, AUTH_TOKEN, "sk-team");
         let saved = app
-            .claude_save_sub2api_provider(Provider {
+            .claude_save_provider(Provider {
                 settings: path.to_str().unwrap().into(),
                 username: "admin@example.com".into(),
                 password: "secret".into(),
@@ -848,18 +650,17 @@ mod tests {
             })
             .await
             .unwrap();
-        app.claude_sync_sub2api().await.unwrap();
-        let card = saved.card_id(7);
+        sync_all(&app).await;
+        let card = crate::sub2api::card_id(Pool::Claude, &saved.id, 7);
         let shown = |app: &Application| {
-            let store = app.claude_load().unwrap();
-            let summary = summaries(&store, None).remove(0);
+            let summary = app.provider_cards(Pool::Claude, None).unwrap().remove(0);
             (
                 summary.workspace_status,
                 summary.usage.is_some(),
                 summary.usage_error,
             )
         };
-        app.claude_refresh_usage(&card).await.unwrap();
+        app.refresh_usage(Pool::Claude, &card).await.unwrap();
         assert_eq!(shown(&app), ("active".into(), true, None));
         // Only the full listing asks for active accounts.
         let asked = queries.lock().unwrap().clone();
@@ -871,7 +672,7 @@ mod tests {
             "id": 9, "name": "new-account", "platform": "anthropic",
             "type": "oauth", "status": "active"
         }));
-        app.claude_refresh_sub2api_provider(&saved.id)
+        app.refresh_provider(Pool::Claude, &saved.id, false)
             .await
             .unwrap();
         let store = app.claude_load().unwrap();
@@ -886,14 +687,14 @@ mod tests {
 
         *items.lock().unwrap() = json!([{"id": 7, "name": "claude-team", "platform": "anthropic",
             "type": "oauth", "status": "error", "error_message": "Token expired"}]);
-        app.claude_refresh_usage(&card).await.unwrap();
+        app.refresh_usage(Pool::Claude, &card).await.unwrap();
         assert_eq!(
             shown(&app),
             ("deactivated".into(), false, Some("Token expired".into()))
         );
 
         *items.lock().unwrap() = json!([]);
-        app.claude_refresh_sub2api_provider(&saved.id)
+        app.refresh_provider(Pool::Claude, &saved.id, false)
             .await
             .unwrap();
         assert_eq!(
@@ -911,7 +712,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (app, _, _, _, card, _, _, requests) = pool_recording(dir.path()).await;
         requests.lock().unwrap().clear();
-        app.claude_say_hi(&card).await.unwrap();
+        app.say_hi(Pool::Claude, &card).await.unwrap();
         // The usage, which shows the window only later, is left to the card.
         assert_eq!(
             *requests.lock().unwrap(),
@@ -930,7 +731,9 @@ mod tests {
         source_file(dir.path(), "http://sub2api.invalid", AUTH_TOKEN, "sk-team");
         assert!(path.exists());
         // The card sets its provider's proxy; the default account proxy is not used.
-        app.claude_save_account_proxy(&card, &base).await.unwrap();
+        app.save_account_proxy(Pool::Claude, &card, &base)
+            .await
+            .unwrap();
         assert_eq!(app.claude_load().unwrap().providers[0].proxy_url, base);
         let mut preferences = app.preferences().unwrap();
         preferences.account_proxy_url = unavailable.clone();
@@ -941,23 +744,23 @@ mod tests {
         store.providers[0].imported_account_ids.push(9);
         store.providers[0].cached_accounts.push(other);
         app.claude_save(&store).unwrap();
-        app.claude_refresh(None).await.unwrap();
-        let accounts = app.claude_accounts().await.unwrap();
+        app.refresh_all(Pool::Claude).await.unwrap();
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         let card = accounts.iter().find(|a| a.id == card).unwrap();
         assert_eq!(card.proxy_url, base);
         assert!(card.usage_error.is_none());
         let card = card.id.clone();
-        app.claude_save_account_proxy(&card, &unavailable)
+        app.save_account_proxy(Pool::Claude, &card, &unavailable)
             .await
             .unwrap();
-        assert!(app.claude_refresh(None).await.is_err());
+        assert!(app.refresh_all(Pool::Claude).await.is_err());
         assert!(app.claude_load().unwrap().providers[0]
             .cached_accounts
             .iter()
             .all(|a| a.usage_error.is_some()));
         // Explicit direct mode.
         source_file(dir.path(), &base, AUTH_TOKEN, "sk-team");
-        app.claude_save_account_proxy(&card, "direct://")
+        app.save_account_proxy(Pool::Claude, &card, "direct://")
             .await
             .unwrap();
         let mut store = app.claude_load().unwrap();
@@ -966,9 +769,9 @@ mod tests {
             .imported_account_ids
             .retain(|id| *id != 9);
         app.claude_save(&store).unwrap();
-        app.claude_refresh(None).await.unwrap();
+        app.refresh_all(Pool::Claude).await.unwrap();
         assert!(app
-            .claude_accounts()
+            .accounts(Pool::Claude)
             .await
             .unwrap()
             .iter()
@@ -982,19 +785,19 @@ mod tests {
     async fn deleted_sub2api_provider_stays_removed_until_explicit_sync() {
         let dir = tempfile::tempdir().unwrap();
         let (app, _, _, _, _, _, _, requests) = pool_recording(dir.path()).await;
-        for account in app.claude_accounts().await.unwrap() {
-            if is_card(&account.id) {
-                app.claude_delete_account(&account.id).await.unwrap();
+        for account in app.accounts(Pool::Claude).await.unwrap() {
+            if crate::sub2api::is_card(Pool::Claude, &account.id) {
+                app.delete_account(Pool::Claude, &account.id).await.unwrap();
             }
         }
         requests.lock().unwrap().clear();
-        app.claude_refresh(None).await.unwrap();
-        app.claude_refresh_recurring(0).await.unwrap();
+        app.refresh_all(Pool::Claude).await.unwrap();
+        app.refresh_recurring(Pool::Claude, 0).await.unwrap();
         assert!(requests.lock().unwrap().is_empty());
         assert!(app.claude_load().unwrap().providers[0]
             .cached_accounts
             .is_empty());
-        app.claude_sync_sub2api().await.unwrap();
+        sync_all(&app).await;
         assert!(!app.claude_load().unwrap().providers[0]
             .cached_accounts
             .is_empty());
@@ -1014,7 +817,7 @@ mod tests {
         app.claude_save(&store).unwrap();
         let original = fs::read(&path).unwrap();
         fs::write(&path, "invalid JSON").unwrap();
-        let error = app.claude_refresh_usage(&card).await.unwrap_err();
+        let error = app.refresh_usage(Pool::Claude, &card).await.unwrap_err();
         let store = app.claude_load().unwrap();
         assert_eq!(
             store.providers[0].cached_accounts[0].usage_error.as_deref(),
@@ -1023,7 +826,7 @@ mod tests {
         assert!(store.providers[0].cached_accounts[0].usage.is_some());
         assert!(store.providers[0].cached_accounts[1].usage_error.is_none());
         let error = app
-            .claude_refresh_sub2api(&provider_id, None)
+            .refresh_provider(Pool::Claude, &provider_id, false)
             .await
             .unwrap_err();
         assert!(app.claude_load().unwrap().providers[0]
@@ -1031,8 +834,8 @@ mod tests {
             .iter()
             .all(|a| a.usage_error.as_deref() == Some(error.as_str())));
         fs::write(&path, original).unwrap();
-        app.claude_refresh_usage(&card).await.unwrap();
-        let cards = app.claude_accounts().await.unwrap();
+        app.refresh_usage(Pool::Claude, &card).await.unwrap();
+        let cards = app.accounts(Pool::Claude).await.unwrap();
         assert!(cards
             .iter()
             .find(|a| a.id == card)
@@ -1065,13 +868,11 @@ mod tests {
         };
         // The settings file is required, never taken from the main settings.
         assert_eq!(
-            app.claude_save_sub2api_provider(draft.clone())
-                .await
-                .unwrap_err(),
+            app.claude_save_provider(draft.clone()).await.unwrap_err(),
             "error.sub2api.configuration_incomplete"
         );
         let mut saved = app
-            .claude_save_sub2api_provider(Provider {
+            .claude_save_provider(Provider {
                 settings: format!(" {} ", path.display()),
                 ..draft
             })
@@ -1089,7 +890,7 @@ mod tests {
         );
 
         saved.admin_base_url = "https://admin.example/api/v1/".into();
-        saved = app.claude_save_sub2api_provider(saved).await.unwrap();
+        saved = app.claude_save_provider(saved).await.unwrap();
         let connection = app.claude_sub2api_connection(&saved).unwrap();
         assert_eq!(connection.admin_base, "https://admin.example/api/v1");
         assert_eq!(
@@ -1100,7 +901,7 @@ mod tests {
         let stored = fs::read_to_string(app.claude_store_path()).unwrap();
         assert!(!stored.contains("sk-from") && !stored.contains("admin-password"));
         assert!(app
-            .claude_save_sub2api_provider(Provider {
+            .claude_save_provider(Provider {
                 settings: dir.path().join("missing.json").to_str().unwrap().into(),
                 username: "admin".into(),
                 password: "password".into(),
@@ -1111,7 +912,7 @@ mod tests {
             .contains("Cannot read"));
         saved.admin_base_url = "https://user:password@admin.example".into();
         assert_eq!(
-            app.claude_save_sub2api_provider(saved).await.unwrap_err(),
+            app.claude_save_provider(saved).await.unwrap_err(),
             "error.sub2api.invalid_base_url"
         );
     }
@@ -1127,19 +928,19 @@ mod tests {
         fs::write(main_path(&location), &official).unwrap();
         // Settings without a replacing credential are official, at any address.
         assert_eq!(
-            current(&app.claude_accounts().await.unwrap()),
+            current(&app.accounts(Pool::Claude).await.unwrap()),
             [alice.clone()]
         );
 
         // A missing settings file fails without changing anything.
         let source_raw = fs::read(&path).unwrap();
         fs::remove_file(&path).unwrap();
-        assert!(app.claude_switch_account(&card).await.is_err());
+        assert!(app.switch_account(Pool::Claude, &card).await.is_err());
         assert_eq!(fs::read_to_string(main_path(&location)).unwrap(), official);
         assert!(!app.claude_official_path().exists());
         fs::write(&path, &source_raw).unwrap();
 
-        let execution = app.claude_switch_account(&card).await.unwrap();
+        let execution = app.switch_account(Pool::Claude, &card).await.unwrap();
         assert_eq!(execution.provider.as_deref(), Some("team"));
         assert!(execution.login_overrides.is_empty());
         assert_eq!(
@@ -1149,7 +950,7 @@ mod tests {
         );
         assert_eq!(fs::read(&path).unwrap(), source_raw);
         assert_eq!(
-            current(&app.claude_accounts().await.unwrap()),
+            current(&app.accounts(Pool::Claude).await.unwrap()),
             [card.clone()]
         );
 
@@ -1162,7 +963,7 @@ mod tests {
         edited["env"][BASE_URL] = "https://edited.invalid".into();
         write_main(&location, &edited);
         source_file(dir.path(), &base, "ANTHROPIC_API_KEY", "rotated-model-key");
-        let execution = app.claude_switch_account(&card).await.unwrap();
+        let execution = app.switch_account(Pool::Claude, &card).await.unwrap();
         assert!(execution.login_overrides.is_empty());
         assert_eq!(
             main_settings(&location)["env"],
@@ -1170,26 +971,26 @@ mod tests {
                 "ANTHROPIC_API_KEY": "rotated-model-key"})
         );
         assert_eq!(
-            current(&app.claude_accounts().await.unwrap()),
+            current(&app.accounts(Pool::Claude).await.unwrap()),
             [card.clone()]
         );
 
         // Back to the login: the recorded settings return, with what changed
         // while a provider was applied, and the relay recorded with them.
-        let execution = app.claude_switch_account(&alice).await.unwrap();
+        let execution = app.switch_account(Pool::Claude, &alice).await.unwrap();
         assert!(execution.login_overrides.is_empty());
         let mut restored: Value = serde_json::from_str(&official).unwrap();
         restored["statusLine"] = json!({"type": "command"});
         assert_eq!(main_settings(&location), restored);
         assert_eq!(
-            current(&app.claude_accounts().await.unwrap()),
+            current(&app.accounts(Pool::Claude).await.unwrap()),
             [alice.clone()]
         );
         // Between logins the settings are left alone.
         let mut changed = main_settings(&location);
         changed["theme"] = "dark".into();
         write_main(&location, &changed);
-        app.claude_switch_account(&alice).await.unwrap();
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
         assert_eq!(main_settings(&location), changed);
 
         // A credential written outside Copool takes Claude Code off the login.
@@ -1197,17 +998,17 @@ mod tests {
             "env": {AUTH_TOKEN: "outside", BASE_URL: "https://gateway.invalid",
                 "DISABLE_TELEMETRY": "1"}});
         write_main(&location, &outside);
-        assert!(current(&app.claude_accounts().await.unwrap()).is_empty());
+        assert!(current(&app.accounts(Pool::Claude).await.unwrap()).is_empty());
         // The record went with its restore, so only what replaces the login goes.
         assert!(!app.claude_official_path().exists());
-        app.claude_switch_account(&alice).await.unwrap();
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
         assert_eq!(
             main_settings(&location),
             json!({"theme": "dark", "env": {"DISABLE_TELEMETRY": "1"}})
         );
         assert!(!app.claude_official_path().exists());
         write_main(&location, &outside);
-        app.claude_switch_account(&card).await.unwrap();
+        app.switch_account(Pool::Claude, &card).await.unwrap();
         assert_eq!(
             main_settings(&location),
             json!({"theme": "dark", "env": {"DISABLE_TELEMETRY": "1",
@@ -1217,14 +1018,14 @@ mod tests {
         // What remained is recorded, so the login does not keep the provider's
         // base URL and send its token to the gateway.
         assert!(app.claude_official_path().exists());
-        app.claude_switch_account(&alice).await.unwrap();
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
         assert_eq!(
             main_settings(&location),
             json!({"theme": "dark", "env": {"DISABLE_TELEMETRY": "1"}})
         );
         assert!(!app.claude_official_path().exists());
-        app.claude_delete_account(&card).await.unwrap();
-        assert_eq!(app.claude_accounts().await.unwrap().len(), 1);
+        app.delete_account(Pool::Claude, &card).await.unwrap();
+        assert_eq!(app.accounts(Pool::Claude).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1233,7 +1034,7 @@ mod tests {
         let (app, location, base, _, card, alice) = pool(dir.path()).await;
         let official = json!({"theme": "dark", "env": {"DISABLE_TELEMETRY": "1"}});
         write_main(&location, &official);
-        app.claude_switch_account(&card).await.unwrap();
+        app.switch_account(Pool::Claude, &card).await.unwrap();
         let without_credential = || {
             let mut edited = main_settings(&location);
             edited["env"]
@@ -1245,11 +1046,11 @@ mod tests {
         };
         // Between providers, the record is kept rather than replaced.
         without_credential();
-        app.claude_switch_account(&card).await.unwrap();
+        app.switch_account(Pool::Claude, &card).await.unwrap();
         assert_eq!(main_settings(&location)["env"][AUTH_TOKEN], "sk-team");
         // Back to the login, the gateway goes with what the provider added.
         without_credential();
-        app.claude_switch_account(&alice).await.unwrap();
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
         assert_eq!(main_settings(&location), official);
         assert!(!app.claude_official_path().exists());
     }
@@ -1270,7 +1071,7 @@ mod tests {
         };
         write(&found, "sk-found");
         let saved = app
-            .claude_save_sub2api_provider(Provider {
+            .claude_save_provider(Provider {
                 settings: "team".into(),
                 username: "admin@example.com".into(),
                 password: "secret".into(),
@@ -1285,28 +1086,38 @@ mod tests {
         assert_eq!(saved.settings, "team");
         let stored = fs::read_to_string(app.claude_store_path()).unwrap();
         assert!(!stored.contains("team-settings.json") && !stored.contains("\"settings\""));
-        assert_eq!(app.claude_sub2api_providers().unwrap()[0].settings, "team");
-        app.claude_sync_sub2api().await.unwrap();
+        assert_eq!(app.claude_providers().unwrap()[0].settings, "team");
+        sync_all(&app).await;
         // The file moved: the next switch searches again.
         let moved = location.config_dir.join("other/settings-team.json");
         fs::create_dir_all(moved.parent().unwrap()).unwrap();
         fs::rename(&found, &moved).unwrap();
         write(&moved, "sk-moved");
-        app.claude_switch_account(&saved.card_id(7)).await.unwrap();
+        app.switch_account(
+            Pool::Claude,
+            &crate::sub2api::card_id(Pool::Claude, &saved.id, 7),
+        )
+        .await
+        .unwrap();
         assert_eq!(main_settings(&location)["env"][AUTH_TOKEN], "sk-moved");
         // A path chosen later is kept instead.
         let picked = dir.path().join("elsewhere/team.json");
         fs::create_dir_all(picked.parent().unwrap()).unwrap();
         write(&picked, "sk-picked");
         let saved = app
-            .claude_save_sub2api_provider(Provider {
+            .claude_save_provider(Provider {
                 settings: picked.to_str().unwrap().into(),
                 ..saved
             })
             .await
             .unwrap();
         assert_eq!(saved.settings_path, picked.to_str().unwrap());
-        app.claude_switch_account(&saved.card_id(7)).await.unwrap();
+        app.switch_account(
+            Pool::Claude,
+            &crate::sub2api::card_id(Pool::Claude, &saved.id, 7),
+        )
+        .await
+        .unwrap();
         assert_eq!(main_settings(&location)["env"][AUTH_TOKEN], "sk-picked");
     }
 
@@ -1315,11 +1126,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, _, _, card, alice) = pool(dir.path()).await;
         assert!(!main_path(&location).exists());
-        app.claude_switch_account(&card).await.unwrap();
+        app.switch_account(Pool::Claude, &card).await.unwrap();
         assert!(main_path(&location).exists());
-        app.claude_switch_account(&alice).await.unwrap();
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
         assert!(!main_path(&location).exists());
-        assert_eq!(current(&app.claude_accounts().await.unwrap()), [alice]);
+        assert_eq!(current(&app.accounts(Pool::Claude).await.unwrap()), [alice]);
     }
 
     #[tokio::test]
@@ -1327,20 +1138,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (app, _, _, _, card, alice, secrets, requests) = pool_recording(dir.path()).await;
         let provider = app.claude_load().unwrap().providers[0].id.clone();
-        assert_eq!(current(&app.claude_accounts().await.unwrap()), [alice]);
+        assert_eq!(current(&app.accounts(Pool::Claude).await.unwrap()), [alice]);
         secrets.clear_reads();
         requests.lock().unwrap().clear();
         // An inactive provider is included even on tick 1.
-        app.claude_refresh_recurring(1).await.unwrap();
-        assert_eq!(secrets.reads(), [password_secret(&provider)]);
+        app.refresh_recurring(Pool::Claude, 1).await.unwrap();
+        assert_eq!(
+            secrets.reads(),
+            [crate::sub2api::password_secret(Pool::Claude, &provider)]
+        );
         assert_eq!(logins(&requests), 1);
         // Its card shows the very next round.
-        app.set_claude_refresh_schedule(crate::refresh_policy::Schedule {
-            at: 1_000,
-            tick: 2,
-            interval: 300,
-        });
-        let accounts = app.claude_accounts().await.unwrap();
+        app.set_schedule(
+            Pool::Claude,
+            crate::refresh_policy::Schedule {
+                at: 1_000,
+                tick: 2,
+                interval: 300,
+            },
+        );
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
         assert_eq!(
             accounts
                 .iter()
@@ -1357,15 +1174,18 @@ mod tests {
         let (app, _, _, _, card, _, secrets, requests) = pool_recording(dir.path()).await;
         let (other, other_requests) = add_provider(&app, dir.path(), "other-secret").await;
         let first = app.claude_load().unwrap().providers[0].id.clone();
-        app.claude_switch_account(&card).await.unwrap();
+        app.switch_account(Pool::Claude, &card).await.unwrap();
         secrets.clear_reads();
         requests.lock().unwrap().clear();
         other_requests.lock().unwrap().clear();
         // Every round includes the inactive provider.
-        app.claude_refresh_recurring(1).await.unwrap();
+        app.refresh_recurring(Pool::Claude, 1).await.unwrap();
         let mut reads = secrets.reads();
         reads.sort();
-        let mut expected = vec![password_secret(&first), password_secret(&other.id)];
+        let mut expected = vec![
+            crate::sub2api::password_secret(Pool::Claude, &first),
+            crate::sub2api::password_secret(Pool::Claude, &other.id),
+        ];
         expected.sort();
         assert_eq!(reads, expected);
         assert_eq!((logins(&requests), logins(&other_requests)), (1, 1));
@@ -1380,12 +1200,35 @@ mod tests {
         secrets.clear_reads();
         requests.lock().unwrap().clear();
         other_requests.lock().unwrap().clear();
-        app.claude_refresh(None).await.unwrap();
+        app.refresh_all(Pool::Claude).await.unwrap();
         let mut reads = secrets.reads();
         reads.sort();
-        let mut expected = vec![password_secret(&first), password_secret(&other.id)];
+        let mut expected = vec![
+            crate::sub2api::password_secret(Pool::Claude, &first),
+            crate::sub2api::password_secret(Pool::Claude, &other.id),
+        ];
         expected.sort();
         assert_eq!(reads, expected);
         assert_eq!((logins(&requests), logins(&other_requests)), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn the_claude_proxy_routes_a_provider_to_its_gateway_with_its_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, base, _, _, alice) = pool(dir.path()).await;
+        let candidates = app.claude_proxy_candidates().unwrap();
+        // The official login, and one route for the provider.
+        assert!(candidates.iter().any(|c| c.id == alice));
+        let route = candidates
+            .iter()
+            .find(|c| c.auth_json.get("copoolProvider").is_some())
+            .unwrap();
+        let provider = &route.auth_json["copoolProvider"];
+        assert_eq!(provider["baseUrl"], base.as_str());
+        assert_eq!(provider["apiKey"], "sk-team");
+        // ANTHROPIC_AUTH_TOKEN is sent as a bearer token.
+        assert_eq!(provider["authHeader"], "authorization");
+        assert_eq!(provider["preferred"], false);
+        assert!(route.usage.is_some());
     }
 }

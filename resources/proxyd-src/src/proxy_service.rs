@@ -37,6 +37,7 @@ use crate::auth::extract_auth;
 use crate::auth::refresh_chatgpt_auth_tokens;
 use crate::auth::write_active_codex_auth;
 use crate::models::ApiProxyStatus;
+use crate::models::Pool;
 use crate::models::StoredAccount;
 use crate::models::UsageSnapshot;
 use crate::models::UsageWindow;
@@ -127,9 +128,33 @@ const REQUEST_MODEL_MAPPINGS: &[(&str, &str)] = &[
 ];
 const ACTIVE_USAGE_REFRESH_INTERVAL_SECONDS: u64 = 10;
 const FULL_USAGE_REFRESH_TICKS: u64 = 6;
+/// The Claude usage endpoint answers HTTP 429 to frequent requests: every
+/// account is asked as often as the app's own rounds ask.
+const CLAUDE_USAGE_REFRESH_INTERVAL_SECONDS: u64 = 300;
+/// A future that answers a candidate's renewal from outside the engine.
+pub(crate) type RenewCandidate = Arc<
+    dyn Fn(
+            String,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 #[derive(Clone)]
 pub(crate) struct ProxyStorageContext {
+    /// The pool whose accounts the proxy serves, and whose API it offers.
+    pub(crate) pool: Pool,
+    /// The proxy's API key file in `data_dir`.
+    pub(crate) key_file: &'static str,
+    /// Whether the candidates include the accounts of `accounts.json`, where
+    /// renewals and usage are then stored.
+    pub(crate) read_store: bool,
+    /// Whether the proxy refreshes its accounts' usage itself.
+    pub(crate) refresh_usage: bool,
+    /// Renews a candidate's login where the pool keeps it, returning the
+    /// login now kept; without, the engine renews into `accounts.json`.
+    pub(crate) renew_candidate: Option<RenewCandidate>,
     pub(crate) data_dir: PathBuf,
     pub(crate) store_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) sync_active_auth_on_refresh: bool,
@@ -181,6 +206,7 @@ struct ProxyContext {
 }
 
 struct ApiProxyHandleState {
+    pool: Pool,
     port: u16,
     api_key: Arc<RwLock<String>>,
     task_finished: bool,
@@ -291,6 +317,11 @@ pub(crate) fn new_proxy_storage_context(
     sync_active_auth_on_refresh: bool,
 ) -> ProxyStorageContext {
     ProxyStorageContext {
+        pool: Pool::Codex,
+        key_file: "api-proxy.key",
+        read_store: true,
+        refresh_usage: true,
+        renew_candidate: None,
         data_dir,
         store_lock,
         sync_active_auth_on_refresh,
@@ -432,21 +463,32 @@ pub(crate) async fn start_api_proxy_with_runtime(
     let context = Arc::new(ProxyContext {
         storage: storage.clone(),
         api_key: shared_api_key.clone(),
-        upstream_base_url: storage
-            .upstream_base_url
-            .clone()
-            .unwrap_or_else(resolve_codex_upstream_base_url),
+        upstream_base_url: storage.upstream_base_url.clone().unwrap_or_else(|| {
+            match storage.pool {
+                Pool::Codex => resolve_codex_upstream_base_url(),
+                Pool::Claude => crate::claude_api::API_ROOT.into(),
+            }
+        }),
         client,
         shared: shared.clone(),
     });
     let request_body_limit = resolve_proxy_request_body_limit_bytes();
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let router = Router::new()
-        .route("/health", get(health_handler))
-        .route("/v1/models", get(models_handler))
-        .route("/v1/chat/completions", post(chat_completions_handler))
-        .route("/v1/responses", post(responses_handler))
+    let router = Router::new().route("/health", get(health_handler));
+    let router = match storage.pool {
+        Pool::Codex => router
+            .route("/v1/models", get(models_handler))
+            .route("/v1/chat/completions", post(chat_completions_handler))
+            .route("/v1/responses", post(responses_handler)),
+        Pool::Claude => router
+            .route("/anthropic/v1/messages", post(claude_messages_handler))
+            .route(
+                "/anthropic/v1/messages/count_tokens",
+                post(claude_messages_handler),
+            ),
+    };
+    let router = router
         .fallback(any(unsupported_proxy_handler))
         .layer(DefaultBodyLimit::max(request_body_limit))
         .with_state(context.clone());
@@ -468,6 +510,7 @@ pub(crate) async fn start_api_proxy_with_runtime(
     });
 
     let handle = ApiProxyRuntimeHandle {
+        pool: storage.pool,
         port,
         api_key: shared_api_key,
         shutdown_tx: Some(shutdown_tx),
@@ -610,7 +653,7 @@ async fn chat_completions_handler(
         };
 
     let upstream =
-        match send_codex_request_over_candidates(&context, &headers, &upstream_payload).await {
+        match send_over_candidates(&context, &headers, &Outbound::Codex(&upstream_payload)).await {
             Ok(value) => value,
             Err(response) => return response,
         };
@@ -674,7 +717,7 @@ async fn responses_handler(
         };
 
     let upstream =
-        match send_codex_request_over_candidates(&context, &headers, &upstream_payload).await {
+        match send_over_candidates(&context, &headers, &Outbound::Codex(&upstream_payload)).await {
             Ok(value) => value,
             Err(response) => return response,
         };
@@ -717,6 +760,38 @@ async fn responses_handler(
     }
 }
 
+/// Anthropic's Messages API, passed through to the Claude pool's accounts:
+/// the request and the answer as they are, streamed or not.
+async fn claude_messages_handler(
+    State(context): State<Arc<ProxyContext>>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response<Body> {
+    if let Some(response) = ensure_authorized(&headers, &context.api_key) {
+        return response;
+    }
+    if is_payload_oversized(&body, resolve_proxy_request_body_limit_bytes()) {
+        return json_error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Request body exceeds the configured limit",
+        );
+    }
+    // The upstream's own path: the request's, without the proxy's base path.
+    let path = uri
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or(uri.path());
+    let path = path.strip_prefix(Pool::Claude.base_path()).unwrap_or(path);
+    let outbound = Outbound::Claude { path, body: &body };
+    let (candidate, upstream) = match send_over_candidates(&context, &headers, &outbound).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    update_proxy_target(&context, &candidate).await;
+    build_streamed_response(upstream)
+}
+
 async fn unsupported_proxy_handler(
     State(context): State<Arc<ProxyContext>>,
     headers: HeaderMap,
@@ -731,10 +806,14 @@ async fn unsupported_proxy_handler(
         return response;
     }
 
+    let supported = match context.storage.pool {
+        Pool::Codex => "GET /v1/models, POST /v1/chat/completions and POST /v1/responses",
+        Pool::Claude => "POST /anthropic/v1/messages and POST /anthropic/v1/messages/count_tokens",
+    };
     json_error_response(
         StatusCode::NOT_FOUND,
         &format!(
-            "This proxy supports only GET /v1/models, POST /v1/chat/completions and POST /v1/responses; received {method} {}",
+            "This proxy supports only {supported}; received {method} {}",
             uri.path()
         ),
     )
@@ -1507,10 +1586,17 @@ fn map_text_settings(root: &mut Map<String, Value>, text: &Value) {
     }
 }
 
-async fn send_codex_request_over_candidates(
+/// A request for the upstream: Codex's payload, or an Anthropic API request
+/// passed through as it came.
+enum Outbound<'a> {
+    Codex(&'a Value),
+    Claude { path: &'a str, body: &'a Bytes },
+}
+
+async fn send_over_candidates(
     context: &ProxyContext,
     headers: &HeaderMap,
-    payload: &Value,
+    outbound: &Outbound<'_>,
 ) -> Result<(ProxyCandidate, reqwest::Response), Response<Body>> {
     let candidates = match load_proxy_candidates(&context.storage).await {
         Ok(items) if !items.is_empty() => items,
@@ -1534,16 +1620,23 @@ async fn send_codex_request_over_candidates(
         let mut did_refresh = false;
 
         loop {
-            let upstream =
-                match forward_codex_request_with_candidate(context, &candidate, headers, payload)
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(error) => {
-                        attempt_errors.push(format!("{}: {}", candidate.label, error));
-                        break;
-                    }
-                };
+            let forwarded = match outbound {
+                Outbound::Codex(payload) => {
+                    forward_codex_request_with_candidate(context, &candidate, headers, payload)
+                        .await
+                }
+                Outbound::Claude { path, body } => {
+                    forward_claude_request_with_candidate(context, &candidate, headers, path, body)
+                        .await
+                }
+            };
+            let upstream = match forwarded {
+                Ok(response) => response,
+                Err(error) => {
+                    attempt_errors.push(format!("{}: {}", candidate.label, error));
+                    break;
+                }
+            };
 
             let status = upstream.status();
             if status.is_success() {
@@ -1726,20 +1819,7 @@ async fn forward_codex_request_with_candidate(
     let serialized = serde_json::to_vec(payload)
         .map_err(|error| format!("Failed to serialize the upstream request: {error}"))?;
 
-    let insecure = provider.is_some_and(|p| p["allowInsecureTLS"] == true);
-    let client = if candidate.proxy_url.trim().is_empty() && !insecure {
-        context.client.clone()
-    } else {
-        // Cached per proxy, so a shared account proxy keeps its connections.
-        crate::proxy_session::client(
-            &candidate.proxy_url,
-            crate::proxy_session::Options {
-                timeout: std::time::Duration::from_secs(180),
-                user_agent: "codex-tools-proxy/0.1".into(),
-                insecure,
-            },
-        )?
-    };
+    let client = candidate_client(context, candidate)?;
     let mut request = client
         .post(&upstream_url)
         .header(
@@ -1761,6 +1841,97 @@ async fn forward_codex_request_with_candidate(
         .send()
         .await
         .map_err(|error| format!("Codex upstream request failed {upstream_url}: {error}"))
+}
+
+/// Request headers not passed on: the client's credential for the proxy,
+/// and those of its own connection.
+fn forwards_request_header(name: &str) -> bool {
+    !matches!(
+        name.to_ascii_lowercase().as_str(),
+        "host"
+            | "authorization"
+            | "x-api-key"
+            | "content-length"
+            | "connection"
+            | "transfer-encoding"
+            | "accept-encoding"
+            | "proxy-authorization"
+    )
+}
+
+/// Sends an Anthropic API request with a Claude account's login, or to a
+/// Sub2api provider's gateway with its key.
+async fn forward_claude_request_with_candidate(
+    context: &ProxyContext,
+    candidate: &ProxyCandidate,
+    headers: &HeaderMap,
+    path: &str,
+    body: &Bytes,
+) -> Result<reqwest::Response, String> {
+    let provider = candidate.auth_json.get("copoolProvider");
+    let base = provider
+        .and_then(|p| p["baseUrl"].as_str())
+        .unwrap_or(&context.upstream_base_url);
+    let upstream_url = format!("{}{path}", base.trim_end_matches('/'));
+    let client = candidate_client(context, candidate)?;
+    let mut request = client.post(&upstream_url).body(body.clone());
+    for (name, value) in headers {
+        if forwards_request_header(name.as_str()) && name.as_str() != "anthropic-beta" {
+            request = request.header(name, value);
+        }
+    }
+    let betas = headers
+        .get_all("anthropic-beta")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned);
+    let mut betas: Vec<String> = betas.collect();
+    match provider {
+        Some(provider) if provider["authHeader"] == "x-api-key" => {
+            request = request.header("x-api-key", &candidate.access_token);
+        }
+        Some(_) => request = request.bearer_auth(&candidate.access_token),
+        None => {
+            // A subscription login is accepted on the API with its beta.
+            request = request.bearer_auth(&candidate.access_token);
+            if !betas.iter().any(|b| b == crate::claude_api::OAUTH_BETA) {
+                betas.push(crate::claude_api::OAUTH_BETA.into());
+            }
+        }
+    }
+    if !betas.is_empty() {
+        request = request.header("anthropic-beta", betas.join(","));
+    }
+    request
+        .send()
+        .await
+        .map_err(|error| format!("Claude upstream request failed {upstream_url}: {error}"))
+}
+
+/// The client for a candidate: the shared one, or one through its proxy.
+fn candidate_client(
+    context: &ProxyContext,
+    candidate: &ProxyCandidate,
+) -> Result<reqwest::Client, String> {
+    let insecure = candidate
+        .auth_json
+        .get("copoolProvider")
+        .is_some_and(|p| p["allowInsecureTLS"] == true);
+    if candidate.proxy_url.trim().is_empty() && !insecure {
+        return Ok(context.client.clone());
+    }
+    // Cached per proxy, so a shared account proxy keeps its connections.
+    crate::proxy_session::client(
+        &candidate.proxy_url,
+        crate::proxy_session::Options {
+            timeout: std::time::Duration::from_secs(180),
+            user_agent: "codex-tools-proxy/0.1".into(),
+            insecure,
+        },
+    )
 }
 
 fn parse_codex_version_from_user_agent(user_agent: &str) -> Option<&str> {
@@ -1810,7 +1981,11 @@ async fn load_proxy_candidates(
     storage: &ProxyStorageContext,
 ) -> Result<Vec<ProxyCandidate>, String> {
     let _guard = storage.store_lock.lock().await;
-    let store = load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?;
+    let store = if storage.read_store {
+        load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?
+    } else {
+        Default::default()
+    };
 
     let selected = if storage.prefer_local_selection {
         store
@@ -1849,9 +2024,16 @@ async fn load_proxy_candidates(
         .map(|load| load())
         .transpose()?
         .unwrap_or_default();
+    // An account the pool reports as the one its tool uses.
+    let selected = selected.or_else(|| {
+        accounts
+            .iter()
+            .find(|a| a.extra.get("copoolCurrent").and_then(Value::as_bool) == Some(true))
+            .map(|a| a.id.clone())
+    });
     let mut candidates = accounts
         .into_iter()
-        .filter_map(account_to_proxy_candidate)
+        .filter_map(|account| account_to_proxy_candidate(storage.pool, account))
         .map(|mut candidate| {
             if candidate.auth_json.get("copoolProvider").is_none()
                 && candidate.proxy_url.trim().is_empty()
@@ -1871,16 +2053,29 @@ async fn load_proxy_candidates(
     Ok(candidates)
 }
 
-fn account_to_proxy_candidate(account: StoredAccount) -> Option<ProxyCandidate> {
+fn account_to_proxy_candidate(pool: Pool, account: StoredAccount) -> Option<ProxyCandidate> {
     if !account.is_available() || account.awaiting_first_request() {
         return None;
     }
-    let extracted = if let Some(provider) = account.auth_json.get("copoolProvider") {
-        let mut auth = extract_auth(&account.auth_json).ok()?;
-        auth.access_token = provider["apiKey"].as_str()?.into();
-        auth
-    } else {
-        extract_auth(&account.auth_json).ok()?
+    let extracted = match (pool, account.auth_json.get("copoolProvider")) {
+        (Pool::Codex, Some(provider)) => {
+            let mut auth = extract_auth(&account.auth_json).ok()?;
+            auth.access_token = provider["apiKey"].as_str()?.into();
+            auth
+        }
+        (Pool::Codex, None) => extract_auth(&account.auth_json).ok()?,
+        // A Claude login, or a Claude provider's key; the account is the
+        // stored one's.
+        (Pool::Claude, provider) => crate::models::ExtractedAuth {
+            access_token: match provider {
+                Some(provider) => provider["apiKey"].as_str()?.into(),
+                None => {
+                    crate::claude_api::text(&account.auth_json["claudeAiOauth"]["accessToken"])?
+                }
+            },
+            account_id: account.account_id.clone(),
+            ..Default::default()
+        },
     };
     let renews = account.renews();
     Some(ProxyCandidate {
@@ -2012,19 +2207,24 @@ fn compare_runtime_proxy_candidates(
     left.id.cmp(&right.id)
 }
 
-async fn sleep_usage_refresh_interval() {
-    tokio::time::sleep(std::time::Duration::from_secs(
-        ACTIVE_USAGE_REFRESH_INTERVAL_SECONDS,
-    ))
+async fn sleep_usage_refresh_interval(pool: Pool) {
+    tokio::time::sleep(std::time::Duration::from_secs(match pool {
+        Pool::Codex => ACTIVE_USAGE_REFRESH_INTERVAL_SECONDS,
+        Pool::Claude => CLAUDE_USAGE_REFRESH_INTERVAL_SECONDS,
+    }))
     .await;
 }
 
 async fn run_usage_refresh_loop(context: Arc<ProxyContext>) {
+    // The pool's own refresh keeps the usage current.
+    if !context.storage.refresh_usage {
+        return;
+    }
     refresh_all_proxy_account_usage(&context.storage).await;
 
     let mut tick = 0u64;
     loop {
-        sleep_usage_refresh_interval().await;
+        sleep_usage_refresh_interval(context.storage.pool).await;
         tick = tick.saturating_add(1);
         refresh_proxy_account_usage_for_tick(&context, tick).await;
     }
@@ -2054,8 +2254,13 @@ async fn refresh_proxy_account_usage_for_tick(context: &ProxyContext, tick: u64)
         let snapshot = context.shared.lock().await;
         snapshot.active_account_id.clone()
     };
-    let refresh_candidates =
-        usage_refresh_candidates_for_tick(tick, active_account_id.as_deref(), candidates);
+    // Each Claude round asks for every account.
+    let refresh_candidates = match context.storage.pool {
+        Pool::Codex => {
+            usage_refresh_candidates_for_tick(tick, active_account_id.as_deref(), candidates)
+        }
+        Pool::Claude => candidates,
+    };
     refresh_proxy_candidate_usage(&context.storage, refresh_candidates).await;
 }
 
@@ -2083,24 +2288,42 @@ async fn refresh_proxy_candidate_usage(
     candidates: Vec<ProxyCandidate>,
 ) {
     // The upstream the proxy forwards to is also where usage is read.
-    let origin = storage
-        .upstream_base_url
-        .as_deref()
-        .map(|configured| chatgpt_base_origin(Some(configured)))
-        .unwrap_or_else(resolve_chatgpt_base_origin);
+    let origin = match storage.pool {
+        Pool::Codex => storage
+            .upstream_base_url
+            .as_deref()
+            .map(|configured| chatgpt_base_origin(Some(configured)))
+            .unwrap_or_else(resolve_chatgpt_base_origin),
+        Pool::Claude => storage
+            .upstream_base_url
+            .clone()
+            .unwrap_or_else(|| crate::claude_api::API_ROOT.into()),
+    };
     // Sub2api providers carry their API key as the token; it is never sent to
-    // the ChatGPT usage endpoints.
+    // the usage endpoints.
     for candidate in candidates
         .into_iter()
         .filter(|c| c.auth_json.get("copoolProvider").is_none())
     {
-        let result = fetch_usage_snapshot_from(
-            &origin,
-            &candidate.access_token,
-            &candidate.account_id,
-            &candidate.proxy_url,
-        )
-        .await;
+        let result = match storage.pool {
+            Pool::Codex => {
+                fetch_usage_snapshot_from(
+                    &origin,
+                    &candidate.access_token,
+                    &candidate.account_id,
+                    &candidate.proxy_url,
+                )
+                .await
+            }
+            Pool::Claude => {
+                crate::claude_api::fetch_usage(
+                    &origin,
+                    &candidate.auth_json["claudeAiOauth"],
+                    &candidate.proxy_url,
+                )
+                .await
+            }
+        };
         persist_candidate_usage_result(storage, &candidate.id, result).await;
     }
 }
@@ -2201,23 +2424,48 @@ async fn refresh_proxy_candidate_auth(
     if !candidate.renews {
         return Err(crate::models::RENEWAL_OFF.into());
     }
-    let refreshed_auth_json =
-        refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?;
-    // A login renewed elsewhere in the meantime is the one to retry with.
-    let refreshed_auth_json = persist_refreshed_candidate_auth(
-        storage,
-        &candidate.id,
-        &candidate.auth_json,
-        &refreshed_auth_json,
-    )
-    .await?;
+    let refreshed_auth_json = match &storage.renew_candidate {
+        // The pool renews the login where it keeps it.
+        Some(renew) => renew(candidate.id.clone()).await?,
+        None => {
+            let refreshed = match storage.pool {
+                Pool::Codex => {
+                    refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?
+                }
+                Pool::Claude => {
+                    let mut auth = candidate.auth_json.clone();
+                    crate::claude_api::renew(&mut auth["claudeAiOauth"], &candidate.proxy_url)
+                        .await?;
+                    auth
+                }
+            };
+            // A login renewed elsewhere in the meantime is the one to retry with.
+            persist_refreshed_candidate_auth(
+                storage,
+                &candidate.id,
+                &candidate.auth_json,
+                &refreshed,
+            )
+            .await?
+        }
+    };
 
-    let extracted = extract_auth(&refreshed_auth_json).map_err(|error| {
-        format!(
-            "Failed to parse the account login after refresh: {}",
-            unlocalized(&error)
-        )
-    })?;
+    let extracted = match storage.pool {
+        Pool::Codex => extract_auth(&refreshed_auth_json).map_err(|error| {
+            format!(
+                "Failed to parse the account login after refresh: {}",
+                unlocalized(&error)
+            )
+        })?,
+        Pool::Claude => crate::models::ExtractedAuth {
+            access_token: crate::claude_api::text(
+                &refreshed_auth_json["claudeAiOauth"]["accessToken"],
+            )
+            .ok_or("Claude returned no access token")?,
+            account_id: candidate.account_id.clone(),
+            ..Default::default()
+        },
+    };
 
     Ok(ProxyCandidate {
         renews: candidate.renews,
@@ -2251,7 +2499,19 @@ async fn persist_refreshed_candidate_auth(
         .iter_mut()
         .find(|account| account.id == account_id)
     {
-        if !crate::auth::renewal_replaces(refreshed_auth_json, from, &account.auth_json) {
+        let replaces = match storage.pool {
+            Pool::Codex => {
+                crate::auth::renewal_replaces(refreshed_auth_json, from, &account.auth_json)
+            }
+            Pool::Claude => {
+                account.auth_json == *from
+                    || crate::claude_api::newer_login(
+                        &refreshed_auth_json["claudeAiOauth"],
+                        &account.auth_json["claudeAiOauth"],
+                    )
+            }
+        };
+        if !replaces {
             return Ok(account.auth_json.clone());
         }
         account.auth_json = refreshed_auth_json.clone();
@@ -2265,6 +2525,7 @@ async fn persist_refreshed_candidate_auth(
     }
 
     if storage.sync_active_auth_on_refresh
+        && storage.pool == Pool::Codex
         && crate::auth::read_current_codex_auth()
             .ok()
             .as_ref()
@@ -2524,6 +2785,9 @@ async fn read_persisted_api_proxy_key(
     if let Some(value) = read_api_proxy_key_file(storage)? {
         return Ok(Some(value));
     }
+    if !keeps_legacy_key(storage) {
+        return Ok(None);
+    }
 
     let _guard = storage.store_lock.lock().await;
     let store = load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?;
@@ -2543,6 +2807,11 @@ async fn read_persisted_api_proxy_key(
 async fn ensure_persisted_api_proxy_key(storage: &ProxyStorageContext) -> Result<String, String> {
     if let Some(existing) = read_api_proxy_key_file(storage)? {
         return Ok(existing);
+    }
+    if !keeps_legacy_key(storage) {
+        let new_key = generate_api_proxy_key();
+        write_api_proxy_key_file(storage, &new_key)?;
+        return Ok(new_key);
     }
 
     let _guard = storage.store_lock.lock().await;
@@ -2571,6 +2840,9 @@ async fn regenerate_persisted_api_proxy_key(
 ) -> Result<String, String> {
     let new_key = generate_api_proxy_key();
     write_api_proxy_key_file(storage, &new_key)?;
+    if !keeps_legacy_key(storage) {
+        return Ok(new_key);
+    }
 
     let _guard = storage.store_lock.lock().await;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
@@ -2611,7 +2883,11 @@ fn write_api_proxy_key_file(storage: &ProxyStorageContext, api_key: &str) -> Res
 }
 
 fn api_proxy_key_path(storage: &ProxyStorageContext) -> Result<PathBuf, String> {
-    Ok(storage.data_dir.join("api-proxy.key"))
+    Ok(storage.data_dir.join(storage.key_file))
+}
+/// Only the Codex proxy's key was once kept in its account store.
+fn keeps_legacy_key(storage: &ProxyStorageContext) -> bool {
+    storage.pool == Pool::Codex && storage.read_store
 }
 
 #[cfg(feature = "desktop")]
@@ -2661,6 +2937,40 @@ fn build_json_proxy_response(
     body: Bytes,
 ) -> Response<Body> {
     build_proxy_response(status, upstream_headers, body)
+}
+
+/// The upstream's answer as it is: its status, headers and body, streamed.
+fn build_streamed_response(upstream: reqwest::Response) -> Response<Body> {
+    let status = upstream.status();
+    let mut response = Response::builder().status(status.as_u16());
+    for (name, value) in upstream.headers() {
+        if should_forward_response_header(name.as_str())
+            || name.as_str().eq_ignore_ascii_case("content-type")
+        {
+            response = response.header(name, value);
+        }
+    }
+    let output = stream! {
+        let mut upstream = upstream;
+        loop {
+            match upstream.chunk().await {
+                Ok(Some(chunk)) => yield Ok::<Bytes, std::io::Error>(chunk),
+                Ok(None) => break,
+                Err(error) => {
+                    yield Err(std::io::Error::other(error.to_string()));
+                    return;
+                }
+            }
+        }
+    };
+    response
+        .body(Body::from_stream(output))
+        .unwrap_or_else(|_| {
+            json_error_response(
+                StatusCode::BAD_GATEWAY,
+                "Failed to build the streaming proxy response",
+            )
+        })
 }
 
 fn build_passthrough_sse_response(upstream: reqwest::Response) -> Response<Body> {
@@ -3417,6 +3727,7 @@ async fn update_proxy_error(context: &ProxyContext, error: Option<String>) {
 
 fn snapshot_handle_state(handle: &ApiProxyRuntimeHandle) -> ApiProxyHandleState {
     ApiProxyHandleState {
+        pool: handle.pool,
         port: handle.port,
         api_key: handle.api_key.clone(),
         task_finished: handle.task.is_finished(),
@@ -3442,7 +3753,7 @@ async fn status_from_handle_state(handle: ApiProxyHandleState) -> ApiProxyStatus
             running: true,
             port: Some(handle.port),
             api_key: Some(read_current_api_key(&handle.api_key)),
-            base_url: Some(proxy_base_url(handle.port)),
+            base_url: Some(proxy_base_url(handle.pool, handle.port)),
             active_account_id: snapshot.active_account_id,
             active_account_label: snapshot.active_account_label,
             last_error: snapshot.last_error,
@@ -3482,8 +3793,8 @@ fn resolve_codex_upstream_base_url() -> String {
     resolve_upstream_base_url(&resolve_chatgpt_base_origin(), UpstreamRouteFamily::Codex)
 }
 
-fn proxy_base_url(port: u16) -> String {
-    format!("http://127.0.0.1:{port}/v1")
+fn proxy_base_url(pool: Pool, port: u16) -> String {
+    format!("http://127.0.0.1:{port}{}", pool.base_path())
 }
 
 fn resolve_proxy_request_body_limit_bytes() -> usize {
@@ -3547,6 +3858,129 @@ mod tests {
     };
     use serde_json::json;
     use std::sync::Arc;
+
+    /// The daemon's Claude pool: its own accounts.json, the usage it asks
+    /// for itself, and Anthropic's API passed through with each login.
+    #[tokio::test]
+    async fn a_claude_daemon_serves_messages_with_the_logins_it_keeps() {
+        use axum::{extract::Request, routing::any, Router};
+        let requests = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let log = requests.clone();
+        let router = Router::new().fallback(any(move |request: Request| {
+            let log = log.clone();
+            async move {
+                let path = request.uri().path().to_owned();
+                let auth = request
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_owned();
+                log.lock().unwrap().push((path.clone(), auth));
+                let body = if path.starts_with("/api/oauth/usage") {
+                    json!({"five_hour": {"utilization": 10}, "seven_day": {"utilization": 20}})
+                } else {
+                    json!({"type": "message", "content": []})
+                };
+                ([("content-type", "application/json")], body.to_string())
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = super::account_store_path_from_data_dir(dir.path());
+        let mut store = super::load_store_from_path(&path).unwrap();
+        store.accounts.push(
+            serde_json::from_value(json!({
+                "id": "alice", "label": "Alice", "accountId": "acct-alice", "addedAt": 1, "updatedAt": 1,
+                "authJson": {"claudeAiOauth": {"accessToken": "alice-access", "refreshToken": "alice-refresh", "expiresAt": 4_000_000_000_000_i64}}
+            }))
+            .unwrap(),
+        );
+        super::save_store_to_path(&path, &store).unwrap();
+        let mut storage = super::new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        storage.pool = crate::models::Pool::Claude;
+        storage.upstream_base_url = Some(base);
+        let slot = tokio::sync::Mutex::new(None);
+        let status = super::start_api_proxy_with_runtime(&storage, &slot, Some(0), "127.0.0.1")
+            .await
+            .unwrap();
+        // The daemon's key file is the one its status reads.
+        assert!(dir.path().join("api-proxy.key").exists());
+        let url = format!("{}/v1/messages", status.base_url.unwrap());
+        let response = reqwest::Client::new()
+            .post(url)
+            .bearer_auth(status.api_key.unwrap())
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let seen = requests.lock().unwrap().clone();
+        assert!(seen.contains(&("/v1/messages".into(), "Bearer alice-access".into())));
+        // Its usage is asked for and kept, as the Codex daemon keeps its own.
+        for _ in 0..50 {
+            if super::load_store_from_path(&path).unwrap().accounts[0]
+                .usage
+                .is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let usage = super::load_store_from_path(&path).unwrap().accounts[0]
+            .usage
+            .clone()
+            .unwrap();
+        assert_eq!(usage.one_week.unwrap().used_percent, 20.0);
+        super::stop_api_proxy_with_runtime(&storage, &slot)
+            .await
+            .unwrap();
+
+        // A Sub2api provider in use is sent its gateway's requests, with the
+        // key of its settings in the header they name.
+        let gateway = format!("{}/gateway", storage.upstream_base_url.clone().unwrap());
+        let provider: super::StoredAccount = serde_json::from_value(json!({
+            "id": "claude-sub2api-provider:p", "label": "Team", "accountId": "route",
+            "addedAt": 1, "updatedAt": 1,
+            "authJson": {"copoolProvider": {"id": "p", "baseUrl": gateway, "apiKey": "sk-team",
+                "authHeader": "x-api-key", "preferred": true}}
+        }))
+        .unwrap();
+        storage.provider_candidates = Some(Arc::new(move || Ok(vec![provider.clone()])));
+        storage.prefer_local_selection = true;
+        let status = super::start_api_proxy_with_runtime(&storage, &slot, Some(0), "127.0.0.1")
+            .await
+            .unwrap();
+        requests.lock().unwrap().clear();
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/messages", status.base_url.unwrap()))
+            .header("x-api-key", status.api_key.unwrap())
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        // No OAuth credential goes to a gateway: its key goes in x-api-key.
+        assert_eq!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|r| r.0 == "/gateway/v1/messages")
+                .cloned(),
+            Some(("/gateway/v1/messages".into(), String::new()))
+        );
+        super::stop_api_proxy_with_runtime(&storage, &slot)
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn account_proxy_is_fallback_for_forwarding_candidates_without_persisting() {
@@ -4414,7 +4848,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         let renewals: Vec<_> = saved
             .accounts
             .iter()
-            .map(|a| (a.renewal(), a.extra.get("renewal").cloned()))
+            .map(|a| (a.renewal().as_str(), a.extra.get("renewal").cloned()))
             .collect();
         assert_eq!(
             renewals,
@@ -4427,7 +4861,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         let candidates: Vec<_> = saved
             .accounts
             .into_iter()
-            .map(|a| (a.renewal(), a.renews()))
+            .map(|a| (a.renewal().as_str(), a.renews()))
             .collect();
         assert_eq!(
             candidates,

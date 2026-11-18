@@ -2,26 +2,42 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/features.js"), "utf8");
+const { Providers } = require("../ui/controllers.js");
+// Windows checkouts may end lines with CRLF; the markers below look for LF.
+const source = fs
+  .readFileSync(require("node:path").join(__dirname, "../ui/features.js"), "utf8")
+  .replace(/\r\n/g, "\n");
 const start = source.indexOf("function providerSyncChoices(");
-const body = source.slice(start, source.indexOf("\nasync function openProviderImport", start));
+const end = source.indexOf("\nasync function syncProvider", start);
 test("Provider menu syncs only the chosen saved provider in its pool", () => {
+  assert(start >= 0 && end > start, "providerSyncChoices found");
   const calls = [];
+  const providerControllers = {
+    claude: new Providers(null, "claude"),
+    codex: new Providers(null, "codex"),
+  };
+  providerControllers.claude.persisted = [
+    { id: "c1", name: "Claude One" },
+    { id: "c2", name: "Claude Two" },
+  ];
+  providerControllers.codex.persisted = [
+    { id: "x1", providerID: "Codex One" },
+    { id: "x2", providerID: "Codex Two" },
+  ];
   const scope = {
-    claudeProvidersSaved: [{ id: "c1", name: "Claude One" }, { id: "c2", name: "Claude Two" }],
-    providerController: { persisted: [{ providerID: "Codex One" }, { providerID: "Codex Two" }] },
-    syncClaudeSub2api: (id) => calls.push(["claude", id]),
-    openProviderImport: (id) => calls.push(["codex", id]),
+    providerControllers,
+    syncProvider: (target, key) => calls.push([target, key]),
     extra: (en) => en,
   };
   vm.createContext(scope);
-  vm.runInContext(body, scope);
+  vm.runInContext(source.slice(start, end), scope);
   const claude = scope.providerSyncChoices("claude");
   assert.equal(claude[1].label, "Claude Two");
   claude[1].run();
   scope.providerSyncChoices("codex")[0].run();
+  // Each pool's cards name the provider by its own key.
   assert.deepEqual(calls, [["claude", "c2"], ["codex", "Codex One"]]);
-  scope.claudeProvidersSaved = [];
+  providerControllers.claude.persisted = [];
   assert.equal(scope.providerSyncChoices("claude")[0].disabled, true);
 });
 

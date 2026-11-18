@@ -1,4 +1,5 @@
 use super::{account, auth, fixture, save_fixture, stored};
+use crate::Pool;
 use crate::{refresh_policy::*, utils::now_unix_seconds, Preferences};
 use serde_json::{json, Value};
 fn reset(id: &str, current: bool, at: i64) -> crate::models::AccountSummary {
@@ -60,14 +61,14 @@ fn testAccountsUsageRefreshPlanningUsesActiveThenFullRecurringTicks() {
 async fn testSwitchAccountWritesCurrentAccountIDToStore() {
     let (_dir, app) = fixture();
     save_fixture(&app, json!({"accounts":[stored("acct-1","p","workspace")]}));
-    app.switch_account("acct-1").await.unwrap();
+    app.switch_account(Pool::Codex, "acct-1").await.unwrap();
     let saved: Value =
         serde_json::from_slice(&std::fs::read(app.paths.data_dir.join("accounts.json")).unwrap())
             .unwrap();
     assert_eq!(saved["currentAccountId"], "acct-1");
     assert_eq!(saved["currentSelection"]["cardId"], "acct-1");
     assert_eq!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -90,10 +91,10 @@ async fn testAutoSmartSwitchReturnsCurrentAccountAfterSwitch() {
     })
     .await
     .unwrap();
-    let switched = app.auto_switch_if_needed().await.unwrap();
+    let switched = app.auto_switch_if_needed(Pool::Codex).await.unwrap();
     assert_eq!(switched.as_deref(), Some("best"));
     assert!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -117,11 +118,14 @@ async fn testAutoSmartSwitchUsesSelectedCardWhenAccountsShareIdentity() {
     .await
     .unwrap();
     assert_eq!(
-        app.auto_switch_if_needed().await.unwrap().as_deref(),
+        app.auto_switch_if_needed(Pool::Codex)
+            .await
+            .unwrap()
+            .as_deref(),
         Some("best")
     );
     assert_eq!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -139,7 +143,7 @@ async fn testListAccountsKeepsCurrentSelectionWhenReconciledAccountKeyChanges() 
         &app,
         json!({"accounts":[a],"currentAccountId":"card","currentSelection":{"cardId":"card","accountKey":"old|old","selectedAt":1,"sourceDeviceId":"macos-local"}}),
     );
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts[0].account_id, "new");
     assert!(accounts[0].is_current);
     let saved: Value =
@@ -155,7 +159,9 @@ async fn testListAccountsDoesNotClearStoredWorkspaceNameWhenAuthLacksTeamName() 
     a["teamName"] = "Existing Team".into();
     save_fixture(&app, json!({"accounts":[a]}));
     assert_eq!(
-        app.accounts().await.unwrap()[0].team_name.as_deref(),
+        app.accounts(Pool::Codex).await.unwrap()[0]
+            .team_name
+            .as_deref(),
         Some("Existing Team")
     );
 }
@@ -167,7 +173,7 @@ async fn testListAccountsReconcilesStoredWorkspaceMetadataFromAuthJSON() {
     a["planType"] = Value::Null;
     a["authJson"]["tokens"]["id_token"]=super::jwt(json!({"sub":"p","email":"test@example.com","https://api.openai.com/auth":{"chatgpt_account_id":"account-1","chatgpt_plan_type":"pro","chatgpt_team_name":"workspace-x"}})).into();
     save_fixture(&app, json!({"accounts":[a]}));
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts[0].email.as_deref(), Some("test@example.com"));
     assert_eq!(accounts[0].plan_type.as_deref(), Some("pro"));
     assert_eq!(accounts[0].team_name.as_deref(), Some("workspace-x"));
@@ -209,13 +215,13 @@ async fn testAccountProxyIsPersistedUsedForRefreshAndCanBeCleared() {
         &app,
         json!({"accounts":[stored("a","a","account-1"),stored("b","b","account-2")]}),
     );
-    app.save_account_proxy("a", " http://127.0.0.1:8080 ")
+    app.save_account_proxy(Pool::Codex, "a", " http://127.0.0.1:8080 ")
         .await
         .unwrap();
-    app.save_account_proxy("b", "socks5://127.0.0.1:1080")
+    app.save_account_proxy(Pool::Codex, "b", "socks5://127.0.0.1:1080")
         .await
         .unwrap();
-    app.refresh_accounts(None, true).await.unwrap();
+    super::refresh_accounts(&app, None, true).await.unwrap();
     let proxies: std::collections::BTreeSet<_> = network
         .calls
         .lock()
@@ -251,7 +257,10 @@ async fn testAccountProxyIsPersistedUsedForRefreshAndCanBeCleared() {
             .map(|a| &a.proxy_url)
             .collect::<Vec<_>>()
     );
-    assert!(app.save_account_proxy("a", "invalid").await.is_err());
+    assert!(app
+        .save_account_proxy(Pool::Codex, "a", "invalid")
+        .await
+        .is_err());
     assert_eq!(
         crate::repository::load_accounts(&app.paths.store())
             .unwrap()
@@ -259,7 +268,7 @@ async fn testAccountProxyIsPersistedUsedForRefreshAndCanBeCleared() {
             .proxy_url,
         "http://127.0.0.1:8080"
     );
-    app.save_account_proxy("a", " ").await.unwrap();
+    app.save_account_proxy(Pool::Codex, "a", " ").await.unwrap();
     let saved = crate::repository::load_accounts(&app.paths.store()).unwrap();
     assert_eq!(saved.accounts[0].proxy_url, "");
     assert_eq!(saved.accounts[1].proxy_url, "socks5://127.0.0.1:1080");
@@ -270,9 +279,9 @@ async fn testForcedRefreshBypassesUsageThrottle() {
     let mut a = stored("a", "a", "account-1");
     a["usage"] = json!({"fetchedAt":now_unix_seconds()});
     save_fixture(&app, json!({"accounts":[a]}));
-    app.refresh_accounts(None, false).await.unwrap();
+    super::refresh_accounts(&app, None, false).await.unwrap();
     assert!(network.calls.lock().unwrap().is_empty());
-    app.refresh_accounts(None, true).await.unwrap();
+    super::refresh_accounts(&app, None, true).await.unwrap();
     assert_eq!(network.calls.lock().unwrap().len(), 1);
 }
 #[tokio::test]
@@ -280,7 +289,7 @@ async fn testRefreshUsagePersistsUsageStateTimestamp() {
     let (_dir, app, _) = super::network_fixture::fixture();
     save_fixture(&app, json!({"accounts":[stored("a","a","account-1")]}));
     let before = now_unix_seconds();
-    app.refresh_accounts(None, true).await.unwrap();
+    super::refresh_accounts(&app, None, true).await.unwrap();
     let saved = crate::repository::load_accounts(&app.paths.store()).unwrap();
     let a = &saved.accounts[0];
     assert!(a.extra["usageStateUpdatedAt"].as_i64().unwrap() >= before);
@@ -295,7 +304,7 @@ async fn testSelectiveUsageRefreshOnlyRequestsTargetAccounts() {
         &app,
         json!({"accounts":[stored("a","a","account-1"),stored("b","b","account-2")]}),
     );
-    app.refresh_accounts(Some(&["a".into()]), true)
+    super::refresh_accounts(&app, Some(&["a".into()]), true)
         .await
         .unwrap();
     assert_eq!(
@@ -338,7 +347,7 @@ async fn testAccountCardsCarryTheAccessTokenExpiry() {
         accounts.push(c);
     }
     save_fixture(&app, json!({ "accounts": accounts }));
-    let cards = app.accounts().await.unwrap();
+    let cards = app.accounts(Pool::Codex).await.unwrap();
     let expiry = |id: &str| cards.iter().find(|c| c.id == id).unwrap().token_expires_at;
     assert_eq!(expiry("a"), Some(1_900_000_000));
     assert_eq!(expiry("b"), None);
@@ -353,7 +362,7 @@ async fn testRefreshUsageRefreshesExpiredStoredAuthBeforeFetching() {
     let mut a = stored("a", "a", "account-1");
     a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1})).into();
     save_fixture(&app, json!({"accounts":[a]}));
-    app.refresh_accounts(None, true).await.unwrap();
+    super::refresh_accounts(&app, None, true).await.unwrap();
     assert_eq!(
         network
             .calls
@@ -378,10 +387,10 @@ async fn testAccountProxyIsUsedForBothTokenRefreshAndUsage() {
     let mut a = stored("a", "a", "account-1");
     a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1})).into();
     save_fixture(&app, json!({"accounts":[a]}));
-    app.save_account_proxy("a", "socks5://127.0.0.1:1080")
+    app.save_account_proxy(Pool::Codex, "a", "socks5://127.0.0.1:1080")
         .await
         .unwrap();
-    app.refresh_accounts(None, true).await.unwrap();
+    super::refresh_accounts(&app, None, true).await.unwrap();
     assert_eq!(
         *network.calls.lock().unwrap(),
         [
@@ -406,7 +415,7 @@ async fn testRefreshUsageShowsRefreshFailureMessageWhenRefreshTokenIsReused() {
     save_fixture(&app, json!({"accounts":[a]}));
     *network.refresh_error.lock().unwrap() =
         Some("Your refresh token has already been used".into());
-    assert!(app.refresh_accounts(None, true).await.is_err());
+    assert!(super::refresh_accounts(&app, None, true).await.is_err());
     assert_eq!(
         crate::repository::load_accounts(&app.paths.store())
             .unwrap()
@@ -424,13 +433,13 @@ async fn testLateRefreshDoesNotOverwriteALoginRenewedSince() {
     a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1})).into();
     save_fixture(&app, json!({"accounts":[a],"currentAccountId":"a"}));
     let app = std::sync::Arc::new(app);
-    app.switch_account("a").await.unwrap();
+    app.switch_account(Pool::Codex, "a").await.unwrap();
     network
         .block
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let task = {
         let app = app.clone();
-        tokio::spawn(async move { app.refresh_usage("a").await })
+        tokio::spawn(async move { app.refresh_usage(Pool::Codex, "a").await })
     };
     network.started.notified().await;
     // Codex renews the same login while the request is answered late.
@@ -455,13 +464,13 @@ async fn testRefreshUsageDoesNotOverwriteConcurrentProxySwitchProjection() {
         json!({"accounts":[first,second],"currentAccountId":"a"}),
     );
     let app = std::sync::Arc::new(app);
-    app.switch_account("a").await.unwrap();
+    app.switch_account(Pool::Codex, "a").await.unwrap();
     network
         .block
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let task = {
         let app = app.clone();
-        tokio::spawn(async move { app.refresh_usage("a").await })
+        tokio::spawn(async move { app.refresh_usage(Pool::Codex, "a").await })
     };
     network.started.notified().await;
     let b = crate::repository::load_accounts(&app.paths.store())
@@ -481,7 +490,7 @@ async fn testRefreshUsageDoesNotOverwriteConcurrentProxySwitchProjection() {
         "account-2"
     );
     assert_eq!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -501,16 +510,16 @@ async fn testTrayRefreshPreservesAndPublishesProxySavedAfterItsSettingsSnapshot(
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let task = {
         let app = app.clone();
-        tokio::spawn(async move { app.refresh_usage("a").await })
+        tokio::spawn(async move { app.refresh_usage(Pool::Codex, "a").await })
     };
     network.started.notified().await;
-    app.save_account_proxy("a", "http://127.0.0.1:8080")
+    app.save_account_proxy(Pool::Codex, "a", "http://127.0.0.1:8080")
         .await
         .unwrap();
     network.resume.notify_one();
     task.await.unwrap().unwrap();
     assert_eq!(
-        app.accounts().await.unwrap()[0].proxy_url,
+        app.accounts(Pool::Codex).await.unwrap()[0].proxy_url,
         "http://127.0.0.1:8080"
     );
     assert_eq!(
@@ -576,9 +585,11 @@ async fn testImportCurrentAuthPrefersRemoteWorkspaceMetadata() {
     )
     .unwrap();
     *network.metadata.lock().unwrap() = vec![metadata("account-1", "remote-space", "workspace")];
-    app.import_current().await.unwrap();
+    app.import_current(Pool::Codex).await.unwrap();
     assert_eq!(
-        app.accounts().await.unwrap()[0].team_name.as_deref(),
+        app.accounts(Pool::Codex).await.unwrap()[0]
+            .team_name
+            .as_deref(),
         Some("remote-space")
     );
     assert_eq!(
@@ -619,9 +630,11 @@ async fn testRefreshAllUsageDoesNotClearStoredWorkspaceNameWhenAuthLacksTeamName
         &app,
         json!({"accounts":[team("a","account-1",Some("stored-space"))]}),
     );
-    app.refresh_all().await.unwrap();
+    app.refresh_all(Pool::Codex).await.unwrap();
     assert_eq!(
-        app.accounts().await.unwrap()[0].team_name.as_deref(),
+        app.accounts(Pool::Codex).await.unwrap()[0]
+            .team_name
+            .as_deref(),
         Some("stored-space")
     );
 }
@@ -630,9 +643,9 @@ async fn testRefreshAllUsageDoesNotBlockOnWorkspaceMetadataLookup() {
     let (_dir, app, network) = super::network_fixture::fixture();
     save_fixture(&app, json!({"accounts":[team("a","account-1",None)]}));
     *network.metadata_error.lock().unwrap() = Some("metadata unavailable".into());
-    app.refresh_all().await.unwrap();
+    app.refresh_all(Pool::Codex).await.unwrap();
     assert!(network.calls.lock().unwrap().iter().all(|c| c.0 == "usage"));
-    assert!(app.accounts().await.unwrap()[0].usage.is_some());
+    assert!(app.accounts(Pool::Codex).await.unwrap()[0].usage.is_some());
 }
 #[tokio::test]
 async fn testRefreshAllUsageSeriallyStreamsPartialAccountUpdates() {
@@ -654,7 +667,7 @@ async fn testRefreshAllUsageSeriallyStreamsPartialAccountUpdates() {
                 .count(),
         );
     }));
-    app.refresh_all().await.unwrap();
+    app.refresh_all(Pool::Codex).await.unwrap();
     assert!(counts.lock().unwrap().contains(&1));
     assert_eq!(counts.lock().unwrap().last(), Some(&2));
     assert_eq!(
@@ -801,8 +814,8 @@ async fn testRefreshUsageMarksDeactivatedAccountWithoutWritingWorkspaceDirectory
         json!({"accounts":[team("a","account-1",Some("team-space"))]}),
     );
     *network.usage_error.lock().unwrap() = Some("workspace_deactivated".into());
-    assert!(app.refresh_usage("a").await.is_err());
-    let a = app.accounts().await.unwrap().remove(0);
+    assert!(app.refresh_usage(Pool::Codex, "a").await.is_err());
+    let a = app.accounts(Pool::Codex).await.unwrap().remove(0);
     assert_eq!(a.workspace_status, "deactivated");
     assert_eq!(a.display_status, "deactivated");
     assert!(!a.available);
@@ -815,9 +828,12 @@ async fn testImportAccountRemovesStoredWorkspaceDirectoryEntryForAuthorizedWorks
         &app,
         json!({"accounts":[],"workspaceDirectory":[directory("account-1","Team one","active","visible"),directory("account-2","Team two","active","visible")]}),
     );
-    app.import_json(&team("a", "account-1", None)["authJson"].to_string())
-        .await
-        .unwrap();
+    app.import_json(
+        Pool::Codex,
+        &team("a", "account-1", None)["authJson"].to_string(),
+    )
+    .await
+    .unwrap();
     let entries = app.workspace_directory().await.unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["workspaceId"], "account-2");
@@ -829,7 +845,7 @@ async fn testDeleteDeactivatedPendingAccountMarksUnifiedAccountDeleted() {
     a["displayStatus"] = "deactivated".into();
     a["workspaceStatus"] = "deactivated".into();
     save_fixture(&app, json!({"accounts":[a]}));
-    app.delete_account("a").await.unwrap();
+    app.delete_account(Pool::Codex, "a").await.unwrap();
     let stored = crate::repository::load_accounts(&app.paths.store()).unwrap();
     assert_eq!(stored.accounts.len(), 1);
     assert_eq!(stored.accounts[0].extra["displayStatus"], "deleted");
@@ -844,13 +860,13 @@ async fn testDeletingDeactivatedPendingAccountAlsoDismissesWorkspaceFromFutureDi
     let mut dead = team("b", "account-2", Some("Team two"));
     dead["displayStatus"] = "deactivated".into();
     save_fixture(&app, json!({"accounts":[team("a","account-1",None),dead]}));
-    app.delete_account("b").await.unwrap();
+    app.delete_account(Pool::Codex, "b").await.unwrap();
     *network.metadata.lock().unwrap() = vec![metadata("account-2", "Team two", "workspace")];
     let entries = app.sync_workspace_directory().await.unwrap();
     assert_eq!(entries[0]["visibility"], "deleted");
     assert_eq!(entries[0]["status"], "deactivated");
     assert_eq!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -867,9 +883,9 @@ async fn testTrayMenuModelStartBackgroundRefreshRefreshesUsageOnRecurringTick() 
         &app,
         json!({"accounts":[stored("a","a","a")],"currentAccountId":"a"}),
     );
-    app.refresh_recurring(1).await.unwrap();
+    app.refresh_recurring(Pool::Codex, 1).await.unwrap();
     assert_eq!(network.calls.lock().unwrap().len(), 1);
-    assert!(app.accounts().await.unwrap()[0].usage.is_some());
+    assert!(app.accounts(Pool::Codex).await.unwrap()[0].usage.is_some());
 }
 #[tokio::test]
 async fn testTrayMenuModelStartBackgroundRefreshDoesNotRunWorkspaceHealthCheckOnRecurringTick() {
@@ -878,7 +894,7 @@ async fn testTrayMenuModelStartBackgroundRefreshDoesNotRunWorkspaceHealthCheckOn
         &app,
         json!({"accounts":[team("a","a",None)],"currentAccountId":"a"}),
     );
-    app.refresh_recurring(1).await.unwrap();
+    app.refresh_recurring(Pool::Codex, 1).await.unwrap();
     assert!(network.calls.lock().unwrap().iter().all(|c| c.0 == "usage"));
     assert!(app.workspace_directory().await.unwrap().is_empty());
 }
@@ -890,7 +906,7 @@ async fn testTrayMenuModelRecurringRefreshDoesNotTriggerWorkspaceMetadataLookup(
         json!({"accounts":[team("a","a",None)],"currentAccountId":"a"}),
     );
     for tick in [0, 1, 6] {
-        app.refresh_recurring(tick).await.unwrap();
+        app.refresh_recurring(Pool::Codex, tick).await.unwrap();
     }
     assert_eq!(network.calls.lock().unwrap().len(), 3);
     assert!(network.calls.lock().unwrap().iter().all(|c| c.0 == "usage"));
@@ -905,7 +921,7 @@ async fn testAddAccountViaLoginOnMacOSImportsSingleCurrentAccount() {
     app.import_authorized(team("a", "account-1", None)["authJson"].clone(), None, &[])
         .await
         .unwrap();
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].account_id, "account-1");
     assert_eq!(accounts[0].team_name.as_deref(), Some("remote-space"));
@@ -932,7 +948,7 @@ async fn testAddAccountViaLoginReimportsCurrentAccountWithoutCreatingDuplicates(
             .await
             .unwrap();
     }
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].account_id, "account-1");
     assert_eq!(accounts[0].team_name.as_deref(), Some("remote-space"));
@@ -958,7 +974,7 @@ async fn testAuthorizeWorkspaceViaLoginImportsSpecificWorkspace() {
     app.import_authorized(document.clone(), Some("account-2"), &[])
         .await
         .unwrap();
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].account_id, "account-2");
     assert_eq!(accounts[0].team_name.as_deref(), Some("ops-space"));
@@ -977,7 +993,7 @@ async fn testAddAccountViaLoginImportsAccountWhenWorkspaceMetadataLookupFails() 
     app.import_authorized(team("a", "account-1", None)["authJson"].clone(), None, &[])
         .await
         .unwrap();
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts[0].account_id, "account-1");
     assert!(accounts[0].team_name.is_none());
     assert_eq!(
@@ -1015,7 +1031,10 @@ async fn testTrayMenuModelAutoSmartSwitchWritesAuthAndLaunchesCodex() {
         })
     }));
     assert_eq!(
-        app.auto_switch_if_needed().await.unwrap().as_deref(),
+        app.auto_switch_if_needed(Pool::Codex)
+            .await
+            .unwrap()
+            .as_deref(),
         Some("b")
     );
     assert_eq!(*events.lock().unwrap(), [(true, "b".into())]);
@@ -1035,14 +1054,14 @@ async fn testRefreshUsageKeepsAuthSwitchedOutsideCopool() {
         json!({"accounts":[a.clone(),b],"currentAccountId":"a"}),
     );
     crate::persistence::write_json(&app.paths.codex_auth, &b_auth).unwrap();
-    app.refresh_usage("a").await.unwrap();
+    app.refresh_usage(Pool::Codex, "a").await.unwrap();
     let current: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(current, b_auth);
 
     crate::persistence::write_json(&app.paths.codex_auth, &a["authJson"]).unwrap();
     save_fixture(&app, json!({"accounts":[a],"currentAccountId":"a"}));
-    app.refresh_usage("a").await.unwrap();
+    app.refresh_usage(Pool::Codex, "a").await.unwrap();
     let current: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(current["tokens"]["access_token"], "refreshed-test-only");
@@ -1070,25 +1089,29 @@ async fn testTokenRenewalChoiceHoldsBackOrAllowsOneRenewal() {
     };
     // Without a choice, always.
     assert_eq!(
-        app.accounts().await.unwrap()[0].renewal.as_deref(),
+        app.accounts(Pool::Codex).await.unwrap()[0]
+            .renewal
+            .as_deref(),
         Some("always")
     );
     assert!(saved().extra.get("renewal").is_none());
     // Never: the expired login is reported, not renewed.
-    app.set_renewal("a", "never").await.unwrap();
-    let _ = app.refresh_usage("a").await;
+    app.set_renewal(Pool::Codex, "a", "never").await.unwrap();
+    let _ = app.refresh_usage(Pool::Codex, "a").await;
     assert!(calls().is_empty());
     assert_eq!(
         saved().usage_error.as_deref(),
         Some(crate::models::RENEWAL_OFF)
     );
     assert_eq!(
-        app.accounts().await.unwrap()[0].renewal.as_deref(),
+        app.accounts(Pool::Codex).await.unwrap()[0]
+            .renewal
+            .as_deref(),
         Some("never")
     );
     // Once: renewed, then never.
-    app.set_renewal("a", "once").await.unwrap();
-    app.refresh_usage("a").await.unwrap();
+    app.set_renewal(Pool::Codex, "a", "once").await.unwrap();
+    app.refresh_usage(Pool::Codex, "a").await.unwrap();
     assert_eq!(calls(), ["refresh", "usage"]);
     assert_eq!(
         saved().auth_json["tokens"]["access_token"],
@@ -1096,24 +1119,32 @@ async fn testTokenRenewalChoiceHoldsBackOrAllowsOneRenewal() {
     );
     assert_eq!(saved().extra["renewal"], "never");
     assert_eq!(
-        app.accounts().await.unwrap()[0].renewal.as_deref(),
+        app.accounts(Pool::Codex).await.unwrap()[0]
+            .renewal
+            .as_deref(),
         Some("never")
     );
     // Refused as expired by usage, it is not renewed again.
     *network.usage_error.lock().unwrap() = Some("Provided authentication token is expired".into());
-    let _ = app.refresh_usage("a").await;
+    let _ = app.refresh_usage(Pool::Codex, "a").await;
     assert_eq!(calls(), ["refresh", "usage", "usage"]);
     assert_eq!(
         saved().usage_error.as_deref(),
         Some(crate::models::RENEWAL_OFF)
     );
     // Always renews again; unknown choices and accounts are refused.
-    app.set_renewal("a", "always").await.unwrap();
-    let _ = app.refresh_usage("a").await;
+    app.set_renewal(Pool::Codex, "a", "always").await.unwrap();
+    let _ = app.refresh_usage(Pool::Codex, "a").await;
     assert_eq!(calls()[3..], ["usage", "refresh", "usage"]);
     assert_eq!(saved().extra["renewal"], "always");
-    assert!(app.set_renewal("a", "sometimes").await.is_err());
-    assert!(app.set_renewal("missing", "never").await.is_err());
+    assert!(app
+        .set_renewal(Pool::Codex, "a", "sometimes")
+        .await
+        .is_err());
+    assert!(app
+        .set_renewal(Pool::Codex, "missing", "never")
+        .await
+        .is_err());
 }
 #[tokio::test]
 async fn testRenewNowRenewsWithoutAskingUsageUnlessTheAccountFailed() {
@@ -1141,12 +1172,12 @@ async fn testRenewNowRenewsWithoutAskingUsageUnlessTheAccountFailed() {
             .unwrap()
     };
     // An unexpired login is not renewed by a refresh.
-    app.refresh_usage("a").await.unwrap();
+    app.refresh_usage(Pool::Codex, "a").await.unwrap();
     assert_eq!(calls(), [call("usage", "account-1")]);
     // Renew now renews it even with renewal off, asks no usage, and the
     // choice stays.
-    app.set_renewal("a", "never").await.unwrap();
-    app.renew_now("a").await.unwrap();
+    app.set_renewal(Pool::Codex, "a", "never").await.unwrap();
+    app.renew_now(Pool::Codex, "a").await.unwrap();
     assert_eq!(calls()[1..], [call("refresh", "account-1")]);
     assert_eq!(
         saved("a").auth_json["tokens"]["access_token"],
@@ -1154,15 +1185,15 @@ async fn testRenewNowRenewsWithoutAskingUsageUnlessTheAccountFailed() {
     );
     assert_eq!(saved("a").extra["renewal"], "never");
     // An account that had failed refreshes its usage once renewed.
-    app.set_renewal("b", "never").await.unwrap();
+    app.set_renewal(Pool::Codex, "b", "never").await.unwrap();
     *network.usage_error.lock().unwrap() = Some("Provided authentication token is expired".into());
-    let _ = app.refresh_usage("b").await;
+    let _ = app.refresh_usage(Pool::Codex, "b").await;
     assert_eq!(
         saved("b").usage_error.as_deref(),
         Some(crate::models::RENEWAL_OFF)
     );
     *network.usage_error.lock().unwrap() = None;
-    app.renew_now("b").await.unwrap();
+    app.renew_now(Pool::Codex, "b").await.unwrap();
     assert_eq!(
         calls()[3..],
         [call("refresh", "account-2"), call("usage", "account-2")]
@@ -1171,8 +1202,11 @@ async fn testRenewNowRenewsWithoutAskingUsageUnlessTheAccountFailed() {
     assert_eq!(saved("b").extra["renewal"], "never");
     // A refused renewal is reported; a missing account too.
     *network.refresh_error.lock().unwrap() = Some("refresh refused".into());
-    assert_eq!(app.renew_now("a").await.unwrap_err(), "refresh refused");
-    assert!(app.renew_now("missing").await.is_err());
+    assert_eq!(
+        app.renew_now(Pool::Codex, "a").await.unwrap_err(),
+        "refresh refused"
+    );
+    assert!(app.renew_now(Pool::Codex, "missing").await.is_err());
 }
 
 #[test]

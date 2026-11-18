@@ -1,5 +1,6 @@
 use super::http_fixture::serve;
 use crate::usage::*;
+use crate::Pool;
 use axum::http::StatusCode;
 use std::sync::Arc;
 
@@ -34,10 +35,13 @@ async fn redirected_usage_connection_failure_is_reported_and_keeps_previous_usag
     let previous = json!({"fetchedAt":1,"fiveHour":{"usedPercent":10,"windowSeconds":18000}});
     account["usage"] = previous;
     super::save_fixture(&app, json!({"accounts":[account]}));
-    let error = app.refresh_usage("relay-account").await.unwrap_err();
+    let error = app
+        .refresh_usage(Pool::Codex, "relay-account")
+        .await
+        .unwrap_err();
     assert!(error.contains(&server.base), "{error}");
     assert!(error.to_lowercase().contains("refused"), "{error}");
-    let cards = app.accounts().await.unwrap();
+    let cards = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(cards[0].usage_error.as_deref(), Some(error.as_str()));
     assert_eq!(cards[0].usage.as_ref().unwrap().fetched_at, 1);
     assert_eq!(
@@ -52,8 +56,10 @@ async fn redirected_usage_connection_failure_is_reported_and_keeps_previous_usag
         10.
     );
     failing.store(false, std::sync::atomic::Ordering::SeqCst);
-    app.refresh_usage("relay-account").await.unwrap();
-    let cards = app.accounts().await.unwrap();
+    app.refresh_usage(Pool::Codex, "relay-account")
+        .await
+        .unwrap();
+    let cards = app.accounts(Pool::Codex).await.unwrap();
     assert!(cards[0].usage_error.is_none());
     assert_eq!(
         cards[0]
@@ -139,12 +145,15 @@ fn every_codex_request_reads_the_configuration_copool_uses() {
         codex_config: config.clone(),
     };
     assert_eq!(network.origin(), configured);
-    assert_eq!(app.storage().upstream_base_url.as_deref(), Some(configured));
+    assert_eq!(
+        app.proxy_storage(Pool::Codex).upstream_base_url.as_deref(),
+        Some(configured)
+    );
     // Without a setting both use the official origin, never ~/.codex.
     std::fs::write(&config, "model = \"gpt-5\"\n").unwrap();
     assert_eq!(network.origin(), "https://chatgpt.com");
     assert_eq!(
-        app.storage().upstream_base_url.as_deref(),
+        app.proxy_storage(Pool::Codex).upstream_base_url.as_deref(),
         Some("https://chatgpt.com")
     );
 }
@@ -429,7 +438,7 @@ async fn explicit_codex_greeting_sends_without_usage_preflight_or_reset_shortcut
             "resetAt": crate::utils::now_unix_seconds() + 18000
         }});
         super::save_fixture(&app, json!({"accounts": [account]}));
-        let result = app.say_hi("greeting").await;
+        let result = app.say_hi(Pool::Codex, "greeting").await;
         assert_eq!(result.is_ok(), succeeds, "{result:?}");
         assert_eq!(
             *requests.lock().unwrap(),

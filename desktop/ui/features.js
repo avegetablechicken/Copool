@@ -1,8 +1,14 @@
 "use strict";
 let configurationCache = null;
 let installedEditors = [];
-const providerController = new window.CopoolControllers.Settings(invoke);
-const providerDrafts = providerController.providers;
+const settingsController = new window.CopoolControllers.Settings(invoke);
+/// Each pool's Sub2api providers and their forms.
+const providerControllers = Object.fromEntries(
+  POOLS.map((target) => [
+    target,
+    new window.CopoolControllers.Providers(invoke, target),
+  ]),
+);
 /// One controller per account pool; only the shown pool renders.
 function poolController(target, onMutation) {
   const controller = new window.CopoolControllers.Accounts(
@@ -19,62 +25,100 @@ function poolController(target, onMutation) {
   );
   return controller;
 }
-const poolControllers = {
-  codex: poolController("codex", () =>
-    invoke("sync_remote_accounts").catch((error) => notice(error, true)),
-  ),
-  // Remote servers only serve the Codex pool.
-  claude: poolController("claude", () => {}),
-};
+/// A pool's changed accounts go to its remote servers.
+const poolControllers = Object.fromEntries(
+  POOLS.map((target) => [
+    target,
+    poolController(target, () =>
+      invoke("sync_remote_accounts", { pool: target }).catch((error) =>
+        notice(error, true),
+      ),
+    ),
+  ]),
+);
 let accountsController = poolControllers[pool];
 let lastProxyNotice;
-const proxyController = new window.CopoolControllers.Proxy(invoke, () => {
-  proxyCache = proxyController.proxyStatus;
-  renderProxy();
-  renderRemoteStates();
-  syncButtons();
-  if (proxyController.notice && proxyController.notice !== lastProxyNotice) {
-    lastProxyNotice = proxyController.notice;
-    const n = lastProxyNotice;
-    notice(n.message || tr(n.key, ...(n.args || [])), n.style === "error");
-  }
-});
-function providerField(
-  form,
-  provider,
-  key,
-  label,
-  type = "text",
-  saved = providerController.persisted.some((p) => p.id === provider.id),
-  keepLabel = "settings.sub2api.password_keep",
-) {
+/// Each pool's API proxy page; only the shown one renders.
+const proxyControllers = Object.fromEntries(
+  POOLS.map((target) => {
+    const controller = new window.CopoolControllers.Proxy(
+      poolInvoke(target),
+      () => {
+        if (controller !== proxyController) return;
+        proxyCache = proxyController.proxyStatus;
+        renderProxy();
+        renderRemoteStates();
+        syncButtons();
+        if (proxyController.notice && proxyController.notice !== lastProxyNotice) {
+          lastProxyNotice = proxyController.notice;
+          const n = lastProxyNotice;
+          notice(n.message || tr(n.key, ...(n.args || [])), n.style === "error");
+        }
+      },
+      { pool: target },
+    );
+    return [target, controller];
+  }),
+);
+let proxyController = proxyControllers[proxyPool];
+function providerField(form, provider, key, label, type, saved) {
   const row = el("label", "row provider-field");
   row.append(el("span", "", tr(label)));
   const input = el("input");
-  input.type = type;
+  input.type = type || "text";
   input.value = provider[key] || "";
   input.autocomplete = type === "password" ? "new-password" : "off";
   input.setAttribute("aria-label", tr(label));
   input.oninput = () => (provider[key] = input.value);
   // Only a saved provider has a password to keep, as in the SwiftUI form.
   input.placeholder = tr(
-    type === "password" && saved ? keepLabel : `${label}_placeholder`,
+    type === "password" && saved
+      ? "settings.sub2api.password_keep"
+      : `${label}_placeholder`,
   );
   row.append(input);
   form.append(row);
 }
+/// The Claude settings file a provider names, typed or chosen with a
+/// button inside its field.
+function settingsFileButton(field, provider, rerender) {
+  const choose = button("", "folder", "icon-btn", async () => {
+    try {
+      const path = await invoke("pick_settings_file");
+      if (path) {
+        provider.settings = path;
+        rerender();
+      }
+    } catch (error) {
+      notice(error, true);
+    }
+  });
+  choose.type = "button";
+  choose.title = tr("settings.sub2api.choose_settings_file");
+  choose.setAttribute("aria-label", choose.title);
+  field.classList.add("with-button");
+  field.append(choose);
+}
 const expandedProviders = new Set();
-function renderProviders() {
-  const root = $("provider-forms");
+/// Both pools' provider forms, or one pool's.
+function renderProviders(target = null) {
+  if (target === null) {
+    for (const each of POOLS) renderProviders(each);
+    return;
+  }
+  const providers = providerControllers[target];
+  const root = $(`${target === "codex" ? "" : `${target}-`}provider-forms`);
+  const rerender = () => renderProviders(target);
   root.replaceChildren();
   renderProviderCount();
-  for (const [id, provider] of providerDrafts) {
+  for (const [id, provider] of providers.providers) {
+    const saved = providers.isSaved(id);
     const form = el("form", "provider-form");
     const header = el("div", "row provider-header");
     const toggle = button("", null, "provider-toggle", () => {
       if (expandedProviders.has(id)) expandedProviders.delete(id);
       else expandedProviders.add(id);
-      renderProviders();
+      rerender();
     });
     toggle.type = "button";
     toggle.setAttribute("aria-expanded", String(expandedProviders.has(id)));
@@ -83,20 +127,19 @@ function renderProviders() {
     if (!expandedProviders.has(id)) chevron.classList.add("collapsed");
     toggle.append(
       chevron,
-      brandIcon("codex"),
-      el("span", "", provider.providerID || "Sub2api"),
+      brandIcon(target),
+      el("span", "", providers.name(provider) || "Sub2api"),
     );
-    const remove = button("", "trash", "icon-btn", () => {
-      const saved = providerController.persisted.some((p) => p.id === id);
+    const remove = button("", "trash", "icon-btn", () =>
       action(
         async () => {
-          await providerController.remove(id);
+          await providers.remove(id);
           expandedProviders.delete(id);
-          renderProviders();
+          rerender();
         },
         saved ? tr("settings.notice.sub2api_saved") : undefined,
-      );
-    });
+      ),
+    );
     remove.type = "button";
     remove.title = tr("settings.sub2api.remove_provider");
     remove.setAttribute("aria-label", remove.title);
@@ -104,13 +147,10 @@ function renderProviders() {
     form.append(header);
     if (expandedProviders.has(id)) {
       const body = el("div", "provider-body");
-      for (const [key, label, type] of [
-        ["providerID", "provider_id"],
-        ["adminBaseURL", "admin_base_url"],
-        ["username", "username"],
-        ["password", "password", "password"],
-      ]) {
-        providerField(body, provider, key, `settings.sub2api.${label}`, type);
+      for (const [key, label, type] of providers.form.fields) {
+        providerField(body, provider, key, `settings.sub2api.${label}`, type, saved);
+        if (key === "settings")
+          settingsFileButton(body.lastElementChild, provider, rerender);
       }
       const row = el("label", "row");
       row.append(
@@ -132,37 +172,36 @@ function renderProviders() {
     form.onsubmit = (event) => {
       event.preventDefault();
       action(async () => {
-        await providerController.save(id);
-        configurationCache = await invoke("configuration");
-        renderProviders();
+        await providers.save(id);
+        rerender();
       }, tr("settings.notice.sub2api_saved"));
     };
     root.append(form);
   }
 }
+/// The import menu's Sub2api choices: the pool's saved providers.
 function providerSyncChoices(target) {
-  const providers = target === "claude"
-    ? claudeProvidersSaved
-    : providerController.persisted;
-  if (!providers.length) return [{
+  const providers = providerControllers[target];
+  if (!providers.persisted.length) return [{
     label: extra("Add a provider in Settings first.", "请先在设置中添加服务商。"),
     disabled: true,
   }];
-  return providers.map((provider) => ({
-    label: target === "claude" ? provider.name : provider.providerID,
-    run: () => target === "claude"
-      ? syncClaudeSub2api(provider.id)
-      : openProviderImport(provider.providerID),
+  return providers.persisted.map((provider) => ({
+    label: providers.name(provider),
+    run: () => syncProvider(target, providers.key(provider)),
   }));
 }
-async function openProviderImport(id) {
-  const controller = poolControllers.codex;
+/// Imports the accounts of one provider, restoring removed cards.
+async function syncProvider(target, key) {
+  const controller = poolControllers[target];
   if (controller.importing) return;
   controller.importing = true;
   syncButtons();
   try {
     await droppingNewCards($("import-open"), () => action(async () => {
-      const count = await invoke("refresh_provider", { id, sync: true });
+      const count = await invoke("refresh_provider", { pool: target, id: key, sync: true });
+      // The cards' providers, as the sync left them.
+      await providerControllers[target].load();
       notice(tr("accounts.notice.sub2api_imported_format", count));
     }));
   } finally {
@@ -175,7 +214,13 @@ async function initializeFeatures() {
     invoke("configuration"),
     invoke("installed_editors"),
   ]);
-  providerController.accept(configurationCache);
+  // A pool's provider store that cannot be read must not keep the rest of
+  // the app from rendering.
+  await Promise.all(
+    POOLS.map((target) =>
+      providerControllers[target].load().catch((error) => notice(error, true)),
+    ),
+  );
   renderProviders();
   const none = el("option", "", tr("common.none"));
   none.value = "";
@@ -215,8 +260,7 @@ function brandIcon(target) {
 /// Both pools' providers share one count, as they share one block.
 function renderProviderCount() {
   $("provider-count").textContent = String(
-    providerDrafts.size +
-      (typeof claudeProviderDrafts === "undefined" ? 0 : claudeProviderDrafts.size),
+    POOLS.reduce((count, target) => count + providerControllers[target].providers.size, 0),
   );
 }
 /// One button adds a provider to either pool.
@@ -225,25 +269,19 @@ $("provider-add").onclick = () => {
     closeMenu(true);
     return;
   }
-  showMenu($("provider-add"), [
-    { label: tr("pool.codex"), icon: brandIcon("codex"), run: addCodexProvider },
-    { label: tr("pool.claude"), icon: brandIcon("claude"), run: addClaudeProvider },
-  ]);
+  showMenu(
+    $("provider-add"),
+    POOLS.map((target) => ({
+      label: tr(`pool.${target}`),
+      icon: brandIcon(target),
+      run: () => addProvider(target),
+    })),
+  );
 };
-function addCodexProvider() {
-  const id = crypto.randomUUID();
-  providerDrafts.set(id, {
-    id,
-    providerID: "",
-    username: "",
-    password: "",
-    proxyURL: "",
-    adminBaseURL: "",
-    importedAccountIDs: [],
-    cachedAccounts: [],
-    allowInsecureTLS: false,
-  });
-  renderProviders();
+/// A new provider's form opens, ready to fill in.
+function addProvider(target) {
+  expandedProviders.add(providerControllers[target].add());
+  renderProviders(target);
 }
 /// Adds an account, signs one in again, or authorizes a pending workspace,
 /// waiting for the browser sign-in in a dialog that can cancel it.
@@ -347,10 +385,16 @@ const remoteTitles = {
   uninstall: "proxy.remote.action.uninstall_remote",
 };
 const remoteOperations = { syncAccounts: "sync", refresh: "status" };
+/// The shown pool's remote servers.
+function shownRemotes() {
+  return [...remoteDrafts].filter(
+    ([, server]) => (server.pool || "codex") === proxyPool,
+  );
+}
 function renderRemotes() {
   $("remote-list").replaceChildren();
-  $("remote-empty").hidden = remoteDrafts.size > 0;
-  for (const [id, server] of remoteDrafts) {
+  $("remote-empty").hidden = shownRemotes().length > 0;
+  for (const [id, server] of shownRemotes()) {
     const form = el("form", "remote-form");
     form.dataset.serverId = id;
     const header = button("", null, "remote-card-header", () => {
@@ -624,7 +668,7 @@ function renderRemoteStates() {
       for (const [key, value] of [
         ["remote_dir", found.remote_dir],
         ["listen_port", found.listen_port],
-        ["base_url", `http://${server.host}:${found.listen_port}/v1`],
+        ["base_url", found.base_url],
         [
           "api_key",
           tr(
@@ -705,7 +749,7 @@ $("remote-add").onclick = () =>
     expandedRemotes.add(id);
     renderRemotes();
   });
-const tunnelConfiguration = proxyController.tunnelConfiguration;
+let tunnelConfiguration = proxyController.tunnelConfiguration;
 function renderTunnelControls() {
   const root = $("tunnel-controls");
   root.replaceChildren();
@@ -847,6 +891,7 @@ $("tunnel-install").onclick = () => runTunnel("install");
 const initializeBaseFeatures = initializeFeatures;
 initializeFeatures = async () => {
   await initializeBaseFeatures();
+  // Every pool's servers; each pool's page shows its own.
   for (const server of configurationCache.remoteServers) {
     remoteDrafts.set(server.id, server);
     // A placeholder draft opens, as RemoteServerCardView.isPlaceholderDraft.
@@ -854,10 +899,11 @@ initializeFeatures = async () => {
       expandedRemotes.add(server.id);
   }
   renderRemotes();
-  Object.assign(
-    tunnelConfiguration,
-    configurationCache.proxyConfiguration.cloudflared,
-  );
+  for (const controller of Object.values(proxyControllers))
+    Object.assign(
+      controller.tunnelConfiguration,
+      controller.localConfiguration(configurationCache).cloudflared,
+    );
   renderTunnelControls();
 };
 function renderPendingWorkspaces() {
@@ -935,188 +981,32 @@ function scheduleTunnelSave() {
 }
 
 async function refreshFeatureState() {
-  const [settings, provider, activity, tunnel] = await Promise.all([
+  const [settings, provider, activity, ...tunnels] = await Promise.all([
     invoke("configuration"),
     invoke("current_provider"),
     invoke("refresh_activity"),
-    invoke("tunnel_action", { action: "status", value: null }),
+    ...POOLS.map((target) =>
+      proxyControllers[target].invoke("tunnel_action", { action: "status", value: null }),
+    ),
   ]);
   // Activity covers both pools; each pool waits only on its own accounts.
   for (const controller of Object.values(poolControllers))
     controller.syncActivity(
       activity.filter((id) => controller.accounts.some((a) => a.id === id)),
     );
-  proxyController.tunnelStatus = tunnel;
-  proxyController.remoteServers = settings.remoteServers;
-  proxyController.applyLocal(
-    proxyController.proxyStatus,
-    settings.proxyConfiguration,
-    tunnel,
-  );
+  POOLS.forEach((target, index) => {
+    const controller = proxyControllers[target];
+    controller.tunnelStatus = tunnels[index];
+    controller.remoteServers = controller.ownServers(settings.remoteServers);
+    controller.applyLocal(
+      controller.proxyStatus,
+      controller.localConfiguration(settings),
+      tunnels[index],
+    );
+  });
   configurationCache = settings;
-  providerController.accept(settings, provider.id);
+  settingsController.accept(provider.id);
 }
 window.__TAURI__.event
   .listen("remote-sync-error", ({ payload }) => notice(payload, true))
   .catch((error) => notice(error, true));
-
-// Sub2api providers of the Claude pool: their Claude accounts join the pool,
-// and switching to one points Claude Code at the provider's gateway.
-const claudeProviderDrafts = new Map();
-let claudeProvidersSaved = [];
-const expandedClaudeProviders = new Set();
-async function loadClaudeProviders() {
-  claudeProvidersSaved = await invoke("claude_sub2api_providers");
-  for (const saved of claudeProvidersSaved)
-    if (!claudeProviderDrafts.has(saved.id))
-      claudeProviderDrafts.set(saved.id, { ...saved, password: "", apiKey: "" });
-  renderClaudeProviders();
-}
-function renderClaudeProviders() {
-  const root = $("claude-provider-forms");
-  root.replaceChildren();
-  renderProviderCount();
-  for (const [id, provider] of claudeProviderDrafts) {
-    const saved = claudeProvidersSaved.find((p) => p.id === id);
-    const form = el("form", "provider-form");
-    const header = el("div", "row provider-header");
-    const toggle = button("", null, "provider-toggle", () => {
-      if (expandedClaudeProviders.has(id)) expandedClaudeProviders.delete(id);
-      else expandedClaudeProviders.add(id);
-      renderClaudeProviders();
-    });
-    toggle.type = "button";
-    toggle.setAttribute("aria-expanded", String(expandedClaudeProviders.has(id)));
-    const chevron = icon("chevron-down");
-    chevron.classList.add("provider-chevron");
-    if (!expandedClaudeProviders.has(id)) chevron.classList.add("collapsed");
-    toggle.append(
-      chevron,
-      brandIcon("claude"),
-      el("span", "", provider.name || "Sub2api"),
-    );
-    const remove = button("", "trash", "icon-btn", () =>
-      action(
-        async () => {
-          if (saved) await invoke("claude_remove_sub2api_provider", { id });
-          claudeProviderDrafts.delete(id);
-          expandedClaudeProviders.delete(id);
-          await loadClaudeProviders();
-        },
-        saved ? tr("settings.notice.sub2api_saved") : undefined,
-      ),
-    );
-    remove.type = "button";
-    remove.title = tr("settings.sub2api.remove_provider");
-    remove.setAttribute("aria-label", remove.title);
-    header.append(toggle, remove);
-    form.append(header);
-    if (expandedClaudeProviders.has(id)) {
-      const body = el("div", "provider-body");
-      for (const [key, label, type] of [
-        ["settings", "claude_settings"],
-        ["adminBaseURL", "admin_base_url"],
-        ["username", "username"],
-        ["password", "password", "password"],
-      ]) {
-        providerField(
-          body,
-          provider,
-          key,
-          `settings.sub2api.${label}`,
-          type,
-          !!saved,
-        );
-        // Settings name a file to search for, or its path, typed or chosen
-        // with a button inside the field.
-        if (key === "settings") {
-          const field = body.lastElementChild;
-          const choose = button("", "folder", "icon-btn", async () => {
-            try {
-              const path = await invoke("pick_settings_file");
-              if (path) {
-                provider.settings = path;
-                renderClaudeProviders();
-              }
-            } catch (error) {
-              notice(error, true);
-            }
-          });
-          choose.type = "button";
-          choose.title = tr("settings.sub2api.choose_settings_file");
-          choose.setAttribute("aria-label", choose.title);
-          field.classList.add("with-button");
-          field.append(choose);
-        }
-      }
-      const row = el("label", "row");
-      row.append(
-        el("span", "row-label", tr("settings.sub2api.allow_insecure_tls")),
-      );
-      const check = el("input", "switch");
-      check.type = "checkbox";
-      check.checked = !!provider.allowInsecureTLS;
-      check.onchange = () => (provider.allowInsecureTLS = check.checked);
-      row.append(check);
-      body.append(row);
-      const actions = el("div", "provider-save");
-      const save = button(tr("common.save"), null, "btn primary");
-      save.type = "submit";
-      actions.append(save);
-      body.append(actions);
-      form.append(body);
-    }
-    form.onsubmit = (event) => {
-      event.preventDefault();
-      action(async () => {
-        const value = await invoke("claude_save_sub2api_provider", {
-          value: structuredClone(provider),
-        });
-        claudeProviderDrafts.delete(id);
-        claudeProviderDrafts.set(value.id, { ...value, password: "", apiKey: "" });
-        await loadClaudeProviders();
-      }, tr("settings.notice.sub2api_saved"));
-    };
-    root.append(form);
-  }
-}
-function addClaudeProvider() {
-  const id = crypto.randomUUID();
-  claudeProviderDrafts.set(id, {
-    id,
-    name: "",
-    settings: "",
-    adminBaseURL: "",
-    username: "",
-    password: "",
-    apiKey: "",
-    allowInsecureTLS: false,
-  });
-  expandedClaudeProviders.add(id);
-  renderClaudeProviders();
-}
-/// Imports the Claude accounts of the selected provider.
-async function syncClaudeSub2api(id) {
-  const controller = poolControllers.claude;
-  if (controller.importing) return;
-  controller.importing = true;
-  syncButtons();
-  try {
-    await droppingNewCards($("import-open"), () => action(async () => {
-      const count = await invoke("claude_sync_sub2api", { id });
-      // The cards' providers, as the sync left them.
-      await loadClaudeProviders();
-      notice(tr("accounts.notice.sub2api_imported_format", count));
-    }));
-  } finally {
-    controller.importing = false;
-    syncButtons();
-  }
-}
-
-const initializeClaudeFeatures = initializeFeatures;
-initializeFeatures = async () => {
-  await initializeClaudeFeatures();
-  // A Claude store error must not keep the rest of the app from rendering.
-  await loadClaudeProviders().catch((error) => notice(error, true));
-};

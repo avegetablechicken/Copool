@@ -193,3 +193,21 @@ fn testDeploymentPlanUninstallCommandStopsDisablesAndRemovesServiceArtifacts() {
 fn testDeploymentPlanStatusCommandChecksUsrLibSystemdDirectory() {
     assert!(status_command("/srv/codex", "unit").contains("/usr/lib/systemd/system/$UNIT"));
 }
+#[test]
+fn a_claude_server_runs_the_daemon_for_its_pool() {
+    let mut server = draft("server-1");
+    // A Codex server keeps the command daemons before pools understand.
+    assert_eq!(server.pool, crate::Pool::Codex);
+    let unit = systemd_unit(&server, "codex-tools-proxyd-server-1.service");
+    assert!(!unit.contains("--pool"));
+    server.pool = crate::Pool::Claude;
+    let unit = systemd_unit(&server, "codex-tools-proxyd-server-1.service");
+    assert!(unit.contains("--port 8787 --pool claude --no-sync-current-auth"));
+    let saved = serde_json::to_value(&server).unwrap();
+    assert_eq!(saved["pool"], "claude");
+    // Discovery reports each instance's pool, Codex for a command without one.
+    let discover = discover_command();
+    assert!(discover.contains("--pool \\([a-z]*\\)"));
+    assert!(discover.contains("[ -n \"$POOL\" ] || POOL=codex"));
+    assert!(discover.contains("pool=%s"));
+}

@@ -1,4 +1,5 @@
 use super::{http_fixture::serve, MemorySecrets};
+use crate::Pool;
 use crate::{
     credentials::SecretStore, settings::Provider, utils::now_unix_seconds, Application, Paths,
 };
@@ -42,7 +43,7 @@ async fn testSaveSub2APIProviderStoresPasswordOutsideSettings() {
     let mut draft = provider("my");
     draft.admin_base_url = " https://admin.test/api/v1/ ".into();
     draft.allow_insecure_tls = true;
-    let saved = app.save_provider(draft).await.unwrap();
+    let saved = app.codex_save_provider(draft).await.unwrap();
     assert_eq!(saved.password, "");
     assert_eq!(saved.admin_base_url, "https://admin.test/api/v1");
     assert_eq!(saved.username, "admin@example.test");
@@ -68,15 +69,15 @@ async fn testSaveSub2APIProviderStoresPasswordOutsideSettings() {
 #[tokio::test]
 async fn testEditingProviderPreservesOtherCredentialsWithoutKeychainAccess() {
     let (_dir, app, secrets) = fixture();
-    let mut first = app.save_provider(provider("first")).await.unwrap();
-    let second = app.save_provider(provider("second")).await.unwrap();
+    let mut first = app.codex_save_provider(provider("first")).await.unwrap();
+    let second = app.codex_save_provider(provider("second")).await.unwrap();
     secrets.gets.lock().unwrap().clear();
     secrets.sets.lock().unwrap().clear();
     secrets
         .deny_reads
         .store(true, std::sync::atomic::Ordering::SeqCst);
     first.admin_base_url = "https://admin.example.test".into();
-    let mut first = app.save_provider(first).await.unwrap();
+    let mut first = app.codex_save_provider(first).await.unwrap();
     assert!(secrets.gets.lock().unwrap().is_empty());
     assert!(secrets.sets.lock().unwrap().is_empty());
     assert_eq!(
@@ -84,17 +85,17 @@ async fn testEditingProviderPreservesOtherCredentialsWithoutKeychainAccess() {
         second
     );
     first.password = "replacement".into();
-    let first = app.save_provider(first).await.unwrap();
+    let first = app.codex_save_provider(first).await.unwrap();
     assert_eq!(*secrets.sets.lock().unwrap(), [first.id.clone()]);
     assert!(secrets.gets.lock().unwrap().is_empty());
     assert_eq!(secrets.values.lock().unwrap()[&first.id], "replacement");
     assert_eq!(secrets.values.lock().unwrap()[&second.id], "test-secret");
-    app.save_provider(first.clone()).await.unwrap();
+    app.codex_save_provider(first.clone()).await.unwrap();
     assert_eq!(*secrets.sets.lock().unwrap(), [first.id]);
     let mut new = provider("new");
     new.password.clear();
     assert_eq!(
-        app.save_provider(new).await.unwrap_err(),
+        app.codex_save_provider(new).await.unwrap_err(),
         "error.sub2api.configuration_incomplete"
     );
     assert_eq!(
@@ -110,7 +111,7 @@ async fn testEditingProviderPreservesOtherCredentialsWithoutKeychainAccess() {
 async fn testSettingsPageAddsAndSavesArbitrarySub2APIProviderConfigurations() {
     let (_dir, app, _) = fixture();
     for name in ["my", "ShareCoder", "custom-provider"] {
-        app.save_provider(provider(name)).await.unwrap();
+        app.codex_save_provider(provider(name)).await.unwrap();
     }
     let saved = app.configuration().unwrap();
     assert_eq!(
@@ -174,7 +175,7 @@ async fn testAccountsPageRestoresCachedSub2APIAccountsWithoutNetwork() {
     secrets
         .deny_reads
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let cards = app.accounts().await.unwrap();
+    let cards = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].id, "sub2api-my-42");
     assert_eq!(cards[0].source_tag.as_deref(), Some("SUB2API"));
@@ -202,18 +203,23 @@ async fn testAccountsPageImportsSub2APIAccountsAndPersistsIDs() {
     let (_dir, app, _) = fixture();
     let server = upstream(Arc::new(Mutex::new(vec![42])), Default::default()).await;
     config(&app, &[("my", &server.base)], "my");
-    app.save_provider(provider("my")).await.unwrap();
-    assert_eq!(app.refresh_provider("my", true).await.unwrap(), 1);
+    app.codex_save_provider(provider("my")).await.unwrap();
+    assert_eq!(
+        app.refresh_provider(Pool::Codex, "my", true).await.unwrap(),
+        1
+    );
     let settings = app.configuration().unwrap();
     let p = &settings.sub2_api_provider.providers[0];
     assert_eq!(p.imported_account_ids, [42]);
     assert_eq!(p.cached_accounts[0]["id"], 42);
     assert_eq!(
-        app.accounts().await.unwrap()[0].source_tag.as_deref(),
+        app.accounts(Pool::Codex).await.unwrap()[0]
+            .source_tag
+            .as_deref(),
         Some("SUB2API")
     );
     assert_eq!(
-        app.accounts().await.unwrap()[0]
+        app.accounts(Pool::Codex).await.unwrap()[0]
             .usage
             .as_ref()
             .unwrap()
@@ -229,7 +235,7 @@ async fn testAccountsPageSub2APIImportPreservesOtherProviderCaches() {
     let (_dir, app, _) = fixture();
     let server = upstream(Arc::new(Mutex::new(vec![42])), Default::default()).await;
     config(&app, &[("my", &server.base)], "my");
-    app.save_provider(provider("my")).await.unwrap();
+    app.codex_save_provider(provider("my")).await.unwrap();
     let mut settings = app.configuration().unwrap();
     let mut other = provider("other");
     other.password.clear();
@@ -237,10 +243,10 @@ async fn testAccountsPageSub2APIImportPreservesOtherProviderCaches() {
     other.cached_accounts = vec![cached(7, "other", 10.)];
     settings.sub2_api_provider.providers.push(other.clone());
     app.persist_configuration(&settings).unwrap();
-    app.refresh_provider("my", true).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
     let saved = app.configuration().unwrap();
     assert_eq!(saved.sub2_api_provider.provider("other").unwrap(), other);
-    assert_eq!(app.accounts().await.unwrap().len(), 2);
+    assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 2);
 }
 #[tokio::test]
 async fn testAccountsPageSub2APIImportRequiresCurrentProviderConfiguration() {
@@ -251,10 +257,12 @@ async fn testAccountsPageSub2APIImportRequiresCurrentProviderConfiguration() {
         "missing",
     );
     assert_eq!(
-        app.refresh_provider("missing", true).await.unwrap_err(),
+        app.refresh_provider(Pool::Codex, "missing", true)
+            .await
+            .unwrap_err(),
         crate::sub2api::PROVIDER_NOT_FOUND
     );
-    assert!(app.accounts().await.unwrap().is_empty());
+    assert!(app.accounts(Pool::Codex).await.unwrap().is_empty());
 }
 #[tokio::test]
 async fn testManualSub2APIRefreshUsesCardProviderWithoutConfirmation() {
@@ -262,10 +270,12 @@ async fn testManualSub2APIRefreshUsesCardProviderWithoutConfirmation() {
     let calls = Arc::new(Mutex::new(vec![]));
     let server = upstream(Arc::new(Mutex::new(vec![42])), calls.clone()).await;
     config(&app, &[("my", &server.base)], "openai");
-    app.save_provider(provider("my")).await.unwrap();
-    app.refresh_provider("my", true).await.unwrap();
+    app.codex_save_provider(provider("my")).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
     calls.lock().unwrap().clear();
-    app.refresh_usage("sub2api-my-42").await.unwrap();
+    app.refresh_usage(Pool::Codex, "sub2api-my-42")
+        .await
+        .unwrap();
     assert!(calls
         .lock()
         .unwrap()
@@ -288,10 +298,12 @@ async fn testRefreshAdoptsUpstreamMembershipChanges() {
     let ids = Arc::new(Mutex::new(vec![42, 43]));
     let server = upstream(ids.clone(), Default::default()).await;
     config(&app, &[("my", &server.base)], "my");
-    app.save_provider(provider("my")).await.unwrap();
-    app.refresh_provider("my", true).await.unwrap();
+    app.codex_save_provider(provider("my")).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
     *ids.lock().unwrap() = vec![43, 44];
-    app.refresh_provider("my", false).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", false)
+        .await
+        .unwrap();
     let settings = app.configuration().unwrap();
     let p = settings.sub2_api_provider.provider("my").unwrap();
     assert_eq!(p.imported_account_ids, [43, 44]);
@@ -303,9 +315,9 @@ async fn testRefreshAdoptsUpstreamMembershipChanges() {
         [43, 44]
     );
     assert!(!settings.extra.contains_key("providerSyncNeeded:my"));
-    assert_eq!(app.accounts().await.unwrap().len(), 2);
+    assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 2);
     assert!(p.cached_accounts.iter().all(|a| !a["usage"].is_null()));
-    app.refresh_provider("my", true).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
     let settings = app.configuration().unwrap();
     assert_eq!(
         settings
@@ -316,7 +328,7 @@ async fn testRefreshAdoptsUpstreamMembershipChanges() {
         [43, 44]
     );
     assert!(!settings.extra.contains_key("providerSyncNeeded:my"));
-    assert_eq!(app.accounts().await.unwrap().len(), 2);
+    assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 2);
 }
 #[tokio::test]
 async fn testAccountsPageSwitchesToSub2APIAccountProvider() {
@@ -329,13 +341,15 @@ async fn testAccountsPageSwitchesToSub2APIAccountProvider() {
     p.cached_accounts = vec![cached(42, "my", 20.)];
     settings.sub2_api_provider.providers.push(p);
     app.persist_configuration(&settings).unwrap();
-    app.switch_account("sub2api-my-42").await.unwrap();
+    app.switch_account(Pool::Codex, "sub2api-my-42")
+        .await
+        .unwrap();
     assert_eq!(
         crate::codex_config::resolve_path(&app.codex_config_path()).id,
         "my"
     );
     assert_eq!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -350,11 +364,11 @@ async fn testAccountsPageSwitchesToSub2APIAccountProvider() {
 async fn testAccountsPageSwitchesProviderToOpenAIForLocalAccount() {
     let (_dir, app, _) = fixture();
     config(&app, &[("my", "https://provider.invalid/v1")], "my");
-    app.import_json(&super::auth("a", "a").to_string())
+    app.import_json(Pool::Codex, &super::auth("a", "a").to_string())
         .await
         .unwrap();
-    let id = app.accounts().await.unwrap()[0].id.clone();
-    app.switch_account(&id).await.unwrap();
+    let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
+    app.switch_account(Pool::Codex, &id).await.unwrap();
     assert_eq!(
         crate::codex_config::resolve_path(&app.codex_config_path()).id,
         "openai"
@@ -362,7 +376,7 @@ async fn testAccountsPageSwitchesProviderToOpenAIForLocalAccount() {
     let auth: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(crate::auth::extract_auth(&auth).unwrap().account_id, "a");
-    assert!(app.accounts().await.unwrap()[0].is_current);
+    assert!(app.accounts(Pool::Codex).await.unwrap()[0].is_current);
 }
 #[tokio::test]
 async fn testCacheRefreshCannotOverwriteNewAccountProxy() {
@@ -375,10 +389,10 @@ async fn testCacheRefreshCannotOverwriteNewAccountProxy() {
     settings.sub2_api_provider.providers.push(p);
     app.persist_configuration(&settings).unwrap();
     let stale: crate::sub2api::Account = serde_json::from_value(cached(42, "p", 20.)).unwrap();
-    app.save_account_proxy("sub2api-p-42", "socks5://127.0.0.1:1080")
+    app.save_account_proxy(Pool::Codex, "sub2api-p-42", "socks5://127.0.0.1:1080")
         .await
         .unwrap();
-    app.apply_provider_refresh("p", vec![stale], false)
+    app.apply_provider_refresh(Pool::Codex, "p", vec![stale], None, true, false)
         .await
         .unwrap();
     assert_eq!(
@@ -391,7 +405,7 @@ async fn testCacheRefreshCannotOverwriteNewAccountProxy() {
         "socks5://127.0.0.1:1080"
     );
     assert_eq!(
-        app.accounts().await.unwrap()[0].proxy_url,
+        app.accounts(Pool::Codex).await.unwrap()[0].proxy_url,
         "socks5://127.0.0.1:1080"
     );
 }
@@ -400,7 +414,10 @@ async fn testTrayRecurringRefreshUpdatesSub2APIAccountsAndCache() {
     let (_dir, app, _) = fixture();
     let server = upstream(Arc::new(Mutex::new(vec![42])), Default::default()).await;
     config(&app, &[("ShareCoder", &server.base)], "ShareCoder");
-    let p = app.save_provider(provider("ShareCoder")).await.unwrap();
+    let p = app
+        .codex_save_provider(provider("ShareCoder"))
+        .await
+        .unwrap();
     let mut settings = app.configuration().unwrap();
     settings
         .sub2_api_provider
@@ -410,8 +427,11 @@ async fn testTrayRecurringRefreshUpdatesSub2APIAccountsAndCache() {
         .unwrap()
         .imported_account_ids = vec![42];
     app.persist_configuration(&settings).unwrap();
-    app.refresh_recurring(0).await.unwrap();
-    assert_eq!(app.accounts().await.unwrap()[0].id, "sub2api-ShareCoder-42");
+    app.refresh_recurring(Pool::Codex, 0).await.unwrap();
+    assert_eq!(
+        app.accounts(Pool::Codex).await.unwrap()[0].id,
+        "sub2api-ShareCoder-42"
+    );
     assert_eq!(
         app.configuration()
             .unwrap()
@@ -435,7 +455,7 @@ async fn testManualRefreshUpdatesAllSub2APIProvidersWithOfficialDefault() {
         "openai",
     );
     for (name, id) in [("first", 42), ("second", 7)] {
-        app.save_provider(provider(name)).await.unwrap();
+        app.codex_save_provider(provider(name)).await.unwrap();
         let mut s = app.configuration().unwrap();
         s.sub2_api_provider
             .providers
@@ -445,7 +465,7 @@ async fn testManualRefreshUpdatesAllSub2APIProvidersWithOfficialDefault() {
             .imported_account_ids = vec![id];
         app.persist_configuration(&s).unwrap();
     }
-    app.refresh_all().await.unwrap();
+    app.refresh_all(Pool::Codex).await.unwrap();
     assert!(first_calls
         .lock()
         .unwrap()
@@ -456,7 +476,7 @@ async fn testManualRefreshUpdatesAllSub2APIProvidersWithOfficialDefault() {
         .unwrap()
         .iter()
         .any(|p| p.ends_with("/7/quota")));
-    assert_eq!(app.accounts().await.unwrap().len(), 2);
+    assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 2);
     assert_eq!(
         crate::codex_config::resolve_path(&app.codex_config_path()).id,
         "openai"
@@ -475,7 +495,7 @@ async fn recurringRefreshReachesEveryProviderOnlyOnFullRounds() {
         "first",
     );
     for (name, id) in [("first", 42), ("second", 7)] {
-        app.save_provider(provider(name)).await.unwrap();
+        app.codex_save_provider(provider(name)).await.unwrap();
         let mut s = app.configuration().unwrap();
         s.sub2_api_provider
             .providers
@@ -494,25 +514,28 @@ async fn recurringRefreshReachesEveryProviderOnlyOnFullRounds() {
             .count()
     };
     // A round between full ones refreshes only the provider in use...
-    app.refresh_recurring(1).await.unwrap();
+    app.refresh_recurring(Pool::Codex, 1).await.unwrap();
     assert_eq!(
         (asked(&first_calls, "42"), asked(&second_calls, "7")),
         (1, 0)
     );
     // ...and a full round every provider.
-    app.refresh_recurring(6).await.unwrap();
+    app.refresh_recurring(Pool::Codex, 6).await.unwrap();
     assert_eq!(
         (asked(&first_calls, "42"), asked(&second_calls, "7")),
         (2, 1)
     );
     // Their cards show it: the provider in use's next round, the other's
     // next full round (tick 6).
-    app.set_refresh_schedule(crate::refresh_policy::Schedule {
-        at: 1_000,
-        tick: 2,
-        interval: 300,
-    });
-    let accounts = app.accounts().await.unwrap();
+    app.set_schedule(
+        Pool::Codex,
+        crate::refresh_policy::Schedule {
+            at: 1_000,
+            tick: 2,
+            interval: 300,
+        },
+    );
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     let next = |id: &str| {
         accounts
             .iter()
@@ -528,14 +551,14 @@ async fn testAccountsPageSyncsConfiguredProviderWithoutConfirmation() {
     let (_dir, app, _) = fixture();
     let server = upstream(Arc::new(Mutex::new(vec![42])), Default::default()).await;
     config(&app, &[("my", &server.base)], "my");
-    app.save_provider(provider("my")).await.unwrap();
+    app.codex_save_provider(provider("my")).await.unwrap();
     assert!(app
         .configuration()
         .unwrap()
         .sub2_api_provider
         .confirmed_provider_ids
         .is_empty());
-    app.refresh_provider("my", true).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
     assert_eq!(
         app.configuration()
             .unwrap()
@@ -545,7 +568,7 @@ async fn testAccountsPageSyncsConfiguredProviderWithoutConfirmation() {
             .imported_account_ids,
         [42]
     );
-    assert_eq!(app.accounts().await.unwrap().len(), 1);
+    assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 1);
 }
 #[tokio::test]
 async fn testSmartSwitchIncludesSub2APIProviderCandidate() {
@@ -564,13 +587,13 @@ async fn testSmartSwitchIncludesSub2APIProviderCandidate() {
         &app,
         json!({"accounts":[local],"cachedAccounts":crate::repository::load_accounts(&app.paths.store()).unwrap().extra["cachedAccounts"]}),
     );
-    app.smart_switch().await.unwrap();
+    app.smart_switch(Pool::Codex).await.unwrap();
     assert_eq!(
         crate::codex_config::resolve_path(&app.codex_config_path()).id,
         "my"
     );
     assert_eq!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -586,14 +609,17 @@ async fn sub2api_refresh_failure_marks_only_affected_cards_and_recovers() {
     let (_dir, app, secrets) = fixture();
     let server = upstream(Arc::new(Mutex::new(vec![42, 43])), Default::default()).await;
     config(&app, &[("my", &server.base)], "openai");
-    app.save_provider(provider("my")).await.unwrap();
-    app.refresh_provider("my", true).await.unwrap();
-    let previous = app.accounts().await.unwrap()[0].usage.clone();
+    app.codex_save_provider(provider("my")).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
+    let previous = app.accounts(Pool::Codex).await.unwrap()[0].usage.clone();
     secrets
         .deny_reads
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let error = app.refresh_usage("sub2api-my-42").await.unwrap_err();
-    let cards = app.accounts().await.unwrap();
+    let error = app
+        .refresh_usage(Pool::Codex, "sub2api-my-42")
+        .await
+        .unwrap_err();
+    let cards = app.accounts(Pool::Codex).await.unwrap();
     let failed = cards.iter().find(|a| a.id == "sub2api-my-42").unwrap();
     assert_eq!(failed.usage_error.as_deref(), Some(error.as_str()));
     assert_eq!(
@@ -606,9 +632,12 @@ async fn sub2api_refresh_failure_marks_only_affected_cards_and_recovers() {
         .unwrap()
         .usage_error
         .is_none());
-    let error = app.refresh_provider("my", false).await.unwrap_err();
+    let error = app
+        .refresh_provider(Pool::Codex, "my", false)
+        .await
+        .unwrap_err();
     assert!(app
-        .accounts()
+        .accounts(Pool::Codex)
         .await
         .unwrap()
         .iter()
@@ -616,8 +645,10 @@ async fn sub2api_refresh_failure_marks_only_affected_cards_and_recovers() {
     secrets
         .deny_reads
         .store(false, std::sync::atomic::Ordering::SeqCst);
-    app.refresh_usage("sub2api-my-42").await.unwrap();
-    let cards = app.accounts().await.unwrap();
+    app.refresh_usage(Pool::Codex, "sub2api-my-42")
+        .await
+        .unwrap();
+    let cards = app.accounts(Pool::Codex).await.unwrap();
     assert!(cards
         .iter()
         .find(|a| a.id == "sub2api-my-42")
@@ -630,9 +661,11 @@ async fn sub2api_refresh_failure_marks_only_affected_cards_and_recovers() {
         .unwrap()
         .usage_error
         .is_some());
-    app.refresh_provider("my", false).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", false)
+        .await
+        .unwrap();
     assert!(app
-        .accounts()
+        .accounts(Pool::Codex)
         .await
         .unwrap()
         .iter()
@@ -651,20 +684,20 @@ async fn sub2api_requests_go_through_the_provider_proxy() {
     config(&app, &[("my", "http://sub2api.invalid/v1")], "openai");
     let mut p = provider("my");
     p.proxy_url = server.base.clone();
-    app.save_provider(p).await.unwrap();
-    app.refresh_provider("my", true).await.unwrap();
+    app.codex_save_provider(p).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
     // Any card sets its provider's proxy; the default account proxy is not used.
-    app.save_account_proxy("sub2api-my-43", &unavailable)
+    app.save_account_proxy(Pool::Codex, "sub2api-my-43", &unavailable)
         .await
         .unwrap();
-    app.save_account_proxy("sub2api-my-42", &server.base)
+    app.save_account_proxy(Pool::Codex, "sub2api-my-42", &server.base)
         .await
         .unwrap();
     let mut preferences = app.preferences().unwrap();
     preferences.account_proxy_url = unavailable.clone();
     app.save_preferences(preferences).await.unwrap();
     calls.lock().unwrap().clear();
-    app.refresh_all().await.unwrap();
+    app.refresh_all(Pool::Codex).await.unwrap();
     let requests = calls.lock().unwrap().clone();
     assert_eq!(
         requests
@@ -682,18 +715,18 @@ async fn sub2api_requests_go_through_the_provider_proxy() {
     );
     assert!(requests.iter().any(|p| p.ends_with("/42/quota")));
     assert!(requests.iter().any(|p| p.ends_with("/43/quota")));
-    let cards = app.accounts().await.unwrap();
+    let cards = app.accounts(Pool::Codex).await.unwrap();
     assert!(cards
         .iter()
         .all(|a| a.proxy_url == server.base && a.usage_error.is_none()));
-    app.save_account_proxy("sub2api-my-43", &unavailable)
+    app.save_account_proxy(Pool::Codex, "sub2api-my-43", &unavailable)
         .await
         .unwrap();
     calls.lock().unwrap().clear();
-    assert!(app.refresh_all().await.is_err());
+    assert!(app.refresh_all(Pool::Codex).await.is_err());
     assert!(calls.lock().unwrap().is_empty());
     assert!(app
-        .accounts()
+        .accounts(Pool::Codex)
         .await
         .unwrap()
         .iter()
@@ -722,10 +755,14 @@ async fn testSavedCloudflareTokenIsMarkedWithoutBeingReturned() {
     assert!(cloudflared().get("apiToken").is_none());
     // Saving without typing the token again keeps it, and the mark.
     let config: crate::tunnel::Configuration = serde_json::from_value(cloudflared()).unwrap();
-    app.save_tunnel_configuration(&config).await.unwrap();
+    app.save_tunnel_configuration(Pool::Codex, &config)
+        .await
+        .unwrap();
     assert_eq!(cloudflared()["hasAPIToken"], true);
     secrets.remove("cloudflare-api-token").unwrap();
-    app.save_tunnel_configuration(&config).await.unwrap();
+    app.save_tunnel_configuration(Pool::Codex, &config)
+        .await
+        .unwrap();
     assert_eq!(cloudflared()["hasAPIToken"], false);
 }
 
@@ -735,23 +772,61 @@ async fn deleted_sub2api_provider_stays_removed_until_explicit_sync() {
     let calls = Arc::new(Mutex::new(vec![]));
     let server = upstream(Arc::new(Mutex::new(vec![42, 43])), calls.clone()).await;
     config(&app, &[("my", &server.base)], "my");
-    app.save_provider(provider("my")).await.unwrap();
-    app.refresh_provider("my", true).await.unwrap();
-    for account in app.accounts().await.unwrap() {
-        app.delete_account(&account.id).await.unwrap();
+    app.codex_save_provider(provider("my")).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
+    for account in app.accounts(Pool::Codex).await.unwrap() {
+        app.delete_account(Pool::Codex, &account.id).await.unwrap();
     }
     calls.lock().unwrap().clear();
-    app.refresh_all().await.unwrap();
-    app.refresh_recurring(0).await.unwrap();
-    app.refresh_recurring(1).await.unwrap();
+    app.refresh_all(Pool::Codex).await.unwrap();
+    app.refresh_recurring(Pool::Codex, 0).await.unwrap();
+    app.refresh_recurring(Pool::Codex, 1).await.unwrap();
     assert!(calls.lock().unwrap().is_empty());
-    assert!(app.accounts().await.unwrap().is_empty());
+    assert!(app.accounts(Pool::Codex).await.unwrap().is_empty());
     // A response from a refresh started before removal cannot resurrect it either.
     let stale = serde_json::from_value(cached(42, "my", 20.)).unwrap();
-    app.apply_provider_refresh("my", vec![stale], false)
+    app.apply_provider_refresh(Pool::Codex, "my", vec![stale], None, true, false)
         .await
         .unwrap();
-    assert!(app.accounts().await.unwrap().is_empty());
-    app.refresh_provider("my", true).await.unwrap();
-    assert_eq!(app.accounts().await.unwrap().len(), 2);
+    assert!(app.accounts(Pool::Codex).await.unwrap().is_empty());
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
+    assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn refreshing_one_card_drops_an_account_sub2api_no_longer_lists() {
+    let (_dir, app, _) = fixture();
+    let ids = Arc::new(Mutex::new(vec![42, 43]));
+    let server = upstream(ids.clone(), Default::default()).await;
+    config(&app, &[("my", &server.base)], "openai");
+    app.codex_save_provider(provider("my")).await.unwrap();
+    app.refresh_provider(Pool::Codex, "my", true).await.unwrap();
+    // Only the account Sub2api no longer lists leaves; the provider stays.
+    *ids.lock().unwrap() = vec![43];
+    app.refresh_usage(Pool::Codex, "sub2api-my-42")
+        .await
+        .unwrap();
+    assert_eq!(cards(&app).await, ["sub2api-my-43"]);
+    // Its last account gone, the provider has no card left.
+    ids.lock().unwrap().clear();
+    app.refresh_usage(Pool::Codex, "sub2api-my-43")
+        .await
+        .unwrap();
+    assert!(cards(&app).await.is_empty());
+    let settings = app.configuration().unwrap();
+    assert!(settings.sub2_api_provider.providers[0]
+        .imported_account_ids
+        .is_empty());
+}
+/// The Codex pool's card ids, sorted.
+async fn cards(app: &Application) -> Vec<String> {
+    let mut ids: Vec<String> = app
+        .accounts(Pool::Codex)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    ids.sort();
+    ids
 }

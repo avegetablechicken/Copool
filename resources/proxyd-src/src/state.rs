@@ -21,6 +21,7 @@ pub(crate) struct ApiProxyRuntimeSnapshot {
 }
 
 pub(crate) struct ApiProxyRuntimeHandle {
+    pub(crate) pool: crate::models::Pool,
     pub(crate) port: u16,
     pub(crate) api_key: Arc<RwLock<String>>,
     pub(crate) shutdown_tx: Option<oneshot::Sender<()>>,
@@ -51,6 +52,8 @@ pub(crate) struct AppState {
     pub(crate) store_lock: Arc<Mutex<()>>,
     pub(crate) add_flow_auth_backup: Mutex<Option<Option<Value>>>,
     pub(crate) api_proxy: Mutex<Option<ApiProxyRuntimeHandle>>,
+    /// The Claude pool's API proxy, independent of the Codex one.
+    pub(crate) claude_api_proxy: Mutex<Option<ApiProxyRuntimeHandle>>,
     pub(crate) cloudflared: Mutex<Option<CloudflaredRuntimeHandle>>,
 }
 
@@ -60,6 +63,7 @@ impl Default for AppState {
             store_lock: Arc::new(Mutex::new(())),
             add_flow_auth_backup: Mutex::new(None),
             api_proxy: Mutex::new(None),
+            claude_api_proxy: Mutex::new(None),
             cloudflared: Mutex::new(None),
         }
     }

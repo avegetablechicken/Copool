@@ -36,8 +36,10 @@ impl Default for Configuration {
         }
     }
 }
+/// One pool's public tunnel to its API proxy.
 #[derive(Default)]
 pub struct Tunnel {
+    pool: crate::Pool,
     child: Option<tokio::process::Child>,
     log: Option<PathBuf>,
     hostname: Option<String>,
@@ -99,7 +101,17 @@ fn binary(data: &Path) -> Option<PathBuf> {
         p.is_file().then_some(p)
     })
 }
+/// The public base URL of a tunnel's root, as the pool's proxy gives it.
+fn public_base(pool: crate::Pool, root: &str) -> String {
+    format!("{}{}", root.trim_end_matches('/'), pool.base_path())
+}
 impl Tunnel {
+    pub fn new(pool: crate::Pool) -> Self {
+        Self {
+            pool,
+            ..Default::default()
+        }
+    }
     pub fn status(&mut self, data: &Path) -> Status {
         let running = self
             .child
@@ -111,13 +123,14 @@ impl Tunnel {
         let url = if running {
             self.hostname
                 .as_ref()
-                .map(|h| format!("https://{h}/v1"))
+                .map(|h| format!("https://{h}"))
                 .or_else(|| {
                     self.log
                         .as_ref()
                         .and_then(|p| std::fs::read_to_string(p).ok())
                         .and_then(|s| quick_url(&s))
                 })
+                .map(|root| public_base(self.pool, &root))
         } else {
             None
         };
@@ -147,7 +160,10 @@ impl Tunnel {
         }
         let bin = binary(data).ok_or("error.cloudflared.not_installed")?;
         self.stop().await?;
-        let log = data.join("cloudflared.log");
+        let log = data.join(match self.pool {
+            crate::Pool::Codex => "cloudflared.log",
+            crate::Pool::Claude => "claude-cloudflared.log",
+        });
         std::fs::create_dir_all(data).map_err(|e| e.to_string())?;
         let file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
         let mut cmd = tokio::process::Command::new(bin);
@@ -298,7 +314,7 @@ pub fn quick_url(log: &str) -> Option<String> {
             let url = reqwest::Url::parse(value).ok()?;
             url.host_str()
                 .filter(|h| h.ends_with(".trycloudflare.com") && *h != "trycloudflare.com")?;
-            Some(format!("{}/v1", url.as_str().trim_end_matches('/')))
+            Some(url.as_str().trim_end_matches('/').to_owned())
         })
         .next()
 }
@@ -383,5 +399,23 @@ pub async fn install(data: &Path) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn each_pool_is_given_its_proxy_base_url() {
+        let log = "INF |  https://quiet-river.trycloudflare.com  |";
+        let root = quick_url(log).unwrap();
+        assert_eq!(root, "https://quiet-river.trycloudflare.com");
+        assert_eq!(
+            public_base(crate::Pool::Codex, &root),
+            "https://quiet-river.trycloudflare.com/v1"
+        );
+        assert_eq!(
+            public_base(crate::Pool::Claude, &root),
+            "https://quiet-river.trycloudflare.com/anthropic"
+        );
     }
 }

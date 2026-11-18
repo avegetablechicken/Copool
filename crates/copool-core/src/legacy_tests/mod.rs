@@ -107,3 +107,24 @@ pub(crate) mod network_fixture;
 
 #[path = "../usage_regression_tests.rs"]
 mod usage_regressions;
+/// Swift's refreshAccounts: the Codex accounts by `ids`, every one without;
+/// a refresh not forced skips usage fetched within the last 25 seconds.
+async fn refresh_accounts(
+    app: &crate::Application,
+    ids: Option<&[String]>,
+    force: bool,
+) -> Result<(), String> {
+    let mut errors = vec![];
+    for account in app.accounts(crate::Pool::Codex).await? {
+        if ids.is_none_or(|ids| ids.contains(&account.id)) {
+            if let Err(error) = app.codex_refresh_account(&account.id, force, None).await {
+                errors.push(error);
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join(" | "))
+    }
+}

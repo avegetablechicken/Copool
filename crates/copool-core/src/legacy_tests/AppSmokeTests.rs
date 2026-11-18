@@ -1,15 +1,17 @@
 use super::{auth, network_fixture::fixture, save_fixture, stored};
+use crate::Pool;
 use crate::{utils::now_unix_seconds, Preferences};
 use serde_json::{json, Value};
 #[tokio::test]
 async fn testAccountsPageLoadSwitchAndSettingsFlow() {
     let (_dir, app, _) = fixture();
     app.import_json(
+        Pool::Codex,
         &json!([auth("first", "workspace-1"), auth("second", "workspace-2")]).to_string(),
     )
     .await
     .unwrap();
-    let accounts = app.accounts().await.unwrap();
+    let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts.len(), 2);
     let target = accounts
         .iter()
@@ -17,8 +19,8 @@ async fn testAccountsPageLoadSwitchAndSettingsFlow() {
         .unwrap()
         .id
         .clone();
-    app.switch_account(&target).await.unwrap();
-    let rows = app.accounts().await.unwrap();
+    app.switch_account(Pool::Codex, &target).await.unwrap();
+    let rows = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(rows.iter().find(|a| a.is_current).unwrap().id, target);
     let mut preferences = app.preferences().unwrap();
     preferences.locale = "zh-Hans".into();
@@ -33,7 +35,7 @@ async fn testAccountsPageLoadSwitchAndSettingsFlow() {
     assert_eq!(reloaded.preferences().unwrap().usage_display, "remaining");
     assert_eq!(
         reloaded
-            .accounts()
+            .accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -59,10 +61,10 @@ fn current(app: &crate::Application) -> String {
 async fn testAccountsPageSmartSwitchUpdatesCurrentStateAndAuth() {
     let (_dir, app, _) = fixture();
     save_fixture(&app, pool());
-    app.smart_switch().await.unwrap();
+    app.smart_switch(Pool::Codex).await.unwrap();
     assert_eq!(current(&app), "two");
     assert_eq!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
@@ -93,15 +95,15 @@ async fn testProxyPageStartAndStopFlow() {
     })
     .await
     .unwrap();
-    assert!(!app.proxy_status().await.unwrap().running);
-    let running = app.start_proxy().await.unwrap();
+    assert!(!app.proxy_status(Pool::Codex).await.unwrap().running);
+    let running = app.start_proxy(Pool::Codex).await.unwrap();
     assert!(running.running);
     assert_eq!(running.port, Some(port));
     assert!(running.api_key.is_some());
-    assert!(app.proxy_status().await.unwrap().running);
-    let stopped = app.stop_proxy().await.unwrap();
+    assert!(app.proxy_status(Pool::Codex).await.unwrap().running);
+    let stopped = app.stop_proxy(Pool::Codex).await.unwrap();
     assert!(!stopped.running);
-    assert!(!app.proxy_status().await.unwrap().running);
+    assert!(!app.proxy_status(Pool::Codex).await.unwrap().running);
 }
 #[tokio::test]
 async fn testTrayAutoSmartSwitchUpdatesAccountsPageCurrentState() {
@@ -119,13 +121,16 @@ async fn testTrayAutoSmartSwitchUpdatesAccountsPageCurrentState() {
         changed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }));
     assert_eq!(
-        app.auto_switch_if_needed().await.unwrap().as_deref(),
+        app.auto_switch_if_needed(Pool::Codex)
+            .await
+            .unwrap()
+            .as_deref(),
         Some("second")
     );
     assert_eq!(current(&app), "two");
     assert!(notifications.load(std::sync::atomic::Ordering::SeqCst) > 0);
     assert_eq!(
-        app.accounts()
+        app.accounts(Pool::Codex)
             .await
             .unwrap()
             .iter()
