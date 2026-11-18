@@ -44,8 +44,7 @@ struct CreditDetails {
     balance: Option<String>,
 }
 
-/// Usage under a resolved ChatGPT origin (`chatgpt_base_origin`), then the
-/// official endpoints.
+/// Usage under the resolved ChatGPT origin (`chatgpt_base_origin`).
 pub(crate) async fn fetch_usage_snapshot_from(
     origin: &str,
     access_token: &str,
@@ -188,7 +187,8 @@ fn moving_idle_window(first: &UsageSnapshot, latest: &UsageSnapshot) -> bool {
     }
 }
 
-/// Usage endpoints under the configured ChatGPT origin, then the official ones.
+/// Try compatible paths on the configured origin. Falling back to a different
+/// host would hide a broken configured relay and bypass the user's route.
 pub(crate) fn usage_urls(normalized: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
@@ -202,9 +202,6 @@ pub(crate) fn usage_urls(normalized: &str) -> Vec<String> {
         candidates.push(format!("{normalized}{WHAM_USAGE_PATH}"));
         candidates.push(format!("{normalized}{CODEX_USAGE_PATH}"));
     }
-
-    candidates.push("https://chatgpt.com/backend-api/wham/usage".to_string());
-    candidates.push(format!("https://chatgpt.com{CODEX_USAGE_PATH}"));
 
     let mut deduped = Vec::new();
     for url in candidates {

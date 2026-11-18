@@ -97,10 +97,12 @@ where
     F: Fn(&str) -> reqwest::RequestBuilder + Send + Sync + 'static,
     V: Fn(Value) -> Result<T, String> + Send + Sync + 'static,
 {
-    let response = make(&endpoint)
-        .send()
-        .await
-        .map_err(|e| Failure::Other(format!("{endpoint}: {e}")))?;
+    let response = make(&endpoint).send().await.map_err(|e| {
+        Failure::Other(format!(
+            "{endpoint}: {}",
+            crate::usage::format_reqwest_error(&e)
+        ))
+    })?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();

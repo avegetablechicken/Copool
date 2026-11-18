@@ -24,6 +24,8 @@
 
 2026-11-07（按 provider 同步卡片）：Codex / Claude 的 Import 菜单支持独立 provider 子菜单和最右侧右箭头，仅同步所选 provider。鼠标与键盘分别控制高亮；父菜单预留子菜单空间，过长标题省略。前端测试 156 项、单 provider 隔离回归测试及桌面 cargo check 通过，尚未桌面实机验证或打包。
 
+2026-10-30（Codex 配置转发地址故障提示）：普通账号额度查询只在 `chatgpt_base_url` 指定的地址下尝试兼容接口，不再在转发失败后静默直连官方地址；未配置时仍使用官方地址。网络错误保留底层连接失败原因，失败时保留旧额度和时间并记录卡片错误，恢复后清除错误。macOS 本机模拟重定向至无服务端口的回归测试通过；核心测试 463 通过、2 忽略，另有 2 项 Claude 凭据库测试因钥匙串禁止交互失败。独立 daemon 检查通过（存在 dead-code 警告）。未使用真实账号验证，未打包、安装或进行 Windows/Linux 实机验证。
+
 Rust 桌面版本的应用名为 `Copool`，Bundle ID / 应用标识为 `io.github.copool.rust`。
 
 Copool 是 Rust + Tauri 2 桌面应用，目标为 macOS、Windows 和 Linux。原 SwiftUI 版本已从仓库移除，界面与交互仍以它为准，源码可在提交 `cae2fce` 中查阅（如 `git show cae2fce:Sources/Copool/Features/Accounts/AccountsPageModel.swift`）。

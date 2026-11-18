@@ -3,6 +3,71 @@ use crate::usage::*;
 use axum::http::StatusCode;
 use std::sync::Arc;
 
+#[tokio::test]
+async fn redirected_usage_connection_failure_is_reported_and_keeps_previous_usage() {
+    use axum::http::{HeaderMap, HeaderValue};
+    use serde_json::json;
+    let (_dir, app) = super::fixture();
+    // Reserve an ephemeral port, then close it to simulate an unavailable relay.
+    let unavailable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let destination = format!("http://{}", unavailable.local_addr().unwrap());
+    drop(unavailable);
+    let target = destination.clone();
+    let failing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let state = failing.clone();
+    let server = super::http_fixture::serve_headers(move |r| {
+        if state.load(std::sync::atomic::Ordering::SeqCst) {
+            let mut headers = HeaderMap::new();
+            headers.insert("location", HeaderValue::from_str(&format!("{target}{}", r.path)).unwrap());
+            (StatusCode::TEMPORARY_REDIRECT, headers, String::new())
+        } else {
+            (StatusCode::OK, HeaderMap::new(), json!({"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":25,"limit_window_seconds":18000}}}).to_string())
+        }
+    }).await;
+    std::fs::create_dir_all(app.codex_config_path().parent().unwrap()).unwrap();
+    std::fs::write(
+        app.codex_config_path(),
+        format!("chatgpt_base_url = {:?}\n", server.base),
+    )
+    .unwrap();
+    let mut account = super::stored("relay-account", "fixture-user", "fixture-workspace");
+    let previous = json!({"fetchedAt":1,"fiveHour":{"usedPercent":10,"windowSeconds":18000}});
+    account["usage"] = previous;
+    super::save_fixture(&app, json!({"accounts":[account]}));
+    let error = app.refresh_usage("relay-account").await.unwrap_err();
+    assert!(error.contains(&server.base), "{error}");
+    assert!(error.to_lowercase().contains("refused"), "{error}");
+    let cards = app.accounts().await.unwrap();
+    assert_eq!(cards[0].usage_error.as_deref(), Some(error.as_str()));
+    assert_eq!(cards[0].usage.as_ref().unwrap().fetched_at, 1);
+    assert_eq!(
+        cards[0]
+            .usage
+            .as_ref()
+            .unwrap()
+            .five_hour
+            .as_ref()
+            .unwrap()
+            .used_percent,
+        10.
+    );
+    failing.store(false, std::sync::atomic::Ordering::SeqCst);
+    app.refresh_usage("relay-account").await.unwrap();
+    let cards = app.accounts().await.unwrap();
+    assert!(cards[0].usage_error.is_none());
+    assert_eq!(
+        cards[0]
+            .usage
+            .as_ref()
+            .unwrap()
+            .five_hour
+            .as_ref()
+            .unwrap()
+            .used_percent,
+        25.
+    );
+}
+
 #[test]
 fn account_usage_endpoints_are_official() {
     // Without a chatgpt_base_url the endpoints are the official ones; the
@@ -18,9 +83,9 @@ fn account_usage_endpoints_are_official() {
 }
 
 #[test]
-fn loopback_chatgpt_base_url_is_tried_before_the_official_endpoints() {
+fn configured_chatgpt_base_url_does_not_fall_back_to_official_endpoints() {
     for scheme in ["http", "https"] {
-        for host in ["127.0.0.1", "localhost", "[::1]"] {
+        for host in ["127.0.0.1", "localhost", "[::1]", "relay.example.test"] {
             let origin = format!("{scheme}://{host}:8787");
             assert_eq!(
                 usage_urls(&chatgpt_base_origin(Some(&format!(
@@ -29,8 +94,6 @@ fn loopback_chatgpt_base_url_is_tried_before_the_official_endpoints() {
                 vec![
                     format!("{origin}/backend-api/wham/usage"),
                     format!("{origin}/api/codex/usage"),
-                    "https://chatgpt.com/backend-api/wham/usage".into(),
-                    "https://chatgpt.com/api/codex/usage".into(),
                 ]
             );
         }
