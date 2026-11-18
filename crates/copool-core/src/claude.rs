@@ -5789,6 +5789,21 @@ mod tests {
         assert_eq!(refreshes(&fake), ["alice-refresh"]);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn renewal_takes_over_from_a_claude_code_that_died_holding_its_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake, id) = expired_live_login(&dir).await;
+        // Exited mid-renewal: its locks are far from stale, but its owner
+        // record proves it gone.
+        let locks = refresh_lock::hold_as_dead_claude_code(&location.storage_dir);
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
+        assert_eq!(live_access(&location), "fresh-access");
+        assert!(locks.iter().all(|lock| !lock.exists()));
+        assert!(!location.storage_dir.join(refresh_lock::OWNER_FILE).exists());
+    }
+
     #[tokio::test]
     async fn switching_waits_until_claude_code_has_renewed_the_login_being_left() {
         let dir = tempfile::tempdir().unwrap();
