@@ -2254,7 +2254,17 @@ impl Application {
                             Err(_) if in_use => return Err(LIVE_UNREADABLE.into()),
                             Err(_) => None,
                         };
-                        if live_generation_changed(latest.as_ref(), locked.as_ref()) {
+                        // A login named as another account, before and after
+                        // the wait, never held this token: its renewal is no
+                        // reason to stop.
+                        let another = |live: Option<&Live>| {
+                            let named = live.and_then(|l| l.account.as_ref()).and_then(identity);
+                            identity(&account.account)
+                                .is_some_and(|ours| named.is_some_and(|named| named != ours))
+                        };
+                        if live_generation_changed(latest.as_ref(), locked.as_ref())
+                            && !(another(latest.as_ref()) && another(locked.as_ref()))
+                        {
                             // Renewed or switched while we waited; the round
                             // adopts or leaves that login.
                             return Err(CREDENTIALS_CHANGED.into());
@@ -5827,6 +5837,53 @@ mod tests {
         assert!(!location.storage_dir.exists());
         let stored = app.claude_load().unwrap();
         assert_eq!(stored.accounts[0].oauth["refreshToken"], "fresh-refresh");
+    }
+
+    #[tokio::test]
+    async fn a_pool_login_renews_after_waiting_for_claude_code_to_renew_another() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = waiting_app(&dir);
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let (oauth, account) = login("bob", 1);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string(),
+        )
+        .await
+        .unwrap();
+        let bob = app
+            .claude_load()
+            .unwrap()
+            .accounts
+            .iter()
+            .find(|a| a.oauth["refreshToken"] == "bob-refresh")
+            .unwrap()
+            .id
+            .clone();
+        app.release_new_accounts(Pool::Claude, Some(&bob))
+            .await
+            .unwrap();
+        // Claude Code renews its own login, alice's, while bob's waits.
+        let locks = hold_claude_code_locks(&location);
+        let finish = {
+            let location = location.clone();
+            let locks = locks.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                external_update(location, "alice", "code")();
+                for lock in locks.iter().rev() {
+                    fs::remove_dir(lock).unwrap();
+                }
+            })
+        };
+        app.refresh_usage(Pool::Claude, &bob).await.unwrap();
+        finish.join().unwrap();
+        assert_eq!(refreshes(&fake), ["bob-refresh"]);
+        assert_eq!(live_access(&location), "code");
+        let stored = app.claude_load().unwrap();
+        let saved = stored.accounts.iter().find(|a| a.id == bob).unwrap();
+        assert_eq!(saved.oauth["refreshToken"], "fresh-refresh");
+        assert!(saved.usage_error.is_none());
     }
 
     #[tokio::test]
