@@ -1987,6 +1987,11 @@ details.remote-action-guide p {
 
 /* -------------------------------------------------------------- tunnel */
 
+#public-details > .message:nth-child(1 of :not([hidden])) {
+  border-top: 0;
+  margin-top: 0;
+}
+
 #tunnel-controls {
   display: flex;
   flex-direction: column;
