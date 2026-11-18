@@ -3438,6 +3438,7 @@ mod tests {
             json("400 Bad Request", r#"{"error":"invalid_grant","error_description":"Refresh token not found or invalid"}"#),
             json("429 Too Many Requests", r#"{"error":{"type":"rate_limit_error","message":"Rate limited. Please try again later."}}"#),
             json("500 Internal Server Error", "{}"),
+            json("502 Bad Gateway", r#"{"error":{"message":"Claude account has no proxy route."}}"#),
         ])
         .await;
         let scope = "user:inference user:profile";
@@ -3461,8 +3462,14 @@ mod tests {
                 .unwrap_err(),
             "Claude token refresh failed: HTTP 500"
         );
+        assert_eq!(
+            refresh_at(&url, "rt-5", scope, "direct://")
+                .await
+                .unwrap_err(),
+            "Claude token refresh failed: HTTP 502 Claude account has no proxy route."
+        );
         let requests = server.await.unwrap();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 5);
         for (n, (head, body)) in requests.iter().enumerate() {
             assert!(head.starts_with("post /v1/oauth/token http/1.1"), "{head}");
             // The token endpoint refuses `claude-code/…` and `curl/…` agents.

@@ -86,10 +86,17 @@ pub(crate) async fn refresh_at(
     if status.as_u16() == 429 {
         return Err(TOKEN_REFRESH_RATE_LIMITED.into());
     }
+    // A proxy in between, or Claude, may say why; shown as usage errors are.
+    let message = body["error"]["message"]
+        .as_str()
+        .or_else(|| body["error_description"].as_str())
+        .unwrap_or_default();
     Err(format!(
-        "Claude token refresh failed: HTTP {}",
+        "Claude token refresh failed: HTTP {} {message}",
         status.as_u16()
-    ))
+    )
+    .trim()
+    .to_owned())
 }
 
 /// The scopes a login was granted, as Claude Code asks for them on renewal;
