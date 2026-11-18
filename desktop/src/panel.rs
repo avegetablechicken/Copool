@@ -172,6 +172,7 @@ pub fn set_modal(app: &AppHandle, modal: bool) {
 }
 
 /// Whether a system dialog opened from the panel is open.
+#[cfg(target_os = "macos")]
 pub fn is_modal(app: &AppHandle) -> bool {
     state(app).modal.load(Ordering::SeqCst)
 }

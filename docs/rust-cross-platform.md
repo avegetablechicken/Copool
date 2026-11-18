@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-18（Windows 编译警告）：非 Unix 平台显式忽略 `set_private_permissions` 的参数；`panel::is_modal` 仅在 macOS 编译，与调用方平台条件一致。Windows 桌面端及独立 daemon 的 cargo check 已启动，提交时仍在编译依赖，尚未确认完成；未进行 macOS 构建验证。
+
 2026-11-16（macOS 开机启动恢复为登录项）：沿原 SwiftUI 版本的 `LaunchAtStartupService`，macOS 13 及以上从 App 包运行时用 `SMAppService.mainApp` 注册/注销，启动时按已保存偏好同步（被系统设置阻止的仍视为已注册，不重复注册），并删除早期 Rust 版本写入的 `~/Library/LaunchAgents/io.github.copool.rust.plist`。包外 plist 在系统设置中归于开发者名下，曾被禁用而导致不启动；原版（`com.alick.copool`）留下的同路径登录项不会被本应用移除，需在“登录时打开”中手动删除以免重复启动。旧版 macOS、非 App 包运行及 Windows/Linux 保持原实现。`scripts/test_rust.py` 与桌面 crate 的 clippy 通过；本机打包安装后已确认注册（系统设置中归于 Copool，状态 enabled）；尚未验证登录时启动与注销。
 2026-11-17（Windows 本地构建）：Windows 与 macOS 共用 `scripts/build_rust_desktop.py` 入口、参数解析、UI 检查和构建流程；`scripts/windows_build.py` 负责 Windows 环境准备，与 macOS 签名辅助模块对应。`scripts/build_windows.ps1` 仅为可选启动包装。Windows 环境准备通过 vswhere 查找现有 x64 C++ Build Tools，导入开发环境并使用 `stable-x86_64-pc-windows-msvc`，避免 Scoop 的同名 link.exe 与 ARM64 宿主库缺失问题。运行 `C:\tools\miniconda3\python.exe scripts/build_rust_desktop.py`（与 macOS 使用相同脚本）；需要预先安装 Windows SDK 和 x64 Rust 工具链（ARM64 Windows 使用 rustup 的 `--force-non-host` 安装选项）。Windows 默认通过 Tauri CLI 生成 NSIS 安装程序（`target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe`），`--no-bundle` 仅生成可执行文件。打包需要 cargo tauri 或 Node.js/npx，NSIS 工具由 Tauri 下载；Windows 分支禁用 macOS WidgetKit 预打包钩子。2026-11-18 已通过统一入口生成 Copool_0.1.0_x64-setup.exe（9.26 MiB），173 项前端测试通过；尚未执行安装/卸载验证，不包含代码签名；未安装 Node 时统一入口会跳过 UI 检查。本机 Release 构建已完成，PE 架构 x64、文件版本与产品版本均为 0.1.0；尚未验证 GUI 运行。
 

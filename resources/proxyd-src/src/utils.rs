@@ -79,6 +79,8 @@ pub(crate) fn write_private_file_atomically(path: &Path, contents: &[u8]) -> Res
 }
 
 pub(crate) fn set_private_permissions(path: &Path) {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
