@@ -201,6 +201,10 @@ function translate() {
   $("language").value = locale;
   syncGeneralSelectLabels();
   $("page-title").textContent = tr(`tab.${selectedPage}`);
+  // The back chevron has no text; name it for assistive technology.
+  document
+    .querySelector("#top-sub .back")
+    .setAttribute("aria-label", tr("tab.accounts"));
   document.querySelectorAll(".pool-btn").forEach((button) => {
     button.title = withShortcut(
       tr(`pool.${button.dataset.pool}`),
