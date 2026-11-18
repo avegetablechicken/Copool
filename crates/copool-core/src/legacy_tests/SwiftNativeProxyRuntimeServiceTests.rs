@@ -266,7 +266,35 @@ async fn testRepeatedSuccessForCurrentProviderDoesNotResyncProvider() {
 async fn testHealthAndModelsEndpoints() {
     let (_dir, app) = fixture();
     save_fixture(&app, json!({"accounts":[stored("a","a","a")]}));
-    let started = start(&app, None).await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (log, failing) = (seen.clone(), fail.clone());
+    let server = serve(move |request| {
+        let header = |name: &str| {
+            request
+                .headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        if request.path.ends_with("/models") {
+            log.lock().unwrap().push((
+                request.uri.clone(),
+                header("authorization"),
+                header("chatgpt-account-id"),
+                header("version"),
+            ));
+        }
+        if failing.load(Ordering::SeqCst) {
+            return (axum::http::StatusCode::SERVICE_UNAVAILABLE, "{}".into());
+        }
+        let models = json!({"models": [{"slug": "gpt-6.2-sol", "priority": 1, "visibility": "list",
+            "supported_in_api": true, "supported_reasoning_levels": [{"effort": "high"}]}]});
+        (axum::http::StatusCode::OK, models.to_string())
+    })
+    .await;
+    let started = start(&app, Some(&server.base)).await;
     assert!(started.running);
     assert!(started.api_key.as_ref().unwrap().starts_with("sk-"));
     let base = format!("http://127.0.0.1:{}", started.port.unwrap());
@@ -274,17 +302,52 @@ async fn testHealthAndModelsEndpoints() {
     let health = client.get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(health.status(), 200);
     assert_eq!(health.json::<Value>().await.unwrap()["ok"], true);
-    let models = client
-        .get(format!("{base}/v1/models"))
+    let models = || async {
+        let response = client
+            .get(format!("{base}/v1/models"))
+            .bearer_auth(started.api_key.as_ref().unwrap())
+            .header("User-Agent", "codex_cli_rs/0.166.0")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let listed = response.json::<Value>().await.unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        listed
+    };
+    // The upstream's list, asked as Codex asks with the account's login.
+    assert_eq!(models().await, ["GPT-6.2-Sol", "GPT-6.2-Sol-High"]);
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        [(
+            "/backend-api/codex/models?client_version=0.166.0".to_owned(),
+            "Bearer test-only".to_owned(),
+            "a".to_owned(),
+            "0.166.0".to_owned(),
+        )]
+    );
+    // Within its lifetime the list is served without asking again.
+    assert_eq!(models().await, ["GPT-6.2-Sol", "GPT-6.2-Sol-High"]);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    app.stop_proxy(Pool::Codex).await.unwrap();
+
+    // Once the upstream fails, a proxy without a list it fetched says so.
+    let started = start(&app, Some(&server.base)).await;
+    fail.store(true, Ordering::SeqCst);
+    let response = client
+        .get(format!(
+            "http://127.0.0.1:{}/v1/models",
+            started.port.unwrap()
+        ))
         .bearer_auth(started.api_key.unwrap())
         .send()
         .await
         .unwrap();
-    assert_eq!(models.status(), 200);
-    assert!(!models.json::<Value>().await.unwrap()["data"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert_eq!(response.status(), 502);
     app.stop_proxy(Pool::Codex).await.unwrap();
 }
 #[tokio::test]

@@ -1791,8 +1791,16 @@ mod tests {
         app.import_json(Pool::Codex, &document("alice").to_string())
             .await
             .unwrap();
+        // An upstream listing a model, so an authorized request succeeds.
+        let upstream = axum::Router::new().fallback(|| async {
+            axum::Json(serde_json::json!({"models": [{"slug": "gpt-6-luna"}]}))
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut storage = app.proxy_storage(Pool::Codex);
+        storage.upstream_base_url = Some(format!("http://{}", listener.local_addr().unwrap()));
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
         let status = proxy_service::start_api_proxy_with_runtime(
-            &app.proxy_storage(Pool::Codex),
+            &storage,
             &app.state.api_proxy,
             Some(0),
             "127.0.0.1",

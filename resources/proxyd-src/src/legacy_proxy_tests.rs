@@ -136,18 +136,33 @@ fn testNormalizesUpstreamModelsForClientDisplay() {
 }
 #[test]
 fn testClientVisibleModelsIncludeReasoningAliasNames() {
-    for model in [
-        "GPT-5.5",
-        "GPT-5.5-High",
-        "GPT-5.4-Low",
-        "GPT-5.4-High",
-        "GPT-5.4-Mini-High",
-        "GPT-5.4-Mini-xHigh",
-        "GPT-5.3-Codex-xHigh",
-        "GPT-5.3-Codex-Medium",
-    ] {
-        assert!(MODELS.contains(&model), "{model}");
-    }
+    let listed = json!({"models": [
+        {"slug": "gpt-6-luna", "priority": 2, "visibility": "list", "supported_in_api": true,
+         "supported_reasoning_levels": [{"effort": "low"}, {"effort": "xhigh"}, {"effort": "max"}]},
+        {"slug": "codex-auto-review", "priority": 0, "visibility": "hide", "supported_in_api": true},
+        {"slug": "gpt-6.2-sol", "priority": 1, "visibility": "list", "supported_in_api": true,
+         "supported_reasoning_levels": [{"effort": "medium"}, {"effort": "high"}]},
+    ]});
+    assert_eq!(
+        client_models(&listed),
+        [
+            "GPT-6.2-Sol",
+            "GPT-6.2-Sol-Medium",
+            "GPT-6.2-Sol-High",
+            "GPT-6-Luna",
+            "GPT-6-Luna-Low",
+            "GPT-6-Luna-xHigh",
+        ]
+    );
+    // Each listed name is routed back to its model and effort.
+    let alias = resolve_client_model("GPT-6.2-Sol-High").unwrap();
+    assert_eq!(alias.upstream_model, "gpt-6.2-sol");
+    assert_eq!(alias.default_reasoning_effort.as_deref(), Some("high"));
+    // A gateway's OpenAI list is taken as it is.
+    assert_eq!(
+        client_models(&json!({"object": "list", "data": [{"id": "gpt-5.4"}]})),
+        ["GPT-5.4"]
+    );
 }
 #[test]
 fn testResolvesUpstreamBaseURLForBothRouteFamilies() {
@@ -316,6 +331,7 @@ fn desktop_context(store: Value) -> (tempfile::TempDir, ProxyContext) {
         upstream_base_url: "http://127.0.0.1:1".into(),
         client: reqwest::Client::new(),
         shared: Arc::new(tokio::sync::Mutex::new(Default::default())),
+        models: Default::default(),
     };
     (dir, context)
 }

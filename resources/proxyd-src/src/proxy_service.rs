@@ -74,53 +74,11 @@ const UNSUPPORTED_RESPONSES_FORWARDING_KEYS: &[&str] = &[
     "temperature",
 ];
 const SSE_DONE: &str = "data: [DONE]\n\n";
-const MODELS: &[&str] = &[
-    "GPT-5",
-    "GPT-5-Low",
-    "GPT-5-Medium",
-    "GPT-5-High",
-    "GPT-5-xHigh",
-    "GPT-5.5",
-    "GPT-5.5-Low",
-    "GPT-5.5-Medium",
-    "GPT-5.5-High",
-    "GPT-5.5-xHigh",
-    "GPT-5.4",
-    "GPT-5.4-Low",
-    "GPT-5.4-Medium",
-    "GPT-5.4-High",
-    "GPT-5.4-xHigh",
-    "GPT-5.4-Mini",
-    "GPT-5.4-Mini-Low",
-    "GPT-5.4-Mini-Medium",
-    "GPT-5.4-Mini-High",
-    "GPT-5.4-Mini-xHigh",
-    "GPT-5.2",
-    "GPT-5.2-Low",
-    "GPT-5.2-Medium",
-    "GPT-5.2-High",
-    "GPT-5.2-xHigh",
-    "GPT-5.3-Codex",
-    "GPT-5.3-Codex-Low",
-    "GPT-5.3-Codex-Medium",
-    "GPT-5.3-Codex-High",
-    "GPT-5.3-Codex-xHigh",
-    "GPT-5.2-Codex",
-    "GPT-5.2-Codex-Low",
-    "GPT-5.2-Codex-Medium",
-    "GPT-5.2-Codex-High",
-    "GPT-5.2-Codex-xHigh",
-    "GPT-5.1-Codex-Mini",
-    "GPT-5.1-Codex-Mini-Low",
-    "GPT-5.1-Codex-Mini-Medium",
-    "GPT-5.1-Codex-Mini-High",
-    "GPT-5.1-Codex-Mini-xHigh",
-    "GPT-5.1-Codex-Max",
-    "GPT-5.1-Codex-Max-Low",
-    "GPT-5.1-Codex-Max-Medium",
-    "GPT-5.1-Codex-Max-High",
-    "GPT-5.1-Codex-Max-xHigh",
-];
+/// The reasoning efforts a listed model is also offered at, as an alias
+/// (`GPT-6.2-Sol-High`), when the upstream reports the model supports them.
+const REASONING_ALIAS_EFFORTS: [&str; 4] = ["low", "medium", "high", "xhigh"];
+/// How long the upstream's model list is served before it is asked again.
+const MODELS_TTL_SECONDS: i64 = 300;
 const REQUEST_MODEL_MAPPINGS: &[(&str, &str)] = &[
     ("gpt-5-4", "gpt-5.4"),
     ("gpt-5.4", "gpt-5.4"),
@@ -203,6 +161,15 @@ struct ProxyContext {
     upstream_base_url: String,
     client: reqwest::Client,
     shared: Arc<tokio::sync::Mutex<ApiProxyRuntimeSnapshot>>,
+    /// The model list last fetched from the upstream.
+    models: Arc<tokio::sync::Mutex<Option<FetchedModels>>>,
+}
+
+/// The models the upstream listed for a client version, as clients see them.
+struct FetchedModels {
+    client_version: String,
+    fetched_at: i64,
+    ids: Vec<String>,
 }
 
 struct ApiProxyHandleState {
@@ -471,6 +438,7 @@ pub(crate) async fn start_api_proxy_with_runtime(
         }),
         client,
         shared: shared.clone(),
+        models: Default::default(),
     });
     let request_body_limit = resolve_proxy_request_body_limit_bytes();
 
@@ -607,6 +575,8 @@ async fn health_handler() -> impl IntoResponse {
     Json(json!({ "ok": true }))
 }
 
+/// The models the upstream serves, as Codex asks for them, with an alias
+/// for each reasoning effort a model supports.
 async fn models_handler(
     State(context): State<Arc<ProxyContext>>,
     headers: HeaderMap,
@@ -614,10 +584,13 @@ async fn models_handler(
     if let Some(response) = ensure_authorized(&headers, &context.api_key) {
         return response;
     }
-
+    let ids = match listed_models(&context, &headers).await {
+        Ok(ids) => ids,
+        Err(error) => return json_error_response(StatusCode::BAD_GATEWAY, &error),
+    };
     Json(json!({
         "object": "list",
-        "data": MODELS
+        "data": ids
             .iter()
             .map(|model| {
                 json!({
@@ -630,6 +603,166 @@ async fn models_handler(
             .collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+/// The model list for the client's version: the one fetched within the
+/// last minutes, else the upstream's now, else the last the upstream gave.
+async fn listed_models(context: &ProxyContext, headers: &HeaderMap) -> Result<Vec<String>, String> {
+    let (user_agent, version) = codex_client(headers);
+    let mut cached = context.models.lock().await;
+    if let Some(models) = cached.as_ref().filter(|m| {
+        m.client_version == version && now_unix_seconds() - m.fetched_at < MODELS_TTL_SECONDS
+    }) {
+        return Ok(models.ids.clone());
+    }
+    match fetch_upstream_models(context, user_agent, version).await {
+        Ok(ids) => {
+            *cached = Some(FetchedModels {
+                client_version: version.to_owned(),
+                fetched_at: now_unix_seconds(),
+                ids: ids.clone(),
+            });
+            Ok(ids)
+        }
+        Err(error) => cached.as_ref().map(|m| m.ids.clone()).ok_or(error),
+    }
+}
+
+/// Asks the accounts in routing order for the upstream's models, as Codex
+/// does with its own login; a login the upstream refuses is renewed once.
+/// The listing selects no account.
+async fn fetch_upstream_models(
+    context: &ProxyContext,
+    user_agent: &str,
+    version: &str,
+) -> Result<Vec<String>, String> {
+    let candidates = load_proxy_candidates(&context.storage).await?;
+    let candidates = order_proxy_candidates_for_runtime(context, candidates).await;
+    if candidates.is_empty() {
+        return Err("No authorized account is available for proxying.".into());
+    }
+    let mut errors = Vec::new();
+    for mut candidate in candidates {
+        let mut did_refresh = false;
+        loop {
+            let (status, body) =
+                match request_models(context, &candidate, user_agent, version).await {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        errors.push(format!("{}: {error}", candidate.label));
+                        break;
+                    }
+                };
+            if status.is_success() {
+                match serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .map(|listed| client_models(&listed))
+                {
+                    Some(ids) if !ids.is_empty() => return Ok(ids),
+                    _ => errors.push(format!(
+                        "{}: the upstream listed no models",
+                        candidate.label
+                    )),
+                }
+                break;
+            }
+            if candidate.auth_json.get("copoolProvider").is_none()
+                && !did_refresh
+                && should_retry_with_token_refresh(status, &body)
+            {
+                match refresh_proxy_candidate_auth(&context.storage, &candidate).await {
+                    Ok(refreshed) => {
+                        candidate = refreshed;
+                        did_refresh = true;
+                        continue;
+                    }
+                    Err(error) => {
+                        errors.push(format!(
+                            "{}: failed to refresh the login: {}",
+                            candidate.label,
+                            unlocalized(&error)
+                        ));
+                        break;
+                    }
+                }
+            }
+            errors.push(format!(
+                "{}: HTTP {} {}",
+                candidate.label,
+                status.as_u16(),
+                extract_error_signals(&body).brief
+            ));
+            break;
+        }
+    }
+    Err(errors.into_iter().take(3).collect::<Vec<_>>().join(" | "))
+}
+
+/// One account's model list: the Codex endpoint's with a login, a Sub2api
+/// gateway's with its key.
+async fn request_models(
+    context: &ProxyContext,
+    candidate: &ProxyCandidate,
+    user_agent: &str,
+    version: &str,
+) -> Result<(StatusCode, Bytes), String> {
+    let provider = candidate.auth_json.get("copoolProvider");
+    let base = match provider.and_then(|p| p["baseUrl"].as_str()) {
+        Some(base) => base.to_owned(),
+        None => resolve_upstream_base_url(&context.upstream_base_url, UpstreamRouteFamily::Codex),
+    };
+    let client = candidate_client(context, candidate)?;
+    let account_id = provider.is_none().then_some(candidate.account_id.as_str());
+    let response = codex_models_request(
+        &client,
+        &base,
+        &candidate.access_token,
+        account_id,
+        user_agent,
+        version,
+    )
+    .send()
+    .await
+    .map_err(|error| format!("Codex models request failed {base}/models: {error}"))?;
+    let status = response.status();
+    Ok((status, read_capped(response, 8 * 1024 * 1024).await?))
+}
+
+/// The client's names for an upstream model list. Codex's endpoint lists
+/// the models its picker shows, by priority, each with the reasoning
+/// efforts it supports; a gateway's OpenAI list is taken as it is.
+fn client_models(listed: &Value) -> Vec<String> {
+    if let Some(models) = listed["models"].as_array() {
+        let mut shown = models
+            .iter()
+            .filter(|m| m["visibility"].as_str().unwrap_or("list") == "list")
+            .filter(|m| m["supported_in_api"].as_bool() != Some(false))
+            .filter_map(|m| Some((m["slug"].as_str()?, m)))
+            .collect::<Vec<_>>();
+        shown.sort_by_key(|(_, m)| m["priority"].as_i64().unwrap_or(i64::MAX));
+        let mut ids = Vec::new();
+        for (slug, model) in shown {
+            let name = client_display_model_name(slug);
+            let efforts = model["supported_reasoning_levels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|level| level["effort"].as_str())
+                .filter(|effort| REASONING_ALIAS_EFFORTS.contains(effort))
+                .map(|effort| format!("{name}-{}", display_segment(effort)))
+                .collect::<Vec<_>>();
+            ids.push(name);
+            ids.extend(efforts);
+        }
+        return ids;
+    }
+    listed["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m["id"].as_str())
+        .map(normalize_model_for_client)
+        .collect()
 }
 
 async fn chat_completions_handler(
@@ -1722,7 +1855,28 @@ async fn send_over_candidates(
     Err(json_error_response(StatusCode::BAD_GATEWAY, &merged_error))
 }
 
-/// A bounded greeting on the selected subscription, independent of proxy routing.
+/// The model a greeting last completed with, per upstream.
+static HELLO_MODEL: std::sync::Mutex<Option<HelloModel>> = std::sync::Mutex::new(None);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HelloModel {
+    base: String,
+    slug: String,
+    effort: String,
+}
+
+/// Why a greeting failed: an expired login, a model the upstream no
+/// longer serves, or anything else, which another model would meet too.
+enum HelloFailure {
+    Expired,
+    Model(String),
+    Other(String),
+}
+
+/// A bounded greeting on the selected subscription, independent of proxy
+/// routing. It is said with the model the last one completed with; failing
+/// that model, or without one, with the oldest mini or luna model the
+/// upstream lists, the next one if the upstream no longer serves it.
 pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), String> {
     let auth = crate::auth::extract_auth(auth)?;
     let client = crate::proxy_session::client(
@@ -1733,18 +1887,152 @@ pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), 
             ..Default::default()
         },
     )?;
-    let url = format!(
-        "{}/responses",
-        resolve_upstream_base_url(base, UpstreamRouteFamily::Codex)
-    );
+    let upstream = resolve_upstream_base_url(base, UpstreamRouteFamily::Codex);
+    let cached = HELLO_MODEL
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|m| m.base == upstream);
+    let expired = || Err("Provided authentication token is expired".to_owned());
+    let mut errors = Vec::new();
+    if let Some(model) = &cached {
+        match greet(&client, &upstream, &auth, model).await {
+            Ok(()) => return Ok(()),
+            Err(HelloFailure::Expired) => return expired(),
+            Err(HelloFailure::Other(error)) => return Err(error),
+            Err(HelloFailure::Model(error)) => {
+                forget_hello_model(model);
+                errors.push(error);
+            }
+        }
+    }
+    let response = codex_models_request(
+        &client,
+        &upstream,
+        &auth.access_token,
+        Some(&auth.account_id),
+        CODEX_USER_AGENT,
+        CODEX_CLIENT_VERSION,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("Codex greeting failed to list models: {e}"))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return expired();
+    }
+    let body = read_capped(response, 8 * 1024 * 1024).await?;
+    if !status.is_success() {
+        let detail = extract_error_signals(&body).brief;
+        return Err(format!(
+            "Codex greeting failed to list models: HTTP {status}: {detail}"
+        ));
+    }
+    let listed = serde_json::from_slice::<Value>(&body).unwrap_or_default();
+    let models = hello_models(&upstream, &listed)
+        .into_iter()
+        .filter(|m| cached.as_ref() != Some(m));
+    for model in models {
+        match greet(&client, &upstream, &auth, &model).await {
+            Ok(()) => {
+                *HELLO_MODEL.lock().unwrap() = Some(model);
+                return Ok(());
+            }
+            Err(HelloFailure::Expired) => return expired(),
+            Err(HelloFailure::Other(error)) => return Err(error),
+            Err(HelloFailure::Model(error)) => errors.push(error),
+        }
+    }
+    Err(if errors.is_empty() {
+        "Codex greeting failed: the upstream lists no mini or luna model".into()
+    } else {
+        errors.join(" | ")
+    })
+}
+
+/// Forgets the cached greeting model, unless a greeting meanwhile
+/// completed with another.
+fn forget_hello_model(model: &HelloModel) {
+    let mut cached = HELLO_MODEL.lock().unwrap();
+    if cached.as_ref() == Some(model) {
+        *cached = None;
+    }
+}
+
+/// The mini and luna models of an upstream list, the oldest version first,
+/// each with the lowest reasoning effort it supports.
+fn hello_models(base: &str, listed: &Value) -> Vec<HelloModel> {
+    let mut models = listed["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| m["supported_in_api"].as_bool() != Some(false))
+        .filter_map(|m| {
+            let slug = m["slug"].as_str()?;
+            slug.split('-')
+                .any(|part| matches!(part, "mini" | "luna"))
+                .then_some((slug, m))
+        })
+        .collect::<Vec<_>>();
+    // An unknown version goes last.
+    models.sort_by_key(|(slug, _)| {
+        slug.strip_prefix("gpt-")
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|version| {
+                version
+                    .split('.')
+                    .map(|n| n.parse::<u32>().ok())
+                    .collect::<Option<Vec<_>>>()
+            })
+            .map_or((1, Vec::new()), |version| (0, version))
+    });
+    models
+        .into_iter()
+        .map(|(slug, m)| {
+            let supported = m["supported_reasoning_levels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|level| level["effort"].as_str())
+                .collect::<Vec<_>>();
+            let effort = REASONING_ALIAS_EFFORTS
+                .iter()
+                .find(|effort| supported.is_empty() || supported.contains(effort))
+                .copied()
+                .unwrap_or("low");
+            HelloModel {
+                base: base.to_owned(),
+                slug: slug.to_owned(),
+                effort: effort.to_owned(),
+            }
+        })
+        .collect()
+}
+
+/// Says hi with one model.
+async fn greet(
+    client: &reqwest::Client,
+    upstream: &str,
+    auth: &crate::models::ExtractedAuth,
+    model: &HelloModel,
+) -> Result<(), HelloFailure> {
+    let failed = |detail: String| {
+        let error = format!("Codex greeting with {} failed: {detail}", model.slug);
+        if contains_model_restriction_signal(&detail.to_lowercase()) {
+            HelloFailure::Model(error)
+        } else {
+            HelloFailure::Other(error)
+        }
+    };
     let (payload, _) = normalize_openai_responses_request(json!({
-        "model": "gpt-5.6-luna",
+        "model": model.slug,
         "instructions": "Reply only with Hi.",
         "input": "Hi",
-        "reasoning": {"effort": "low"}
-    }))?;
-    let mut response = client
-        .post(url)
+        "reasoning": {"effort": model.effort}
+    }))
+    .map_err(HelloFailure::Other)?;
+    let response = client
+        .post(format!("{upstream}/responses"))
         .bearer_auth(&auth.access_token)
         .header("ChatGPT-Account-Id", &auth.account_id)
         .header("Originator", "codex_cli_rs")
@@ -1754,27 +2042,71 @@ pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), 
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("Codex greeting failed: {e}"))?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        return Err("Provided authentication token is expired".into());
-    }
+        .map_err(|e| HelloFailure::Other(format!("Codex greeting failed: {e}")))?;
     let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(HelloFailure::Expired);
+    }
+    let body = read_capped(response, 1024 * 1024)
+        .await
+        .map_err(HelloFailure::Other)?;
+    if !status.is_success() {
+        let detail = extract_error_signals(&body).brief;
+        return Err(match failed(format!("HTTP {status}: {detail}")) {
+            // A model the upstream cannot find is no longer served.
+            HelloFailure::Other(error) if status == reqwest::StatusCode::NOT_FOUND => {
+                HelloFailure::Model(error)
+            }
+            failure => failure,
+        });
+    }
+    let reply = extract_completed_response_from_sse(&body).map_err(failed)?;
+    if reply["status"] != "completed" {
+        return Err(HelloFailure::Other(
+            "Codex greeting did not complete".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// A response body read up to a limit.
+async fn read_capped(mut response: reqwest::Response, limit: usize) -> Result<Bytes, String> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-        if body.len() + chunk.len() > 1024 * 1024 {
-            return Err("Codex greeting response exceeded 1 MiB".into());
+        if body.len() + chunk.len() > limit {
+            return Err(format!(
+                "The upstream response exceeded {} MiB",
+                limit / 1024 / 1024
+            ));
         }
         body.extend_from_slice(&chunk);
     }
-    if !status.is_success() {
-        let detail = extract_error_signals(&Bytes::from(body)).brief;
-        return Err(format!("Codex greeting failed: HTTP {status}: {detail}"));
+    Ok(Bytes::from(body))
+}
+
+/// Codex's request for the models an upstream serves its version, with a
+/// login (its workspace given) or a gateway's key.
+fn codex_models_request(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    account_id: Option<&str>,
+    user_agent: &str,
+    version: &str,
+) -> reqwest::RequestBuilder {
+    let mut request = client
+        .get(format!("{}/models", base.trim_end_matches('/')))
+        .query(&[("client_version", version)])
+        .bearer_auth(token)
+        .header("Accept", "application/json")
+        .header("Originator", "codex_cli_rs")
+        .header("Version", version)
+        .header("User-Agent", user_agent)
+        .timeout(std::time::Duration::from_secs(30));
+    if let Some(account_id) = account_id {
+        request = request.header("ChatGPT-Account-Id", account_id);
     }
-    let reply = extract_completed_response_from_sse(&body)?;
-    if reply["status"] != "completed" {
-        return Err("Codex greeting did not complete".into());
-    }
-    Ok(())
+    request
 }
 
 async fn forward_codex_request_with_candidate(
@@ -1805,16 +2137,7 @@ async fn forward_codex_request_with_candidate(
         .map(ToString::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let user_agent = headers
-        .get("user-agent")
-        .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(CODEX_USER_AGENT);
-    let explicit_version = headers
-        .get("version")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim);
-    let version = resolve_codex_client_version(explicit_version, user_agent);
+    let (user_agent, version) = codex_client(headers);
 
     let serialized = serde_json::to_vec(payload)
         .map_err(|error| format!("Failed to serialize the upstream request: {error}"))?;
@@ -1931,6 +2254,23 @@ fn candidate_client(
             user_agent: "codex-tools-proxy/0.1".into(),
             insecure,
         },
+    )
+}
+
+/// The client's user agent and Codex version, as passed upstream.
+fn codex_client(headers: &HeaderMap) -> (&str, &str) {
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(CODEX_USER_AGENT);
+    let explicit_version = headers
+        .get("version")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    (
+        user_agent,
+        resolve_codex_client_version(explicit_version, user_agent),
     )
 }
 
@@ -3846,7 +4186,6 @@ mod tests {
     use super::SseEvent;
     use super::CODEX_CLIENT_VERSION;
     use super::DEFAULT_PROXY_REQUEST_BODY_LIMIT_BYTES;
-    use super::MODELS;
     use super::{
         new_proxy_storage_context, persist_candidate_usage_result,
         persist_refreshed_candidate_auth, refresh_proxy_candidate_auth,
@@ -4299,18 +4638,6 @@ mod tests {
             map_client_model_to_upstream("GPT-5.3-Codex-Medium").expect("alias model should map"),
             "gpt-5.3-codex"
         );
-    }
-
-    #[test]
-    fn client_visible_models_include_reasoning_alias_names() {
-        assert!(MODELS.contains(&"GPT-5.5"));
-        assert!(MODELS.contains(&"GPT-5.5-High"));
-        assert!(MODELS.contains(&"GPT-5.4-Low"));
-        assert!(MODELS.contains(&"GPT-5.4-High"));
-        assert!(MODELS.contains(&"GPT-5.4-Mini-High"));
-        assert!(MODELS.contains(&"GPT-5.4-Mini-xHigh"));
-        assert!(MODELS.contains(&"GPT-5.3-Codex-xHigh"));
-        assert!(MODELS.contains(&"GPT-5.3-Codex-Medium"));
     }
 
     #[test]
@@ -5060,47 +5387,97 @@ fn is_payload_oversized(buffer: &[u8], limit: usize) -> bool {
 #[cfg(test)]
 mod say_hi_tests {
     use super::*;
+    use axum::{extract::Request, routing::any, Router};
+
+    const COMPLETED: &str = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n";
+
+    type Seen = Arc<std::sync::Mutex<Vec<(String, HeaderMap, Value)>>>;
+
+    /// An upstream listing `models` and answering a greeting with each
+    /// model by `reply`; returns its Codex base and the requests it saw.
+    async fn upstream(
+        models: Value,
+        reply: impl Fn(&str) -> (u16, String) + Send + Sync + 'static,
+    ) -> (String, Seen, tokio::task::JoinHandle<()>) {
+        let seen: Seen = Default::default();
+        let (recorder, reply) = (seen.clone(), Arc::new(reply));
+        let router = Router::new().fallback(any(move |request: Request| {
+            let (recorder, reply, models) = (recorder.clone(), reply.clone(), models.clone());
+            async move {
+                let uri = request.uri().to_string();
+                let headers = request.headers().clone();
+                let bytes = axum::body::to_bytes(request.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap_or_default();
+                let (status, text) = if uri.contains("/models") {
+                    (200, json!({"models": models}).to_string())
+                } else {
+                    reply(body["model"].as_str().unwrap_or_default())
+                };
+                recorder.lock().unwrap().push((uri, headers, body));
+                (StatusCode::from_u16(status).unwrap(), text)
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!(
+            "http://{}/backend-api/codex",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        (base, seen, server)
+    }
+
+    fn model(slug: &str, efforts: &[&str]) -> Value {
+        let levels: Vec<Value> = efforts.iter().map(|e| json!({"effort": e})).collect();
+        json!({"slug": slug, "supported_in_api": true, "supported_reasoning_levels": levels})
+    }
+
+    fn auth() -> Value {
+        json!({"tokens": {"access_token": "test-only", "id_token": "test-only", "account_id": "selected-account"}})
+    }
+
+    /// The models greeted with, in order.
+    fn greeted(seen: &Seen) -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.0.ends_with("/responses"))
+            .map(|r| r.2["model"].as_str().unwrap().to_owned())
+            .collect()
+    }
 
     #[tokio::test]
     async fn greeting_uses_selected_login_and_requires_completed_response() {
-        use axum::{extract::Request, routing::any, Router};
         for (status, reply, succeeds) in [
-            (200, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n", true),
+            (200, COMPLETED, true),
             (200, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"quota exhausted\"}}}\n\n", false),
             (200, "data: {\"type\":\"response.created\"}\n\n", false),
             (400, r#"{"error":{"message":"Unsupported value for input type","code":"invalid_request_error"}}"#, false),
             (401, "unauthorized", false),
             (429, "rate limited", false),
         ] {
-            let seen = Arc::new(std::sync::Mutex::new(None));
-            let recorder = seen.clone();
-            let router = Router::new().fallback(any(move |request: Request| {
-                let recorder = recorder.clone();
-                async move {
-                    let uri = request.uri().path().to_owned();
-                    let headers = request.headers().clone();
-                    let bytes = axum::body::to_bytes(request.into_body(), 4096).await.unwrap();
-                    let body: Value = serde_json::from_slice(&bytes).unwrap();
-                    *recorder.lock().unwrap() = Some((uri, headers, body));
-                    (StatusCode::from_u16(status).unwrap(), reply)
-                }
-            }));
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let base = format!("http://{}/backend-api/codex", listener.local_addr().unwrap());
-            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-            let auth = serde_json::json!({"tokens": {"access_token": "test-only", "id_token": "test-only", "account_id": "selected-account"}});
-            let result = say_hi(&base, &auth, "").await;
+            let models = json!([model("gpt-5.6-luna", &["low", "medium"])]);
+            let (base, seen, server) =
+                upstream(models, move |_| (status, reply.to_owned())).await;
+            let result = say_hi(&base, &auth(), "").await;
             server.abort();
             assert_eq!(result.is_ok(), succeeds, "{result:?}");
             if status == 400 {
                 assert!(result.unwrap_err().contains("Unsupported value for input type"));
             }
-            let (uri, headers, body) = seen.lock().unwrap().take().unwrap();
+            let seen = seen.lock().unwrap().clone();
+            // The models are asked for as Codex asks, then one greeting is sent.
+            assert_eq!(seen.len(), 2, "{status} {reply}");
+            assert_eq!(seen[0].0, "/backend-api/codex/models?client_version=0.144.0");
+            let (uri, _, body) = &seen[1];
             assert_eq!(uri, "/backend-api/codex/responses");
-            assert_eq!(headers["authorization"], "Bearer test-only");
-            assert_eq!(headers["chatgpt-account-id"], "selected-account");
-            assert_eq!(headers["version"], "0.144.0");
-            assert_eq!(headers["user-agent"], "codex_cli_rs/0.144.0");
+            for (_, headers, _) in &seen {
+                assert_eq!(headers["authorization"], "Bearer test-only");
+                assert_eq!(headers["chatgpt-account-id"], "selected-account");
+                assert_eq!(headers["version"], "0.144.0");
+                assert_eq!(headers["user-agent"], "codex_cli_rs/0.144.0");
+            }
             assert_eq!(parse_codex_version_from_user_agent(CODEX_USER_AGENT), Some(CODEX_CLIENT_VERSION));
             assert_eq!(body["input"][0]["content"][0]["text"], "Hi");
             assert_eq!(body["input"][0]["type"], "message");
@@ -5112,5 +5489,73 @@ mod say_hi_tests {
             assert_eq!(body["store"], false);
             assert!(body.get("tools").is_none());
         }
+    }
+
+    /// The oldest mini or luna model is greeted with, the next ones while
+    /// the upstream no longer serves it; the one that answered is kept for
+    /// the next greetings until it too is no longer served.
+    #[tokio::test]
+    async fn greeting_adapts_to_the_mini_and_luna_models_served() {
+        let models = json!([
+            model("gpt-6.2-sol", &["low"]),
+            model("gpt-6-luna", &["low"]),
+            model("gpt-5.4-mini", &["medium", "high"]),
+            model("gpt-5.1-codex-mini", &["low"]),
+        ]);
+        let retired = Arc::new(std::sync::Mutex::new(vec!["gpt-5.1-codex-mini".to_owned()]));
+        let gone = retired.clone();
+        let (base, seen, server) = upstream(models, move |model| {
+            if gone.lock().unwrap().iter().any(|m| m == model) {
+                (400, format!(r#"{{"error":{{"message":"The '{model}' model is not supported when using Codex with a ChatGPT account."}}}}"#))
+            } else {
+                (200, COMPLETED.to_owned())
+            }
+        })
+        .await;
+        say_hi(&base, &auth(), "").await.unwrap();
+        assert_eq!(greeted(&seen), ["gpt-5.1-codex-mini", "gpt-5.4-mini"]);
+        // Its lowest supported effort.
+        assert_eq!(
+            seen.lock().unwrap().last().unwrap().2["reasoning"]["effort"],
+            "medium"
+        );
+
+        seen.lock().unwrap().clear();
+        say_hi(&base, &auth(), "").await.unwrap();
+        // The model that answered, without asking for the list.
+        assert_eq!(greeted(&seen), ["gpt-5.4-mini"]);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+
+        seen.lock().unwrap().clear();
+        retired.lock().unwrap().push("gpt-5.4-mini".into());
+        say_hi(&base, &auth(), "").await.unwrap();
+        assert_eq!(
+            greeted(&seen),
+            ["gpt-5.4-mini", "gpt-5.1-codex-mini", "gpt-6-luna"]
+        );
+        server.abort();
+    }
+
+    /// A failure another model would meet as well ends the greeting; so
+    /// does a list without mini or luna models.
+    #[tokio::test]
+    async fn greeting_stops_on_failures_no_model_avoids() {
+        let models = json!([
+            model("gpt-5.1-codex-mini", &["low"]),
+            model("gpt-6-luna", &["low"])
+        ]);
+        let (base, seen, server) = upstream(models, |_| (429, "rate limited".to_owned())).await;
+        assert!(say_hi(&base, &auth(), "").await.is_err());
+        assert_eq!(greeted(&seen), ["gpt-5.1-codex-mini"]);
+        server.abort();
+
+        let (base, seen, server) = upstream(json!([model("gpt-6.2-sol", &["low"])]), |_| {
+            (200, COMPLETED.to_owned())
+        })
+        .await;
+        let error = say_hi(&base, &auth(), "").await.unwrap_err();
+        assert!(error.contains("no mini or luna model"), "{error}");
+        assert!(greeted(&seen).is_empty());
+        server.abort();
     }
 }

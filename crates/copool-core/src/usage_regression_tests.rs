@@ -414,8 +414,12 @@ async fn explicit_codex_greeting_sends_without_usage_preflight_or_reset_shortcut
         let seen = requests.clone();
         let server = serve(move |r| {
             seen.lock().unwrap().push((r.method.clone(), r.path.clone()));
-            assert_eq!(r.path, "/backend-api/codex/responses", "no usage preflight");
             assert_eq!(r.headers["chatgpt-account-id"], "greeting-workspace");
+            if r.path == "/backend-api/codex/models" {
+                let models = json!({"models": [{"slug": "gpt-5.6-luna", "supported_in_api": true}]});
+                return (StatusCode::OK, models.to_string());
+            }
+            assert_eq!(r.path, "/backend-api/codex/responses", "no usage preflight");
             let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
             assert_eq!(body["input"][0]["content"][0]["text"], "Hi");
             if succeeds {
@@ -442,7 +446,10 @@ async fn explicit_codex_greeting_sends_without_usage_preflight_or_reset_shortcut
         assert_eq!(result.is_ok(), succeeds, "{result:?}");
         assert_eq!(
             *requests.lock().unwrap(),
-            vec![("POST".into(), "/backend-api/codex/responses".into())]
+            vec![
+                ("GET".into(), "/backend-api/codex/models".into()),
+                ("POST".into(), "/backend-api/codex/responses".into())
+            ]
         );
         assert!(app.refresh_activity().is_empty());
     }
