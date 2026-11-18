@@ -75,12 +75,28 @@ impl GreetingSchedule {
                 && self.last_auto.is_none_or(|last| *reset > last)
                 && now >= self.retry_after
         });
-        let timed = self
-            .times
-            .iter()
-            .any(|t| t == time && self.last_times.get(t).is_none_or(|d| d != day));
-        (auto, timed)
+        (auto, self.timed_pending(day, time))
     }
+    /// One of its daily times is now and has yet to be said today.
+    fn timed_pending(&self, day: &str, time: &str) -> bool {
+        self.times
+            .iter()
+            .any(|t| t == time && self.last_times.get(t).is_none_or(|d| d != day))
+    }
+}
+/// How often a pool's cards are read for automatic greetings. Reading them
+/// may read Claude Code's login and configuration, so not every second.
+const AUTO_CHECK: std::time::Duration = std::time::Duration::from_secs(15);
+/// What a pool's schedules may have due now: a daily time, and whether any
+/// greets automatically.
+fn pending(schedules: &Schedules, pool: Pool, day: &str, time: &str) -> (bool, bool) {
+    let prefix = key(pool, "");
+    let mut ours = schedules
+        .iter()
+        .filter(|(key, _)| key.starts_with(&prefix))
+        .map(|(_, schedule)| schedule);
+    let timed = ours.clone().any(|s| s.timed_pending(day, time));
+    (timed, ours.any(|s| s.auto))
 }
 pub(crate) struct GreetingGuard<'a> {
     app: &'a Application,
@@ -142,6 +158,7 @@ impl Application {
     pub(crate) async fn background_greetings(self: Arc<Self>) {
         let mut tasks = tokio::task::JoinSet::new();
         let mut running = std::collections::BTreeSet::new();
+        let mut auto_checked: [Option<std::time::Instant>; Pool::ALL.len()] = Default::default();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -155,8 +172,19 @@ impl Application {
                         self.load_greetings().unwrap_or_default()
                     };
                     for pool in Pool::ALL {
-                        let prefix = key(pool, "");
-                        if !enabled.iter().any(|(key, s)| key.starts_with(&prefix) && (s.auto || !s.times.is_empty())) { continue; }
+                        // Cards are read for a daily time as it comes, and
+                        // for automatic greetings every `AUTO_CHECK`.
+                        let clock = Local::now();
+                        let (timed, auto) = pending(
+                            &enabled,
+                            pool,
+                            &clock.format("%Y-%m-%d").to_string(),
+                            &clock.format("%H:%M").to_string(),
+                        );
+                        let checked = &mut auto_checked[pool as usize];
+                        let auto = auto && checked.is_none_or(|at| at.elapsed() >= AUTO_CHECK);
+                        if !timed && !auto { continue; }
+                        if auto { *checked = Some(std::time::Instant::now()); }
                         let accounts = self.accounts(pool).await;
                         let Ok(accounts) = accounts else { continue };
                         let now = Local::now();
@@ -275,6 +303,54 @@ mod tests {
         s.last_auto = None;
         s.retry_after = 200;
         assert_eq!(s.due(&account, 102, "2026-01-01", "08:00"), (None, false));
+    }
+    #[test]
+    fn cards_are_read_only_for_a_pending_time_or_automatic_greetings() {
+        let mut schedules = Schedules::new();
+        assert_eq!(
+            pending(&schedules, Pool::Codex, "2026-01-01", "08:00"),
+            (false, false)
+        );
+        schedules.insert(
+            key(Pool::Claude, "a"),
+            GreetingSchedule {
+                times: vec!["08:00".into()],
+                ..Default::default()
+            },
+        );
+        schedules.insert(
+            key(Pool::Codex, "b"),
+            GreetingSchedule {
+                auto: true,
+                ..Default::default()
+            },
+        );
+        // Each pool by its own schedules.
+        assert_eq!(
+            pending(&schedules, Pool::Claude, "2026-01-01", "08:00"),
+            (true, false)
+        );
+        assert_eq!(
+            pending(&schedules, Pool::Claude, "2026-01-01", "08:01"),
+            (false, false)
+        );
+        assert_eq!(
+            pending(&schedules, Pool::Codex, "2026-01-01", "08:00"),
+            (false, true)
+        );
+        // A time said today is not pending again until tomorrow.
+        let claude = schedules.get_mut(&key(Pool::Claude, "a")).unwrap();
+        claude
+            .last_times
+            .insert("08:00".into(), "2026-01-01".into());
+        assert_eq!(
+            pending(&schedules, Pool::Claude, "2026-01-01", "08:00"),
+            (false, false)
+        );
+        assert_eq!(
+            pending(&schedules, Pool::Claude, "2026-01-02", "08:00"),
+            (true, false)
+        );
     }
     struct NoSecrets;
     impl crate::credentials::SecretStore for NoSecrets {
