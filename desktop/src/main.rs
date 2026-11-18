@@ -653,7 +653,8 @@ fn hide_panel(app: tauri::AppHandle) {
 fn main() {
     #[cfg(target_os = "linux")]
     appearance::enable_compositing();
-    let app = tauri::Builder::default()
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut app = tauri::Builder::default()
         .on_window_event(panel::on_window_event)
         .manage(panel::PanelState::default())
         .manage(LoginState::default())
@@ -855,6 +856,11 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build Copool");
+    // An accessory app from launch, as the SwiftUI app's LSUIElement made it:
+    // tao applies this policy before it creates the panel, which can join a
+    // full-screen app's space only if created while the app is an accessory.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     let closing = std::sync::atomic::AtomicBool::new(false);
     app.run(move |handle, event| {
         #[cfg(target_os = "macos")]

@@ -334,3 +334,5 @@ Say hi schedules (Codex Plus and Claude): each account has an independent Auto t
 2026-11-16（Windows CI 测试源码换行）：reset-inventory 的两项界面测试在提取函数前统一 CRLF 为 LF，避免 Windows checkout 下取到空函数。macOS 本地完整 UI 测试及临时副本中全部 UI 源文件转为 CRLF 后的测试均通过。远端本轮 Windows Tests 失败、macOS/Linux 通过；日志下载权限受限，仅能读取退出码注释，尚未重跑远端 CI。
 
 2026-11-18（macOS 状态栏面板文件选择）：从面板打开的系统文件选择框（导入 JSON、身份文件、设置文件）期间，状态栏展开会话的全局鼠标监控不再因选择框内的点击取消会话，会话结束回调也不再隐藏面板，避免选择框一点击 Copool 面板即被隐藏。本机 `cargo build -p copool-desktop --locked`、clippy 与格式检查通过；未打包或安装。
+
+2026-11-18（macOS 状态栏面板全屏空间）：面板窗口每次显示前设置 `canJoinAllSpaces | fullScreenAuxiliary | ignoresCycle`，并在 `build()` 之后、事件循环启动前设置 Accessory 激活策略（原先在 `setup` 中设置）。Tauri 在启动完成后先按 tao 记录的策略（默认 Regular）激活应用，随即创建配置中的窗口，再运行 `setup`；在 Regular 状态下创建的窗口即使带有上述行为也进不了其他应用的全屏空间，只会显示在桌面空间。macOS 27 上用隔离数据的测试实例（另一应用标识）验证：在另一进程的全屏空间中显示面板，修复前窗口始终不在当前空间，修复后 3 次均显示在全屏空间，桌面空间行为不变；该验证关闭状态栏展开会话处理后结果相同，原因与之无关。状态栏点击与 Control-F8 无法合成触发，尚待实机确认；未在早于 macOS 27 的系统上验证。本机构建、clippy 与格式检查通过，未打包或安装。

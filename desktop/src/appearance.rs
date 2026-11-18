@@ -8,7 +8,6 @@ pub fn configure(app: &mut App) -> tauri::Result<()> {
         #[cfg(target_os = "macos")]
         {
             use tauri::window::{Effect, EffectState, EffectsBuilder};
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             _window.set_effects(
                 EffectsBuilder::new()
                     .effect(Effect::Popover)
