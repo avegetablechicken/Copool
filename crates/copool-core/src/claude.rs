@@ -4818,10 +4818,14 @@ mod tests {
     }
     /// An isolated pool with the default: new accounts wait for a refresh.
     fn waiting_app(dir: &tempfile::TempDir) -> (Application, Location, Arc<Fake>) {
-        let app = Application::open(crate::Paths {
-            data_dir: dir.path().join("data"),
-            codex_auth: dir.path().join("codex/auth.json"),
-        })
+        let item = crate::vault::Item::new(Arc::new(MemoryVault::default()));
+        let app = Application::open_with_secrets(
+            crate::Paths {
+                data_dir: dir.path().join("data"),
+                codex_auth: dir.path().join("codex/auth.json"),
+            },
+            Arc::new(crate::vault::ItemSecrets::new(item)),
+        )
         .unwrap();
         let location = Location::files(dir.path().join("claude"));
         app.set_claude_location(location.clone());
