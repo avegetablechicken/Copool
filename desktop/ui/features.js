@@ -110,7 +110,6 @@ function renderProviders(target = null) {
   const root = $(`${target === "codex" ? "" : `${target}-`}provider-forms`);
   const rerender = () => renderProviders(target);
   root.replaceChildren();
-  renderProviderCount();
   for (const [id, provider] of providers.providers) {
     const saved = providers.isSaved(id);
     const form = el("form", "provider-form");
@@ -257,26 +256,20 @@ function brandIcon(target) {
   icon.classList.add("provider-brand");
   return icon;
 }
-/// Both pools' providers share one count, as they share one block.
-function renderProviderCount() {
-  $("provider-count").textContent = String(
-    POOLS.reduce((count, target) => count + providerControllers[target].providers.size, 0),
-  );
-}
-/// One button adds a provider to either pool.
-$("provider-add").onclick = () => {
-  if (openMenu?.trigger === $("provider-add")) {
+/// Choose the provider first, then the pool whose form to open.
+$("provider-add").onclick = ({ currentTarget: trigger }) => {
+  if (openMenu?.trigger === trigger) {
     closeMenu(true);
     return;
   }
-  showMenu(
-    $("provider-add"),
-    POOLS.map((target) => ({
+  showMenu(trigger, [{
+    label: "Sub2API",
+    run: () => showMenu(trigger, POOLS.map((target) => ({
       label: tr(`pool.${target}`),
       icon: brandIcon(target),
       run: () => addProvider(target),
-    })),
-  );
+    }))),
+  }]);
 };
 /// A new provider's form opens, ready to fill in.
 function addProvider(target) {
