@@ -542,6 +542,15 @@ fn fit_panel(app: tauri::AppHandle, height: f64) {
 fn hide_panel(app: tauri::AppHandle) {
     panel::hide(&app);
 }
+/// Moves menu bar keyboard navigation from the open panel to the neighbouring
+/// item (macOS); elsewhere the panel is not part of such navigation.
+#[tauri::command]
+fn navigate_menu_bar(app: tauri::AppHandle, right: bool) {
+    #[cfg(target_os = "macos")]
+    status_item::navigate(&app, right);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, right);
+}
 fn main() {
     #[cfg(target_os = "linux")]
     appearance::enable_compositing();
@@ -661,8 +670,8 @@ fn main() {
                     &tray,
                     status_item::Handlers {
                         press: Box::new(move || panel::toggle(&press, panel::tray_anchor(&press))),
-                        begin: Box::new(move |focus| {
-                            panel::present(&begin, panel::tray_anchor(&begin), focus)
+                        begin: Box::new(move |clicked| {
+                            panel::present(&begin, panel::tray_anchor(&begin), !clicked)
                         }),
                         // The system may end the session while a dialog
                         // opened from the panel holds focus; it stays open.
@@ -728,7 +737,8 @@ fn main() {
             refresh_workspace_names,
             dismiss_workspace,
             fit_panel,
-            hide_panel
+            hide_panel,
+            navigate_menu_bar
         ])
         .build(tauri::generate_context!())
         .expect("Failed to build Copool");

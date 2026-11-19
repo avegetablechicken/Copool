@@ -418,3 +418,20 @@ test("Usage bar tooltips report estimated time to exhaustion, not excess percent
   assert.equal(P.usagePaceMessage(null, now), null);
   assert.equal(message(0), null);
 });
+test("menu bar keyboard navigation moves on with plain left and right", () => {
+  const navigating = { navigating: true, modified: false, inText: false, handled: false };
+  assert.equal(P.menuBarStep("ArrowLeft", navigating), "left");
+  assert.equal(P.menuBarStep("ArrowRight", navigating), "right");
+  // Up and down keep their meaning in the panel, as after a click.
+  assert.equal(P.menuBarStep("ArrowUp", navigating), null);
+  assert.equal(P.menuBarStep("ArrowDown", navigating), null);
+  // Clicked open, modified, in text or used already, arrows stay the panel's.
+  for (const change of [
+    { navigating: false },
+    { modified: true },
+    { inText: true },
+    { handled: true },
+  ]) {
+    assert.equal(P.menuBarStep("ArrowRight", { ...navigating, ...change }), null);
+  }
+});

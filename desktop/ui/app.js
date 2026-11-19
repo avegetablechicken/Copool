@@ -2246,6 +2246,11 @@ $("import-open").onclick = () => {
     },
   ]);
 };
+// Opened by keyboard navigation of the menu bar (macOS 27); see menuBarStep.
+let menuBarNavigation = false;
+// Where ←/→ move the caret.
+const TEXT_ENTRY =
+  'textarea, [contenteditable]:not([contenteditable="false"]), input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"])';
 // Coport's panel shortcuts. An open dialog keeps Escape and Return for
 // cancel and submit, as the SwiftUI dialogs did.
 document.addEventListener("keydown", (event) => {
@@ -2271,6 +2276,17 @@ document.addEventListener("keydown", (event) => {
               items.length;
       items[next]?.focus();
     }
+    return;
+  }
+  const step = P.menuBarStep(event.key, {
+    navigating: menuBarNavigation,
+    modified: event.metaKey || event.ctrlKey || event.altKey || event.shiftKey,
+    inText: Boolean(event.target.closest?.(TEXT_ENTRY)),
+    handled: event.defaultPrevented || event.isComposing,
+  });
+  if (step) {
+    event.preventDefault();
+    invoke("navigate_menu_bar", { right: step === "right" }).catch(() => {});
     return;
   }
   const mac = navigator.userAgent.includes("Mac");
@@ -2622,12 +2638,18 @@ const PANEL_PAGE_TIMEOUT_MS = 60 * 1000;
 let panelHiddenAt = null;
 window.__TAURI__.event
   .listen("panel-hidden", () => {
+    menuBarNavigation = false;
     panelHiddenAt = Date.now();
     closeMenu();
   })
   .catch((error) => notice(error, true));
 window.__TAURI__.event
-  .listen("panel-shown", () => {
+  .listen("panel-shown", ({ payload } = {}) => {
+    menuBarNavigation = Boolean(payload?.keyboard);
+    // Keys start on the panel, not in a text field left focused, where ←/→
+    // would not move along the menu bar.
+    if (menuBarNavigation && document.activeElement?.closest?.(TEXT_ENTRY))
+      document.activeElement.blur();
     if (panelHiddenAt && Date.now() - panelHiddenAt > PANEL_PAGE_TIMEOUT_MS)
       showPage("accounts", false);
     panelHiddenAt = null;

@@ -677,6 +677,15 @@
   function cardsEqual(a, b) {
     return JSON.stringify(a) === JSON.stringify(b);
   }
+
+  // While keyboard navigation of the menu bar holds the panel open (macOS 27),
+  // the focused panel receives ←/→; those it does not use move the navigation
+  // on to the neighbouring item, as from a menu. Returns "left", "right" or
+  // null for `key`.
+  function menuBarStep(key, { navigating, modified, inText, handled }) {
+    if (!navigating || modified || inText || handled) return null;
+    return key === "ArrowLeft" ? "left" : key === "ArrowRight" ? "right" : null;
+  }
   return {
     formatLocalized,
     proxyButtons,
@@ -718,5 +727,6 @@
     publicStatus,
     remoteDetails,
     remoteLogs,
+    menuBarStep,
   };
 });
