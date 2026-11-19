@@ -2227,7 +2227,7 @@ $("import-open").onclick = () => {
     closeMenu(true);
     return;
   }
-  showMenu($("import-open"), [
+  const items = [
     {
       label: tr("accounts.action.import_current_auth"),
       run: () =>
@@ -2240,11 +2240,15 @@ $("import-open").onclick = () => {
       label: tr("accounts.action.import_auth_file"),
       run: () => importAccountFile(),
     },
-    {
+  ];
+  const providers = providerSyncChoices(pool);
+  if (providers.length) {
+    items.push({
       label: tr("accounts.action.import_sub2api"),
-      children: providerSyncChoices(pool),
-    },
-  ]);
+      children: providers,
+    });
+  }
+  showMenu($("import-open"), items);
 };
 // Opened by keyboard navigation of the menu bar (macOS 27); see menuBarStep.
 let menuBarNavigation = false;

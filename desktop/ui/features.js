@@ -181,10 +181,6 @@ function renderProviders(target = null) {
 /// The import menu's Sub2api choices: the pool's saved providers.
 function providerSyncChoices(target) {
   const providers = providerControllers[target];
-  if (!providers.persisted.length) return [{
-    label: extra("Add a provider in Settings first.", "请先在设置中添加服务商。"),
-    disabled: true,
-  }];
   return providers.persisted.map((provider) => ({
     label: providers.name(provider),
     run: () => syncProvider(target, providers.key(provider)),

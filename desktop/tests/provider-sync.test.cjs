@@ -9,7 +9,9 @@ const source = fs
   .replace(/\r\n/g, "\n");
 const start = source.indexOf("function providerSyncChoices(");
 const end = source.indexOf("\nasync function syncProvider", start);
-test("Provider menu syncs only the chosen saved provider in its pool", () => {
+const appSource = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8")
+  .replace(/\r\n/g, "\n");
+test("Import shows provider sync only for pools with saved providers", () => {
   assert(start >= 0 && end > start, "providerSyncChoices found");
   const calls = [];
   const providerControllers = {
@@ -24,27 +26,43 @@ test("Provider menu syncs only the chosen saved provider in its pool", () => {
     { id: "x1", providerID: "Codex One" },
     { id: "x2", providerID: "Codex Two" },
   ];
+  const trigger = {};
+  let items;
   const scope = {
     providerControllers,
     syncProvider: (target, key) => calls.push([target, key]),
-    extra: (en) => en,
+    $: () => trigger,
+    openMenu: null,
+    tr: (key) => key,
+    showMenu: (_, choices) => { items = choices; },
   };
   vm.createContext(scope);
   vm.runInContext(source.slice(start, end), scope);
-  const claude = scope.providerSyncChoices("claude");
-  assert.equal(claude[1].label, "Claude Two");
-  claude[1].run();
-  scope.providerSyncChoices("codex")[0].run();
+  const handlerStart = appSource.indexOf('$("import-open").onclick =');
+  const handlerEnd = appSource.indexOf("\n};", handlerStart);
+  assert(handlerStart >= 0 && handlerEnd > handlerStart, "Import click handler found");
+  vm.runInContext(appSource.slice(handlerStart, handlerEnd + 3), scope);
+  scope.pool = "claude";
+  trigger.onclick();
+  assert.equal(items[2].label, "accounts.action.import_sub2api");
+  assert.equal(items[2].children[1].label, "Claude Two");
+  items[2].children[1].run();
+  providerControllers.claude.persisted = [];
+  trigger.onclick();
+  assert.deepEqual(Array.from(items, item => item.label), [
+    "accounts.action.import_current_auth", "accounts.action.import_auth_file",
+  ]);
+  scope.pool = "codex";
+  trigger.onclick();
+  items[2].children[0].run();
   // Each pool's cards name the provider by its own key.
   assert.deepEqual(calls, [["claude", "c2"], ["codex", "Codex One"]]);
-  providerControllers.claude.persisted = [];
-  assert.equal(scope.providerSyncChoices("claude")[0].disabled, true);
 });
 
 test("Menu hover suppresses stale focus without moving focus; keyboard restores it", () => {
-  const app = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8");
-  const start = app.indexOf("function configureMenuNavigation(");
-  const end = app.indexOf("\nfunction showMenu", start);
+  const start = appSource.indexOf("function configureMenuNavigation(");
+  const end = appSource.indexOf("\nfunction showMenu", start);
+  assert(start >= 0 && end > start, "configureMenuNavigation found");
   const handlers = {};
   const classes = new Set();
   const menu = {
@@ -53,7 +71,7 @@ test("Menu hover suppresses stale focus without moving focus; keyboard restores 
   };
   const scope = {};
   vm.createContext(scope);
-  vm.runInContext(app.slice(start, end), scope);
+  vm.runInContext(appSource.slice(start, end), scope);
   scope.configureMenuNavigation(menu);
   handlers.pointerover();
   assert.ok(classes.has("pointer-navigation"));
@@ -85,7 +103,6 @@ test("Menu hover suppresses stale focus without moving focus; keyboard restores 
   assert.ok(childClasses.has("inactive-menu"), "returning focus restores only the parent");
 });
 
-const appSource = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8");
 const layoutScope = {};
 vm.createContext(layoutScope);
 vm.runInContext(appSource.slice(appSource.indexOf("function menuPairLayout("), appSource.indexOf("function showMenu(")), layoutScope);
