@@ -631,9 +631,11 @@
   ) {
     return (
       account.sourceTag !== "SUB2API" &&
-      ["error.accounts.sign_in_expired", translated].includes(
-        account.usageError,
-      )
+      [
+        "error.accounts.sign_in_expired",
+        "error.antigravity.sign_in_expired",
+        translated,
+      ].includes(account.usageError)
     );
   }
   function resetInventory(usage, now = Date.now() / 1000) {

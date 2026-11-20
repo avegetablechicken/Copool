@@ -345,8 +345,26 @@ async fn fetch_usage(
         (Ok(None), Ok(None)) => Err(Failure::Other("Antigravity reported no quota".into())),
     }
 }
+/// The tokens of a renewal, to put in any document of its login.
+struct Renewed {
+    access: String,
+    expires_at: i64,
+    lifetime: i64,
+    refresh: Option<String>,
+}
+impl Renewed {
+    fn apply(&self, document: &mut Value) {
+        login::apply_renewal(
+            document,
+            &self.access,
+            self.expires_at,
+            self.lifetime,
+            self.refresh.as_deref(),
+        );
+    }
+}
 /// Renews the document's access token; an error when Google refuses.
-async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Result<()> {
+async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Result<Renewed> {
     let refresh = login::refresh_token(document).ok_or(SIGN_IN_EXPIRED)?;
     let (status, body) = network.renew(&refresh, proxy).await?;
     match status {
@@ -360,14 +378,14 @@ async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Resu
                 .as_i64()
                 .filter(|s| *s > 0)
                 .unwrap_or(3600);
-            login::apply_renewal(
-                document,
-                access,
-                now_unix_seconds() + lifetime,
+            let renewed = Renewed {
+                access: access.to_owned(),
+                expires_at: now_unix_seconds() + lifetime,
                 lifetime,
-                body["refresh_token"].as_str(),
-            );
-            Ok(())
+                refresh: body["refresh_token"].as_str().map(str::to_owned),
+            };
+            renewed.apply(document);
+            Ok(renewed)
         }
         // invalid_grant: the login was signed out or revoked.
         400 | 401 | 403 => Err(SIGN_IN_EXPIRED.into()),
@@ -630,6 +648,61 @@ impl Application {
         Ok(account.usage_error.is_some()
             || login::expiry(&account.document).is_some_and(|e| e <= now_unix_seconds()))
     }
+    /// Antigravity's login when it holds the document's login with another
+    /// access token, unexpired: Antigravity, or another app sharing its
+    /// login, renewed it.
+    async fn antigravity_live_renewal(&self, document: &Value, now: i64) -> Option<Value> {
+        let live = self
+            .antigravity_read_live(KeychainAccess::Background)
+            .await
+            .ok()
+            .flatten()?;
+        let renewed = login::same_login(&live.value, document)
+            && login::access_token(&live.value).is_some()
+            && login::access_token(&live.value) != login::access_token(document)
+            && login::expiry(&live.value).is_none_or(|e| e > now + EXPIRY_MARGIN);
+        renewed.then_some(live.value)
+    }
+    /// Renews the document's access token, then gives the renewal to
+    /// Antigravity's login when it holds this login.
+    async fn antigravity_renew(
+        &self,
+        network: &dyn Network,
+        document: &mut Value,
+        proxy: &str,
+    ) -> Result<()> {
+        let renewed = renew(network, document, proxy).await?;
+        self.antigravity_write_back(&renewed, document).await;
+        Ok(())
+    }
+    /// Puts a renewal in Antigravity's login, in the item's own form, when
+    /// the item still holds the renewed login and no token lasting longer;
+    /// never another login or a newer token. Silent: no authorization UI,
+    /// and a failure only logged, for Copool's store keeps the renewal.
+    async fn antigravity_write_back(&self, renewed: &Renewed, document: &Value) {
+        let outcome: Result<()> = async {
+            let Some(mut live) = self
+                .antigravity_read_live(KeychainAccess::Background)
+                .await?
+            else {
+                return Ok(());
+            };
+            if !login::same_login(&live.value, document)
+                || login::expiry(&live.value).unwrap_or(0) > renewed.expires_at
+                || login::access_token(&live.value).as_deref() == Some(renewed.access.as_str())
+            {
+                return Ok(());
+            }
+            renewed.apply(&mut live.value);
+            self.antigravity_live()
+                .write(login::encode(&live), KeychainAccess::Background)
+                .await
+        }
+        .await;
+        if let Err(error) = outcome {
+            log::warn!("Antigravity's login was not given the renewal; Copool keeps it: {error}");
+        }
+    }
     /// Refreshes an account's usage, renewing its access token as its
     /// renewal allows; with `renew_now`, only renews it, whatever the choice,
     /// and reports that it did. The plan is asked along, and the account's
@@ -669,9 +742,12 @@ impl Application {
         let mut document = account.document.clone();
         let may_renew = forced || Renewal::of(account.renewal) != Renewal::Never;
         let mut renewed = false;
+        // Taken from Antigravity's login after the token was refused.
+        let mut adopted = false;
         let outcome: Result<Option<UsageSnapshot>> = async {
             if forced {
-                renew(network, &mut document, &proxy).await?;
+                self.antigravity_renew(network, &mut document, &proxy)
+                    .await?;
                 renewed = true;
                 return Ok(None);
             }
@@ -681,7 +757,8 @@ impl Application {
                 if !may_renew {
                     return Err(RENEWAL_OFF.into());
                 }
-                renew(network, &mut document, &proxy).await?;
+                self.antigravity_renew(network, &mut document, &proxy)
+                    .await?;
                 renewed = true;
             }
             let token = login::access_token(&document).unwrap_or_default();
@@ -689,9 +766,24 @@ impl Application {
                 Ok(usage) => Ok(Some(usage)),
                 Err(Failure::Other(error)) => Err(error),
                 Err(Failure::Expired) if renewed => Err(SIGN_IN_EXPIRED.into()),
-                Err(Failure::Expired) if !may_renew => Err(RENEWAL_OFF.into()),
                 Err(Failure::Expired) => {
-                    renew(network, &mut document, &proxy).await?;
+                    // Antigravity may have renewed the login since it was
+                    // read: its token is tried once before renewing.
+                    if let Some(live) = self.antigravity_live_renewal(&document, now).await {
+                        document = live;
+                        adopted = true;
+                        let token = login::access_token(&document).unwrap_or_default();
+                        match fetch_usage(network, &token, &proxy, now).await {
+                            Ok(usage) => return Ok(Some(usage)),
+                            Err(Failure::Other(error)) => return Err(error),
+                            Err(Failure::Expired) => {}
+                        }
+                    }
+                    if !may_renew {
+                        return Err(RENEWAL_OFF.into());
+                    }
+                    self.antigravity_renew(network, &mut document, &proxy)
+                        .await?;
                     renewed = true;
                     let token = login::access_token(&document).unwrap_or_default();
                     match fetch_usage(network, &token, &proxy, now).await {
@@ -736,7 +828,11 @@ impl Application {
             return outcome.map(|_| ());
         };
         // Antigravity may have renewed the login meanwhile; keep the newer.
-        if renewed || login::expiry(&document) > login::expiry(&stored.document) {
+        // Its token taken after a refusal replaces the refused one.
+        if renewed
+            || login::expiry(&document) > login::expiry(&stored.document)
+            || adopted && stored.document == account.document
+        {
             stored.document = document;
         }
         if renewed {

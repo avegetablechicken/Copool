@@ -201,6 +201,13 @@ legacy(
       ),
       true,
     );
+    // An Antigravity login whose refresh token Google refused.
+    assert.equal(
+      P.needsReauthentication(
+        account("a", "list", { usageError: "error.antigravity.sign_in_expired" }),
+      ),
+      true,
+    );
     assert.equal(
       P.needsReauthentication(
         account("a", "list", { usageError: "network timeout" }),

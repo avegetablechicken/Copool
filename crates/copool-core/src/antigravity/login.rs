@@ -3,7 +3,8 @@
 //! go-keyring. It holds an OAuth token as JSON (`{"token": {"access_token",
 //! "refresh_token", "expiry", …}}`), on macOS wrapped as
 //! `go-keyring-base64:`. A switch writes another account's document there,
-//! in the same form, and nothing else.
+//! in the same form; a renewal of the login it holds updates its tokens in
+//! place, and nothing else.
 use crate::vault::KeychainAccess;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{Map, Value};
