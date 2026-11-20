@@ -16,6 +16,8 @@ use std::{fs, path::PathBuf, sync::Arc};
 
 mod api;
 mod login;
+#[cfg(any(target_os = "macos", test))]
+mod security;
 
 pub(crate) use api::{sign_in_url, Network};
 
@@ -54,7 +56,7 @@ impl Default for State {
             network: std::sync::RwLock::new(Arc::new(api::Http)),
             // Tests never reach the user's own login.
             #[cfg(not(test))]
-            live: std::sync::RwLock::new(Arc::new(login::SystemStore)),
+            live: std::sync::RwLock::new(login::system_store()),
             #[cfg(test)]
             live: std::sync::RwLock::new(Arc::new(tests::Live::default())),
             lock: Default::default(),

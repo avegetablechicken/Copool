@@ -910,3 +910,24 @@ async fn a_refused_write_back_does_not_fail_the_refresh() {
     let card = cards(&h.app).await.remove(0);
     assert!(card.usage_error.is_none());
 }
+
+#[test]
+fn antigravitys_item_is_reached_only_through_the_security_tool() {
+    // No in-process Keychain call for the item: its partition list would
+    // become Copool's, and agy's next access would ask for approval.
+    for (file, source) in [
+        ("antigravity.rs", include_str!("../antigravity.rs")),
+        ("login.rs", include_str!("login.rs")),
+        ("security.rs", include_str!("security.rs")),
+    ] {
+        for call in [
+            "claude::keychain",
+            "security_framework",
+            "SecItem",
+            "SecKeychain",
+            "passwords::",
+        ] {
+            assert!(!source.contains(call), "{file} uses {call}");
+        }
+    }
+}

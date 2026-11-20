@@ -20,8 +20,8 @@ Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管�
 - 账号导入/切换/删除与用量刷新（5h / 1week）
 - Claude Code accounts: import the Claude Code login or sign in on claude.ai; switching rewrites Claude Code's credentials (the macOS Keychain or `.credentials.json`) and `oauthAccount`, keeping everything else
 - Claude Code 账号：导入 Claude Code 当前登录或在 claude.ai 登录添加；切换时改写 Claude Code 的凭据（macOS 钥匙串或 `.credentials.json`）与 `oauthAccount`，其余内容保持不变
-- Antigravity accounts (Google AI Pro): import the Antigravity / `agy` login or a JSON file; cards show the Gemini and Claude 5h / weekly quotas; switching rewrites Antigravity's login (the `gemini` / `antigravity` credential item), and a token renewal of the login it uses is written back there
-- Antigravity 账号（Google AI Pro）：导入 Antigravity / `agy` 当前登录或 JSON 文件；卡片显示 Gemini 与 Claude 的 5h / 每周额度；切换时改写 Antigravity 的登录（凭据条目 `gemini` / `antigravity`），其当前登录续期后的令牌也写回该条目
+- Antigravity accounts (Google AI Pro): import the Antigravity / `agy` login or a JSON file; cards show the Gemini and Claude 5h / weekly quotas; switching rewrites Antigravity's login (the `gemini` / `antigravity` credential item), and a token renewal of the login it uses is written back there; on macOS the item is read and written only through `/usr/bin/security`, as `agy` does, so its Keychain partition list stays `apple-tool:`
+- Antigravity 账号（Google AI Pro）：导入 Antigravity / `agy` 当前登录或 JSON 文件；卡片显示 Gemini 与 Claude 的 5h / 每周额度；切换时改写 Antigravity 的登录（凭据条目 `gemini` / `antigravity`），其当前登录续期后的令牌也写回该条目；macOS 上与 `agy` 一样只经 `/usr/bin/security` 读写该条目，使其钥匙串分区列表保持 `apple-tool:`
 - Import and refresh Sub2api upstream accounts: OpenAI/Codex for the Codex pool, and Claude for the Claude pool (switching points Claude Code at the Sub2api gateway through `~/.claude/settings.json`)
 - 导入并刷新 Sub2api 上游账号：Codex 池为 OpenAI/Codex 账号，Claude 池为 Claude 账号（切换时经 `~/.claude/settings.json` 让 Claude Code 使用 Sub2api 网关）
 - A proxy per account; new accounts wait for a manual refresh before contacting upstream, so their proxy can be set first (configurable)

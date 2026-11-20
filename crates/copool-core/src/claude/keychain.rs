@@ -307,57 +307,6 @@ async fn create_with_tool(command: &str, failure: &str) -> Result<()> {
     Ok(())
 }
 
-/// Another tool's item under a fixed account name, as `item` names it in
-/// errors; none when absent.
-pub(crate) async fn read_shared(
-    service: &'static str,
-    account: &'static str,
-    access: KeychainAccess,
-    item: &'static str,
-) -> Result<Option<Vec<u8>>> {
-    tokio::task::spawn_blocking(move || {
-        match passwords::generic_password(options(service, Some(account), access)) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(error) if error.code() == -25300 => Ok(None),
-            Err(error) => Err(format!("{item} access failed: {error}")),
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Writes such an item: its data updated in place, its access settings
-/// kept; created through the system tool when there is none, which only an
-/// explicit action may do.
-pub(crate) async fn write_shared(
-    service: &'static str,
-    account: &'static str,
-    bytes: Vec<u8>,
-    access: KeychainAccess,
-    item: &'static str,
-) -> Result<()> {
-    let data = bytes.clone();
-    let updated =
-        tokio::task::spawn_blocking(move || update_item(service, account, &data, access, item))
-            .await
-            .map_err(|e| e.to_string())??;
-    if updated {
-        return Ok(());
-    }
-    if access != KeychainAccess::Interactive {
-        return Err(format!("Cannot create {item} in the background"));
-    }
-    // Deliberately omit -U: a concurrent creator must not have its item overwritten.
-    let command = format!(
-        "add-generic-password -a \"{account}\" -s \"{service}\" -X \"{}\"\n",
-        super::hex(&bytes)
-    );
-    if command.len() > 4095 {
-        return Err(format!("The login is too large to create {item}"));
-    }
-    create_with_tool(&command, &format!("Could not create {item}")).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

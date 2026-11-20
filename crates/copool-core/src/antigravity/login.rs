@@ -2,7 +2,8 @@
 //! service `gemini` and account `antigravity`, as `agy` keeps it through
 //! go-keyring. It holds an OAuth token as JSON (`{"token": {"access_token",
 //! "refresh_token", "expiry", …}}`), on macOS wrapped as
-//! `go-keyring-base64:`. A switch writes another account's document there,
+//! `go-keyring-base64:`, and on macOS reached only through `/usr/bin/security`
+//! (see `super::security`). A switch writes another account's document there,
 //! in the same form; a renewal of the login it holds updates its tokens in
 //! place, and nothing else.
 use crate::vault::KeychainAccess;
@@ -15,7 +16,7 @@ pub(crate) const SERVICE: &str = "gemini";
 pub(crate) const ACCOUNT: &str = "antigravity";
 const WRAPPED: &str = "go-keyring-base64:";
 /// The item, as errors name it.
-const ITEM: &str = "the Antigravity login (Keychain item gemini/antigravity)";
+pub(super) const ITEM: &str = "the Antigravity login (Keychain item gemini/antigravity)";
 
 /// A login document and whether its item wraps it as go-keyring does.
 #[derive(Clone, Debug, PartialEq)]
@@ -223,28 +224,19 @@ pub(crate) trait LiveStore: Send + Sync {
     ) -> crate::account_network::Response<'_, ()>;
 }
 
-/// The item in the system's credential store.
-pub(crate) struct SystemStore;
-#[cfg(target_os = "macos")]
-impl LiveStore for SystemStore {
-    fn read(
-        &self,
-        access: KeychainAccess,
-    ) -> crate::account_network::Response<'_, Option<Vec<u8>>> {
-        Box::pin(crate::claude::keychain::read_shared(
-            SERVICE, ACCOUNT, access, ITEM,
-        ))
-    }
-    fn write(
-        &self,
-        bytes: Vec<u8>,
-        access: KeychainAccess,
-    ) -> crate::account_network::Response<'_, ()> {
-        Box::pin(crate::claude::keychain::write_shared(
-            SERVICE, ACCOUNT, bytes, access, ITEM,
-        ))
-    }
+/// The item in the system's credential store: on macOS through
+/// `/usr/bin/security`, as agy reaches it.
+#[cfg(all(target_os = "macos", not(test)))]
+pub(crate) fn system_store() -> std::sync::Arc<dyn LiveStore> {
+    std::sync::Arc::new(super::security::Keychain::default())
 }
+#[cfg(all(not(target_os = "macos"), not(test)))]
+pub(crate) fn system_store() -> std::sync::Arc<dyn LiveStore> {
+    std::sync::Arc::new(SystemStore)
+}
+/// go-keyring's entry, through the system's keyring API.
+#[cfg(not(target_os = "macos"))]
+pub(crate) struct SystemStore;
 /// go-keyring's entry: on Windows the credential `gemini:antigravity`, on
 /// Linux the Secret Service item of that service and user name.
 #[cfg(not(target_os = "macos"))]
