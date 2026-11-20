@@ -35,8 +35,7 @@ fn testWriterUsesExplicitUsageProgressDisplayModeOverride() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("accounts-widget.json");
     let s = Widget::Codex.build(
-        &[super::account("current", 40., 25., true)],
-        &[],
+        &[(Pool::Codex, &[super::account("current", 40., 25., true)])],
         "remaining",
         Some(0),
         1,

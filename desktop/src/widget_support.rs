@@ -24,26 +24,32 @@ pub async fn publish(app: &Arc<Application>) -> Result<(), String> {
             .filter(|a| a.display_status == "list")
             .collect::<Vec<_>>()
     };
-    let codex = app.accounts(Pool::Codex).await.map(listed);
-    let claude = app.accounts(Pool::Claude).await.map(listed);
+    let mut pools = Vec::new();
+    for pool in Pool::ALL {
+        pools.push((pool, app.accounts(pool).await.map(listed)));
+    }
     let preferences = app.preferences()?;
     let now = chrono::Local::now().timestamp();
     let mut errors = vec![];
     // A pool that cannot be read leaves the widgets showing it as they were.
     for widget in Widget::ALL {
-        let (codex, claude) = match (widget, &codex, &claude) {
-            (Widget::Codex, Ok(codex), _) => (codex.as_slice(), &[][..]),
-            (Widget::Claude, _, Ok(claude)) => (&[][..], claude.as_slice()),
-            (Widget::All, Ok(codex), Ok(claude)) => (codex.as_slice(), claude.as_slice()),
-            _ => continue,
+        let shown: Option<Vec<(Pool, &[AccountSummary])>> = widget
+            .pools()
+            .iter()
+            .map(|pool| match pools.iter().find(|(p, _)| p == pool) {
+                Some((_, Ok(accounts))) => Some((*pool, accounts.as_slice())),
+                _ => None,
+            })
+            .collect();
+        let Some(shown) = shown else {
+            continue;
         };
-        let snapshot = widget.build(codex, claude, &preferences.usage_display, None, now);
+        let snapshot = widget.build(&shown, &preferences.usage_display, None, now);
         if let Err(error) = publish_widget(app, widget, &snapshot) {
             errors.push(error);
         }
     }
-    errors.extend(codex.err());
-    errors.extend(claude.err());
+    errors.extend(pools.into_iter().filter_map(|(_, result)| result.err()));
     if errors.is_empty() {
         Ok(())
     } else {

@@ -9,7 +9,7 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// The tag naming a pool on a card of the widget showing both.
+/// The tag naming a pool on a card of the widget showing every pool.
 fn pool_label(pool: Pool) -> &'static str {
     match pool {
         Pool::Codex => "CODEX",
@@ -22,15 +22,17 @@ fn pool_label(pool: Pool) -> &'static str {
 pub enum Widget {
     Codex,
     Claude,
-    /// Both pools.
+    Antigravity,
+    /// Every pool.
     All,
 }
 impl Widget {
-    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::All];
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Antigravity, Self::All];
     pub fn kind(self) -> &'static str {
         match self {
             Self::Codex => "CopoolCodexAccountsWidget",
             Self::Claude => "CopoolClaudeAccountsWidget",
+            Self::Antigravity => "CopoolAntigravityAccountsWidget",
             Self::All => "CopoolAccountsWidget",
         }
     }
@@ -39,21 +41,44 @@ impl Widget {
         match self {
             Self::Codex => "codex-accounts-widget-snapshot.json",
             Self::Claude => "claude-accounts-widget-snapshot.json",
+            Self::Antigravity => "antigravity-accounts-widget-snapshot.json",
             Self::All => "accounts-widget-snapshot.json",
         }
     }
+    /// The pools the widget shows, in their order.
+    pub fn pools(self) -> &'static [Pool] {
+        match self {
+            Self::Codex => &[Pool::Codex],
+            Self::Claude => &[Pool::Claude],
+            Self::Antigravity => &[Pool::Antigravity],
+            Self::All => &Pool::ALL,
+        }
+    }
+    /// The widget's snapshot from the accounts of its pools; a pool not
+    /// given has none.
     pub fn build(
         self,
-        codex: &[AccountSummary],
-        claude: &[AccountSummary],
+        pools: &[(Pool, &[AccountSummary])],
         mode: &str,
         offset_seconds: Option<i32>,
         now: i64,
     ) -> Snapshot {
+        let accounts = |pool: Pool| {
+            pools
+                .iter()
+                .find(|(p, _)| *p == pool)
+                .map(|(_, accounts)| *accounts)
+                .unwrap_or_default()
+        };
         match self {
-            Self::Codex => build(Pool::Codex, codex, mode, offset_seconds, now),
-            Self::Claude => build(Pool::Claude, claude, mode, offset_seconds, now),
-            Self::All => build_all(codex, claude, mode, offset_seconds, now),
+            Self::All => {
+                let pools: Vec<_> = Pool::ALL.iter().map(|&p| (p, accounts(p))).collect();
+                build_all(&pools, mode, offset_seconds, now)
+            }
+            single => {
+                let pool = single.pools()[0];
+                build(pool, accounts(pool), mode, offset_seconds, now)
+            }
         }
     }
 }
@@ -209,7 +234,8 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
                 account.email.as_deref().unwrap_or(&account.label),
             )
         }
-        // The widgets do not show this pool.
+        // As the app's plan tag: none until the plan is known. The windows
+        // are Gemini's, as the app's collapsed rows show them.
         Pool::Antigravity => (
             raw.unwrap_or_default(),
             None,
@@ -266,18 +292,17 @@ pub fn build(
         .collect();
     snapshot(cards, mode, now)
 }
-/// Both pools: each pool's first card (its current account) leads, Codex's
-/// before Claude's, then the other accounts by remaining quota.
+/// Every pool: each pool's first card (its current account) leads, in the
+/// pools' order, then the other accounts by remaining quota.
 pub fn build_all(
-    codex: &[AccountSummary],
-    claude: &[AccountSummary],
+    pools: &[(Pool, &[AccountSummary])],
     mode: &str,
     offset_seconds: Option<i32>,
     now: i64,
 ) -> Snapshot {
     let mut leading = vec![];
     let mut others = vec![];
-    for (pool, accounts) in [(Pool::Codex, codex), (Pool::Claude, claude)] {
+    for &(pool, accounts) in pools {
         let mut accounts = accounts.to_vec();
         sort_for_display(&mut accounts);
         let mut accounts = accounts.into_iter().map(|a| (pool, a));

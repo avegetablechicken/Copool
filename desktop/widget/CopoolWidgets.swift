@@ -7,6 +7,7 @@ struct CopoolWidgets: WidgetBundle {
         CopoolAccountsWidget()
         CopoolCodexAccountsWidget()
         CopoolClaudeAccountsWidget()
+        CopoolAntigravityAccountsWidget()
     }
 }
 
@@ -19,7 +20,7 @@ struct CopoolAccountsWidget: Widget {
             AccountsWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("Copool Accounts")
-        .description("See the current Codex and Claude accounts and remaining quota at a glance.")
+        .description("See the current Codex, Claude and Antigravity accounts and remaining quota at a glance.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -48,6 +49,20 @@ struct CopoolClaudeAccountsWidget: Widget {
         }
         .configurationDisplayName("Copool Claude Accounts")
         .description("See the current Claude account and remaining quota at a glance.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
+struct CopoolAntigravityAccountsWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(
+            kind: AccountsWidgetVariant.antigravity.kind,
+            provider: AccountsWidgetTimelineProvider(variant: .antigravity)
+        ) { entry in
+            AccountsWidgetEntryView(entry: entry)
+        }
+        .configurationDisplayName("Copool Antigravity Accounts")
+        .description("See the current Antigravity account and remaining Gemini quota at a glance.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -104,6 +119,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
         switch variant {
         case .codex: ["TEAM", "PRO", "TEAM", "PLUS"]
         case .claude: ["MAX 20X", "PRO", "TEAM", "MAX 5X"]
+        case .antigravity: ["PRO", "ULTRA", "PRO", "FREE"]
         case .all: ["TEAM", "MAX 20X", "MAX 20X", "PLUS"]
         }
     }
@@ -116,7 +132,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 id: "current",
                 poolLabel: samplePools[0],
                 planLabel: samplePlans[0],
-                workspaceLabel: variant == .claude ? nil : "workspace",
+                workspaceLabel: variant == .codex || variant == .all ? "workspace" : nil,
                 accountLabel: "current_account",
                 fiveHour: AccountsWidgetWindowSnapshot(
                     title: "5h",
@@ -163,7 +179,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     id: "row-1",
                     poolLabel: samplePools[2],
                     planLabel: samplePlans[2],
-                    workspaceLabel: variant == .all ? nil : "abcdefg",
+                    workspaceLabel: variant == .codex || variant == .claude ? "abcdefg" : nil,
                     accountLabel: "account_name",
                     fiveHour: AccountsWidgetWindowSnapshot(
                         title: "5h",

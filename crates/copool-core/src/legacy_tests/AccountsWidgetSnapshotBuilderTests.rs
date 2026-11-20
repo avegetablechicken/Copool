@@ -135,7 +135,12 @@ fn bothPoolsWidgetLeadsWithEachPoolsCurrentAccountThenRanksTheRest() {
     ];
     claude[0].plan_type = Some("max 5x".into());
     claude[1].plan_type = None;
-    let s = Widget::All.build(&codex, &claude, "used", Some(0), 100);
+    let s = Widget::All.build(
+        &[(Pool::Codex, &codex), (Pool::Claude, &claude)],
+        "used",
+        Some(0),
+        100,
+    );
     let current = s.current_card.unwrap();
     assert_eq!(current.id, "codex-current");
     assert_eq!(current.pool_label.as_deref(), Some("CODEX"));
@@ -150,21 +155,73 @@ fn bothPoolsWidgetLeadsWithEachPoolsCurrentAccountThenRanksTheRest() {
     assert_eq!(s.rows[2].plan_label, "TEAM");
 }
 #[test]
+fn everyPoolsWidgetLeadsWithAntigravitysCurrentAccountAfterTheOthers() {
+    let codex = [account(
+        "codex-current",
+        true,
+        "codex@example.com",
+        90.,
+        90.,
+    )];
+    let claude = [account(
+        "claude-current",
+        true,
+        "claude@example.com",
+        95.,
+        95.,
+    )];
+    let mut antigravity = [
+        account("agy-current", true, "agy@gmail.com", 20., 0.),
+        account("agy-spare", false, "spare@gmail.com", 0., 0.),
+    ];
+    antigravity[0].plan_type = Some("pro".into());
+    antigravity[1].plan_type = None;
+    let s = Widget::All.build(
+        &[
+            (Pool::Codex, &codex),
+            (Pool::Claude, &claude),
+            (Pool::Antigravity, &antigravity),
+        ],
+        "used",
+        Some(0),
+        100,
+    );
+    let ids: Vec<_> = s.rows.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["claude-current", "agy-current", "agy-spare"]);
+    let agy = &s.rows[1];
+    assert_eq!(agy.pool_label.as_deref(), Some("ANTIGRAVITY"));
+    assert_eq!(agy.plan_label, "PRO");
+    assert_eq!(agy.account_label, "agy");
+    // Gemini's windows, as the app's collapsed rows.
+    assert_eq!(agy.five_hour.used_text, "20%");
+    // A plan not yet known shows no tag.
+    assert_eq!(s.rows[2].plan_label, "");
+    // Its own widget carries no pool tag.
+    let own = Widget::Antigravity.build(&[(Pool::Antigravity, &antigravity)], "used", Some(0), 100);
+    assert_eq!(own.current_card.unwrap().pool_label, None);
+    assert_eq!(
+        Widget::Antigravity.kind(),
+        "CopoolAntigravityAccountsWidget"
+    );
+}
+#[test]
 fn bothPoolsWidgetShowsTheOtherPoolWhenOneIsEmpty() {
     let claude = [account("claude", true, "claude@example.com", 10., 20.)];
-    let s = Widget::All.build(&[], &claude, "used", Some(0), 100);
+    let s = Widget::All.build(&[(Pool::Claude, &claude)], "used", Some(0), 100);
     assert_eq!(s.current_card.unwrap().id, "claude");
     assert_eq!(s.secondary_card, None);
     assert_eq!(
-        Widget::All.build(&[], &[], "used", Some(0), 100),
+        Widget::All.build(&[], "used", Some(0), 100),
         Snapshot::default()
     );
 }
 #[test]
 fn singlePoolWidgetsCarryNoPoolTag() {
     let s = Widget::Codex.build(
-        &[account("current", true, "current@example.com", 10., 20.)],
-        &[],
+        &[(
+            Pool::Codex,
+            &[account("current", true, "current@example.com", 10., 20.)],
+        )],
         "used",
         Some(0),
         100,

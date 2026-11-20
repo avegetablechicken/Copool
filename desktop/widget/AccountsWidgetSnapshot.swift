@@ -13,13 +13,15 @@ enum AccountsWidgetConfiguration {
 enum AccountsWidgetVariant: Sendable {
     case codex
     case claude
-    /// Both pools.
+    case antigravity
+    /// Every pool.
     case all
 
     var kind: String {
         switch self {
         case .codex: "CopoolCodexAccountsWidget"
         case .claude: "CopoolClaudeAccountsWidget"
+        case .antigravity: "CopoolAntigravityAccountsWidget"
         case .all: "CopoolAccountsWidget"
         }
     }
@@ -28,6 +30,7 @@ enum AccountsWidgetVariant: Sendable {
         switch self {
         case .codex: "codex-accounts-widget-snapshot.json"
         case .claude: "claude-accounts-widget-snapshot.json"
+        case .antigravity: "antigravity-accounts-widget-snapshot.json"
         case .all: "accounts-widget-snapshot.json"
         }
     }
