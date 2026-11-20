@@ -124,22 +124,36 @@ test("saying hi goes to the Claude pool, locks the card's refresh without spinni
     "accounts.card.say_hi.sent",
     "accounts.card.say_hi.received",
     "accounts.notice.said_hi",
+    "accounts.card.antigravity_say_hi.help",
+    "accounts.card.antigravity_say_hi.sent",
+    "accounts.card.antigravity_say_hi.received",
+    "error.antigravity.say_hi_window_not_started",
   ])
     assert.equal(locales.split(`"${key}"`).length - 1, 11, `${key} in every locale`);
 });
 
 test("say hi now requires an idle window while scheduling stays available", () => {
   const start = source.indexOf("function fiveHourIdle(");
-  const idle = vm.runInNewContext(
-    `(${source.slice(start, source.indexOf("\n}\n", start) + 2)})`,
-    { Date },
-  );
+  const end = source.indexOf("\n}\n", start);
+  assert(start >= 0 && end > start, "fiveHourIdle found");
+  const scope = { Date, pool: "claude" };
+  const idle = vm.runInNewContext(`(${source.slice(start, end + 2)})`, scope);
   const now = Date.now() / 1000;
   assert.equal(idle({ usage: null }), false, "usage not yet known");
   assert.equal(idle({ usage: {} }), true, "no window");
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 0, resetAt: null } } }), true);
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now - 60 } } }), true, "ended");
   assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now + 60 } } }), false);
+  // Antigravity: either pool's idle window will do; only a reported one counts.
+  const started = { usedPercent: 3, resetAt: now + 60 };
+  const quiet = { usedPercent: 0, resetAt: null };
+  const both = (fiveHour, thirdPartyFiveHour) => ({ usage: { fiveHour, thirdPartyFiveHour } });
+  assert.equal(idle(both(started, quiet)), false, "other pools ignore the third-party window");
+  scope.pool = "antigravity";
+  assert.equal(idle(both(started, quiet)), true, "Claude's window idle");
+  assert.equal(idle(both(quiet, started)), true, "Gemini's window idle");
+  assert.equal(idle(both(started, started)), false);
+  assert.equal(idle(both(started, undefined)), false, "no Claude pool reported");
   assert.match(source, /if \(!collapsed && \(sayingHi\.has\(account\.id\) \|\| supportsSayHi\(account\)\)\)\n\s+actions\.append\(sayHiButton/);
 });
 
@@ -147,7 +161,11 @@ test("both pools refresh immediately after a reply, then only until the window s
   const start = source.indexOf("const SAY_HI_LOOKS =");
   const end = source.indexOf("/// Says hi with the account; shown");
   // [refreshes before the window shows, or the second another refresh shows it]
-  for (const target of ["claude", "codex"]) {
+  const idleStart = source.indexOf("function fiveHourIdle(");
+  const idleEnd = source.indexOf("\n}\n", idleStart);
+  assert(idleStart >= 0 && idleEnd > idleStart, "fiveHourIdle found");
+  const fiveHourIdle = source.slice(idleStart, idleEnd + 3);
+  for (const target of ["claude", "codex", "antigravity"]) {
     for (const [shownAfter, shownAt, expected] of [
       [0, Infinity, { refreshes: 1, slept: 0, notices: [["accounts.notice.said_hi", false]] }],
       [2, Infinity, { refreshes: 2, slept: 10000, notices: [["accounts.notice.said_hi", false]] }],
@@ -159,10 +177,12 @@ test("both pools refresh immediately after a reply, then only until the window s
       let refreshes = 0;
       let clock = Date.now();
       const replied = clock;
+      // Antigravity's card has both pools' windows; the hi shows once both run.
       const card = { id: "a", usage: { fiveHour: { resetAt: null } } };
+      if (target === "antigravity") card.usage.thirdPartyFiveHour = { resetAt: null };
       const show = () => {
         if (refreshes >= shownAfter || clock - replied >= shownAt * 1000)
-          card.usage.fiveHour.resetAt = clock / 1000 + 600;
+          for (const window of Object.values(card.usage)) window.resetAt = clock / 1000 + 600;
       };
       const accountsController = {
         accounts: [card],
@@ -190,7 +210,10 @@ test("both pools refresh immediately after a reply, then only until the window s
         notice: (message, error = false) => notices.push([message, error]),
       };
       vm.createContext(scope);
-      vm.runInContext(`${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`, scope);
+      vm.runInContext(
+        `${fiveHourIdle}${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`,
+        scope,
+      );
       await scope.run({ id: "a" });
       assert.equal(refreshes, expected.refreshes);
       assert.equal(clock - replied, expected.slept);

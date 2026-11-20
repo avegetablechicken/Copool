@@ -556,3 +556,7 @@
 "error.antigravity.login_not_found" = "Antigravity のログインが見つかりません。先に Antigravity または agy でサインインしてください。";
 "error.antigravity.credentials_invalid" = "Antigravity ログイン JSON が無効です。空でない refresh_token を含むトークンが必要です。";
 "error.antigravity.sign_in_expired" = "Antigravity のサインインが期限切れです。Antigravity または agy で再度サインインしてから、ログインを読み込んでください。";
+"accounts.card.antigravity_say_hi.help" = "あいさつして、待機中の Gemini と Claude の 5 時間枠を今すぐ開始";
+"accounts.card.antigravity_say_hi.sent" = "あいさつを送信しました。Antigravity の返信を待っています";
+"accounts.card.antigravity_say_hi.received" = "Antigravity が返信しました。5 時間枠の表示を待っています";
+"error.antigravity.say_hi_window_not_started" = "Antigravity はあいさつを受け付けましたが、5 時間枠は開始されていません";

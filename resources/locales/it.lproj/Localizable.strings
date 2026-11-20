@@ -536,3 +536,7 @@
 "error.antigravity.login_not_found" = "Accesso di Antigravity non trovato. Accedi prima con Antigravity o agy.";
 "error.antigravity.credentials_invalid" = "JSON di accesso Antigravity non valido. È previsto un token con refresh_token non vuoto.";
 "error.antigravity.sign_in_expired" = "L’accesso ad Antigravity è scaduto. Accedi di nuovo con Antigravity o agy, poi importa l’accesso.";
+"accounts.card.antigravity_say_hi.help" = "Saluta per avviare ora le finestre di 5 ore inattive di Gemini e Claude";
+"accounts.card.antigravity_say_hi.sent" = "Saluto inviato; in attesa della risposta di Antigravity";
+"accounts.card.antigravity_say_hi.received" = "Antigravity ha risposto; in attesa che compaia la finestra di 5 ore";
+"error.antigravity.say_hi_window_not_started" = "Antigravity ha accettato il saluto, ma la finestra di 5 ore non è iniziata";

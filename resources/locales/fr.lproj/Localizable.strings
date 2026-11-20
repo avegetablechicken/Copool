@@ -536,3 +536,7 @@
 "error.antigravity.login_not_found" = "Connexion Antigravity introuvable. Connectez-vous d’abord avec Antigravity ou agy.";
 "error.antigravity.credentials_invalid" = "JSON de connexion Antigravity invalide. Un jeton avec un refresh_token non vide est attendu.";
 "error.antigravity.sign_in_expired" = "La connexion Antigravity a expiré. Reconnectez-vous avec Antigravity ou agy, puis importez la connexion.";
+"accounts.card.antigravity_say_hi.help" = "Dites bonjour pour lancer maintenant les fenêtres de 5 heures inactives de Gemini et Claude";
+"accounts.card.antigravity_say_hi.sent" = "Bonjour envoyé ; en attente de la réponse d’Antigravity";
+"accounts.card.antigravity_say_hi.received" = "Antigravity a répondu ; en attente de l’affichage de la fenêtre de 5 heures";
+"error.antigravity.say_hi_window_not_started" = "Antigravity a accepté le bonjour, mais la fenêtre de 5 heures n’a pas commencé";

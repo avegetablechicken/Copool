@@ -566,3 +566,7 @@
 "error.antigravity.login_not_found" = "Antigravity login not found. Sign in with Antigravity or agy first.";
 "error.antigravity.credentials_invalid" = "Invalid Antigravity login JSON. Expected a token with a non-empty refresh_token.";
 "error.antigravity.sign_in_expired" = "Antigravity sign-in expired. Sign in again with Antigravity or agy, then import the login.";
+"accounts.card.antigravity_say_hi.help" = "Say hi to start the idle Gemini and Claude 5-hour windows now";
+"accounts.card.antigravity_say_hi.sent" = "Hi sent; waiting for Antigravity's reply";
+"accounts.card.antigravity_say_hi.received" = "Antigravity replied; waiting for the 5-hour window to show";
+"error.antigravity.say_hi_window_not_started" = "Antigravity accepted the hi, but the 5-hour window has not started";

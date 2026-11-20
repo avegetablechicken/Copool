@@ -536,3 +536,7 @@
 "error.antigravity.login_not_found" = "Вход Antigravity не найден. Сначала войдите через Antigravity или agy.";
 "error.antigravity.credentials_invalid" = "Недопустимый JSON входа Antigravity. Ожидается токен с непустым refresh_token.";
 "error.antigravity.sign_in_expired" = "Срок входа Antigravity истёк. Войдите снова через Antigravity или agy, затем импортируйте вход.";
+"accounts.card.antigravity_say_hi.help" = "Поздоровайтесь, чтобы сейчас запустить неактивные 5-часовые окна Gemini и Claude";
+"accounts.card.antigravity_say_hi.sent" = "Приветствие отправлено; ждём ответа Antigravity";
+"accounts.card.antigravity_say_hi.received" = "Antigravity ответил; ждём появления 5-часового окна";
+"error.antigravity.say_hi_window_not_started" = "Antigravity принял приветствие, но 5-часовое окно не началось";

@@ -6,7 +6,7 @@ use crate::{
     application::{Application, SwitchExecution},
     models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
     persistence::write_json,
-    pool::{Pool, PoolAccount},
+    pool::{Hello, Pool, PoolAccount},
     utils::now_unix_seconds,
     vault::KeychainAccess,
 };
@@ -17,7 +17,15 @@ use std::{fs, path::PathBuf, sync::Arc};
 mod api;
 mod login;
 
-pub(crate) use api::Network;
+pub(crate) use api::{sign_in_url, Network};
+
+/// A Google sign-in's login document, from its code.
+pub(crate) async fn sign_in(code: &str, verifier: &str, redirect: &str) -> Result<Value> {
+    login::signed_in(
+        &api::exchange(code, verifier, redirect).await?,
+        now_unix_seconds(),
+    )
+}
 use login::{Document, LiveStore};
 
 type Result<T> = std::result::Result<T, String>;
@@ -87,6 +95,9 @@ struct Stored {
     usage_error: Option<String>,
     #[serde(default)]
     plan: Option<String>,
+    /// The Cloud Code project of its messages, as last reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
     /// Newly imported; nothing goes upstream for it until a manual refresh.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     first_request_pending: bool,
@@ -353,6 +364,7 @@ async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Resu
                 document,
                 access,
                 now_unix_seconds() + lifetime,
+                lifetime,
                 body["refresh_token"].as_str(),
             );
             Ok(())
@@ -475,6 +487,7 @@ impl Application {
                     usage: None,
                     usage_error: None,
                     plan: None,
+                    project: None,
                     first_request_pending: defer,
                     renewal: None,
                 });
@@ -495,6 +508,25 @@ impl Application {
             .await?
             .ok_or(LOGIN_NOT_FOUND)?;
         let (id, waiting) = self.antigravity_upsert(live, true).await?;
+        drop(op);
+        if !waiting {
+            let _ = self.antigravity_refresh(&id, None).await;
+        }
+        Ok(1)
+    }
+    /// Stores a browser sign-in's login without switching to it.
+    pub(crate) async fn antigravity_import_login(&self, document: Value) -> Result<usize> {
+        login::refresh_token(&document).ok_or(CREDENTIALS_INVALID)?;
+        let op = self.antigravity.operations.lock().await;
+        let (id, waiting) = self
+            .antigravity_upsert(
+                Document {
+                    value: document,
+                    wrapped: cfg!(target_os = "macos"),
+                },
+                false,
+            )
+            .await?;
         drop(op);
         if !waiting {
             let _ = self.antigravity_refresh(&id, None).await;
@@ -673,7 +705,7 @@ impl Application {
         .await;
         // The account's name and plan, with the token that worked.
         let token = login::access_token(&document).unwrap_or_default();
-        let (mut identity, mut plan) = (None, None);
+        let (mut identity, mut plan, mut project) = (None, None, None);
         if matches!(outcome, Ok(Some(_))) {
             if account.google_id.is_none() {
                 identity = network
@@ -683,7 +715,7 @@ impl Application {
                     .filter(|(status, _)| (200..300).contains(status))
                     .map(|(_, body)| body);
             }
-            plan = network
+            let assist = network
                 .cloud(
                     api::LOAD_CODE_ASSIST_PATH,
                     &token,
@@ -694,7 +726,9 @@ impl Application {
                 .await
                 .ok()
                 .filter(|(status, _)| (200..300).contains(status))
-                .and_then(|(_, body)| api::plan(&body));
+                .map(|(_, body)| body);
+            plan = assist.as_ref().and_then(api::plan);
+            project = assist.as_ref().and_then(api::project);
         }
         let _lock = self.antigravity.lock.lock().await;
         let mut store = self.antigravity_load()?;
@@ -722,6 +756,9 @@ impl Application {
         if let Some(plan) = plan {
             stored.plan = Some(plan);
         }
+        if let Some(project) = project {
+            stored.project = Some(project);
+        }
         match &outcome {
             Ok(Some(usage)) => {
                 let mut usage = usage.clone();
@@ -742,6 +779,92 @@ impl Application {
             *reported = renewed;
         }
         outcome.map(|_| ())
+    }
+    /// Says hi with an account through its proxy, without switching to it:
+    /// one short message to each pool whose five-hour window is idle (to
+    /// Gemini's when none is), which starts it.
+    pub(crate) async fn antigravity_hello(&self, id: &str) -> Result<Hello> {
+        let account = self
+            .antigravity_load()?
+            .accounts
+            .into_iter()
+            .find(|a| a.id == id)
+            .ok_or("Account not found")?;
+        let Some(token) = login::access_token(&account.document).filter(|_| {
+            login::expiry(&account.document).is_none_or(|e| e > now_unix_seconds() + EXPIRY_MARGIN)
+        }) else {
+            return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
+        };
+        let proxy = self.account_proxy(&account.proxy_url)?;
+        let network = self.antigravity_network();
+        let agent = api::agent();
+        let call = |path: &'static str, body: Value| {
+            let (network, token, agent, proxy) =
+                (network.clone(), token.clone(), agent.clone(), proxy.clone());
+            async move { network.cloud(path, &token, body, &agent, &proxy).await }
+        };
+        let answer = |what: &str, (status, body): api::Reply| match status {
+            200..=299 => Ok(Some(body)),
+            401 | 403 => Ok(None),
+            _ => Err(status_error(what, status, &body)),
+        };
+        let project = match account.project.clone() {
+            Some(project) => project,
+            None => {
+                let Some(body) = answer(
+                    "Antigravity project request",
+                    call(api::LOAD_CODE_ASSIST_PATH, api::empty()).await?,
+                )?
+                else {
+                    return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
+                };
+                api::project(&body).ok_or("Antigravity reported no project")?
+            }
+        };
+        let Some(models) = answer(
+            "Antigravity models request",
+            call(api::FETCH_MODELS_PATH, api::empty()).await?,
+        )?
+        else {
+            return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
+        };
+        let (gemini, third_party) = api::hello_models(&models);
+        // Idle: no reset to come, as the windows read; all without usage yet.
+        let now = now_unix_seconds();
+        let idle = |window: Option<&crate::models::UsageWindow>| {
+            account.usage.is_none() || window.is_some_and(|w| w.reset_at.is_none_or(|r| r <= now))
+        };
+        let usage = account.usage.as_ref();
+        let mut targets: Vec<String> = [
+            (
+                gemini.clone(),
+                idle(usage.and_then(|u| u.five_hour.as_ref())),
+            ),
+            (
+                third_party,
+                idle(usage.and_then(|u| u.third_party_five_hour.as_ref())),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(model, idle)| model.filter(|_| idle))
+        .collect();
+        if targets.is_empty() {
+            targets.extend(gemini);
+        }
+        if targets.is_empty() {
+            return Err("Antigravity lists no model to say hi to".into());
+        }
+        for model in targets {
+            if answer(
+                "Antigravity message request",
+                call(api::GENERATE_PATH, api::hello(&project, &model)).await?,
+            )?
+            .is_none()
+            {
+                return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
+            }
+        }
+        Ok(Hello::Said)
     }
     pub(crate) fn antigravity_unavailable<T>(&self) -> Result<T> {
         Err(NOT_AVAILABLE.into())

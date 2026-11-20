@@ -258,8 +258,7 @@ function renderToolbar() {
   );
   $("add-account").title = withShortcut(tr(addAccount.title), "n");
   $("add-account").setAttribute("aria-label", tr(addAccount.title));
-  // Antigravity's logins are imported, not signed in here.
-  $("add-account").disabled = !addAccount.enabled || pool === "antigravity";
+  $("add-account").disabled = !addAccount.enabled;
   $("smart-switch").title = $("smart-switch").textContent;
   $("smart-switch").disabled = !smartSwitch.enabled || !accountsCache.length;
   label($("refresh-all"), "common.refresh_usage");
@@ -686,15 +685,19 @@ function canSayHi(account) {
   return fiveHourIdle(account) && supportsSayHi(account);
 }
 function supportsSayHi(account) {
-  if (pool === "claude") return true;
-  if (pool === "antigravity") return false;
+  if (pool === "claude" || pool === "antigravity") return true;
   const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
   return account.sourceTag !== "SUB2API" && plan === "plus";
 }
-/// Known usage with no future reset indicates an idle window.
+/// Known usage with no future reset indicates an idle window; Antigravity's
+/// third-party (Claude) pool has its own, idle as well when reported so.
 function fiveHourIdle(account) {
   if (!account.usage) return false;
-  return !(account.usage.fiveHour?.resetAt > Date.now() / 1000);
+  const now = Date.now() / 1000;
+  const idle = (window) => !(window?.resetAt > now);
+  return idle(account.usage.fiveHour) ||
+    (pool === "antigravity" && !!account.usage.thirdPartyFiveHour &&
+      idle(account.usage.thirdPartyFiveHour));
 }
 /// Both pools use the same delayed usage checks after the model replies.
 const SAY_HI_LOOKS = [10, 30, 90, 180];
@@ -711,7 +714,7 @@ async function sayHi(account) {
   const targetPool = pool;
   const shown = () => {
     const card = controller.accounts.find((a) => a.id === account.id);
-    return !card || card.usage?.fiveHour?.resetAt > Date.now() / 1000;
+    return !card || (!!card.usage && !fiveHourIdle(card));
   };
   if (sayingHi.has(account.id)) return;
   sayingHi.set(account.id, "sent");
@@ -752,7 +755,10 @@ function sayHiButton(account, full) {
   );
   control.setAttribute("aria-haspopup", "menu");
   control.setAttribute("aria-expanded", "false");
-  const prefix = pool === "codex" ? "accounts.card.codex_say_hi" : "accounts.card.say_hi";
+  const prefix = {
+    codex: "accounts.card.codex_say_hi",
+    antigravity: "accounts.card.antigravity_say_hi",
+  }[pool] || "accounts.card.say_hi";
   control.title = tr(`${prefix}.${phase || "help"}`);
   control.setAttribute(
     "aria-label",

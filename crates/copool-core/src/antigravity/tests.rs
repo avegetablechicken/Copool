@@ -37,6 +37,8 @@ impl Live {
 #[derive(Default)]
 struct Fake {
     calls: Mutex<Vec<String>>,
+    /// The messages sent: project and model of each.
+    messages: Mutex<Vec<(String, String)>>,
     /// Refresh tokens Google refuses.
     revoked: Mutex<Vec<String>>,
     /// Remaining fraction of the Gemini five-hour pool.
@@ -62,7 +64,7 @@ impl Network for Fake {
         &'a self,
         path: &'a str,
         token: &'a str,
-        _: Value,
+        body: Value,
         agent: &'a str,
         proxy: &'a str,
     ) -> Response<'a, api::Reply> {
@@ -70,6 +72,12 @@ impl Network for Fake {
             .lock()
             .unwrap()
             .push(format!("{path} {token} {agent} {proxy}"));
+        if path == api::GENERATE_PATH && !token.starts_with("expired") {
+            self.messages.lock().unwrap().push((
+                body["project"].as_str().unwrap_or_default().into(),
+                body["model"].as_str().unwrap_or_default().into(),
+            ));
+        }
         let remaining = *self.remaining.lock().unwrap();
         let per_model = self
             .per_model_gemini
@@ -125,7 +133,19 @@ impl Network for Fake {
                     200,
                     json!({"ineligibleTiers": [{"reasonCode": "UNSUPPORTED_CLIENT"}]}),
                 ),
-                api::LOAD_CODE_ASSIST_PATH => (200, json!({"paidTier": {"name": "Google AI Pro"}})),
+                api::LOAD_CODE_ASSIST_PATH => (
+                    200,
+                    json!({"paidTier": {"name": "Google AI Pro"}, "cloudaicompanionProject": "project-1"}),
+                ),
+                api::FETCH_MODELS_PATH => (
+                    200,
+                    json!({"models": {
+                        "gemini-3-flash": {"displayName": "Gemini 3 Flash", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T21:18:53Z"}},
+                        "claude-sonnet-5-5-low": {"displayName": "Claude Sonnet 5.5 (Low)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T22:59:41Z"}},
+                        "gpt-oss-120b-medium": {"displayName": "GPT-OSS 120B (Medium)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T22:59:41Z"}}
+                    }, "commandModelIds": ["gemini-3-flash"]}),
+                ),
+                api::GENERATE_PATH => (200, json!({"response": {"candidates": []}})),
                 _ => (404, Value::Null),
             })
         })
@@ -514,7 +534,7 @@ async fn imports_are_checked_whole_and_folded_into_known_accounts() {
 }
 
 #[tokio::test]
-async fn the_pool_has_no_proxy_providers_or_greetings() {
+async fn the_pool_has_no_proxy_or_providers() {
     let h = harness(true).await;
     assert!(h.app.proxy_status(Pool::Antigravity).await.is_err());
     assert!(h.app.start_proxy(Pool::Antigravity).await.is_err());
@@ -527,7 +547,6 @@ async fn the_pool_has_no_proxy_providers_or_greetings() {
         .await
         .unwrap();
     let id = cards(&h.app).await[0].id.clone();
-    assert!(h.app.say_hi(Pool::Antigravity, &id).await.is_err());
     // Other pools are unaffected by it.
     assert!(h.app.accounts(Pool::Claude).await.unwrap().is_empty());
     h.app.delete_account(Pool::Antigravity, &id).await.unwrap();
@@ -585,4 +604,115 @@ async fn import_time_requests_take_the_shared_account_proxy() {
         .all(|c| c.ends_with(" http://127.0.0.1:7890")));
     let card = cards(&h.app).await.remove(0);
     assert!(card.usage.is_some() && card.proxy_url.is_empty());
+}
+
+#[tokio::test]
+async fn a_browser_sign_in_joins_the_pool_without_switching() {
+    let h = harness(false).await;
+    let mut document = login_of("alice", "access-alice", later());
+    document["auth_method"] = "consumer".into();
+    document["id_token_email"] = "alice@gmail.com".into();
+    assert_eq!(
+        h.app
+            .import_sign_in(Pool::Antigravity, document.clone(), None)
+            .await
+            .unwrap(),
+        1
+    );
+    // Named by its ID token while it waits; nothing goes upstream.
+    let card = cards(&h.app).await.remove(0);
+    assert_eq!(card.label, "alice@gmail.com");
+    assert!(card.awaiting_first_request && !card.is_current);
+    assert!(h.fake.calls().is_empty());
+    assert_eq!(*h.live.writes.lock().unwrap(), 0);
+    // Kept as Antigravity keeps its login, for a later switch.
+    h.app
+        .switch_account(Pool::Antigravity, &card.id)
+        .await
+        .unwrap();
+    let written = h.live.document();
+    assert_eq!(written.value, document);
+    assert_eq!(written.wrapped, cfg!(target_os = "macos"));
+    // A sign-in without a refresh token is refused.
+    let mut broken = document;
+    broken["token"]
+        .as_object_mut()
+        .unwrap()
+        .remove("refresh_token");
+    assert!(h
+        .app
+        .import_sign_in(Pool::Antigravity, broken, None)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn a_hi_starts_each_idle_five_hour_window() {
+    let h = harness(true).await;
+    h.app
+        .import_json(
+            Pool::Antigravity,
+            &login_of("alice", "access-alice", later()).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = cards(&h.app).await[0].id.clone();
+    let set_usage = |gemini: Option<i64>, claude: Option<i64>| {
+        let _lock = futures_util::FutureExt::now_or_never(h.app.antigravity.lock.lock()).unwrap();
+        let mut store = h.app.antigravity_load().unwrap();
+        let usage = store.accounts[0].usage.as_mut().unwrap();
+        usage.five_hour.as_mut().unwrap().reset_at = gemini;
+        usage.third_party_five_hour.as_mut().unwrap().reset_at = claude;
+        h.app.antigravity_save(&store).unwrap();
+    };
+    let later_reset = now_unix_seconds() + 3600;
+    // Gemini's window runs; Claude's is idle: one hi, to the cheapest
+    // model of Claude's pool, in the project the refresh learned.
+    set_usage(Some(later_reset), None);
+    h.app.say_hi(Pool::Antigravity, &id).await.unwrap();
+    assert_eq!(
+        *h.fake.messages.lock().unwrap(),
+        [("project-1".to_owned(), "gpt-oss-120b-medium".to_owned())]
+    );
+    // Both idle (one reset past): a hi to each pool.
+    h.fake.messages.lock().unwrap().clear();
+    set_usage(Some(now_unix_seconds() - 10), None);
+    h.app.say_hi(Pool::Antigravity, &id).await.unwrap();
+    let models: Vec<String> = h
+        .fake
+        .messages
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|m| m.1.clone())
+        .collect();
+    assert_eq!(models, ["gemini-3-flash", "gpt-oss-120b-medium"]);
+    // Both running: Gemini's, as asked.
+    h.fake.messages.lock().unwrap().clear();
+    set_usage(Some(later_reset), Some(later_reset));
+    h.app.say_hi(Pool::Antigravity, &id).await.unwrap();
+    assert_eq!(h.fake.messages.lock().unwrap().len(), 1);
+    assert_eq!(h.fake.messages.lock().unwrap()[0].1, "gemini-3-flash");
+    // A refused token is renewed by a refresh, then the hi goes again.
+    h.fake.messages.lock().unwrap().clear();
+    {
+        let _lock = h.app.antigravity.lock.lock().await;
+        let mut store = h.app.antigravity_load().unwrap();
+        store.accounts[0].document = login_of("alice", "expired-alice", later());
+        h.app.antigravity_save(&store).unwrap();
+    }
+    let renewals = h.fake.renewals();
+    h.app.say_hi(Pool::Antigravity, &id).await.unwrap();
+    assert_eq!(h.fake.renewals(), renewals + 1);
+    // The refresh read both windows idle (Gemini's reset past, Claude's
+    // none): a hi to each, with the renewed token.
+    let models: Vec<String> = h
+        .fake
+        .messages
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|m| m.1.clone())
+        .collect();
+    assert_eq!(models, ["gemini-3-flash", "gpt-oss-120b-medium"]);
 }

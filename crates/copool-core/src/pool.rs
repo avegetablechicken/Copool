@@ -144,7 +144,7 @@ impl Application {
                 self.import_authorized(document, workspace, &consent).await
             }
             Pool::Claude => self.claude_import_login(document).await.map(|_| 1),
-            Pool::Antigravity => self.antigravity_unavailable(),
+            Pool::Antigravity => self.antigravity_import_login(document).await,
         }
     }
     /// Removes a card; a Sub2api card leaves its provider until a sync.
@@ -358,7 +358,7 @@ impl Application {
             let hello = match pool {
                 Pool::Codex => self.codex_hello(id).await?,
                 Pool::Claude => self.claude_hello(id).await?,
-                Pool::Antigravity => return self.antigravity_unavailable(),
+                Pool::Antigravity => self.antigravity_hello(id).await?,
             };
             match hello {
                 Hello::Said => return Ok(()),

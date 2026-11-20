@@ -110,12 +110,18 @@ pub(crate) fn expiry(document: &Value) -> Option<i64> {
 }
 /// The email a document names, if any.
 pub(crate) fn email(document: &Value) -> Option<String> {
-    ["/email", "/account/email", "/user/email", "/token/email"]
-        .iter()
-        .find_map(|path| document.pointer(path).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|email| email.contains('@'))
-        .map(str::to_owned)
+    [
+        "/id_token_email",
+        "/email",
+        "/account/email",
+        "/user/email",
+        "/token/email",
+    ]
+    .iter()
+    .find_map(|path| document.pointer(path).and_then(Value::as_str))
+    .map(str::trim)
+    .filter(|email| email.contains('@'))
+    .map(str::to_owned)
 }
 /// Whether two documents are the same login: the same refresh token.
 pub(crate) fn same_login(a: &Value, b: &Value) -> bool {
@@ -126,6 +132,7 @@ pub(crate) fn apply_renewal(
     document: &mut Value,
     access_token: &str,
     expires_at: i64,
+    expires_in: i64,
     refresh_token: Option<&str>,
 ) {
     let Some(token) = token_mut(document) else {
@@ -160,6 +167,48 @@ pub(crate) fn apply_renewal(
             .unwrap_or(Value::Null),
     };
     token.insert(expiry_key.into(), value);
+    // Antigravity also keeps the token's lifetime.
+    if token.contains_key("expires_in") {
+        token.insert("expires_in".into(), expires_in.into());
+    }
+}
+
+/// A Google sign-in's token response as Antigravity keeps its login: the
+/// token, how it signed in, and the email of its ID token.
+pub(crate) fn signed_in(tokens: &Value, now: i64) -> Result<Value> {
+    let text = |key: &str| {
+        tokens[key]
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+    let access = text("access_token").ok_or("Google returned no access token")?;
+    let refresh = text("refresh_token").ok_or("Google returned no refresh token")?;
+    let expires_in = tokens["expires_in"]
+        .as_i64()
+        .filter(|s| *s > 0)
+        .unwrap_or(3599);
+    let mut document = serde_json::json!({"token": {
+        "access_token": access,
+        "token_type": text("token_type").unwrap_or("Bearer"),
+        "refresh_token": refresh,
+        "expiry": "",
+        "expires_in": expires_in,
+    }, "auth_method": "consumer"});
+    apply_renewal(&mut document, access, now + expires_in, expires_in, None);
+    let email = text("id_token")
+        .and_then(|jwt| jwt.split('.').nth(1))
+        .and_then(|payload| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(payload.trim_end_matches('='))
+                .ok()
+        })
+        .and_then(|claims| serde_json::from_slice::<Value>(&claims).ok())
+        .and_then(|claims| claims["email"].as_str().map(str::to_owned));
+    if let Some(email) = email {
+        document["id_token_email"] = email.into();
+    }
+    Ok(document)
 }
 
 /// Where Antigravity's login item is kept; tests use memory.
@@ -248,6 +297,7 @@ impl LiveStore for SystemStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
 
     #[test]
@@ -284,16 +334,43 @@ mod tests {
     }
 
     #[test]
+    fn a_sign_in_is_kept_as_antigravity_keeps_its_login() {
+        let claims = URL_SAFE_NO_PAD.encode(r#"{"email":"alice@gmail.com","sub":"1"}"#);
+        let tokens = json!({
+            "access_token": "a", "refresh_token": "r", "expires_in": 3599,
+            "token_type": "Bearer", "scope": "openid", "id_token": format!("h.{claims}.s")
+        });
+        let document = signed_in(&tokens, 1_783_846_801).unwrap();
+        // The keys, in the order of Antigravity's own login.
+        assert_eq!(
+            document.to_string(),
+            json!({"token": {
+                "access_token": "a", "token_type": "Bearer", "refresh_token": "r",
+                "expiry": "2026-07-12T10:00:00Z", "expires_in": 3599
+            }, "auth_method": "consumer", "id_token_email": "alice@gmail.com"})
+            .to_string()
+        );
+        assert_eq!(email(&document).as_deref(), Some("alice@gmail.com"));
+        // A renewal keeps the lifetime current too.
+        let mut renewed = document.clone();
+        apply_renewal(&mut renewed, "b", 1_783_850_400, 1800, None);
+        assert_eq!(renewed["token"]["expires_in"], 1800);
+        assert!(signed_in(&json!({"access_token": "a"}), 0).is_err());
+        let unnamed = signed_in(&json!({"access_token": "a", "refresh_token": "r"}), 0).unwrap();
+        assert!(unnamed.get("id_token_email").is_none());
+    }
+
+    #[test]
     fn a_renewal_writes_the_keys_and_forms_the_document_uses() {
         let mut nested = json!({"token": {"access_token": "a", "refresh_token": "r", "expiry": "2026-01-01T00:00:00.5+08:00", "token_type": "Bearer"}, "other": 1});
-        apply_renewal(&mut nested, "b", 1_783_850_400, None);
+        apply_renewal(&mut nested, "b", 1_783_850_400, 3599, None);
         assert_eq!(
             nested,
             json!({"token": {"access_token": "b", "refresh_token": "r", "expiry": "2026-07-12T10:00:00Z", "token_type": "Bearer"}, "other": 1})
         );
         let mut flat =
             json!({"accessToken": "a", "refreshToken": "r", "expiresAt": 1_000_000_000_000_i64});
-        apply_renewal(&mut flat, "b", 1_783_850_400, Some("s"));
+        apply_renewal(&mut flat, "b", 1_783_850_400, 3599, Some("s"));
         assert_eq!(
             flat,
             json!({"accessToken": "b", "refreshToken": "s", "expiresAt": 1_783_850_400_000_i64})

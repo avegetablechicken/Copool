@@ -536,3 +536,7 @@
 "error.antigravity.login_not_found" = "Antigravity-aanmelding niet gevonden. Meld je eerst aan met Antigravity of agy.";
 "error.antigravity.credentials_invalid" = "Ongeldige Antigravity-aanmeldings-JSON. Verwacht wordt een token met een niet-lege refresh_token.";
 "error.antigravity.sign_in_expired" = "De Antigravity-aanmelding is verlopen. Meld je opnieuw aan met Antigravity of agy en importeer de aanmelding.";
+"accounts.card.antigravity_say_hi.help" = "Zeg hallo om de inactieve 5-uursvensters van Gemini en Claude nu te starten";
+"accounts.card.antigravity_say_hi.sent" = "Hallo verzonden; wachten op het antwoord van Antigravity";
+"accounts.card.antigravity_say_hi.received" = "Antigravity heeft geantwoord; wachten tot het 5-uursvenster verschijnt";
+"error.antigravity.say_hi_window_not_started" = "Antigravity heeft het hallo aangenomen, maar het 5-uursvenster is niet gestart";

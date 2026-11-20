@@ -566,3 +566,7 @@
 "error.antigravity.login_not_found" = "未找到 Antigravity 登录。请先在 Antigravity 或 agy 中登录。";
 "error.antigravity.credentials_invalid" = "无效的 Antigravity 登录 JSON：需要包含非空 refresh_token 的令牌。";
 "error.antigravity.sign_in_expired" = "Antigravity 登录已过期。请在 Antigravity 或 agy 中重新登录，然后导入该登录。";
+"accounts.card.antigravity_say_hi.help" = "打个招呼，立即开始空闲的 Gemini 与 Claude 5 小时计时";
+"accounts.card.antigravity_say_hi.sent" = "已发送招呼，等待 Antigravity 回复";
+"accounts.card.antigravity_say_hi.received" = "已收到 Antigravity 回复，等待 5 小时计时显示";
+"error.antigravity.say_hi_window_not_started" = "Antigravity 已接受招呼，但 5 小时计时没有开始";

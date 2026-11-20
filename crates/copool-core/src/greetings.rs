@@ -38,10 +38,11 @@ fn normalize_times(times: &mut Vec<String>) -> Result<()> {
     times.dedup();
     Ok(())
 }
-/// A card that may say hi: any Claude card; an official Codex Plus card.
+/// A card that may say hi: any Claude or Antigravity card; an official
+/// Codex Plus card.
 fn eligible(account: &AccountSummary, pool: Pool) -> bool {
     !account.awaiting_first_request
-        && (pool == Pool::Claude
+        && (pool != Pool::Codex
             || (!crate::sub2api::is_card(pool, &account.id)
                 && account
                     .usage
@@ -54,15 +55,22 @@ fn eligible(account: &AccountSummary, pool: Pool) -> bool {
 impl GreetingSchedule {
     fn due(
         &self,
+        pool: Pool,
         account: &AccountSummary,
         now: i64,
         day: &str,
         time: &str,
     ) -> (Option<i64>, bool) {
-        let reset = account
-            .usage
-            .as_ref()
-            .map(|u| u.five_hour.as_ref().and_then(|w| w.reset_at).unwrap_or(0));
+        // The earliest of its five-hour windows. An Antigravity window
+        // without a reset is idle now, each time it is: it reports none
+        // until a hi starts it, never the reset it last had.
+        let idle = if pool == Pool::Antigravity { now } else { 0 };
+        let reset = account.usage.as_ref().map(|u| {
+            five_hour_windows(u)
+                .map(|w| w.and_then(|w| w.reset_at).unwrap_or(idle))
+                .min()
+                .unwrap_or(idle)
+        });
         let offset = account
             .usage
             .as_ref()
@@ -83,6 +91,20 @@ impl GreetingSchedule {
             .iter()
             .any(|t| t == time && self.last_times.get(t).is_none_or(|d| d != day))
     }
+}
+/// A card's five-hour windows: its own, and Antigravity's third-party pool
+/// when reported.
+fn five_hour_windows(
+    usage: &crate::models::UsageSnapshot,
+) -> impl Iterator<Item = Option<&crate::models::UsageWindow>> {
+    std::iter::once(usage.five_hour.as_ref()).chain(usage.third_party_five_hour.as_ref().map(Some))
+}
+/// Whether every five-hour window of the card shows a reset to come: the hi
+/// started them.
+fn windows_started(account: &AccountSummary, now: i64) -> bool {
+    account.usage.as_ref().is_some_and(|u| {
+        five_hour_windows(u).all(|w| w.and_then(|w| w.reset_at).is_some_and(|r| r > now))
+    })
 }
 /// How often a pool's cards are read for automatic greetings. Reading them
 /// may read Claude Code's login and configuration, so not every second.
@@ -196,7 +218,7 @@ impl Application {
                             let key = key(pool, &account.id);
                             if running.contains(&key) { continue; }
                             let Some(schedule) = all.get_mut(&key) else { continue };
-                            let (auto, timed) = schedule.due(account, now.timestamp(), &day, &time);
+                            let (auto, timed) = schedule.due(pool, account, now.timestamp(), &day, &time);
                             if auto.is_none() && !timed { continue; }
                             // Persist the claim before sending: restarts cannot replay a daily time.
                             schedule.retry_after = now.timestamp() + 300;
@@ -226,9 +248,8 @@ impl Application {
                                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                                         let _ = app.refresh_usage(pool, &id).await;
                                         let cards = app.accounts(pool).await;
-                                        if cards.is_ok_and(|cards| cards.iter().any(|a| a.id == id && a.usage.as_ref()
-                                            .and_then(|u| u.five_hour.as_ref()).and_then(|w| w.reset_at)
-                                            .is_some_and(|r| r > chrono::Utc::now().timestamp()))) { break; }
+                                        if cards.is_ok_and(|cards| cards.iter().any(|a| a.id == id
+                                            && windows_started(a, chrono::Utc::now().timestamp()))) { break; }
                                     }
                                     });
                                 }
@@ -254,6 +275,67 @@ mod tests {
         }
     }
     #[test]
+    fn antigravity_greets_whenever_a_five_hour_window_is_idle() {
+        let stored: crate::models::StoredAccount = serde_json::from_value(serde_json::json!({
+            "id":"test", "label":"test", "accountId":"test", "addedAt":0, "updatedAt":0, "authJson":{}
+        })).unwrap();
+        let mut account = stored.to_summary(None);
+        let usage = |gemini: serde_json::Value, claude: serde_json::Value| {
+            serde_json::from_value(serde_json::json!({
+                "fiveHour": gemini, "thirdPartyFiveHour": claude, "fetchedAt": 0
+            }))
+            .unwrap()
+        };
+        let active = serde_json::json!({"usedPercent": 2, "windowSeconds": 18000, "resetAt": 500});
+        let idle = serde_json::json!({"usedPercent": 0, "windowSeconds": 18000});
+        let mut s = GreetingSchedule {
+            auto: true,
+            ..Default::default()
+        };
+        // Both started: nothing is due before the earliest reset.
+        account.usage = Some(usage(active.clone(), active.clone()));
+        assert_eq!(
+            s.due(Pool::Antigravity, &account, 100, "d", "t"),
+            (None, false)
+        );
+        // Claude's window idle while Gemini's runs: due now.
+        account.usage = Some(usage(active.clone(), idle.clone()));
+        assert_eq!(
+            s.due(Pool::Antigravity, &account, 100, "d", "t"),
+            (Some(100), false)
+        );
+        // Idle again after an earlier greeting: due again, once retries allow.
+        s.last_auto = Some(100);
+        s.retry_after = 400;
+        assert_eq!(
+            s.due(Pool::Antigravity, &account, 300, "d", "t"),
+            (None, false)
+        );
+        assert_eq!(
+            s.due(Pool::Antigravity, &account, 400, "d", "t"),
+            (Some(400), false)
+        );
+        // A Claude card's idle window keeps its own rule.
+        account.usage = Some(usage(idle.clone(), serde_json::Value::Null));
+        s.last_auto = Some(0);
+        assert_eq!(s.due(Pool::Claude, &account, 400, "d", "t"), (None, false));
+        // Started windows of both pools.
+        assert!(windows_started(
+            &AccountSummary {
+                usage: Some(usage(active.clone(), active.clone())),
+                ..account.clone()
+            },
+            100
+        ));
+        assert!(!windows_started(
+            &AccountSummary {
+                usage: Some(usage(active, idle)),
+                ..account.clone()
+            },
+            100
+        ));
+    }
+    #[test]
     fn auto_waits_for_reset_and_daily_times_are_not_replayed() {
         let stored: crate::models::StoredAccount = serde_json::from_value(serde_json::json!({
             "id":"test", "label":"test", "accountId":"test", "addedAt":0, "updatedAt":0, "authJson":{}
@@ -264,16 +346,22 @@ mod tests {
             times: vec!["08:00".into()],
             ..Default::default()
         };
-        assert_eq!(s.due(&account, 100, "2026-01-01", "07:00"), (None, false));
+        assert_eq!(
+            s.due(Pool::Codex, &account, 100, "2026-01-01", "07:00"),
+            (None, false)
+        );
         account.usage = Some(
             serde_json::from_value(
                 serde_json::json!({"fiveHour":{"usedPercent":0, "windowSeconds":18000, "resetAt":101}, "fetchedAt":0}),
             )
             .unwrap(),
         );
-        assert_eq!(s.due(&account, 100, "2026-01-01", "08:00"), (None, true));
         assert_eq!(
-            s.due(&account, 101, "2026-01-01", "08:00"),
+            s.due(Pool::Codex, &account, 100, "2026-01-01", "08:00"),
+            (None, true)
+        );
+        assert_eq!(
+            s.due(Pool::Codex, &account, 101, "2026-01-01", "08:00"),
             (Some(101), true)
         );
         account
@@ -285,7 +373,7 @@ mod tests {
             .unwrap()
             .clock_offset_seconds = Some(10);
         assert_eq!(
-            s.due(&account, 91, "2026-01-01", "07:00"),
+            s.due(Pool::Codex, &account, 91, "2026-01-01", "07:00"),
             (Some(101), false)
         );
         account
@@ -298,11 +386,20 @@ mod tests {
             .clock_offset_seconds = None;
         s.last_auto = Some(101);
         s.last_times.insert("08:00".into(), "2026-01-01".into());
-        assert_eq!(s.due(&account, 102, "2026-01-01", "08:00"), (None, false));
-        assert_eq!(s.due(&account, 102, "2026-01-02", "08:00"), (None, true));
+        assert_eq!(
+            s.due(Pool::Codex, &account, 102, "2026-01-01", "08:00"),
+            (None, false)
+        );
+        assert_eq!(
+            s.due(Pool::Codex, &account, 102, "2026-01-02", "08:00"),
+            (None, true)
+        );
         s.last_auto = None;
         s.retry_after = 200;
-        assert_eq!(s.due(&account, 102, "2026-01-01", "08:00"), (None, false));
+        assert_eq!(
+            s.due(Pool::Codex, &account, 102, "2026-01-01", "08:00"),
+            (None, false)
+        );
     }
     #[test]
     fn cards_are_read_only_for_a_pending_time_or_automatic_greetings() {

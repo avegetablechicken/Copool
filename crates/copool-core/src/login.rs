@@ -50,8 +50,33 @@ impl Login {
         match pool {
             Pool::Codex => Self::begin_codex(workspace).await,
             Pool::Claude => Self::begin_claude().await,
-            Pool::Antigravity => Err("Browser sign-in is not available for Antigravity".into()),
+            Pool::Antigravity => Self::begin_antigravity().await,
         }
+    }
+    /// A Google sign-in with Antigravity's client, which takes any loopback
+    /// port.
+    async fn begin_antigravity() -> Result<Arc<Self>, String> {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .map_err(|e| e.to_string())?;
+        let redirect = format!(
+            "http://localhost:{}/oauth-callback",
+            listener.local_addr().map_err(|e| e.to_string())?.port()
+        );
+        let verifier = nonce();
+        let state = nonce();
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let url = crate::antigravity::sign_in_url(&redirect, &challenge, &state);
+        Ok(Self::listen(
+            listener,
+            "/oauth-callback",
+            url,
+            verifier,
+            state,
+            redirect,
+            None,
+            Pool::Antigravity,
+        ))
     }
     /// A Claude Code sign-in on claude.ai; Claude accepts any loopback port.
     async fn begin_claude() -> Result<Arc<Self>, String> {
@@ -236,6 +261,9 @@ impl Login {
                 .map_err(|_| "error.oauth.request_cancelled")??;
             if self.pool == Pool::Claude {
                 return self.exchange_claude(&code).await;
+            }
+            if self.pool == Pool::Antigravity {
+                return crate::antigravity::sign_in(&code, &self.verifier, &self.redirect).await;
             }
             let response = crate::utils::with_account_proxy(reqwest::Client::builder(), "")?
                 .build()
