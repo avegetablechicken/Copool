@@ -497,7 +497,7 @@ impl Application {
         let (id, waiting) = self.antigravity_upsert(live, true).await?;
         drop(op);
         if !waiting {
-            let _ = self.antigravity_refresh(&id, false, None).await;
+            let _ = self.antigravity_refresh(&id, None).await;
         }
         Ok(1)
     }
@@ -516,7 +516,7 @@ impl Application {
         }
         drop(_op);
         for id in fresh {
-            let _ = self.antigravity_refresh(&id, false, None).await;
+            let _ = self.antigravity_refresh(&id, None).await;
         }
         Ok(count)
     }
@@ -605,7 +605,6 @@ impl Application {
     pub(crate) async fn antigravity_refresh(
         &self,
         id: &str,
-        use_account_proxy: bool,
         renew_now: Option<&mut bool>,
     ) -> Result<()> {
         let forced = renew_now.is_some();
@@ -633,11 +632,7 @@ impl Application {
         }
         let network = self.antigravity_network();
         let network = &*network;
-        let proxy = if use_account_proxy {
-            self.account_proxy(&account.proxy_url)?
-        } else {
-            account.proxy_url.clone()
-        };
+        let proxy = self.account_proxy(&account.proxy_url)?;
         let now = now_unix_seconds();
         let mut document = account.document.clone();
         let may_renew = forced || Renewal::of(account.renewal) != Renewal::Never;

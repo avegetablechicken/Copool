@@ -563,3 +563,26 @@ async fn gemini_models_without_a_shared_pool_report_their_five_hour_window() {
     assert_eq!(usage.third_party_one_week.unwrap().used_percent, 0.0);
     assert_eq!(usage.plan_type.as_deref(), Some("pro"));
 }
+
+#[tokio::test]
+async fn import_time_requests_take_the_shared_account_proxy() {
+    let h = harness(true).await;
+    let preferences = Preferences {
+        account_proxy_url: "http://127.0.0.1:7890".into(),
+        ..h.app.preferences().unwrap()
+    };
+    h.app.save_preferences(preferences).await.unwrap();
+    h.live
+        .sign_in(&login_of("alice", "access-alice", now_unix_seconds() - 10));
+    h.app.import_current(Pool::Antigravity).await.unwrap();
+    // The renewal and every quota request go through the shared proxy, which
+    // the new account does not keep as its own.
+    let calls = h.fake.calls();
+    assert!(calls[0].starts_with("renew refresh-alice http://127.0.0.1:7890"));
+    assert!(calls
+        .iter()
+        .filter(|c| c.starts_with("/v1internal"))
+        .all(|c| c.ends_with(" http://127.0.0.1:7890")));
+    let card = cards(&h.app).await.remove(0);
+    assert!(card.usage.is_some() && card.proxy_url.is_empty());
+}

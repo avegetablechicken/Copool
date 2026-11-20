@@ -310,8 +310,8 @@ impl Application {
     ) -> Result<()> {
         match pool {
             Pool::Codex => self.codex_refresh_account(id, true, renew_now).await,
-            Pool::Claude => self.claude_refresh_usage_scoped(id, true, renew_now).await,
-            Pool::Antigravity => self.antigravity_refresh(id, true, renew_now).await,
+            Pool::Claude => self.claude_refresh_usage_scoped(id, renew_now).await,
+            Pool::Antigravity => self.antigravity_refresh(id, renew_now).await,
         }
     }
     /// Renews an account's tokens at once, whatever its renewal choice, which

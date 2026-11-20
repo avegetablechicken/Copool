@@ -22,6 +22,8 @@ impl Application {
             .iter()
             .find(|a| auth::account_identity(&a.auth_json).ok().as_ref() == Some(&identity));
         let proxy = existing.map(|a| a.proxy_url.clone()).unwrap_or_default();
+        // Requests go through the account's own proxy, else the shared one.
+        let request_proxy = self.account_proxy(&proxy)?;
         // A new account waits for a manual refresh unless the user opted in.
         let contact = existing.is_some_and(|a| !a.awaiting_first_request())
             || (existing.is_none() && self.preferences()?.request_new_accounts);
@@ -30,7 +32,7 @@ impl Application {
                 account_network::fetch(
                     self.network.as_ref(),
                     &document,
-                    &proxy,
+                    &request_proxy,
                     now_unix_seconds(),
                     existing.is_none_or(|a| a.renews()),
                 )
@@ -85,7 +87,7 @@ impl Application {
         {
             if let Ok(rows) = self
                 .network
-                .workspaces(&extracted.access_token, &proxy)
+                .workspaces(&extracted.access_token, &request_proxy)
                 .await
             {
                 if let Some(row) = rows.iter().find(|row| {

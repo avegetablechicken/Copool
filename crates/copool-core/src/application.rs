@@ -70,7 +70,9 @@ pub struct Preferences {
     /// Contact upstream as soon as a new account is imported; otherwise it
     /// waits for a manual refresh, so that its proxy can be set first.
     pub request_new_accounts: bool,
-    /// Default proxy for stored accounts without their own proxy; never for login/import.
+    /// Default proxy of the requests for accounts without their own proxy,
+    /// those right after an import included; never kept as a new account's
+    /// own, nor used for a browser sign-in's token exchange.
     #[serde(alias = "importProxyUrl")]
     pub account_proxy_url: String,
     /// The order the account page's cards were dragged into, per pool.
@@ -1338,7 +1340,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn account_proxy_is_default_for_existing_accounts_but_not_imports() {
+    async fn account_proxy_is_default_for_accounts_and_their_imports() {
         let (_dir, app, network) = crate::legacy_tests::network_fixture::fixture();
         app.import_authorized(document("alice"), None, &[])
             .await
@@ -1372,10 +1374,12 @@ mod tests {
             "socks5://127.0.0.1:7891"
         );
         network.calls.lock().unwrap().clear();
+        // A new account's import-time requests take the shared proxy, which
+        // it does not keep as its own.
         app.import_authorized(document("bob"), None, &[])
             .await
             .unwrap();
-        assert_eq!(network.calls.lock().unwrap()[0].2, "");
+        assert_eq!(network.calls.lock().unwrap()[0].2, "http://127.0.0.1:7890");
         assert_eq!(
             app.accounts(Pool::Codex)
                 .await

@@ -1744,14 +1744,6 @@ impl Application {
         self.claude_save(&store)?;
         Ok((id, label, awaiting))
     }
-    /// Resolve an existing account before requesting its profile. New accounts
-    /// have no saved proxy yet; never borrow the currently selected account's.
-    fn claude_profile_proxy(&self, oauth: &Value, account: Option<&Value>) -> Result<String> {
-        Ok(self
-            .claude_known(oauth, account)?
-            .map(|known| known.proxy_url)
-            .unwrap_or_default())
-    }
     /// The pool's account for this login, by its identity or else its
     /// tokens; none for a new account.
     fn claude_known(&self, oauth: &Value, account: Option<&Value>) -> Result<Option<Stored>> {
@@ -1789,7 +1781,7 @@ impl Application {
         let (id, label, waiting) = self.claude_import_live(live, true).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage_scoped(&id, false, None).await;
+            let _ = self.claude_refresh_usage_scoped(&id, None).await;
         }
         Ok(label)
     }
@@ -1825,7 +1817,7 @@ impl Application {
         drop(_op);
         // Should Claude reject the export, the pool's tokens take over again.
         if !waiting {
-            let _ = self.claude_refresh_usage_scoped(&id, false, None).await;
+            let _ = self.claude_refresh_usage_scoped(&id, None).await;
         }
         Ok(1)
     }
@@ -1844,9 +1836,11 @@ impl Application {
                 Some(known) => known.account,
                 None if self.preferences()?.request_new_accounts => {
                     let token = text(&oauth["accessToken"]).unwrap_or_default();
+                    // A new account has no proxy of its own yet: the shared one.
+                    let proxy = self.account_proxy("")?;
                     match self
                         .claude_network()
-                        .profile(&self.claude_api_root(), &token, "")
+                        .profile(&self.claude_api_root(), &token, &proxy)
                         .await
                     {
                         Ok(profile) => profile_account(Some(&profile), &Value::Null).0,
@@ -1869,7 +1863,9 @@ impl Application {
         // The token response names the account; the profile adds its plan,
         // later on the first refresh for an account that waits.
         let profile = if self.claude_may_contact(known.as_ref())? {
-            let proxy = known.map(|known| known.proxy_url).unwrap_or_default();
+            // Its own proxy, never another account's; else the shared one.
+            let proxy =
+                self.account_proxy(&known.map(|known| known.proxy_url).unwrap_or_default())?;
             self.claude_network()
                 .profile(&self.claude_api_root(), &token, &proxy)
                 .await
@@ -1890,7 +1886,7 @@ impl Application {
         let (id, label, waiting) = self.claude_upsert(oauth, account, false, defer).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage_scoped(&id, false, None).await;
+            let _ = self.claude_refresh_usage_scoped(&id, None).await;
         }
         Ok(label)
     }
@@ -2117,7 +2113,6 @@ impl Application {
     pub(crate) async fn claude_refresh_usage_scoped(
         &self,
         id: &str,
-        use_account_proxy: bool,
         mut renew_now: Option<&mut bool>,
     ) -> Result<()> {
         let forced = renew_now.is_some();
@@ -2178,11 +2173,7 @@ impl Application {
         let network = self.claude_network();
         let api = self.claude_api_root();
         let api = api.as_str();
-        let request_proxy = if use_account_proxy {
-            self.account_proxy(&account.proxy_url)?
-        } else {
-            account.proxy_url.clone()
-        };
+        let request_proxy = self.account_proxy(&account.proxy_url)?;
         let proxy = request_proxy.as_str();
         // A refresh rotates the refresh token, so its result is kept even
         // when the usage request then fails.
@@ -6410,7 +6401,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn account_proxy_routes_refresh_but_not_import() {
+    async fn account_proxy_routes_imports_and_refreshes() {
         let dir = tempfile::tempdir().unwrap();
         let (app, _location, fake) = app(&dir).await;
         let mut preferences = app.preferences().unwrap();
@@ -6423,8 +6414,16 @@ mod tests {
         }))
         .await
         .unwrap();
-        assert_eq!(*fake.profile_proxies.lock().unwrap(), vec![""]);
-        assert_eq!(*fake.usage_proxies.lock().unwrap(), vec![""]);
+        // The import's requests take the shared proxy, which the new
+        // account does not keep as its own.
+        assert_eq!(
+            *fake.profile_proxies.lock().unwrap(),
+            vec!["http://127.0.0.1:7890"]
+        );
+        assert_eq!(
+            *fake.usage_proxies.lock().unwrap(),
+            vec!["http://127.0.0.1:7890"]
+        );
         let account = app.claude_load().unwrap().accounts.remove(0);
         assert!(account.proxy_url.is_empty());
         app.refresh_usage(Pool::Claude, &account.id).await.unwrap();

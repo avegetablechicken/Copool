@@ -180,7 +180,7 @@ impl Application {
     pub(crate) async fn claude_renew_login(&self, id: &str) -> Result<Value> {
         let mut renewed = false;
         let result = self
-            .claude_refresh_usage_scoped(id, true, Some(&mut renewed))
+            .claude_refresh_usage_scoped(id, Some(&mut renewed))
             .await;
         let account = self
             .claude_load()?
