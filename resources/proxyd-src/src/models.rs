@@ -117,6 +117,9 @@ pub struct AccountSummary {
 pub struct UsageSnapshot {
     #[serde(default)]
     pub remaining_reset_count: Option<i64>,
+    /// Set when the reset inventory came from an earlier usage response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_last_confirmed_at: Option<i64>,
     /// When each remaining reset expires (Unix seconds), earliest first; only
     /// those whose expiry upstream reports.
     #[serde(default)]

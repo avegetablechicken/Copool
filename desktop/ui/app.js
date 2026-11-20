@@ -958,6 +958,11 @@ function accountBalanceText(usage, credits, inventory = P.resetInventory(usage))
   resetCount.title = details.resetDates.length
     ? details.resetDates.map(({ at, count }) => `${expiry(at)}${count > 1 ? ` × ${count}` : ""}`).join("\n")
     : expiry(null);
+  if (usage?.resetsLastConfirmedAt != null) {
+    const confirmed = tr("accounts.card.resets_last_confirmed_format",
+      P.formatReset(usage.resetsLastConfirmedAt, locale));
+    resetCount.title = inventory.count === 0 ? confirmed : `${resetCount.title}\n${confirmed}`;
+  }
   footerText.append(creditText, " · ", resetCount);
   if (inventory.warning) {
     const kinds = {

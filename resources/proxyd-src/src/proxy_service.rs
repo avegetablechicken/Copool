@@ -2692,7 +2692,10 @@ async fn persist_candidate_usage_result(
     };
 
     match result {
-        Ok(usage) => {
+        Ok(mut usage) => {
+            if storage.pool == Pool::Claude {
+                crate::claude_api::retain_known_resets(&mut usage, account.usage.as_ref());
+            }
             account.usage = Some(usage);
             account.usage_error = None;
         }
@@ -5318,6 +5321,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             added_at,
             usage: Some(UsageSnapshot {
                 remaining_reset_count: None,
+                resets_last_confirmed_at: None,
                 reset_expiries: Vec::new(),
                 reset_grants: Vec::new(),
                 fetched_at: 0,

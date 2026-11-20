@@ -552,6 +552,7 @@
 "accounts.card.reset_fable" = "Fable reset";
 "accounts.card.reset_partial" = "部分重置";
 "accounts.card.reset_unknown" = "重置范围未知";
+"accounts.card.resets_last_confirmed_format" = "上次确认：%@";
 "accounts.card.expiry_unknown" = "过期时间未知";
 "accounts.window.pace_spent" = "额度已用完";
 "accounts.window.pace_soon" = "预计即将用完";

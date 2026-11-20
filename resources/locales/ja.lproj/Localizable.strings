@@ -542,6 +542,7 @@
 "accounts.card.reset_fable" = "Fable リセット";
 "accounts.card.reset_partial" = "部分リセット";
 "accounts.card.reset_unknown" = "リセット範囲不明";
+"accounts.card.resets_last_confirmed_format" = "最終確認：%@";
 "accounts.card.expiry_unknown" = "有効期限不明";
 "accounts.window.pace_spent" = "上限に達しました";
 "accounts.window.pace_soon" = "まもなく使い切る見込み";

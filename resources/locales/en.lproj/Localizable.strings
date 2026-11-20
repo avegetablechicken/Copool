@@ -552,6 +552,7 @@
 "accounts.card.reset_fable" = "Fable reset";
 "accounts.card.reset_partial" = "Partial reset";
 "accounts.card.reset_unknown" = "Reset scope unknown";
+"accounts.card.resets_last_confirmed_format" = "Last confirmed: %@";
 "accounts.card.expiry_unknown" = "Expiry unknown";
 "accounts.window.pace_spent" = "Limit reached";
 "accounts.window.pace_soon" = "Limit soon";

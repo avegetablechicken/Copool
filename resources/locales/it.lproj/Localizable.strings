@@ -522,6 +522,7 @@
 "accounts.card.reset_fable" = "Ripristino Fable";
 "accounts.card.reset_partial" = "Ripristino parziale";
 "accounts.card.reset_unknown" = "Ambito sconosciuto";
+"accounts.card.resets_last_confirmed_format" = "Ultima conferma: %@";
 "accounts.card.expiry_unknown" = "Scadenza sconosciuta";
 "accounts.window.pace_spent" = "Limite raggiunto";
 "accounts.window.pace_soon" = "Esaurimento previsto a breve";

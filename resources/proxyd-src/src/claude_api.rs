@@ -198,6 +198,7 @@ pub(crate) fn usage_snapshot(
     );
     Ok(UsageSnapshot {
         remaining_reset_count: resets,
+        resets_last_confirmed_at: None,
         reset_expiries,
         reset_grants,
         fetched_at: now,
@@ -206,6 +207,46 @@ pub(crate) fn usage_snapshot(
         one_week: window("seven_day", 7 * 24 * 60 * 60),
         credits: None,
     })
+}
+
+/// Missing inventory leaves the last confirmed resets usable until their expiry.
+pub(crate) fn retain_known_resets(latest: &mut UsageSnapshot, previous: Option<&UsageSnapshot>) {
+    if latest.remaining_reset_count.is_some() {
+        return;
+    }
+    let Some((previous, count)) = previous.and_then(|p| {
+        p.remaining_reset_count
+            .filter(|n| *n >= 0)
+            .map(|count| (p, count))
+    }) else {
+        return;
+    };
+    let now = latest.fetched_at;
+    latest.resets_last_confirmed_at = Some(
+        previous
+            .resets_last_confirmed_at
+            .unwrap_or(previous.fetched_at),
+    );
+    latest.reset_expiries = previous
+        .reset_expiries
+        .iter()
+        .copied()
+        .filter(|at| *at > now)
+        .collect();
+    let remaining = if previous.reset_grants.is_empty() {
+        // Older snapshots stored one expiry per reset, where known.
+        let expired = previous.reset_expiries.len() - latest.reset_expiries.len();
+        (count - expired as i64).max(0)
+    } else {
+        latest.reset_grants = previous
+            .reset_grants
+            .iter()
+            .filter(|g| g.expires_at.is_none_or(|at| at > now))
+            .cloned()
+            .collect();
+        latest.reset_grants.iter().map(|g| g.count).sum()
+    };
+    latest.remaining_reset_count = Some(remaining);
 }
 
 /// The usage-limit resets the account has banked: what its unexpired grants

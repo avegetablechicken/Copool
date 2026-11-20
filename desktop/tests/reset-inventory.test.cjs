@@ -54,7 +54,9 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   // Windows checkout uses CRLF; function boundaries below use LF.
   const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8").replace(/\r\n/g, "\n");
   const start = source.indexOf("function accountBalanceText(");
-  const fn = source.slice(start, source.indexOf("\n}\n", start) + 3);
+  const end = source.indexOf("\n}\n", start);
+  assert.ok(start >= 0 && end > start);
+  const fn = source.slice(start, end + 3);
   const el = (tag, className, text = "") => ({tag, className, textContent: text, children: [],
     append(...nodes) {this.children.push(...nodes);}, setAttribute(name, value) {this[name] = value;}});
   let opened;
@@ -79,6 +81,12 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   assert.equal(opened.trigger, notice);
   assert.equal(opened.lines.join("\n"), "accounts.card.reset_full: × 1\naccounts.card.reset_fable: × 2");
   assert.equal(footer.title, undefined);
+  assert.doesNotMatch(resets.title, /last_confirmed/);
+  const cached = context.accountBalanceText({remainingResetCount: 2, resetExpiries: [1, future],
+    resetsLastConfirmedAt: 100}, "--").children[2];
+  assert.match(cached.textContent, /remaining_resets_format:1$/);
+  assert.match(cached.title, /reset_expires_format/);
+  assert.match(cached.title, /resets_last_confirmed_format/);
   const unknown = context.accountBalanceText({}, "--");
   assert.match(unknown.children[0].title, /expiry_unknown/);
   assert.match(unknown.children[2].title, /expiry_unknown/);

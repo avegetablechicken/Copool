@@ -542,6 +542,7 @@
 "accounts.card.reset_fable" = "Fable 초기화";
 "accounts.card.reset_partial" = "부분 초기화";
 "accounts.card.reset_unknown" = "초기화 범위 불명";
+"accounts.card.resets_last_confirmed_format" = "마지막 확인: %@";
 "accounts.card.expiry_unknown" = "만료 시간 알 수 없음";
 "accounts.window.pace_spent" = "한도에 도달함";
 "accounts.window.pace_soon" = "곧 소진 예상";

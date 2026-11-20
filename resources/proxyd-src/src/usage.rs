@@ -279,6 +279,7 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
     let resets = payload.rate_limit_reset_credits.as_ref();
     UsageSnapshot {
         remaining_reset_count: resets.and_then(reset_count),
+        resets_last_confirmed_at: None,
         reset_expiries: resets.map(reset_expiries).unwrap_or_default(),
         reset_grants: Vec::new(),
         fetched_at: now_unix_seconds(),

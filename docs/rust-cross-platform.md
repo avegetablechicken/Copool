@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-20（Claude reset 与用量刷新）：每次刷新先请求包含 reset 明细的用量。遇到 429 时仅在本次查询重试备用 User-Agent；两次均被限流时，桌面端沿用该账号的退避时间。桌面端与独立 daemon 保存新用量时，若缺少 reset 明细，保留该账号上次确认的次数、类型及到期时间，扣除已知过期项。卡片的 reset 提示显示上次确认时间；首次未知显示 `--`，明确返回零次则立即显示 0。macOS 已用隔离账号验证回退、恢复与同代理账号互不影响；前端测试覆盖 LF 和 CRLF，Windows 和 Linux 尚未实机验证。
+
 2026-11-19（Claude 本机凭据轮换）：刷新已保存账号时，如果本机登录缺少 `oauthAccount` 且令牌已轮换，Copool 使用统一账号代理查询该 access token 的 Claude profile。只有账号和组织均匹配、查询期间凭据仍属同一代，才将其用于目标卡片。macOS 隔离测试覆盖不同账号及用量请求返回 401 期间发生轮换的情况。Windows、Linux 尚未实机验证。
 
 2026-11-18（Windows 编译警告）：非 Unix 平台显式忽略 `set_private_permissions` 的参数；`panel::is_modal` 仅在 macOS 编译，与调用方平台条件一致。Windows 桌面端及独立 daemon 的 cargo check 已启动，提交时仍在编译依赖，尚未确认完成；未进行 macOS 构建验证。

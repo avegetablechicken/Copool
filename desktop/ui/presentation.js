@@ -638,9 +638,13 @@
       (g) => g.count > 0 && (g.expiresAt == null || g.expiresAt > now),
     );
     const hasInventory = (usage?.resetGrants ?? []).length > 0;
-    const count = hasInventory
+    let count = hasInventory
       ? grants.reduce((sum, g) => sum + g.count, 0)
       : usage?.remainingResetCount;
+    if (!hasInventory && count >= 0 && count != null && usage?.resetsLastConfirmedAt != null) {
+      const expired = (usage.resetExpiries ?? []).filter((at) => at <= now).length;
+      count = Math.max(0, count - expired);
+    }
     return {
       count: count != null && count >= 0 ? count : null,
       grants,

@@ -36,9 +36,6 @@ pub(crate) const HELLO_MODEL: &str = "claude-sonnet-5-5";
 /// entrypoint (`sdk-cli`, `cli-bg`) is reportedly counted apart from the
 /// five-hour window.
 const INTERACTIVE_USER_AGENT: &str = "claude-cli/2.1.300 (external, cli)";
-/// How long usage is asked as `claude-code/…` through a proxy after the
-/// usage endpoint refused `claude-cli/…` there.
-const CLI_REFUSAL_SECONDS: i64 = 3600;
 /// The pause after a first HTTP 429, doubled for each following one up to
 /// the longest; a longer `Retry-After` is honored up to six hours.
 const RATE_LIMIT_PAUSE: i64 = 300;
@@ -549,8 +546,6 @@ pub(crate) struct State {
     secrets: std::sync::Mutex<Option<Secrets>>,
     /// Why the vault could not be used last, shown with the error.
     vault_problem: std::sync::Mutex<Option<String>>,
-    /// Until when each proxy asks for usage as `claude-code/…`.
-    cli_refused: std::sync::Mutex<std::collections::HashMap<String, i64>>,
     lock: tokio::sync::Mutex<()>,
     operations: tokio::sync::Mutex<()>,
 }
@@ -564,7 +559,6 @@ impl Default for State {
             vault: Default::default(),
             secrets: Default::default(),
             vault_problem: Default::default(),
-            cli_refused: Default::default(),
             lock: Default::default(),
             operations: Default::default(),
         }
@@ -2549,7 +2543,7 @@ impl Application {
             (false, _) => account.rate_limits,
         };
         let pause = rate_limited.then(|| rate_limit_pause(rate_limits, retry_after));
-        let result = result.map_err(|error| match pause {
+        let mut result = result.map_err(|error| match pause {
             Some(pause) => format!("{error}; retry paused for {} minutes", (pause + 59) / 60),
             None => error,
         });
@@ -2560,8 +2554,9 @@ impl Application {
                 target.usage_retry_at = pause.map(|pause| now_unix_seconds() + pause);
             }
             target.rate_limits = rate_limits;
-            match &result {
+            match &mut result {
                 Ok(Some(usage)) => {
+                    crate::claude_api::retain_known_resets(usage, target.usage.as_ref());
                     target.usage = Some(usage.clone());
                     target.usage_error = live_sync.as_ref().err().cloned();
                 }
@@ -2617,10 +2612,7 @@ impl Application {
         }
         result.map(|_| ()).and(live_sync)
     }
-    /// Asks for usage as Claude Code 2.1.280 (`claude-cli/…`), which the
-    /// banked resets need. The endpoint at times refuses that agent outright,
-    /// with HTTP 429 before reading the token; usage is then asked as
-    /// `claude-code/…` at once, and through that proxy for the next hour.
+    /// A 429 retries with the alternate agent for this request only.
     async fn claude_usage(
         &self,
         network: &dyn Network,
@@ -2628,26 +2620,12 @@ impl Application {
         token: &str,
         proxy: &str,
     ) -> Result<UsageResponse> {
-        let now = now_unix_seconds();
-        let refused = self
-            .claude
-            .cli_refused
-            .lock()
-            .unwrap()
-            .get(proxy)
-            .is_some_and(|until| *until > now);
-        if !refused {
-            let response = network.usage(api, token, USAGE_USER_AGENT, proxy).await?;
-            if response.0 != 429 {
-                return Ok(response);
-            }
-            self.claude
-                .cli_refused
-                .lock()
-                .unwrap()
-                .insert(proxy.to_owned(), now + CLI_REFUSAL_SECONDS);
+        let response = network.usage(api, token, USAGE_USER_AGENT, proxy).await?;
+        if response.0 == 429 {
+            network.usage(api, token, USER_AGENT, proxy).await
+        } else {
+            Ok(response)
         }
-        network.usage(api, token, USER_AGENT, proxy).await
     }
     /// Where Claude Code sends a login's OAuth API requests (usage, profile,
     /// prepaid credits): `CLAUDE_CODE_CUSTOM_OAUTH_URL`, its settings read
@@ -2765,6 +2743,33 @@ mod tests {
         assert_eq!(usage.remaining_reset_count, Some(2));
         assert_eq!(usage.reset_grants[0].kind, ResetKind::Fable);
         assert_eq!(usage.reset_grants[1].kind, ResetKind::Full);
+    }
+
+    #[test]
+    fn retained_resets_expire_without_advancing_the_confirmation_time() {
+        let body = json!({"cedar_ember":{"eligible":true,"grants":[
+            {"resets_left":2,"ends_at":20}, {"resets_left":1,"ends_at":30}
+        ]}});
+        let first = usage_snapshot(&body, None, 10).unwrap();
+        let unknown = |now| usage_snapshot(&json!({}), None, now).unwrap();
+        for legacy in [false, true] {
+            let mut previous = first.clone();
+            if legacy {
+                previous.reset_grants.clear();
+            }
+            for (now, count) in [(20, 1), (25, 1), (30, 0), (40, 0)] {
+                let mut next = unknown(now);
+                crate::claude_api::retain_known_resets(&mut next, Some(&previous));
+                assert_eq!(next.remaining_reset_count, Some(count));
+                assert_eq!(next.resets_last_confirmed_at, Some(10));
+                assert!(next.reset_expiries.iter().all(|at| *at > now));
+                previous = next;
+            }
+        }
+        let mut next = unknown(30);
+        crate::claude_api::retain_known_resets(&mut next, Some(&unknown(10)));
+        assert_eq!(next.remaining_reset_count, None);
+        assert_eq!(next.resets_last_confirmed_at, None);
     }
 
     #[test]
@@ -3044,14 +3049,11 @@ mod tests {
     }
 
     const REFRESH_SECONDS: i64 = crate::refresh_policy::CLAUDE_REFRESH_INTERVAL.as_secs() as i64;
-    /// Usage is asked as `claude-code/…` only, as after the endpoint
-    /// refused `claude-cli/…`: each HTTP 429 is then a real rate limit.
-    fn refuse_cli(app: &Application) {
-        app.claude
-            .cli_refused
+    fn queue_usage_rate_limit(fake: &Fake, body: Value) {
+        fake.usage
             .lock()
             .unwrap()
-            .insert(String::new(), i64::MAX);
+            .extend([(429, Value::Null), (429, body)]);
     }
     /// Moves every account's last request this many seconds back.
     fn age(app: &Application, seconds: i64) {
@@ -3085,17 +3087,13 @@ mod tests {
     async fn consecutive_rate_limits_pause_longer_until_usage_succeeds() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
-        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
         let stored = || app.claude_load().unwrap().accounts[0].clone();
         let usage = stored().usage.unwrap();
         for (count, minutes) in [(1, 5), (2, 10), (3, 20), (4, 40), (5, 60), (6, 60)] {
-            fake.usage
-                .lock()
-                .unwrap()
-                .push((429, json!({"error":{"message":"Rate limited"}})));
+            queue_usage_rate_limit(&fake, json!({"error":{"message":"Rate limited"}}));
             let before = now_unix_seconds();
             let error = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
             assert_eq!(
@@ -3130,7 +3128,7 @@ mod tests {
         let saved = fs::read_to_string(app.claude_store_path()).unwrap();
         assert!(!saved.contains("rateLimits"));
         // A first rate limit after a success pauses briefly again.
-        fake.usage.lock().unwrap().push((429, Value::Null));
+        queue_usage_rate_limit(&fake, Value::Null);
         app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
         assert_eq!(stored().rate_limits, 1);
     }
@@ -3139,12 +3137,11 @@ mod tests {
     async fn other_failures_keep_the_rate_limit_count_without_pausing() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
-        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
         for _ in 0..2 {
-            fake.usage.lock().unwrap().push((429, Value::Null));
+            queue_usage_rate_limit(&fake, Value::Null);
             app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
             end_pause(&app);
         }
@@ -3156,7 +3153,7 @@ mod tests {
         let account = app.claude_load().unwrap().accounts[0].clone();
         assert_eq!(account.rate_limits, 2);
         assert_eq!(account.usage_retry_at, None);
-        fake.usage.lock().unwrap().push((429, Value::Null));
+        queue_usage_rate_limit(&fake, Value::Null);
         assert!(app
             .refresh_usage(Pool::Claude, &id)
             .await
@@ -3168,13 +3165,12 @@ mod tests {
     async fn a_longer_retry_after_sets_the_pause() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
-        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.claude_load().unwrap().accounts[0].id.clone();
         for (retry_after, minutes) in [(Some(5400), 90), (Some(0), 10), (None, 20)] {
             *fake.usage_retry_after.lock().unwrap() = retry_after;
-            fake.usage.lock().unwrap().push((429, Value::Null));
+            queue_usage_rate_limit(&fake, Value::Null);
             let before = now_unix_seconds();
             let error = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
             assert!(
@@ -3200,7 +3196,6 @@ mod tests {
         use std::time::Duration;
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
-        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         assert_eq!(usages(&fake).len(), 1);
@@ -3237,13 +3232,13 @@ mod tests {
         assert_eq!(app.background_round(6, Pool::Claude).await, one);
         assert_eq!(usages(&fake).len(), 4);
         // A rate limit is no change in usage.
-        fake.usage.lock().unwrap().push((429, Value::Null));
+        queue_usage_rate_limit(&fake, Value::Null);
         age(&app, 60);
         assert_eq!(app.background_round(7, Pool::Claude).await, one);
         assert_eq!(app.schedule(Pool::Codex), Some(codex));
         assert_eq!(app.background_round(1, Pool::Codex).await.as_secs(), 10);
         assert_eq!(app.round_interval(Pool::Claude), one);
-        assert_eq!(usages(&fake).len(), 5);
+        assert_eq!(usages(&fake).len(), 6);
     }
 
     #[tokio::test]
@@ -3388,14 +3383,10 @@ mod tests {
     async fn usage_rate_limits_pause_manual_and_background_refresh_until_backoff_expires() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
-        refuse_cli(&app);
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
         let id = app.accounts(Pool::Claude).await.unwrap()[0].id.clone();
-        fake.usage
-            .lock()
-            .unwrap()
-            .push((429, json!({"error":{"message":"Rate limited"}})));
+        queue_usage_rate_limit(&fake, json!({"error":{"message":"Rate limited"}}));
         let error = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
         assert!(error.contains("HTTP 429"));
         let until = app.claude_load().unwrap().accounts[0]
@@ -3753,46 +3744,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn usage_is_asked_as_claude_code_while_claude_cli_is_refused() {
+    async fn fallback_updates_windows_and_keeps_resets_until_confirmed_again() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", LATER);
+        let grants =
+            json!([{"resets_left":1,"ends_at":"2099-01-01T00:00:00Z","gives_back_weekly":true}]);
+        fake.usage.lock().unwrap().push((
+            200,
+            json!({"cedar_ember":{"eligible":true,"grants":grants}}),
+        ));
         app.claude_import_current().await.unwrap();
-        let id = app.claude_load().unwrap().accounts[0].id.clone();
-        let (cli, code) = (USAGE_USER_AGENT, USER_AGENT);
-        assert_eq!(agents(&fake), [cli]);
-        // Refused as claude-cli, the same refresh asks as claude-code.
+        let stored = || app.claude_load().unwrap().accounts[0].clone();
+        let id = stored().id;
+        let first = stored().usage.unwrap();
+        for used in [41, 42] {
+            fake.usage.lock().unwrap().extend([
+                (429, Value::Null),
+                (200, json!({"five_hour":{"utilization":used},"cedar_ember":{"eligible":false,"ineligible_reason":"surface"}}))
+            ]);
+            app.refresh_usage(Pool::Claude, &id).await.unwrap();
+            let usage = stored().usage.unwrap();
+            assert_eq!(usage.five_hour.unwrap().used_percent, f64::from(used));
+            assert_eq!(usage.remaining_reset_count, Some(1));
+            assert_eq!(usage.reset_grants[0].kind, ResetKind::Fable);
+            assert_eq!(usage.reset_expiries, first.reset_expiries);
+            assert_eq!(usage.resets_last_confirmed_at, Some(first.fetched_at));
+        }
         fake.usage
             .lock()
             .unwrap()
-            .push((429, json!({"error": {"type": "rate_limit_error"}})));
+            .push((200, json!({"cedar_ember":{"eligible":true,"grants":[]}})));
         app.refresh_usage(Pool::Claude, &id).await.unwrap();
-        assert_eq!(agents(&fake)[1..], [cli, code]);
-        let account = app.claude_load().unwrap().accounts[0].clone();
-        assert_eq!(account.usage_error, None);
-        assert_eq!(account.rate_limits, 0);
-        assert_eq!(account.usage_retry_at, None);
-        // Through that proxy, only claude-code is asked for the next hour...
-        let until = app.claude.cli_refused.lock().unwrap()[""];
-        assert!((now_unix_seconds() + 3590..=now_unix_seconds() + 3600).contains(&until));
-        app.refresh_usage(Pool::Claude, &id).await.unwrap();
-        assert_eq!(agents(&fake)[3..], [code]);
-        // ...and claude-cli again after it.
-        app.claude
-            .cli_refused
-            .lock()
-            .unwrap()
-            .insert(String::new(), now_unix_seconds() - 1);
-        app.refresh_usage(Pool::Claude, &id).await.unwrap();
-        assert_eq!(agents(&fake)[4..], [cli]);
-        // Any other answer to claude-cli is final.
-        fake.usage.lock().unwrap().push((500, Value::Null));
-        assert!(app.refresh_usage(Pool::Claude, &id).await.is_err());
-        assert_eq!(agents(&fake)[5..], [cli]);
+        let usage = stored().usage.unwrap();
+        assert_eq!(usage.remaining_reset_count, Some(0));
+        assert!(usage.reset_grants.is_empty());
+        assert_eq!(usage.resets_last_confirmed_at, None);
+        let (cli, code) = (USAGE_USER_AGENT, USER_AGENT);
+        assert_eq!(agents(&fake), [cli, cli, code, cli, code, cli]);
     }
 
     #[tokio::test]
-    async fn a_refusal_holds_only_for_its_proxy_and_both_refusals_are_a_rate_limit() {
+    async fn a_refusal_does_not_affect_another_account_on_the_same_proxy() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", LATER);
@@ -3811,7 +3804,7 @@ mod tests {
         app.save_account_proxy(Pool::Claude, &id("alice"), "http://127.0.0.1:7001")
             .await
             .unwrap();
-        app.save_account_proxy(Pool::Claude, &id("bob"), "http://127.0.0.1:7002")
+        app.save_account_proxy(Pool::Claude, &id("bob"), "http://127.0.0.1:7001")
             .await
             .unwrap();
         let (cli, code) = (USAGE_USER_AGENT, USER_AGENT);
@@ -3825,7 +3818,7 @@ mod tests {
             [
                 "http://127.0.0.1:7001",
                 "http://127.0.0.1:7001",
-                "http://127.0.0.1:7002"
+                "http://127.0.0.1:7001"
             ]
         );
         // Refused both ways: a rate limit, counted and paused once.

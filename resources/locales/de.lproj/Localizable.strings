@@ -522,6 +522,7 @@
 "accounts.card.reset_fable" = "Fable-Reset";
 "accounts.card.reset_partial" = "Teilweiser Reset";
 "accounts.card.reset_unknown" = "Umfang unbekannt";
+"accounts.card.resets_last_confirmed_format" = "Zuletzt bestätigt: %@";
 "accounts.card.expiry_unknown" = "Ablaufzeit unbekannt";
 "accounts.window.pace_spent" = "Limit erreicht";
 "accounts.window.pace_soon" = "Voraussichtlich bald aufgebraucht";
