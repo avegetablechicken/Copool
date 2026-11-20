@@ -137,58 +137,58 @@ test("A visible meter changes from red to amber without a data refresh", () => {
   assert.equal(track.title, "accounts.window.pace_spare 1");
 });
 
-test("Antigravity cards name their pools and show the windows the account reports", () => {
+test("Antigravity cards show Gemini's windows as the others, and Claude's in an inset", () => {
   const rows = (pool, usage) => {
+    const el = (tag, className, text) => ({
+      className, text, children: [],
+      append(...nodes) { this.children.push(...nodes); },
+    });
     const context = vm.createContext({
-      pool,
+      pool, el,
       tr: (key) => ({ "accounts.window.five_hour": "5h", "accounts.window.one_week": "1 week" })[key],
       usageWindow: (view, title, tone) => [title, tone, view.available],
     });
     vm.runInContext(body("usageWindows"), context);
-    // Arrays from the context's realm compare as plain values.
-    return JSON.parse(JSON.stringify(context.usageWindows(P.card({ usage }, false, "used", String))));
+    // The inset as its title and its rows; arrays from the context's realm
+    // compare as plain values.
+    const plain = (node) => Array.isArray(node)
+      ? node
+      : { [node.className]: node.children.map((child) =>
+          Array.isArray(child) ? child : child.children.map((title) => title.text)[0]) };
+    return JSON.parse(JSON.stringify(
+      context.usageWindows(P.card({ usage }, false, "used", String)).map(plain),
+    ));
   };
   const window = (usedPercent, windowSeconds) => ({ usedPercent, windowSeconds, resetAt: null });
   const gemini = { fiveHour: window(20, 18000), oneWeek: window(5, 604800) };
-  assert.deepEqual(rows("codex", gemini), [
+  const own = [
     ["5h", "five-hour", true],
     ["1 week", "one-week", true],
+  ];
+  assert.deepEqual(rows("codex", gemini), own);
+  assert.deepEqual(rows("antigravity", gemini), own);
+  // Codex and Claude have no third-party pool.
+  assert.deepEqual(rows("claude", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), own);
+  assert.deepEqual(rows("antigravity", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), [
+    ...own,
+    { "account-member": ["Claude", ["5h", "five-hour", true], ["1 week", "one-week", false]] },
   ]);
-  assert.deepEqual(rows("antigravity", gemini), [
-    ["Gemini 5h", "five-hour", true],
-    ["Gemini 1 week", "one-week", true],
-  ]);
-  assert.deepEqual(
-    rows("antigravity", { ...gemini, thirdPartyFiveHour: window(50, 18000) }).map(([title]) => title),
-    ["Gemini 5h", "Gemini 1 week", "Claude 5h"],
-  );
-  // A Google AI Pro account: Gemini's five hours, and Claude's pool.
+  // A Google AI Pro account: Gemini's five hours, and the third-party pool.
   assert.deepEqual(
     rows("antigravity", {
       fiveHour: window(2, 18000),
       thirdPartyFiveHour: window(0, 18000),
       thirdPartyOneWeek: window(0, 604800),
-    }).map(([title]) => title),
-    ["Gemini 5h", "Claude 5h", "Claude 1 week"],
-  );
-  // Gemini's five hours stay, without data, until a refresh reports them.
-  assert.deepEqual(
-    rows("antigravity", {
-      thirdPartyFiveHour: window(0, 18000),
-      thirdPartyOneWeek: window(0, 604800),
     }),
     [
-      ["Gemini 5h", "five-hour", false],
-      ["Claude 5h", "five-hour", true],
-      ["Claude 1 week", "one-week", true],
+      ["5h", "five-hour", true],
+      ["1 week", "one-week", false],
+      { "account-member": ["Claude", ["5h", "five-hour", true], ["1 week", "one-week", true]] },
     ],
   );
-  assert.deepEqual(rows("antigravity", { fiveHour: window(2, 18000) }), [
-    ["Gemini 5h", "five-hour", true],
-  ]);
-  // A card without usage keeps both Gemini rows, without data.
+  // A card without usage keeps both rows, without data, and no inset.
   assert.deepEqual(rows("antigravity", null), [
-    ["Gemini 5h", "five-hour", false],
-    ["Gemini 1 week", "one-week", false],
+    ["5h", "five-hour", false],
+    ["1 week", "one-week", false],
   ]);
 });

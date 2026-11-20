@@ -1067,24 +1067,27 @@ function accountCard(account, grouped = false) {
   );
   return card;
 }
-/// A card's usage rows. Antigravity's name their pool and show the windows
-/// the account reports (a Google AI Pro account's Gemini models have no
-/// weekly one), always with Gemini's five hours, without data until
-/// reported; before any usage, both Gemini ones without data.
+/// A card's usage rows: five hours and the week. An Antigravity card's are
+/// Gemini's; its third-party (Claude) pool, once reported, follows
+/// in an inset of its own, as a Sub2api provider's accounts.
 function usageWindows(view) {
   const five = tr("accounts.window.five_hour"), week = tr("accounts.window.one_week");
-  if (pool !== "antigravity")
-    return [usageWindow(view.fiveHour, five, "five-hour"), usageWindow(view.oneWeek, week, "one-week")];
-  const rows = [
-    [view.fiveHour, `Gemini ${five}`, "five-hour"],
-    [view.oneWeek, `Gemini ${week}`, "one-week"],
-    [view.thirdPartyFiveHour, `Claude ${five}`, "five-hour"],
-    [view.thirdPartyOneWeek, `Claude ${week}`, "one-week"],
+  const rows = (fiveHour, oneWeek) => [
+    usageWindow(fiveHour, five, "five-hour"),
+    usageWindow(oneWeek, week, "one-week"),
   ];
-  const shown = rows.some(([window]) => window.available)
-    ? rows.filter(([window], index) => index === 0 || window.available)
-    : rows.slice(0, 2);
-  return shown.map((row) => usageWindow(...row));
+  const shown = rows(view.fiveHour, view.oneWeek);
+  if (
+    pool === "antigravity" &&
+    (view.thirdPartyFiveHour.available || view.thirdPartyOneWeek.available)
+  ) {
+    const inset = el("div", "account-member");
+    const name = el("div", "account-name");
+    name.append(el("span", "block-title", "Claude"));
+    inset.append(name, ...rows(view.thirdPartyFiveHour, view.thirdPartyOneWeek));
+    shown.push(inset);
+  }
+  return shown;
 }
 /// A Sub2api provider's cards close together in one card, which shows once
 /// whether the provider is in use, with its controls where a single
