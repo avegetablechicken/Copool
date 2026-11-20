@@ -27,7 +27,7 @@ function poolController(target, onMutation) {
 }
 /// A pool's changed accounts go to its remote servers.
 const poolControllers = Object.fromEntries(
-  POOLS.map((target) => [
+  ACCOUNT_POOLS.map((target) => [
     target,
     poolController(target, () =>
       invoke("sync_remote_accounts", { pool: target }).catch((error) =>
@@ -181,6 +181,7 @@ function renderProviders(target = null) {
 /// The import menu's Sub2api choices: the pool's saved providers.
 function providerSyncChoices(target) {
   const providers = providerControllers[target];
+  if (!providers) return [];
   return providers.persisted.map((provider) => ({
     label: providers.name(provider),
     run: () => syncProvider(target, providers.key(provider)),

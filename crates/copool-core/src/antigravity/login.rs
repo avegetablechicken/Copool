@@ -1,0 +1,302 @@
+//! The login Antigravity uses: one item of the system's credential store,
+//! service `gemini` and account `antigravity`, as `agy` keeps it through
+//! go-keyring. It holds an OAuth token as JSON (`{"token": {"access_token",
+//! "refresh_token", "expiry", …}}`), on macOS wrapped as
+//! `go-keyring-base64:`. A switch writes another account's document there,
+//! in the same form, and nothing else.
+use crate::vault::KeychainAccess;
+use base64::{engine::general_purpose::STANDARD, Engine};
+use serde_json::{Map, Value};
+
+type Result<T> = std::result::Result<T, String>;
+
+pub(crate) const SERVICE: &str = "gemini";
+pub(crate) const ACCOUNT: &str = "antigravity";
+const WRAPPED: &str = "go-keyring-base64:";
+/// The item, as errors name it.
+const ITEM: &str = "the Antigravity login (Keychain item gemini/antigravity)";
+
+/// A login document and whether its item wraps it as go-keyring does.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Document {
+    pub(crate) value: Value,
+    pub(crate) wrapped: bool,
+}
+
+/// The document an item holds; none when it is no login with a refresh
+/// token, which alone keeps an account usable.
+pub(crate) fn decode(bytes: &[u8]) -> Option<Document> {
+    let text = std::str::from_utf8(bytes)
+        .ok()?
+        .trim()
+        .trim_start_matches('\u{feff}')
+        .trim();
+    let (text, wrapped) = match text.strip_prefix(WRAPPED) {
+        Some(encoded) => (
+            String::from_utf8(STANDARD.decode(encoded.trim()).ok()?).ok()?,
+            true,
+        ),
+        None => (text.to_owned(), false),
+    };
+    let value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    refresh_token(&value)?;
+    Some(Document { value, wrapped })
+}
+/// The bytes an item holds for a document.
+pub(crate) fn encode(document: &Document) -> Vec<u8> {
+    let json = document.value.to_string();
+    if document.wrapped {
+        format!("{WRAPPED}{}", STANDARD.encode(json)).into_bytes()
+    } else {
+        json.into_bytes()
+    }
+}
+
+const ACCESS_KEYS: [&str; 2] = ["access_token", "accessToken"];
+const REFRESH_KEYS: [&str; 2] = ["refresh_token", "refreshToken"];
+const EXPIRY_KEYS: [&str; 3] = ["expiry", "expires_at", "expiresAt"];
+
+/// Where a document keeps its tokens: its `token` object, else itself.
+fn token(document: &Value) -> Option<&Map<String, Value>> {
+    let object = document.as_object()?;
+    Some(
+        object
+            .get("token")
+            .and_then(Value::as_object)
+            .unwrap_or(object),
+    )
+}
+fn token_mut(document: &mut Value) -> Option<&mut Map<String, Value>> {
+    let nested = document.get("token").is_some_and(Value::is_object);
+    let object = document.as_object_mut()?;
+    if nested {
+        object.get_mut("token").and_then(Value::as_object_mut)
+    } else {
+        Some(object)
+    }
+}
+fn first(document: &Value, keys: &[&str]) -> Option<String> {
+    let token = token(document)?;
+    keys.iter()
+        .find_map(|key| token.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+pub(crate) fn access_token(document: &Value) -> Option<String> {
+    first(document, &ACCESS_KEYS)
+}
+pub(crate) fn refresh_token(document: &Value) -> Option<String> {
+    first(document, &REFRESH_KEYS)
+}
+/// When the access token expires (Unix seconds): RFC 3339, as Go writes it,
+/// or a number of seconds or milliseconds.
+pub(crate) fn expiry(document: &Value) -> Option<i64> {
+    let token = token(document)?;
+    EXPIRY_KEYS.iter().find_map(|key| {
+        let value = token.get(*key)?;
+        if let Some(text) = value.as_str() {
+            return chrono::DateTime::parse_from_rfc3339(text.trim())
+                .ok()
+                .map(|date| date.timestamp());
+        }
+        let number = value.as_i64()?;
+        Some(if number > 100_000_000_000 {
+            number / 1000
+        } else {
+            number
+        })
+    })
+}
+/// The email a document names, if any.
+pub(crate) fn email(document: &Value) -> Option<String> {
+    ["/email", "/account/email", "/user/email", "/token/email"]
+        .iter()
+        .find_map(|path| document.pointer(path).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|email| email.contains('@'))
+        .map(str::to_owned)
+}
+/// Whether two documents are the same login: the same refresh token.
+pub(crate) fn same_login(a: &Value, b: &Value) -> bool {
+    refresh_token(a).is_some() && refresh_token(a) == refresh_token(b)
+}
+/// Puts a renewal's tokens in the document, under the keys it uses.
+pub(crate) fn apply_renewal(
+    document: &mut Value,
+    access_token: &str,
+    expires_at: i64,
+    refresh_token: Option<&str>,
+) {
+    let Some(token) = token_mut(document) else {
+        return;
+    };
+    let key = |keys: [&'static str; 2], token: &Map<String, Value>| {
+        keys.into_iter()
+            .find(|key| token.contains_key(*key))
+            .unwrap_or(keys[0])
+    };
+    let access = key(ACCESS_KEYS, token);
+    token.insert(access.into(), access_token.into());
+    if let Some(refresh) = refresh_token.filter(|r| !r.trim().is_empty()) {
+        let key = key(REFRESH_KEYS, token);
+        token.insert(key.into(), refresh.into());
+    }
+    let expiry_key = EXPIRY_KEYS
+        .into_iter()
+        .find(|key| token.contains_key(*key))
+        .unwrap_or("expiry");
+    // A number stays a number of the same unit; otherwise RFC 3339 in UTC.
+    let value = match token.get(expiry_key) {
+        Some(Value::Number(n)) if n.as_i64().is_some_and(|n| n > 100_000_000_000) => {
+            Value::from(expires_at * 1000)
+        }
+        Some(Value::Number(_)) => Value::from(expires_at),
+        _ => chrono::DateTime::from_timestamp(expires_at, 0)
+            .map(|date| {
+                date.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                    .into()
+            })
+            .unwrap_or(Value::Null),
+    };
+    token.insert(expiry_key.into(), value);
+}
+
+/// Where Antigravity's login item is kept; tests use memory.
+pub(crate) trait LiveStore: Send + Sync {
+    fn read(&self, access: KeychainAccess)
+        -> crate::account_network::Response<'_, Option<Vec<u8>>>;
+    fn write(
+        &self,
+        bytes: Vec<u8>,
+        access: KeychainAccess,
+    ) -> crate::account_network::Response<'_, ()>;
+}
+
+/// The item in the system's credential store.
+pub(crate) struct SystemStore;
+#[cfg(target_os = "macos")]
+impl LiveStore for SystemStore {
+    fn read(
+        &self,
+        access: KeychainAccess,
+    ) -> crate::account_network::Response<'_, Option<Vec<u8>>> {
+        Box::pin(crate::claude::keychain::read_shared(
+            SERVICE, ACCOUNT, access, ITEM,
+        ))
+    }
+    fn write(
+        &self,
+        bytes: Vec<u8>,
+        access: KeychainAccess,
+    ) -> crate::account_network::Response<'_, ()> {
+        Box::pin(crate::claude::keychain::write_shared(
+            SERVICE, ACCOUNT, bytes, access, ITEM,
+        ))
+    }
+}
+/// go-keyring's entry: on Windows the credential `gemini:antigravity`, on
+/// Linux the Secret Service item of that service and user name.
+#[cfg(not(target_os = "macos"))]
+fn with_entry<T: Send + 'static>(
+    call: impl FnOnce(keyring::Entry) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let entry = || {
+        #[cfg(target_os = "windows")]
+        let entry =
+            keyring::Entry::new_with_target(&format!("{SERVICE}:{ACCOUNT}"), SERVICE, ACCOUNT);
+        #[cfg(not(target_os = "windows"))]
+        let entry = keyring::Entry::new(SERVICE, ACCOUNT);
+        entry.map_err(|e| e.to_string())
+    };
+    // keyring's Linux backend must not run on a Tokio thread (see
+    // `crate::credentials`).
+    std::thread::spawn(move || call(entry()?))
+        .join()
+        .map_err(|_| "The system keyring failed".to_string())?
+}
+#[cfg(not(target_os = "macos"))]
+impl LiveStore for SystemStore {
+    fn read(&self, _: KeychainAccess) -> crate::account_network::Response<'_, Option<Vec<u8>>> {
+        Box::pin(async {
+            tokio::task::spawn_blocking(|| {
+                with_entry(|entry| match entry.get_secret() {
+                    Ok(bytes) => Ok(Some(bytes)),
+                    Err(keyring::Error::NoEntry) => Ok(None),
+                    Err(e) => Err(format!("{ITEM} access failed: {e}")),
+                })
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        })
+    }
+    fn write(&self, bytes: Vec<u8>, _: KeychainAccess) -> crate::account_network::Response<'_, ()> {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                with_entry(move |entry| {
+                    entry
+                        .set_secret(&bytes)
+                        .map_err(|e| format!("Could not write {ITEM}: {e}"))
+                })
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn documents_keep_their_form_through_a_round_trip() {
+        let value = json!({"token": {"access_token": "a", "refresh_token": "r", "expiry": "2026-07-12T10:00:00Z"}});
+        let wrapped = format!("go-keyring-base64:{}", STANDARD.encode(value.to_string()));
+        let document = decode(wrapped.as_bytes()).unwrap();
+        assert!(document.wrapped);
+        assert_eq!(document.value, value);
+        assert_eq!(encode(&document), wrapped.into_bytes());
+        let plain = decode(value.to_string().as_bytes()).unwrap();
+        assert!(!plain.wrapped);
+        assert_eq!(encode(&plain), value.to_string().into_bytes());
+        assert_eq!(access_token(&value).as_deref(), Some("a"));
+        assert_eq!(refresh_token(&value).as_deref(), Some("r"));
+        assert_eq!(expiry(&value), Some(1_783_850_400));
+    }
+
+    #[test]
+    fn only_logins_with_a_refresh_token_are_documents() {
+        for bytes in [
+            b"raw-access-token".as_slice(),
+            br#"{"token": {"access_token": "a"}}"#,
+            br#"[]"#,
+            b"go-keyring-base64:not-base64!",
+        ] {
+            assert!(decode(bytes).is_none());
+        }
+        let flat =
+            decode(br#"{"accessToken": "a", "refreshToken": "r", "expiresAt": 1783850400000}"#)
+                .unwrap();
+        assert_eq!(refresh_token(&flat.value).as_deref(), Some("r"));
+        assert_eq!(expiry(&flat.value), Some(1_783_850_400));
+    }
+
+    #[test]
+    fn a_renewal_writes_the_keys_and_forms_the_document_uses() {
+        let mut nested = json!({"token": {"access_token": "a", "refresh_token": "r", "expiry": "2026-01-01T00:00:00.5+08:00", "token_type": "Bearer"}, "other": 1});
+        apply_renewal(&mut nested, "b", 1_783_850_400, None);
+        assert_eq!(
+            nested,
+            json!({"token": {"access_token": "b", "refresh_token": "r", "expiry": "2026-07-12T10:00:00Z", "token_type": "Bearer"}, "other": 1})
+        );
+        let mut flat =
+            json!({"accessToken": "a", "refreshToken": "r", "expiresAt": 1_000_000_000_000_i64});
+        apply_renewal(&mut flat, "b", 1_783_850_400, Some("s"));
+        assert_eq!(
+            flat,
+            json!({"accessToken": "b", "refreshToken": "s", "expiresAt": 1_783_850_400_000_i64})
+        );
+    }
+}

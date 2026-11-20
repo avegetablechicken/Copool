@@ -18,8 +18,15 @@ let locale = "en";
 let noticeTimer;
 let nativeIcons = {};
 let iconFrame = 0;
-// The account pool on the accounts page: Codex or Claude Code.
-let pool = localStorage.getItem("copool.pool") === "claude" ? "claude" : "codex";
+// The account pools, left to right as their buttons, for ⌘1–⌘3 and the way
+// the cards slide.
+const ACCOUNT_POOLS = ["codex", "claude", "antigravity"];
+// The pools with an API proxy, their Sub2api providers and remote servers.
+const POOLS = ["codex", "claude"];
+// The account pool on the accounts page: Codex, Claude Code or Antigravity.
+let pool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.pool"))
+  ? localStorage.getItem("copool.pool")
+  : "codex";
 // The pool whose API proxy the proxy page shows; each has its own.
 let proxyPool =
   localStorage.getItem("copool.proxyPool") === "claude" ? "claude" : "codex";
@@ -34,13 +41,13 @@ let resetDisplay =
   localStorage.getItem("copool.resetDisplay") === "countdown"
     ? "countdown"
     : "exact";
-/// The commands of one pool: every one names the pool it acts on. Claude
-/// has no workspaces or remote servers.
+/// The commands of one pool: every one names the pool it acts on. Only
+/// Codex has workspaces.
 function poolInvoke(target) {
   return (command, args = {}) => {
-    if (target === "claude" && command === "workspace_directory")
+    if (target !== "codex" && command === "workspace_directory")
       return Promise.resolve([]);
-    if (target === "claude" && command === "cancel_workspace_refresh")
+    if (target !== "codex" && command === "cancel_workspace_refresh")
       return Promise.resolve(null);
     return invoke(command, { ...args, pool: target });
   };
@@ -199,7 +206,7 @@ function translate() {
   document.querySelectorAll("#pool-switch .pool-btn").forEach((button) => {
     button.title = withShortcut(
       tr(`pool.${button.dataset.pool}`),
-      button.dataset.pool === "codex" ? "1" : "2",
+      String(ACCOUNT_POOLS.indexOf(button.dataset.pool) + 1),
     );
     button.setAttribute("aria-label", tr(`pool.${button.dataset.pool}`));
   });
@@ -251,7 +258,8 @@ function renderToolbar() {
   );
   $("add-account").title = withShortcut(tr(addAccount.title), "n");
   $("add-account").setAttribute("aria-label", tr(addAccount.title));
-  $("add-account").disabled = !addAccount.enabled;
+  // Antigravity's logins are imported, not signed in here.
+  $("add-account").disabled = !addAccount.enabled || pool === "antigravity";
   $("smart-switch").title = $("smart-switch").textContent;
   $("smart-switch").disabled = !smartSwitch.enabled || !accountsCache.length;
   label($("refresh-all"), "common.refresh_usage");
@@ -479,11 +487,11 @@ function providerKey(account) {
 /// The saved Sub2api provider a card belongs to, if any.
 function accountProvider(account) {
   const key = providerKey(account);
-  return key === null ? null : providerControllers[pool].find(key);
+  return key === null ? null : (providerControllers[pool]?.find(key) ?? null);
 }
 function providerTitle(account) {
   return (
-    providerControllers[pool].name(accountProvider(account)) ||
+    providerControllers[pool]?.name(accountProvider(account)) ||
     providerKey(account) ||
     "Sub2api"
   );
@@ -679,6 +687,7 @@ function canSayHi(account) {
 }
 function supportsSayHi(account) {
   if (pool === "claude") return true;
+  if (pool === "antigravity") return false;
   const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
   return account.sourceTag !== "SUB2API" && plan === "plus";
 }
@@ -832,7 +841,7 @@ async function showSayHiMenu(trigger, account) {
 /// until its plan is known.
 function planTag(account, view) {
   const known = P.clean(account.usage?.planType) || P.clean(account.planType);
-  return pool === "claude" && !known ? "" : el("span", "tag plan", view.plan);
+  return pool !== "codex" && !known ? "" : el("span", "tag plan", view.plan);
 }
 function accountTags(account, view, grouped = false) {
   const tags = el("span", "account-tags");
@@ -1038,25 +1047,38 @@ function accountCard(account, grouped = false) {
     view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
   const inventory = P.resetInventory(account.usage);
   const footer = el("div", "account-footer");
-  const footerText = accountBalanceText(account.usage, credits, inventory);
+  // Antigravity reports no credits or resets.
+  const footerText = pool === "antigravity"
+    ? el("span", "account-footer-text")
+    : accountBalanceText(account.usage, credits, inventory);
   footer.append(footerText, accountControls(account, full, view, grouped));
   card.append(
     // A provider's account without a plan tag has no tag row to show.
     ...(grouped && !tags.childElementCount ? [] : [head]),
     name,
-    usageWindow(
-      view.fiveHour,
-      tr("accounts.window.five_hour"),
-      "five-hour",
-    ),
-    usageWindow(
-      view.oneWeek,
-      tr("accounts.window.one_week"),
-      "one-week",
-    ),
+    ...usageWindows(view),
     footer,
   );
   return card;
+}
+/// A card's usage rows. Antigravity's name their pool and show the windows
+/// the account reports (a Google AI Pro account's Gemini models have no
+/// weekly one), always with Gemini's five hours, without data until
+/// reported; before any usage, both Gemini ones without data.
+function usageWindows(view) {
+  const five = tr("accounts.window.five_hour"), week = tr("accounts.window.one_week");
+  if (pool !== "antigravity")
+    return [usageWindow(view.fiveHour, five, "five-hour"), usageWindow(view.oneWeek, week, "one-week")];
+  const rows = [
+    [view.fiveHour, `Gemini ${five}`, "five-hour"],
+    [view.oneWeek, `Gemini ${week}`, "one-week"],
+    [view.thirdPartyFiveHour, `Claude ${five}`, "five-hour"],
+    [view.thirdPartyOneWeek, `Claude ${week}`, "one-week"],
+  ];
+  const shown = rows.some(([window]) => window.available)
+    ? rows.filter(([window], index) => index === 0 || window.available)
+    : rows.slice(0, 2);
+  return shown.map((row) => usageWindow(...row));
 }
 /// A Sub2api provider's cards close together in one card, which shows once
 /// whether the provider is in use, with its controls where a single
@@ -1131,7 +1153,9 @@ function renderAccounts(accounts) {
     resetDisplay === "countdown" &&
       accounts.map((account) => {
         const view = P.card(account, false, "used", String);
-        return [view.fiveHour, view.oneWeek].map((w) =>
+        return [
+          view.fiveHour, view.oneWeek, view.thirdPartyFiveHour, view.thirdPartyOneWeek,
+        ].map((w) =>
           resetLabel(w, "countdown"),
         );
       }),
@@ -1172,9 +1196,10 @@ function renderAccounts(accounts) {
         "span",
         "setting-description",
         tr(
-          pool === "claude"
-            ? "accounts.empty.message.no_claude_accounts"
-            : "accounts.empty.message.no_accounts",
+          {
+            claude: "accounts.empty.message.no_claude_accounts",
+            antigravity: "accounts.empty.message.no_antigravity_accounts",
+          }[pool] || "accounts.empty.message.no_accounts",
         ),
       ),
     );
@@ -1693,9 +1718,7 @@ document.querySelectorAll(".disclosure").forEach((button) =>
     setDisclosure(button, button.getAttribute("aria-expanded") !== "true"),
   ),
 );
-/// Shows the Codex or the Claude pool; each keeps its own controller state.
-// The pool buttons' order, left to right, for the way the cards slide.
-const POOLS = ["codex", "claude"];
+/// Shows an account pool; each keeps its own controller state.
 let poolExit = null;
 /// The pool's cards: the pending workspaces and the account list.
 const poolBlocks = () => [$("pending-workspaces"), $("accounts")];
@@ -1742,7 +1765,7 @@ function slidePoolIn(direction) {
   }
 }
 function showPool(next) {
-  if (next !== "codex" && next !== "claude") return;
+  if (!ACCOUNT_POOLS.includes(next)) return;
   document
     .querySelectorAll("#pool-switch .pool-btn")
     .forEach((button) =>
@@ -1750,7 +1773,7 @@ function showPool(next) {
     );
   if (next === pool) return;
   // To the pool on the right, the cards leave to the left; and back.
-  const direction = POOLS.indexOf(next) > POOLS.indexOf(pool) ? -1 : 1;
+  const direction = ACCOUNT_POOLS.indexOf(next) > ACCOUNT_POOLS.indexOf(pool) ? -1 : 1;
   slidePoolOut(direction);
   pool = next;
   fullRefreshAt = null;
@@ -1770,6 +1793,8 @@ document
 /// The proxy page's pool switch: the header's pool icons, each copy with
 /// its own gradient, as `brandIcon` copies them.
 for (const original of document.querySelectorAll("#pool-switch .pool-btn")) {
+  // Antigravity has no API proxy.
+  if (!POOLS.includes(original.dataset.pool)) continue;
   const copy = original.cloneNode(true);
   const target = copy.dataset.pool;
   delete copy.dataset.pool;
@@ -2315,11 +2340,12 @@ document.addEventListener("keydown", (event) => {
   } else if (mod && event.key === "q") {
     event.preventDefault();
     settingsController.quit().catch((error) => notice(error, true));
-  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2"].includes(event.key)) {
+  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3"].includes(event.key)) {
     event.preventDefault();
-    const target = event.key === "1" ? "codex" : "claude";
-    // The proxy page switches its own pool; elsewhere, the accounts page's.
-    if (selectedPage === "proxy") showProxyPool(target);
+    const target = ACCOUNT_POOLS[Number(event.key) - 1];
+    // The proxy page switches its own pool; elsewhere, and for a pool
+    // without a proxy, the accounts page's.
+    if (selectedPage === "proxy" && POOLS.includes(target)) showProxyPool(target);
     else {
       if (selectedPage !== "accounts") showPage("accounts");
       showPool(target);
@@ -2423,9 +2449,10 @@ function switchNotice(execution) {
           execution.provider,
         )
       : tr(
-          pool === "claude"
-            ? "accounts.notice.claude_switch_done"
-            : "accounts.notice.switch_done",
+          {
+            claude: "accounts.notice.claude_switch_done",
+            antigravity: "accounts.notice.antigravity_switch_done",
+          }[pool] || "accounts.notice.switch_done",
         ),
   ];
   // settings.json keys that keep Claude Code off the account login.

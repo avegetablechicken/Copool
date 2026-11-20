@@ -380,6 +380,9 @@ impl Application {
                                 remote_accounts.as_ref(),
                             )?,
                             Pool::Claude => self.claude_remote_payload()?,
+                            Pool::Antigravity => {
+                                return Err("This account pool has no API proxy".into())
+                            }
                         };
                         ssh(
                             &server,

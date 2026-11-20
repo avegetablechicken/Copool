@@ -377,6 +377,10 @@ pub(crate) async fn start_api_proxy_with_runtime(
     preferred_port: Option<u16>,
     bind_host: &str,
 ) -> Result<ApiProxyStatus, String> {
+    // The pools without a proxy reach the arms they share with Codex never.
+    if !storage.pool.proxied() {
+        return Err("This account pool has no API proxy".into());
+    }
     let existing_handle = {
         let mut guard = runtime_slot.lock().await;
         if let Some(existing) = guard.as_ref() {
@@ -432,7 +436,7 @@ pub(crate) async fn start_api_proxy_with_runtime(
         api_key: shared_api_key.clone(),
         upstream_base_url: storage.upstream_base_url.clone().unwrap_or_else(|| {
             match storage.pool {
-                Pool::Codex => resolve_codex_upstream_base_url(),
+                Pool::Codex | Pool::Antigravity => resolve_codex_upstream_base_url(),
                 Pool::Claude => crate::claude_api::API_ROOT.into(),
             }
         }),
@@ -445,7 +449,7 @@ pub(crate) async fn start_api_proxy_with_runtime(
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let router = Router::new().route("/health", get(health_handler));
     let router = match storage.pool {
-        Pool::Codex => router
+        Pool::Codex | Pool::Antigravity => router
             .route("/v1/models", get(models_handler))
             .route("/v1/chat/completions", post(chat_completions_handler))
             .route("/v1/responses", post(responses_handler)),
@@ -940,7 +944,9 @@ async fn unsupported_proxy_handler(
     }
 
     let supported = match context.storage.pool {
-        Pool::Codex => "GET /v1/models, POST /v1/chat/completions and POST /v1/responses",
+        Pool::Codex | Pool::Antigravity => {
+            "GET /v1/models, POST /v1/chat/completions and POST /v1/responses"
+        }
         Pool::Claude => "POST /anthropic/v1/messages and POST /anthropic/v1/messages/count_tokens",
     };
     json_error_response(
@@ -2398,12 +2404,12 @@ fn account_to_proxy_candidate(pool: Pool, account: StoredAccount) -> Option<Prox
         return None;
     }
     let extracted = match (pool, account.auth_json.get("copoolProvider")) {
-        (Pool::Codex, Some(provider)) => {
+        (Pool::Codex | Pool::Antigravity, Some(provider)) => {
             let mut auth = extract_auth(&account.auth_json).ok()?;
             auth.access_token = provider["apiKey"].as_str()?.into();
             auth
         }
-        (Pool::Codex, None) => extract_auth(&account.auth_json).ok()?,
+        (Pool::Codex | Pool::Antigravity, None) => extract_auth(&account.auth_json).ok()?,
         // A Claude login, or a Claude provider's key; the account is the
         // stored one's.
         (Pool::Claude, provider) => crate::models::ExtractedAuth {
@@ -2549,7 +2555,7 @@ fn compare_runtime_proxy_candidates(
 
 async fn sleep_usage_refresh_interval(pool: Pool) {
     tokio::time::sleep(std::time::Duration::from_secs(match pool {
-        Pool::Codex => ACTIVE_USAGE_REFRESH_INTERVAL_SECONDS,
+        Pool::Codex | Pool::Antigravity => ACTIVE_USAGE_REFRESH_INTERVAL_SECONDS,
         Pool::Claude => CLAUDE_USAGE_REFRESH_INTERVAL_SECONDS,
     }))
     .await;
@@ -2596,7 +2602,7 @@ async fn refresh_proxy_account_usage_for_tick(context: &ProxyContext, tick: u64)
     };
     // Each Claude round asks for every account.
     let refresh_candidates = match context.storage.pool {
-        Pool::Codex => {
+        Pool::Codex | Pool::Antigravity => {
             usage_refresh_candidates_for_tick(tick, active_account_id.as_deref(), candidates)
         }
         Pool::Claude => candidates,
@@ -2629,7 +2635,7 @@ async fn refresh_proxy_candidate_usage(
 ) {
     // The upstream the proxy forwards to is also where usage is read.
     let origin = match storage.pool {
-        Pool::Codex => storage
+        Pool::Codex | Pool::Antigravity => storage
             .upstream_base_url
             .as_deref()
             .map(|configured| chatgpt_base_origin(Some(configured)))
@@ -2646,7 +2652,7 @@ async fn refresh_proxy_candidate_usage(
         .filter(|c| c.auth_json.get("copoolProvider").is_none())
     {
         let result = match storage.pool {
-            Pool::Codex => {
+            Pool::Codex | Pool::Antigravity => {
                 fetch_usage_snapshot_from(
                     &origin,
                     &candidate.access_token,
@@ -2772,7 +2778,7 @@ async fn refresh_proxy_candidate_auth(
         Some(renew) => renew(candidate.id.clone()).await?,
         None => {
             let refreshed = match storage.pool {
-                Pool::Codex => {
+                Pool::Codex | Pool::Antigravity => {
                     refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?
                 }
                 Pool::Claude => {
@@ -2794,7 +2800,7 @@ async fn refresh_proxy_candidate_auth(
     };
 
     let extracted = match storage.pool {
-        Pool::Codex => extract_auth(&refreshed_auth_json).map_err(|error| {
+        Pool::Codex | Pool::Antigravity => extract_auth(&refreshed_auth_json).map_err(|error| {
             format!(
                 "Failed to parse the account login after refresh: {}",
                 unlocalized(&error)
@@ -2843,7 +2849,7 @@ async fn persist_refreshed_candidate_auth(
         .find(|account| account.id == account_id)
     {
         let replaces = match storage.pool {
-            Pool::Codex => {
+            Pool::Codex | Pool::Antigravity => {
                 crate::auth::renewal_replaces(refreshed_auth_json, from, &account.auth_json)
             }
             Pool::Claude => {
@@ -5339,6 +5345,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
                     reset_at: None,
                 }),
                 credits: None,
+                third_party_five_hour: None,
+                third_party_one_week: None,
             }),
         }
     }

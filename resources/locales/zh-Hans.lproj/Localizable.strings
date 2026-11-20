@@ -558,3 +558,11 @@
 "accounts.window.pace_soon" = "预计即将用完";
 "accounts.window.pace_in" = "预计 %@ 后用完";
 "accounts.window.pace_spare" = "约 %@%% 余量";
+
+/* Antigravity pool */
+"pool.antigravity" = "Antigravity";
+"accounts.empty.message.no_antigravity_accounts" = "暂无 Antigravity 账号，请导入 Antigravity 登录或 JSON 文件";
+"accounts.notice.antigravity_switch_done" = "已切换 Antigravity 账号，重启 Antigravity 后生效";
+"error.antigravity.login_not_found" = "未找到 Antigravity 登录。请先在 Antigravity 或 agy 中登录。";
+"error.antigravity.credentials_invalid" = "无效的 Antigravity 登录 JSON：需要包含非空 refresh_token 的令牌。";
+"error.antigravity.sign_in_expired" = "Antigravity 登录已过期。请在 Antigravity 或 agy 中重新登录，然后导入该登录。";

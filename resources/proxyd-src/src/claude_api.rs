@@ -206,6 +206,8 @@ pub(crate) fn usage_snapshot(
         five_hour: window("five_hour", 5 * 60 * 60),
         one_week: window("seven_day", 7 * 24 * 60 * 60),
         credits: None,
+        third_party_five_hour: None,
+        third_party_one_week: None,
     })
 }
 

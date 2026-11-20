@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 pub(crate) const CODEX_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 pub(crate) const CLAUDE_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+pub(crate) const ANTIGRAVITY_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 pub(crate) const FAST_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const FAST_REFRESH_UNCHANGED_ROUNDS: u8 = 2;
 /// Background rounds from one that refreshes the whole pool to the next.

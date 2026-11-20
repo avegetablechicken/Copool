@@ -78,5 +78,7 @@ mod import_login;
 
 pub mod claude;
 
+mod antigravity;
+
 mod greetings;
 pub use greetings::GreetingSchedule;

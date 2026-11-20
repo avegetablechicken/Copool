@@ -50,6 +50,7 @@ impl Login {
         match pool {
             Pool::Codex => Self::begin_codex(workspace).await,
             Pool::Claude => Self::begin_claude().await,
+            Pool::Antigravity => Err("Browser sign-in is not available for Antigravity".into()),
         }
     }
     /// A Claude Code sign-in on claude.ai; Claude accepts any loopback port.

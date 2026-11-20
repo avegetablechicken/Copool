@@ -78,11 +78,11 @@ test("Refreshing a provider's only account refreshes the entire provider", () =>
   ]);
 });
 
-test("Cmd+1 and Cmd+2 switch the proxy page's pool there, and the accounts page's elsewhere", () => {
+test("Cmd+1 to Cmd+3 switch the proxy page's pool there, and the accounts page's elsewhere", () => {
   const app = fs
     .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
     .replace(/\r\n/g, "\n");
-  const start = app.indexOf('  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2"]');
+  const start = app.indexOf('  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3"]');
   const end = app.indexOf('  } else if (mod && event.key === ",") {', start);
   assert(start >= 0 && end > start, "pool shortcut branch found");
   for (const [page, key, expected] of [
@@ -90,9 +90,14 @@ test("Cmd+1 and Cmd+2 switch the proxy page's pool there, and the accounts page'
     ["proxy", "1", [["proxy", "codex"]]],
     ["accounts", "2", [["accounts", "claude"]]],
     ["settings", "1", [["page", "accounts"], ["accounts", "codex"]]],
+    // Antigravity has no proxy: its shortcut shows its accounts.
+    ["proxy", "3", [["page", "accounts"], ["accounts", "antigravity"]]],
+    ["accounts", "3", [["accounts", "antigravity"]]],
   ]) {
     const calls = [];
     const scope = {
+      ACCOUNT_POOLS: ["codex", "claude", "antigravity"],
+      POOLS: ["codex", "claude"],
       selectedPage: page,
       showProxyPool: (target) => calls.push(["proxy", target]),
       showPool: (target) => calls.push(["accounts", target]),
@@ -130,4 +135,60 @@ test("A visible meter changes from red to amber without a data refresh", () => {
   context.refreshVisibleMeterPace();
   assert.deepEqual([...classes], ["high"]);
   assert.equal(track.title, "accounts.window.pace_spare 1");
+});
+
+test("Antigravity cards name their pools and show the windows the account reports", () => {
+  const rows = (pool, usage) => {
+    const context = vm.createContext({
+      pool,
+      tr: (key) => ({ "accounts.window.five_hour": "5h", "accounts.window.one_week": "1 week" })[key],
+      usageWindow: (view, title, tone) => [title, tone, view.available],
+    });
+    vm.runInContext(body("usageWindows"), context);
+    // Arrays from the context's realm compare as plain values.
+    return JSON.parse(JSON.stringify(context.usageWindows(P.card({ usage }, false, "used", String))));
+  };
+  const window = (usedPercent, windowSeconds) => ({ usedPercent, windowSeconds, resetAt: null });
+  const gemini = { fiveHour: window(20, 18000), oneWeek: window(5, 604800) };
+  assert.deepEqual(rows("codex", gemini), [
+    ["5h", "five-hour", true],
+    ["1 week", "one-week", true],
+  ]);
+  assert.deepEqual(rows("antigravity", gemini), [
+    ["Gemini 5h", "five-hour", true],
+    ["Gemini 1 week", "one-week", true],
+  ]);
+  assert.deepEqual(
+    rows("antigravity", { ...gemini, thirdPartyFiveHour: window(50, 18000) }).map(([title]) => title),
+    ["Gemini 5h", "Gemini 1 week", "Claude 5h"],
+  );
+  // A Google AI Pro account: Gemini's five hours, and Claude's pool.
+  assert.deepEqual(
+    rows("antigravity", {
+      fiveHour: window(2, 18000),
+      thirdPartyFiveHour: window(0, 18000),
+      thirdPartyOneWeek: window(0, 604800),
+    }).map(([title]) => title),
+    ["Gemini 5h", "Claude 5h", "Claude 1 week"],
+  );
+  // Gemini's five hours stay, without data, until a refresh reports them.
+  assert.deepEqual(
+    rows("antigravity", {
+      thirdPartyFiveHour: window(0, 18000),
+      thirdPartyOneWeek: window(0, 604800),
+    }),
+    [
+      ["Gemini 5h", "five-hour", false],
+      ["Claude 5h", "five-hour", true],
+      ["Claude 1 week", "one-week", true],
+    ],
+  );
+  assert.deepEqual(rows("antigravity", { fiveHour: window(2, 18000) }), [
+    ["Gemini 5h", "five-hour", true],
+  ]);
+  // A card without usage keeps both Gemini rows, without data.
+  assert.deepEqual(rows("antigravity", null), [
+    ["Gemini 5h", "five-hour", false],
+    ["Gemini 1 week", "one-week", false],
+  ]);
 });

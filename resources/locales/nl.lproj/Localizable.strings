@@ -528,3 +528,11 @@
 "accounts.window.pace_soon" = "Naar verwachting binnenkort op";
 "accounts.window.pace_in" = "Naar verwachting op over %@";
 "accounts.window.pace_spare" = "~%@%% ruimte over";
+
+/* Antigravity pool */
+"pool.antigravity" = "Antigravity";
+"accounts.empty.message.no_antigravity_accounts" = "Nog geen Antigravity-accounts. Importeer de Antigravity-aanmelding of een JSON-bestand.";
+"accounts.notice.antigravity_switch_done" = "Antigravity-account gewisseld; start Antigravity opnieuw om het te gebruiken";
+"error.antigravity.login_not_found" = "Antigravity-aanmelding niet gevonden. Meld je eerst aan met Antigravity of agy.";
+"error.antigravity.credentials_invalid" = "Ongeldige Antigravity-aanmeldings-JSON. Verwacht wordt een token met een niet-lege refresh_token.";
+"error.antigravity.sign_in_expired" = "De Antigravity-aanmelding is verlopen. Meld je opnieuw aan met Antigravity of agy en importeer de aanmelding.";

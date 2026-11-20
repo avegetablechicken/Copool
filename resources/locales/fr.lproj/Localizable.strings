@@ -528,3 +528,11 @@
 "accounts.window.pace_soon" = "Épuisement prévu bientôt";
 "accounts.window.pace_in" = "Épuisement prévu dans %@";
 "accounts.window.pace_spare" = "~%@%% de marge";
+
+/* Antigravity pool */
+"pool.antigravity" = "Antigravity";
+"accounts.empty.message.no_antigravity_accounts" = "Aucun compte Antigravity pour l’instant. Importez la connexion Antigravity ou un fichier JSON.";
+"accounts.notice.antigravity_switch_done" = "Compte Antigravity changé ; redémarrez Antigravity pour l’utiliser";
+"error.antigravity.login_not_found" = "Connexion Antigravity introuvable. Connectez-vous d’abord avec Antigravity ou agy.";
+"error.antigravity.credentials_invalid" = "JSON de connexion Antigravity invalide. Un jeton avec un refresh_token non vide est attendu.";
+"error.antigravity.sign_in_expired" = "La connexion Antigravity a expiré. Reconnectez-vous avec Antigravity ou agy, puis importez la connexion.";

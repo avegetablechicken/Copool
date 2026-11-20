@@ -83,6 +83,7 @@ pub struct Preferences {
 pub struct AccountOrder {
     pub codex: Vec<String>,
     pub claude: Vec<String>,
+    pub antigravity: Vec<String>,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -211,8 +212,9 @@ pub struct Application {
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
     pub(crate) changes: Arc<std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
     pub(crate) claude: crate::claude::State,
+    pub(crate) antigravity: crate::antigravity::State,
     /// Each pool's background refresh rounds, by `Pool`.
-    pub(crate) rounds: [crate::pool::Rounds; 2],
+    pub(crate) rounds: [crate::pool::Rounds; 3],
     /// Itself, once shared (`into_shared`).
     this: std::sync::OnceLock<std::sync::Weak<Application>>,
 }
@@ -287,6 +289,7 @@ impl Application {
             refreshing: Default::default(),
             changes: Arc::new(std::sync::RwLock::new(None)),
             claude: Default::default(),
+            antigravity: Default::default(),
             rounds: Default::default(),
             this: Default::default(),
         };
@@ -1173,11 +1176,17 @@ impl Application {
         match pool {
             Pool::Codex => self.storage(),
             Pool::Claude => self.claude_proxy_storage(),
+            // Never run: the engine refuses a pool without a proxy.
+            Pool::Antigravity => {
+                let mut storage = self.storage();
+                storage.pool = Pool::Antigravity;
+                storage
+            }
         }
     }
     fn proxy_slot(&self, pool: Pool) -> &Mutex<Option<crate::state::ApiProxyRuntimeHandle>> {
         match pool {
-            Pool::Codex => &self.state.api_proxy,
+            Pool::Codex | Pool::Antigravity => &self.state.api_proxy,
             Pool::Claude => &self.state.claude_api_proxy,
         }
     }
@@ -1186,9 +1195,11 @@ impl Application {
         Ok(match pool {
             Pool::Codex => preferences.proxy_port,
             Pool::Claude => preferences.claude_proxy_port,
+            Pool::Antigravity => return Err(NO_PROXY.into()),
         })
     }
     pub async fn proxy_status(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        proxied(pool)?;
         proxy_service::get_api_proxy_status_with_runtime(
             &self.proxy_storage(pool),
             self.proxy_slot(pool),
@@ -1196,6 +1207,7 @@ impl Application {
         .await
     }
     pub async fn start_proxy(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        proxied(pool)?;
         let _op = self.proxy_operations.lock().await;
         proxy_service::start_api_proxy_with_runtime(
             &self.proxy_storage(pool),
@@ -1206,11 +1218,13 @@ impl Application {
         .await
     }
     pub async fn stop_proxy(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        proxied(pool)?;
         let _op = self.proxy_operations.lock().await;
         proxy_service::stop_api_proxy_with_runtime(&self.proxy_storage(pool), self.proxy_slot(pool))
             .await
     }
     pub async fn rotate_proxy_key(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        proxied(pool)?;
         let _op = self.proxy_operations.lock().await;
         proxy_service::refresh_api_proxy_key_with_runtime(
             &self.proxy_storage(pool),
@@ -1227,6 +1241,15 @@ impl Application {
     }
     pub(crate) fn shared(&self) -> Option<Arc<Self>> {
         self.this.get()?.upgrade()
+    }
+}
+const NO_PROXY: &str = "This account pool has no API proxy";
+/// Antigravity's pool has no API proxy.
+pub(crate) fn proxied(pool: Pool) -> Result<()> {
+    if pool.proxied() {
+        Ok(())
+    } else {
+        Err(NO_PROXY.into())
     }
 }
 fn validate_preferences(p: &Preferences) -> Result<()> {
@@ -1720,6 +1743,7 @@ mod tests {
         let order = AccountOrder {
             codex: vec!["sub2api:team".into(), "a".into()],
             claude: vec!["claude-1".into()],
+            antigravity: vec!["antigravity-1".into()],
         };
         app.save_preferences(Preferences {
             account_order: order.clone(),
@@ -1815,6 +1839,8 @@ mod tests {
                 reset_at: None,
             }),
             credits: None,
+            third_party_five_hour: None,
+            third_party_one_week: None,
         });
         assert!(eligible(&account.to_summary(None)));
         account

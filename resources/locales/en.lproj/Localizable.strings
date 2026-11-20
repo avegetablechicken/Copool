@@ -558,3 +558,11 @@
 "accounts.window.pace_soon" = "Limit soon";
 "accounts.window.pace_in" = "Limit in %@";
 "accounts.window.pace_spare" = "~%@%% spare";
+
+/* Antigravity pool */
+"pool.antigravity" = "Antigravity";
+"accounts.empty.message.no_antigravity_accounts" = "No Antigravity accounts yet. Import the Antigravity login or a JSON file.";
+"accounts.notice.antigravity_switch_done" = "Switched Antigravity account; restart Antigravity to use it";
+"error.antigravity.login_not_found" = "Antigravity login not found. Sign in with Antigravity or agy first.";
+"error.antigravity.credentials_invalid" = "Invalid Antigravity login JSON. Expected a token with a non-empty refresh_token.";
+"error.antigravity.sign_in_expired" = "Antigravity sign-in expired. Sign in again with Antigravity or agy, then import the login.";

@@ -121,6 +121,7 @@ impl Application {
         match pool {
             Pool::Codex => serde_json::to_value(self.configuration()?.sub2_api_provider.providers),
             Pool::Claude => serde_json::to_value(self.claude_providers()?),
+            Pool::Antigravity => Ok(Value::Array(Vec::new())),
         }
         .map_err(|e| e.to_string())
     }
@@ -136,6 +137,7 @@ impl Application {
                 self.claude_save_provider(serde_json::from_value(draft).map_err(invalid)?)
                     .await?,
             ),
+            Pool::Antigravity => return self.antigravity_unavailable(),
         }
         .map_err(invalid)
     }
@@ -143,6 +145,7 @@ impl Application {
         match pool {
             Pool::Codex => self.codex_remove_provider(id).await?,
             Pool::Claude => self.claude_remove_provider(id).await?,
+            Pool::Antigravity => return self.antigravity_unavailable(),
         }
         self.secrets.remove(&sub2api::password_secret(pool, id))
     }
@@ -170,6 +173,8 @@ impl Application {
                 .map(codex_member)
                 .collect()),
             Pool::Claude => self.claude_members(),
+            // Antigravity has no Sub2api providers.
+            Pool::Antigravity => Ok(Vec::new()),
         }
     }
     fn member(&self, pool: Pool, key: &str) -> Result<Member> {
@@ -179,7 +184,7 @@ impl Application {
             .ok_or_else(|| {
                 match pool {
                     Pool::Codex => sub2api::PROVIDER_NOT_FOUND,
-                    Pool::Claude => "Provider not found",
+                    Pool::Claude | Pool::Antigravity => "Provider not found",
                 }
                 .into()
             })
@@ -193,6 +198,7 @@ impl Application {
                 self.secrets.as_ref(),
             ),
             Pool::Claude => self.claude_member_connection(&member.key),
+            Pool::Antigravity => self.antigravity_unavailable(),
         }
     }
     /// Edits a provider's cards where its pool keeps them; none when it was
@@ -206,6 +212,7 @@ impl Application {
         match pool {
             Pool::Codex => self.codex_edit_member(key, edit).await,
             Pool::Claude => self.claude_edit_member(key, edit).await,
+            Pool::Antigravity => Ok(None),
         }
     }
     /// Every provider's cards; those of the provider the pool uses
@@ -266,6 +273,7 @@ impl Application {
         let model = match pool {
             Pool::Codex => return Err(SAY_HI_REQUIRES_PLUS.into()),
             Pool::Claude => crate::claude::HELLO_MODEL,
+            Pool::Antigravity => return self.antigravity_unavailable(),
         };
         let (member, account) = self.card(pool, id)?;
         self.member_connection(pool, &member)?
@@ -447,12 +455,14 @@ pub fn tunnel_configuration_key(pool: Pool) -> &'static str {
     match pool {
         Pool::Codex => "cloudflared",
         Pool::Claude => "claudeCloudflared",
+        Pool::Antigravity => "antigravityCloudflared",
     }
 }
 fn cloudflare_token_secret(pool: Pool) -> &'static str {
     match pool {
         Pool::Codex => "cloudflare-api-token",
         Pool::Claude => "claude-cloudflare-api-token",
+        Pool::Antigravity => "antigravity-cloudflare-api-token",
     }
 }
 /// A Codex provider's cards, named by the Codex provider it is.

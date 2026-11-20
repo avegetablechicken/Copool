@@ -170,6 +170,7 @@ async fn start_proxy(
         match pool {
             Pool::Codex => preferences.proxy_port = port,
             Pool::Claude => preferences.claude_proxy_port = port,
+            Pool::Antigravity => return Err("This account pool has no API proxy".into()),
         }
         app.save_preferences(preferences).await?;
     }
@@ -414,7 +415,7 @@ async fn remote_action(
         .await
 }
 /// Each pool's public tunnel to its proxy.
-struct TunnelState([tokio::sync::Mutex<copool_core::tunnel::Tunnel>; 2]);
+struct TunnelState([tokio::sync::Mutex<copool_core::tunnel::Tunnel>; Pool::ALL.len()]);
 impl Default for TunnelState {
     fn default() -> Self {
         Self(Pool::ALL.map(|pool| tokio::sync::Mutex::new(copool_core::tunnel::Tunnel::new(pool))))

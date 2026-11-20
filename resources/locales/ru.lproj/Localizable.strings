@@ -528,3 +528,11 @@
 "accounts.window.pace_soon" = "Предположительно скоро закончится";
 "accounts.window.pace_in" = "Предположительно закончится через %@";
 "accounts.window.pace_spare" = "~%@%% запаса";
+
+/* Antigravity pool */
+"pool.antigravity" = "Antigravity";
+"accounts.empty.message.no_antigravity_accounts" = "Аккаунтов Antigravity пока нет. Импортируйте вход Antigravity или файл JSON.";
+"accounts.notice.antigravity_switch_done" = "Аккаунт Antigravity переключён; перезапустите Antigravity, чтобы использовать его";
+"error.antigravity.login_not_found" = "Вход Antigravity не найден. Сначала войдите через Antigravity или agy.";
+"error.antigravity.credentials_invalid" = "Недопустимый JSON входа Antigravity. Ожидается токен с непустым refresh_token.";
+"error.antigravity.sign_in_expired" = "Срок входа Antigravity истёк. Войдите снова через Antigravity или agy, затем импортируйте вход.";

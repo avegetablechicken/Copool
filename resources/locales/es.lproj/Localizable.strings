@@ -528,3 +528,11 @@
 "accounts.window.pace_soon" = "Se agotará pronto";
 "accounts.window.pace_in" = "Se agotará en %@";
 "accounts.window.pace_spare" = "~%@%% de margen";
+
+/* Antigravity pool */
+"pool.antigravity" = "Antigravity";
+"accounts.empty.message.no_antigravity_accounts" = "Aún no hay cuentas de Antigravity. Importa el inicio de sesión de Antigravity o un archivo JSON.";
+"accounts.notice.antigravity_switch_done" = "Cuenta de Antigravity cambiada; reinicia Antigravity para usarla";
+"error.antigravity.login_not_found" = "No se encontró el inicio de sesión de Antigravity. Inicia sesión primero con Antigravity o agy.";
+"error.antigravity.credentials_invalid" = "JSON de inicio de sesión de Antigravity no válido. Se espera un token con un refresh_token no vacío.";
+"error.antigravity.sign_in_expired" = "El inicio de sesión de Antigravity ha caducado. Vuelve a iniciar sesión con Antigravity o agy y luego impórtalo.";

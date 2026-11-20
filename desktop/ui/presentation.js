@@ -58,7 +58,7 @@
     const p = (raw || "team").toUpperCase();
     // Claude's Max plans keep their usage multiplier ("MAX 20X").
     if (/^MAX( \d+X)?$/.test(p)) return p;
-    return ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE"].includes(p)
+    return ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE", "ULTRA"].includes(p)
       ? p
       : "TEAM";
   }
@@ -281,6 +281,9 @@
             : credits.balance,
       fiveHour: windowPresentation(account.usage?.fiveHour, mode, formatDate),
       oneWeek: windowPresentation(account.usage?.oneWeek, mode, formatDate),
+      // Antigravity's third-party (Claude) pool.
+      thirdPartyFiveHour: windowPresentation(account.usage?.thirdPartyFiveHour, mode, formatDate),
+      thirdPartyOneWeek: windowPresentation(account.usage?.thirdPartyOneWeek, mode, formatDate),
       compact: [
         displayPercent(account.usage?.fiveHour, mode),
         displayPercent(account.usage?.oneWeek, mode),

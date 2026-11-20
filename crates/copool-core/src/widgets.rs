@@ -14,6 +14,7 @@ fn pool_label(pool: Pool) -> &'static str {
     match pool {
         Pool::Codex => "CODEX",
         Pool::Claude => "CLAUDE",
+        Pool::Antigravity => "ANTIGRAVITY",
     }
 }
 /// A widget the app publishes; each has its own WidgetKit kind and snapshot.
@@ -208,6 +209,12 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
                 account.email.as_deref().unwrap_or(&account.label),
             )
         }
+        // The widgets do not show this pool.
+        Pool::Antigravity => (
+            raw.unwrap_or_default(),
+            None,
+            account.email.as_deref().unwrap_or(&account.label),
+        ),
     };
     let label = name.trim().split('@').next().unwrap_or_default().to_owned();
     CardSnapshot {

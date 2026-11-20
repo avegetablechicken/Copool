@@ -4,9 +4,9 @@
   <img src="./Copool.png" alt="Copool Icon" width="160" />
 </p>
 
-Copool is a cross-platform desktop app (macOS, Windows, Linux) that manages Codex/ChatGPT and Claude Code account pools, usage-based smart switching, and local/remote API proxy workflows. It is built with a Rust core and a Tauri 2 shell.
+Copool is a cross-platform desktop app (macOS, Windows, Linux) that manages Codex/ChatGPT, Claude Code and Antigravity (Google AI Pro) account pools, usage-based smart switching, and local/remote API proxy workflows. It is built with a Rust core and a Tauri 2 shell.
 
-Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管理 Codex/ChatGPT 与 Claude Code 账号池、按用量智能切换，以及本地/远程 API 代理工作流。采用 Rust 核心与 Tauri 2 外壳。
+Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管理 Codex/ChatGPT、Claude Code 与 Antigravity（Google AI Pro）账号池、按用量智能切换，以及本地/远程 API 代理工作流。采用 Rust 核心与 Tauri 2 外壳。
 
 <p align="center">
   <img src="./docs/demo.gif" alt="Copool main panel in light and dark mode side by side: collapsing and expanding the cards, switching between the Codex and Claude pools, dragging a card to reorder it, and activating a Sub2api provider" width="800" />
@@ -14,12 +14,14 @@ Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管�
 
 ## Features / 功能
 
-- Two account pools, Codex and Claude Code, switched by the colored icons beside the app name (⌘1 / ⌘2)
-- Codex 与 Claude Code 两个账号池，由应用名旁的有色图标切换显示（⌘1 / ⌘2）
+- Three account pools, Codex, Claude Code and Antigravity, switched by the colored icons beside the app name (⌘1 / ⌘2 / ⌘3)
+- Codex、Claude Code 与 Antigravity 三个账号池，由应用名旁的有色图标切换显示（⌘1 / ⌘2 / ⌘3）
 - Account import/switch/delete and usage refresh (5h / 1week)
 - 账号导入/切换/删除与用量刷新（5h / 1week）
 - Claude Code accounts: import the Claude Code login or sign in on claude.ai; switching rewrites Claude Code's credentials (the macOS Keychain or `.credentials.json`) and `oauthAccount`, keeping everything else
 - Claude Code 账号：导入 Claude Code 当前登录或在 claude.ai 登录添加；切换时改写 Claude Code 的凭据（macOS 钥匙串或 `.credentials.json`）与 `oauthAccount`，其余内容保持不变
+- Antigravity accounts (Google AI Pro): import the Antigravity / `agy` login or a JSON file; cards show the Gemini and Claude 5h / weekly quotas; switching rewrites Antigravity's login (the `gemini` / `antigravity` credential item)
+- Antigravity 账号（Google AI Pro）：导入 Antigravity / `agy` 当前登录或 JSON 文件；卡片显示 Gemini 与 Claude 的 5h / 每周额度；切换时改写 Antigravity 的登录（凭据条目 `gemini` / `antigravity`）
 - Import and refresh Sub2api upstream accounts: OpenAI/Codex for the Codex pool, and Claude for the Claude pool (switching points Claude Code at the Sub2api gateway through `~/.claude/settings.json`)
 - 导入并刷新 Sub2api 上游账号：Codex 池为 OpenAI/Codex 账号，Claude 池为 Claude 账号（切换时经 `~/.claude/settings.json` 让 Claude Code 使用 Sub2api 网关）
 - A proxy per account; new accounts wait for a manual refresh before contacting upstream, so their proxy can be set first (configurable)
@@ -58,7 +60,7 @@ See [docs/rust-cross-platform.md](docs/rust-cross-platform.md) for details, data
 
 ## Project Structure / 项目结构
 
-- `crates/copool-core`: accounts, usage, switching, proxy, tunnel, remote servers and settings; the Claude Code pool in `src/claude.rs` and its Sub2api in `src/claude/sub2api.rs`
+- `crates/copool-core`: accounts, usage, switching, proxy, tunnel, remote servers and settings; the Claude Code pool in `src/claude.rs` and its Sub2api in `src/claude/sub2api.rs`; the Antigravity pool in `src/antigravity.rs`
 - `desktop`: Tauri shell (`src`), web UI (`ui`), UI tests (`tests`), macOS widget (`widget`)
 - `resources/proxyd-src`: proxy engine shared by the core and the standalone remote daemon
 - `resources/proxyd-prebuilt*`: prebuilt Linux daemons for remote deployment
@@ -68,6 +70,8 @@ See [docs/rust-cross-platform.md](docs/rust-cross-platform.md) for details, data
 ## Reference Project / 参考项目
 
 - [170-carry/codex-tools](https://github.com/170-carry/codex-tools)
+- OpenQuota: how Antigravity's login and quota are read
+- OpenQuota：Antigravity 登录与额度的读取方式
 - [ming86/cc-account-switcher](https://github.com/ming86/cc-account-switcher) and [farion1231/cc-switch](https://github.com/farion1231/cc-switch): how Claude Code accounts and third-party gateways are switched
 - [ming86/cc-account-switcher](https://github.com/ming86/cc-account-switcher) 与 [farion1231/cc-switch](https://github.com/farion1231/cc-switch)：Claude Code 账号与第三方网关的切换方式
 

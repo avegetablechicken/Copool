@@ -132,6 +132,12 @@ pub struct UsageSnapshot {
     pub five_hour: Option<UsageWindow>,
     pub one_week: Option<UsageWindow>,
     pub credits: Option<CreditSnapshot>,
+    /// Antigravity's pool of third-party models (Claude), beside the Gemini
+    /// windows above; absent elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub third_party_five_hour: Option<UsageWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub third_party_one_week: Option<UsageWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -456,7 +462,8 @@ pub(crate) struct AppSettingsPatch {
     pub(crate) locale: Option<AppLocale>,
 }
 
-/// An account pool. Each has its own accounts and its own API proxy.
+/// An account pool. Each has its own accounts; Codex and Claude also have
+/// their own API proxy, Antigravity none.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
@@ -465,22 +472,32 @@ pub enum Pool {
     #[default]
     Codex,
     Claude,
+    Antigravity,
 }
 impl Pool {
     #[allow(dead_code)]
-    pub const ALL: [Self; 2] = [Self::Codex, Self::Claude];
+    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Antigravity];
+    /// The pools with an API proxy, its tunnel and remote servers.
+    #[allow(dead_code)]
+    pub const PROXIED: [Self; 2] = [Self::Codex, Self::Claude];
     pub fn name(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::Antigravity => "antigravity",
         }
+    }
+    /// Whether the pool has an API proxy.
+    #[allow(dead_code)]
+    pub fn proxied(self) -> bool {
+        self != Self::Antigravity
     }
     /// The path of a proxy's base URL, as its clients take it: OpenAI
     /// clients name the `/v1` root, Claude Code (`ANTHROPIC_BASE_URL`) the
     /// `/anthropic` one and adds `/v1/messages` itself.
     pub fn base_path(self) -> &'static str {
         match self {
-            Self::Codex => "/v1",
+            Self::Codex | Self::Antigravity => "/v1",
             Self::Claude => "/anthropic",
         }
     }

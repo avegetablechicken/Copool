@@ -293,6 +293,8 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
             unlimited: credit.unlimited,
             balance: credit.balance,
         }),
+        third_party_five_hour: None,
+        third_party_one_week: None,
     }
 }
 
