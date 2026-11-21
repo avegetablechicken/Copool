@@ -264,6 +264,17 @@ mod tests {
         assert_eq!(agent, "antigravity/3.0.0 darwin/arm64");
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
         assert_eq!(agent, "antigravity/3.0.0 windows/amd64");
+
+        let cli = crate::proxy_service::antigravity::cli_agent();
+        assert!(
+            cli.starts_with("antigravity/cli/1.5.12 (aidev_client; "),
+            "{cli}"
+        );
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        assert_eq!(
+            cli,
+            "antigravity/cli/1.5.12 (aidev_client; os_type=darwin; arch=arm64; cl=1024904911; auth_method=consumer)"
+        );
     }
 
     #[test]

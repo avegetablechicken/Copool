@@ -1402,9 +1402,22 @@ async fn agy_proxy_fails_over_and_unwraps_cloud_code_streams() {
             async move {
                 let token = req.headers()["authorization"].to_str().unwrap().to_owned();
                 assert!(req.headers().get("x-goog-api-key").is_none());
-                assert_eq!(req.headers()["user-agent"], api::agent());
+                assert_eq!(
+                    req.headers()["user-agent"],
+                    crate::proxy_service::antigravity::cli_agent()
+                );
                 if req.uri().path() == api::FETCH_MODELS_PATH {
-                    return Json(json!({"models":{"gemini-3.1-pro-high":{}}})).into_response();
+                    let bytes = axum::body::to_bytes(req.into_body(), 1024).await.unwrap();
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&bytes).unwrap()["project"],
+                        "project-1"
+                    );
+                    // Neon is usable upstream with the CLI User-Agent; also test fallback when absent.
+                    return Json(json!({"models":{
+                        "gemini-3.1-pro-high": {},
+                        "gemini-4-neon-high": {}
+                    }}))
+                    .into_response();
                 }
                 assert_eq!(
                     req.uri().path_and_query().unwrap().as_str(),
@@ -1430,7 +1443,18 @@ async fn agy_proxy_fails_over_and_unwraps_cloud_code_streams() {
                         .into_response();
                 }
                 assert_eq!(body["project"], "project-1");
-                assert_eq!(body["model"], "gemini-3.1-pro-high");
+                assert_eq!(body["userAgent"], "antigravity");
+                assert_eq!(body["requestType"], "agent");
+                assert!(body["requestId"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("agent/")));
+                let thinking = &body["request"]["generationConfig"]["thinkingConfig"];
+                let expected = match thinking["thinkingLevel"].as_str() {
+                    Some("HIGH") => "gemini-4-neon-high",
+                    Some("EXTRA_HIGH") => "gemini-4-neon-xhigh",
+                    _ => "gemini-3.1-pro-high",
+                };
+                assert_eq!(body["model"], expected);
                 assert!(body["request"]["contents"].is_array());
                 let frame = |text, finish| {
                     let mut candidate = json!({"content":{"role":"model","parts":[{"text":text}]}});
@@ -1502,6 +1526,30 @@ async fn agy_proxy_fails_over_and_unwraps_cloud_code_streams() {
             .status(),
         200
     );
+    let neon = reqwest::Client::new()
+        .post(format!(
+            "{base}/v1beta/models/gemini-4-neon:streamGenerateContent?alt=sse"
+        ))
+        .header("x-goog-api-key", rotated.api_key.as_deref().unwrap())
+        .json(&json!({"contents":[{"parts":[{"text":"hi"}]}],
+            "generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(neon.status(), 200);
+    assert!(neon.text().await.unwrap().contains("MOCK_"));
+    let neon_xhigh = reqwest::Client::new()
+        .post(format!(
+            "{base}/v1beta/models/gemini-4-neon:streamGenerateContent?alt=sse"
+        ))
+        .header("x-goog-api-key", rotated.api_key.as_deref().unwrap())
+        .json(&json!({"contents":[{"parts":[{"text":"hi"}]}],
+            "generationConfig":{"thinkingConfig":{"thinkingLevel":"EXTRA_HIGH"}}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(neon_xhigh.status(), 200);
+    assert!(neon_xhigh.text().await.unwrap().contains("MOCK_"));
     app.stop_proxy(Pool::Antigravity).await.unwrap();
 }
 

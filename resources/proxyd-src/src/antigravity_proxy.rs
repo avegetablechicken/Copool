@@ -95,19 +95,25 @@ impl Generate {
         let thinking = &self.body["generationConfig"]["thinkingConfig"];
         let level = thinking["thinkingLevel"]
             .as_str()
-            .map(str::to_ascii_lowercase)
+            .and_then(thinking_level_suffix)
             .or_else(|| {
                 thinking["thinkingBudget"].as_i64().map(|budget| {
                     if budget < 0 || budget > 1024 {
-                        "high".into()
+                        "high"
                     } else {
-                        "low".into()
+                        "low"
                     }
                 })
             });
         if let Some(level) = level {
             let id = format!("{base}-{level}");
-            if models.contains(&id) {
+            // agy uses the family ID on the Gemini API and sends the effort
+            // separately. Cloud Code expects that effort in the ID.
+            if models.contains(&id)
+                || (!models.contains(&self.model)
+                    && !models.contains(base)
+                    && known_effort_variant(base, level))
+            {
                 return id;
             }
         }
@@ -115,6 +121,34 @@ impl Generate {
             return base.into();
         }
         self.model.clone()
+    }
+}
+
+fn thinking_level_suffix(raw: &str) -> Option<&'static str> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    let normalized = normalized
+        .strip_prefix("thinking_level_")
+        .unwrap_or(&normalized);
+    match normalized {
+        "minimal" => Some("minimal"),
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" | "extra_high" | "extra-high" => Some("xhigh"),
+        "max" => Some("max"),
+        _ => None,
+    }
+}
+
+fn known_effort_variant(base: &str, level: &str) -> bool {
+    match base {
+        "gemini-4-neon" | "gemini-4-hydrogen" => {
+            matches!(level, "low" | "medium" | "high" | "xhigh")
+        }
+        "gemini-4-carbon" | "gemini-4-argon" | "gemini-3.8-flash" | "gemini-3.7-flash"
+        | "gemini-3.6-flash" => matches!(level, "low" | "medium" | "high"),
+        "gemini-3.1-pro" => matches!(level, "low" | "high"),
+        _ => false,
     }
 }
 
@@ -148,19 +182,19 @@ pub(super) async fn forward(
         }
         return Ok(response);
     }
-    let cloud = |path: &str| {
+    let cloud = |path: &str, user_agent: String| {
         client
             .post(format!(
                 "{}/v1internal:{path}",
                 context.upstream_base_url.trim_end_matches('/')
             ))
             .bearer_auth(token)
-            .header("user-agent", agent())
+            .header("user-agent", user_agent)
     };
     let project = match candidate.auth_json["project"].as_str() {
         Some(project) => project.to_owned(),
         None => {
-            let response = cloud("loadCodeAssist")
+            let response = cloud("loadCodeAssist", agent())
                 .json(&json!({}))
                 .send()
                 .await
@@ -176,6 +210,7 @@ pub(super) async fn forward(
                 .to_owned()
         }
     };
+    let cli_ua = cli_agent();
     let cached = {
         let mut catalog = context.antigravity_models.lock().await;
         catalog.retain(|_, (since, _)| since.elapsed() < Duration::from_secs(300));
@@ -184,8 +219,8 @@ pub(super) async fn forward(
     let model = if let Some(models) = cached {
         generate.cloud_model(&models)
     } else {
-        let response = cloud("fetchAvailableModels")
-            .json(&json!({}))
+        let response = cloud("fetchAvailableModels", cli_ua.clone())
+            .json(&json!({"project": project}))
             .send()
             .await
             .map_err(net_error)?;
@@ -208,8 +243,8 @@ pub(super) async fn forward(
             .insert(candidate.id.clone(), (Instant::now(), Arc::clone(&models)));
         generate.cloud_model(&models)
     };
-    cloud(method)
-        .json(&envelope(&project, &model, &generate.body))
+    cloud(method, cli_ua)
+        .json(&proxy_envelope(&project, &model, &generate.body))
         .send()
         .await
         .map_err(net_error)
@@ -218,6 +253,17 @@ pub(super) async fn forward(
 pub(crate) fn envelope(project: &str, model: &str, request: &Value) -> Value {
     json!({"project":project, "model":model, "userAgent":"antigravity",
         "requestId":uuid::Uuid::new_v4().to_string(), "request":request})
+}
+
+fn proxy_envelope(project: &str, model: &str, request: &Value) -> Value {
+    json!({
+        "project": project,
+        "model": model,
+        "userAgent": "antigravity",
+        "requestId": format!("agent/{}", uuid::Uuid::new_v4()),
+        "requestType": "agent",
+        "request": request,
+    })
 }
 
 fn unwrap_stream(mut upstream: reqwest::Response) -> Response<Body> {
@@ -249,14 +295,15 @@ fn unwrap_stream(mut upstream: reqwest::Response) -> Response<Body> {
         .unwrap()
 }
 
-/// The Antigravity version Copool's requests name.
+/// The Antigravity version Copool's quota/account requests name.
 const CLIENT_VERSION: &str = "3.0.0";
-/// Antigravity's agent, `antigravity/<version> <os>/<arch>` with Go's names
-/// of the system. Cloud Code answers by it: `loadCodeAssist` refuses other
-/// clients (`agy`'s included) and reports no plan, and the quota summary
-/// leaves out the Gemini pool for a client without a version or one before
-/// 2.6, so that a Google AI Pro account would show only its Claude pool.
-pub(crate) fn agent() -> String {
+/// The Antigravity CLI version and changelist Copool's proxy requests name.
+/// Cloud Code gates newer CLI models (such as Gemini 4 Neon) behind the
+/// `antigravity/cli/<version> (aidev_client; ...)` User-Agent used by `agy`.
+const CLI_VERSION: &str = "1.5.12";
+const CLI_CL: &str = "1024904911";
+
+fn go_platform() -> (&'static str, &'static str) {
     let os = match std::env::consts::OS {
         "macos" => "darwin",
         other => other,
@@ -267,7 +314,26 @@ pub(crate) fn agent() -> String {
         "x86" => "386",
         other => other,
     };
+    (os, arch)
+}
+
+/// Antigravity's agent, `antigravity/<version> <os>/<arch>` with Go's names
+/// of the system. Cloud Code answers by it: `loadCodeAssist` refuses other
+/// clients (`agy`'s included) and reports no plan, and the quota summary
+/// leaves out the Gemini pool for a client without a version or one before
+/// 2.6, so that a Google AI Pro account would show only its Claude pool.
+pub(crate) fn agent() -> String {
+    let (os, arch) = go_platform();
     format!("antigravity/{CLIENT_VERSION} {os}/{arch}")
+}
+
+/// Antigravity CLI's agent for Cloud Code model catalog and generation proxy
+/// calls, matching `agy` 1.5.12's `codeassistclient.userAgent` format.
+pub(crate) fn cli_agent() -> String {
+    let (os, arch) = go_platform();
+    format!(
+        "antigravity/cli/{CLI_VERSION} (aidev_client; os_type={os}; arch={arch}; cl={CLI_CL}; auth_method=consumer)"
+    )
 }
 
 /// The remote node keeps only the login fields it needs in accounts.json.
@@ -316,4 +382,95 @@ pub(super) async fn remote_usage(
     })?;
     usage.plan_type = candidate.plan_type.clone();
     Ok(usage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(model: &str, body: Value) -> Generate {
+        Generate {
+            model: model.into(),
+            body,
+            streaming: true,
+        }
+    }
+
+    #[test]
+    fn cloud_model_resolves_family_and_thinking_level_variants() {
+        let catalog: HashSet<String> = [
+            "gemini-4-neon-high",
+            "gemini-4-neon-xhigh",
+            "gemini-3.8-flash-high",
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-low",
+            "gemini-3-flash",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+
+        assert_eq!(
+            req(
+                "gemini-4-neon",
+                json!({"generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}})
+            )
+            .cloud_model(&catalog),
+            "gemini-4-neon-high"
+        );
+        assert_eq!(
+            req(
+                "gemini-4-neon",
+                json!({"generationConfig": {"thinkingConfig": {"thinkingLevel": "EXTRA_HIGH"}}})
+            )
+            .cloud_model(&catalog),
+            "gemini-4-neon-xhigh"
+        );
+        assert_eq!(
+            req(
+                "gemini-4-neon",
+                json!({"generationConfig": {"thinkingConfig": {"thinkingLevel": "THINKING_LEVEL_XHIGH"}}})
+            )
+            .cloud_model(&catalog),
+            "gemini-4-neon-xhigh"
+        );
+        assert_eq!(
+            req(
+                "gemini-3.8-flash",
+                json!({"generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}})
+            )
+            .cloud_model(&catalog),
+            "gemini-3.8-flash-high"
+        );
+        assert_eq!(
+            req(
+                "gemini-3.1-pro-preview",
+                json!({"generationConfig": {"thinkingConfig": {"thinkingBudget": 512}}})
+            )
+            .cloud_model(&catalog),
+            "gemini-3.1-pro-low"
+        );
+        assert_eq!(
+            req("gemini-3-flash-preview", json!({})).cloud_model(&catalog),
+            "gemini-3-flash"
+        );
+        assert_eq!(
+            req(
+                "gemini-4-neon-high",
+                json!({"generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}})
+            )
+            .cloud_model(&catalog),
+            "gemini-4-neon-high"
+        );
+        // Fallback for known effort families when absent from the catalog.
+        let empty = HashSet::new();
+        assert_eq!(
+            req(
+                "gemini-4-neon",
+                json!({"generationConfig": {"thinkingConfig": {"thinkingLevel": "MEDIUM"}}})
+            )
+            .cloud_model(&empty),
+            "gemini-4-neon-medium"
+        );
+    }
 }
