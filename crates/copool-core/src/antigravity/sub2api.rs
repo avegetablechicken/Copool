@@ -1,11 +1,16 @@
 //! Sub2api in the Antigravity pool: its Antigravity OAuth accounts as cards,
 //! and agy pointed at its `/antigravity` gateway by `"modelProvider":
 //! "gemini"` in agy's settings. agy then sends `GEMINI_API_KEY` to
-//! `GOOGLE_GEMINI_BASE_URL`, both read from its environment only: as for a
-//! Codex provider's `env_key`, Copool never stores or writes the key, and
-//! only checks that both are exported before it switches. What the pools do
-//! alike with their providers is in `providers.rs`; here is where the
-//! Antigravity pool keeps them and how it uses one.
+//! `GOOGLE_GEMINI_BASE_URL`, both read from its environment only. A
+//! provider names the variable holding its key, as a Codex provider's
+//! `env_key` does, and Copool never holds the key itself; its gateway is
+//! its Sub2api address. Copool assigns both, the key as that variable's
+//! value, in a block of its own at the end of `~/.gemini/.env`, which
+//! Gemini CLI reads and agy has from a shell that loads it, and switches
+//! only once a new shell exports them so. An account's switch removes the
+//! block. What the pools do alike with their providers is in
+//! `providers.rs`; here is where the Antigravity pool keeps them and how it
+//! uses one.
 use super::{Result, Store};
 use crate::{
     application::{Application, SwitchExecution},
@@ -15,7 +20,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// agy's switch from its Google login to the Gemini API.
 const MODEL_PROVIDER: &str = "modelProvider";
@@ -24,27 +29,36 @@ const GEMINI: &str = "gemini";
 pub(super) const API_KEY: &str = "GEMINI_API_KEY";
 pub(super) const BASE_URL: &str = "GOOGLE_GEMINI_BASE_URL";
 pub(crate) const API_KEY_MISSING: &str = "error.antigravity.gemini_api_key_missing";
-pub(crate) const BASE_URL_MISSING: &str = "error.antigravity.gemini_base_url_missing";
+pub(crate) const API_KEY_VARIABLE_INVALID: &str = "error.antigravity.api_key_variable_invalid";
+pub(crate) const ENV_NOT_LOADED: &str = "error.antigravity.gemini_env_not_loaded";
 pub(crate) const SETTINGS_INVALID: &str = "error.antigravity.settings_invalid";
+const CONFIGURATION_INCOMPLETE: &str = "error.sub2api.configuration_incomplete";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Provider {
     pub id: String,
     pub name: String,
-    /// The Sub2api address: its root, or the `/antigravity` gateway agy's
-    /// `GOOGLE_GEMINI_BASE_URL` names. Never taken from that variable, which
-    /// may name a local proxy instead: the administrator's password goes
-    /// only where the form says.
+    /// The Sub2api address agy sends to, as its root or its `/antigravity`
+    /// gateway: its switch sets `GOOGLE_GEMINI_BASE_URL` to the gateway.
+    /// Through Coport it is Coport's, with Sub2api's in its path
+    /// (`http://127.0.0.1:8787/antigravity/https://relay.example.com`), as
+    /// `ANTHROPIC_BASE_URL` names a Claude gateway through Coport; the admin
+    /// API is then derived from the Sub2api address in it, reached directly.
     #[serde(rename = "baseURL")]
     pub base_url: String,
-    /// Optional admin API override, independent of agy's gateway.
+    /// Optional admin API override, independent of agy's gateway. Never
+    /// taken from `GOOGLE_GEMINI_BASE_URL`: the administrator's password
+    /// goes only where the form says.
     #[serde(rename = "adminBaseURL")]
     pub admin_base_url: String,
     pub username: String,
     /// Only in a draft from the form; the system keyring keeps it.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub password: String,
+    /// The variable holding the Sub2api API key agy sends, as a new shell
+    /// exports it: `GEMINI_API_KEY` itself unless named. Never the key.
+    pub api_key_variable: String,
     /// The proxy of every request for the provider and its accounts: blank
     /// for the system settings, "direct://" for none.
     #[serde(rename = "proxyURL")]
@@ -62,6 +76,37 @@ fn root(url: &str) -> String {
         .unwrap_or(url)
         .trim_end_matches('/')
         .to_owned()
+}
+/// agy's gateway at a provider, its `GOOGLE_GEMINI_BASE_URL`.
+fn gateway(p: &Provider) -> Result<String> {
+    if p.base_url.is_empty() {
+        return Err(CONFIGURATION_INCOMPLETE.into());
+    }
+    Ok(format!("{}/antigravity", p.base_url))
+}
+/// The Sub2api address in an address: the upstream a proxy's path names
+/// (`<proxy>/antigravity/https://relay`), else the address itself.
+fn upstream(url: &str) -> &str {
+    ["/https://", "/http://"]
+        .iter()
+        .filter_map(|scheme| url.find(scheme))
+        .min()
+        .map_or(url, |at| &url[at + 1..])
+}
+/// The variable holding a provider's key.
+fn key_variable(p: &Provider) -> &str {
+    match p.api_key_variable.as_str() {
+        "" => API_KEY,
+        name => name,
+    }
+}
+/// Whether a value can be assigned in single quotes, literally, to a shell
+/// and to dotenv alike.
+fn quotable(value: &str) -> bool {
+    !value.is_empty()
+        && !value
+            .chars()
+            .any(|c| c == '\'' || c == '"' || c.is_whitespace() || c.is_control())
 }
 /// An Antigravity provider's cards, named by its id.
 fn member(p: &Provider) -> Member {
@@ -82,8 +127,8 @@ pub(super) struct SettingsRecord {
     model_provider: Option<Value>,
 }
 
-/// agy's settings as text; none when there are none.
-fn read_settings(path: &Path) -> Result<Option<String>> {
+/// A file's text, agy's settings or `.env`; none when there is none.
+fn read_text(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -116,8 +161,8 @@ fn render_settings(settings: &Map<String, Value>, previous: Option<&str>) -> Res
     }
     Ok(text)
 }
-/// Writes the settings verbatim, or removes them for none.
-fn put_settings(path: &Path, text: Option<&str>) -> Result<()> {
+/// Writes a file verbatim, or removes it for none.
+fn put_text(path: &Path, text: Option<&str>) -> Result<()> {
     match text {
         Some(text) => crate::claude::write_text(path, text),
         None if path.exists() => std::fs::remove_file(path).map_err(|e| e.to_string()),
@@ -129,22 +174,47 @@ fn uses_api_key(settings: &Map<String, Value>) -> bool {
 }
 /// Whether agy's settings put it on the Gemini API, off its login.
 pub(super) fn api_key_mode(path: &Path) -> bool {
-    read_settings(path)
+    read_text(path)
         .ok()
         .and_then(|text| parse_settings(text.as_deref()).ok())
         .is_some_and(|settings| uses_api_key(&settings))
 }
+/// What `leave_api_key` changed, as it was: agy's settings and its `.env`,
+/// each none when unchanged.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct Left {
+    settings: Option<Option<String>>,
+    env: Option<(PathBuf, Option<String>)>,
+}
 /// Puts agy back on its login: `modelProvider` as it was before a provider
-/// set it, else none. Forgets the provider and its record. Returns the
-/// settings as they were, to restore on a later failure; none unchanged.
-/// Settings Copool cannot read refuse the switch only when it put a
-/// provider in them: an account's switch never depends on agy's settings
-/// otherwise.
-pub(super) fn leave_api_key(path: &Path, store: &mut Store) -> Result<Option<Option<String>>> {
+/// set it, else none, and `.env` without Copool's block. Forgets the
+/// provider and its record. Returns what it changed, to restore on a later
+/// failure. Settings Copool cannot read refuse the switch only when it put
+/// a provider in them: an account's switch never depends on agy's settings
+/// otherwise; nor ever on its `.env`.
+pub(super) fn leave_api_key(path: &Path, store: &mut Store) -> Result<Left> {
     let applied = store.settings_provider.is_some() || store.settings_record.is_some();
     let record = store.settings_record.take();
     store.settings_provider = None;
-    let read = read_settings(path)
+    let settings = leave_settings(path, record, applied)?;
+    let env = env_path(path);
+    let env = match read_text(&env) {
+        Ok(Some(text)) if has_block(&text) => {
+            let left = without_block(&text);
+            put_text(&env, (!left.trim().is_empty()).then_some(&*left))
+                .ok()
+                .map(|()| (env, Some(text)))
+        }
+        _ => None,
+    };
+    Ok(Left { settings, env })
+}
+fn leave_settings(
+    path: &Path,
+    record: Option<SettingsRecord>,
+    applied: bool,
+) -> Result<Option<Option<String>>> {
+    let read = read_text(path)
         .and_then(|text| parse_settings(text.as_deref()).map(|settings| (text, settings)));
     let (text, mut settings) = match read {
         Ok(read) => read,
@@ -166,13 +236,146 @@ pub(super) fn leave_api_key(path: &Path, store: &mut Store) -> Result<Option<Opt
             settings.shift_remove(MODEL_PROVIDER);
         }
     }
-    put_settings(path, Some(&render_settings(&settings, text.as_deref())?))?;
+    put_text(path, Some(&render_settings(&settings, text.as_deref())?))?;
     Ok(Some(text))
 }
-/// Restores settings `leave_api_key` changed.
-pub(super) fn restore_settings(path: &Path, previous: Option<Option<String>>) {
-    if let Some(previous) = previous {
-        let _ = put_settings(path, previous.as_deref());
+/// Restores what `leave_api_key` changed.
+pub(super) fn restore_settings(path: &Path, left: Left) {
+    if let Some(previous) = left.settings {
+        let _ = put_text(path, previous.as_deref());
+    }
+    if let Some((env, previous)) = left.env {
+        let _ = put_text(&env, previous.as_deref());
+    }
+}
+
+/// Gemini's `.env`, two levels above agy's settings: `~/.gemini/.env`.
+pub(super) fn env_path(settings: &Path) -> PathBuf {
+    settings
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(Path::new(""))
+        .join(".env")
+}
+/// Copool's block in `.env`: the user's own lines above it stay, and the
+/// last assignment wins, to a shell and to dotenv alike.
+const BLOCK_START: &str = "# >>> Copool: agy's Sub2api provider (rewritten on each switch) >>>";
+const BLOCK_END: &str = "# <<< Copool <<<";
+fn has_block(text: &str) -> bool {
+    text.lines().any(|line| line.trim_end() == BLOCK_START)
+}
+/// The text without Copool's block and the blank line `with_block` put
+/// before it, its other lines as they were.
+fn without_block(text: &str) -> String {
+    let mut inside = false;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        if trimmed == BLOCK_START {
+            inside = true;
+            if kept.last().is_some_and(|l| l.trim().is_empty()) {
+                kept.pop();
+            }
+        }
+        if !inside {
+            kept.push(line);
+        }
+        if trimmed == BLOCK_END {
+            inside = false;
+        }
+    }
+    kept.concat()
+}
+/// `.env` with Copool's block at its end, assigning agy's key from the
+/// provider's variable and its gateway, in the file's newlines.
+fn with_block(text: Option<&str>, variable: &str, gateway: &str) -> Result<String> {
+    let mut lines = vec![BLOCK_START.to_owned()];
+    if !crate::proxy_integration::is_variable(variable) {
+        return Err(API_KEY_VARIABLE_INVALID.into());
+    }
+    // Expanded where it is loaded, after the user's own exports;
+    // GEMINI_API_KEY itself is the user's to export.
+    if variable != API_KEY {
+        lines.push(format!("{API_KEY}=\"${{{variable}}}\""));
+    }
+    if !quotable(gateway) {
+        return Err("Invalid Sub2api URL".into());
+    }
+    lines.push(format!("{BASE_URL}='{gateway}'"));
+    lines.push(BLOCK_END.to_owned());
+    let text = without_block(text.unwrap_or(""));
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    // A blank line sets the block off from the user's lines.
+    let separator = if text.is_empty() {
+        String::new()
+    } else if text.ends_with('\n') {
+        newline.to_owned()
+    } else {
+        newline.repeat(2)
+    };
+    Ok(format!("{text}{separator}{}{newline}", lines.join(newline)))
+}
+
+/// The lines a shell's startup file loads Gemini's `.env` with, exporting
+/// what it sets; zsh and bash both read them.
+fn rc_lines(env: &Path) -> Result<String> {
+    let env = env
+        .to_str()
+        .filter(|p| !p.contains(['\'', '\n']))
+        .ok_or("Invalid .env path")?;
+    Ok(format!(
+        "# Copool: agy's Sub2api key and gateway, from Gemini's .env.\n\
+         [ -f '{env}' ] && {{ set -a; . '{env}'; set +a; }}\n"
+    ))
+}
+/// Has the startup file load `.env` last, after anything else it exports,
+/// unless it already ends so. Returns its length before, none when it was
+/// absent, for `unload_env_in`; none at all when nothing changed.
+fn load_env_in(rc: &Path, env: &Path) -> Result<Option<Option<u64>>> {
+    use std::io::Write;
+    let lines = rc_lines(env)?;
+    let text = read_text(rc)?;
+    if text.as_deref().is_some_and(|t| t.ends_with(&lines)) {
+        return Ok(None);
+    }
+    let before = text.as_ref().map(|t| t.len() as u64);
+    let separator = match text.as_deref() {
+        None | Some("") => "",
+        Some(t) if t.ends_with('\n') => "\n",
+        Some(_) => "\n\n",
+    };
+    // Appended in place: the file keeps its mode and any link to it.
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(rc)
+        .and_then(|mut file| file.write_all(format!("{separator}{lines}").as_bytes()))
+        .map_err(|e| e.to_string())?;
+    Ok(Some(before))
+}
+/// Takes back what `load_env_in` appended.
+fn unload_env_in(rc: &Path, before: Option<u64>) {
+    let _ = match before {
+        None => std::fs::remove_file(rc),
+        Some(len) => std::fs::OpenOptions::new()
+            .write(true)
+            .open(rc)
+            .and_then(|file| file.set_len(len)),
+    };
+}
+/// What a provider's switch changed outside agy's settings, to take back
+/// when it fails.
+struct Changes {
+    env: PathBuf,
+    env_before: Option<String>,
+    rc: Option<(PathBuf, Option<u64>)>,
+}
+impl Changes {
+    fn undo(&self) {
+        if let Some((rc, before)) = &self.rc {
+            unload_env_in(rc, *before);
+        }
+        let _ = put_text(&self.env, self.env_before.as_deref());
     }
 }
 
@@ -187,9 +390,16 @@ impl Application {
         draft.base_url = root(&draft.base_url);
         draft.admin_base_url = draft.admin_base_url.trim().trim_end_matches('/').into();
         draft.proxy_url = draft.proxy_url.trim().into();
-        if draft.base_url.is_empty() && draft.admin_base_url.is_empty() {
-            return Err("error.sub2api.configuration_incomplete".into());
+        // agy's gateway is the Sub2api URL; the admin API only overrides.
+        if draft.base_url.is_empty() {
+            return Err(CONFIGURATION_INCOMPLETE.into());
         }
+        draft.api_key_variable = match draft.api_key_variable.trim() {
+            "" => API_KEY.into(),
+            name if crate::proxy_integration::is_variable(name) => name.into(),
+            // A key typed here would be kept in plain text: never.
+            _ => return Err(API_KEY_VARIABLE_INVALID.into()),
+        };
         if draft.id.trim().is_empty() {
             draft.id = uuid::Uuid::new_v4().to_string();
         }
@@ -204,7 +414,11 @@ impl Application {
                 &draft.password,
                 existing.is_some(),
                 &draft.proxy_url,
-                &[&draft.base_url, &draft.admin_base_url],
+                &[
+                    &draft.base_url,
+                    upstream(&draft.base_url),
+                    &draft.admin_base_url,
+                ],
             )?;
             if let Some(old) = existing.map(|i| &providers[i]) {
                 draft.imported_account_ids = old.imported_account_ids.clone();
@@ -281,8 +495,9 @@ impl Application {
             .secrets
             .get(&sub2api::password_secret(Pool::Antigravity, &p.id))?
             .ok_or("error.sub2api.configuration_incomplete")?;
+        // Sub2api itself, not a proxy in front of agy's requests.
         let admin = if p.admin_base_url.is_empty() {
-            &p.base_url
+            upstream(&p.base_url)
         } else {
             &p.admin_base_url
         };
@@ -313,41 +528,113 @@ impl Application {
             },
         })
     }
-    /// Whether agy's environment holds `name`, as the user's shell exports
-    /// it; asked off the runtime, for the shell may take seconds.
-    async fn antigravity_exported(&self, name: &'static str) -> Result<bool> {
+    /// Variables in agy's environment, as the user's shell exports them;
+    /// with `now`, as one shell opened now does. Asked off the runtime, for
+    /// the shell may take seconds.
+    async fn antigravity_exported(&self, names: &[&str], now: bool) -> Result<Vec<Option<String>>> {
         let environment = self.antigravity.environment.read().unwrap().clone();
-        tokio::task::spawn_blocking(move || environment(name).is_some())
-            .await
-            .map_err(|e| e.to_string())
+        let names: Vec<String> = names.iter().map(|&name| name.to_owned()).collect();
+        tokio::task::spawn_blocking(move || {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            let mut values = environment(&names, now);
+            values.resize(names.len(), None);
+            values
+        })
+        .await
+        .map_err(|e| e.to_string())
     }
-    /// Puts agy on the provider's gateway: `"modelProvider": "gemini"` in its
-    /// settings, recording what that replaced; the login in the Keychain
-    /// stays, for an account's switch to return to. Called under the pool's
-    /// operations lock.
+    /// Whether agy started from a terminal opened now has the gateway, and
+    /// the variable's value as its key.
+    async fn antigravity_env_loaded(&self, variable: &str, gateway: &str) -> Result<bool> {
+        let values = self
+            .antigravity_exported(&[BASE_URL, API_KEY, variable], true)
+            .await?;
+        let url = values[0]
+            .as_deref()
+            .map(|url| url.trim().trim_end_matches('/'));
+        Ok(url == Some(gateway) && values[1].is_some() && values[1] == values[2])
+    }
+    /// Assigns agy's key and gateway in Copool's block of Gemini's `.env`,
+    /// and has the shell's startup file load it when a new shell does not
+    /// export them so. Takes all back when even then it does not.
+    async fn antigravity_put_env(
+        &self,
+        settings: &Path,
+        variable: &str,
+        gateway: &str,
+    ) -> Result<Changes> {
+        let env = env_path(settings);
+        let env_before = read_text(&env)?;
+        put_text(
+            &env,
+            Some(&with_block(env_before.as_deref(), variable, gateway)?),
+        )?;
+        let mut changes = Changes {
+            env,
+            env_before,
+            rc: None,
+        };
+        let mut loaded = self.antigravity_env_loaded(variable, gateway).await;
+        if let (Ok(false), Some(rc)) = (&loaded, self.antigravity_shell_rc()) {
+            loaded = match load_env_in(&rc, &changes.env) {
+                Ok(Some(before)) => {
+                    changes.rc = Some((rc, before));
+                    self.antigravity_env_loaded(variable, gateway).await
+                }
+                // It loads the file last already: something else differs.
+                Ok(None) => Ok(false),
+                Err(error) => Err(error),
+            };
+        }
+        match loaded {
+            Ok(true) => Ok(changes),
+            other => {
+                changes.undo();
+                Err(other.err().unwrap_or_else(|| ENV_NOT_LOADED.into()))
+            }
+        }
+    }
+    /// Puts agy on the provider's gateway: its key and gateway in Gemini's
+    /// `.env`, and `"modelProvider": "gemini"` in agy's settings, recording
+    /// what that replaced; the login in the Keychain stays, for an
+    /// account's switch to return to. Called under the pool's operations
+    /// lock.
     pub(super) async fn antigravity_switch_sub2api(&self, id: &str) -> Result<SwitchExecution> {
         let (member, account) = self.card(Pool::Antigravity, id)?;
         if !account.status.eq_ignore_ascii_case("active") {
             return Err("Account is deactivated".into());
         }
-        // agy without them would exit at once, or send the key to Google.
-        if !self.antigravity_exported(API_KEY).await? {
+        let provider = self
+            .antigravity_load()?
+            .providers
+            .into_iter()
+            .find(|p| p.id == member.key)
+            .ok_or("Account not found")?;
+        let variable = key_variable(&provider);
+        // A variable nothing exports would leave agy without a key.
+        if self.antigravity_exported(&[variable], false).await?[0].is_none() {
             return Err(API_KEY_MISSING.into());
         }
-        if !self.antigravity_exported(BASE_URL).await? {
-            return Err(BASE_URL_MISSING.into());
-        }
         let path = self.antigravity_settings_path();
+        // Outside the store's lock: the shell may take seconds.
+        let changes = self
+            .antigravity_put_env(&path, variable, &gateway(&provider)?)
+            .await?;
+        let applied = self.antigravity_apply_gemini(&path, member.key).await;
+        if applied.is_err() {
+            changes.undo();
+        }
+        applied?;
+        Ok(SwitchExecution {
+            provider: Some(provider.name),
+            ..Default::default()
+        })
+    }
+    /// `"modelProvider": "gemini"` in agy's settings, for the provider.
+    async fn antigravity_apply_gemini(&self, path: &Path, provider: String) -> Result<()> {
         let _lock = self.antigravity.lock.lock().await;
         let mut store = self.antigravity_load()?;
-        let name = store
-            .providers
-            .iter()
-            .find(|p| p.id == member.key)
-            .ok_or("Account not found")?
-            .name
-            .clone();
-        let text = read_settings(&path)?;
+        let text = read_text(path)?;
         let mut settings = parse_settings(text.as_deref())?;
         // Between providers, the record of the login's settings stays.
         if store.settings_record.is_none() {
@@ -356,16 +643,13 @@ impl Application {
             });
         }
         settings.insert(MODEL_PROVIDER.into(), GEMINI.into());
-        put_settings(&path, Some(&render_settings(&settings, text.as_deref())?))?;
-        store.settings_provider = Some(member.key);
+        put_text(path, Some(&render_settings(&settings, text.as_deref())?))?;
+        store.settings_provider = Some(provider);
         if let Err(error) = self.antigravity_save(&store) {
-            let _ = put_settings(&path, text.as_deref());
+            let _ = put_text(path, text.as_deref());
             return Err(error);
         }
-        Ok(SwitchExecution {
-            provider: Some(name),
-            ..Default::default()
-        })
+        Ok(())
     }
 }
 
@@ -384,7 +668,7 @@ mod tests {
     #[test]
     fn leaving_the_api_returns_modelprovider_and_keeps_the_rest_in_its_format() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
+        let path = dir.path().join("cli/settings.json");
         for newline in ["\n", "\r\n"] {
             for bom in ["", "\u{feff}"] {
                 let applied = format!(
@@ -393,7 +677,8 @@ mod tests {
                 fs_write(&path, &applied);
                 let mut store = record(None);
                 let previous = leave_api_key(&path, &mut store).unwrap();
-                assert_eq!(previous, Some(Some(applied.clone())));
+                assert_eq!(previous.settings, Some(Some(applied.clone())));
+                assert_eq!(previous.env, None);
                 assert!(store.settings_record.is_none() && store.settings_provider.is_none());
                 let left = std::fs::read_to_string(&path).unwrap();
                 // The format stays: its newlines, mark and key order.
@@ -422,7 +707,7 @@ mod tests {
     #[test]
     fn leaving_returns_an_earlier_value_but_never_gemini() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
+        let path = dir.path().join("cli/settings.json");
         for (recorded, expected) in [
             (Some(Value::from("vertex")), Some(Value::from("vertex"))),
             (Some(Value::from(GEMINI)), None),
@@ -437,11 +722,17 @@ mod tests {
         // Settings agy already uses its login with are not rewritten.
         let unchanged = "{\"modelProvider\":\"vertex\"}";
         fs_write(&path, unchanged);
-        assert_eq!(leave_api_key(&path, &mut record(None)).unwrap(), None);
+        assert_eq!(
+            leave_api_key(&path, &mut record(None)).unwrap(),
+            Left::default()
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), unchanged);
         // No settings at all stay none.
-        let missing = dir.path().join("missing/settings.json");
-        assert_eq!(leave_api_key(&missing, &mut record(None)).unwrap(), None);
+        let missing = dir.path().join("missing/cli/settings.json");
+        assert_eq!(
+            leave_api_key(&missing, &mut record(None)).unwrap(),
+            Left::default()
+        );
         assert!(!missing.exists());
         // Settings that are not a JSON object are refused, not replaced,
         // once Copool put a provider in them; otherwise left alone.
@@ -451,9 +742,44 @@ mod tests {
                 leave_api_key(&path, &mut record(None)).unwrap_err(),
                 SETTINGS_INVALID
             );
-            assert_eq!(leave_api_key(&path, &mut Store::default()).unwrap(), None);
+            assert_eq!(
+                leave_api_key(&path, &mut Store::default()).unwrap(),
+                Left::default()
+            );
             assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
         }
+    }
+
+    #[test]
+    fn agys_gateway_is_the_address_and_admin_is_the_sub2api_in_it() {
+        let direct = "https://182.92.106.196:6060";
+        let coport = format!("http://127.0.0.1:8787/antigravity/{direct}");
+        for (raw, base) in [
+            (format!("{direct}/antigravity/"), direct.to_owned()),
+            (format!("{coport}/antigravity"), coport.clone()),
+            (coport.clone(), coport.clone()),
+        ] {
+            let p = Provider {
+                base_url: root(&raw),
+                ..Default::default()
+            };
+            assert_eq!(p.base_url, base, "{raw}");
+            assert_eq!(gateway(&p).unwrap(), format!("{base}/antigravity"));
+            // The admin password goes to Sub2api, not through Coport.
+            assert_eq!(upstream(&p.base_url), direct, "{raw}");
+        }
+        assert_eq!(
+            upstream("http://relay.example.com"),
+            "http://relay.example.com"
+        );
+        assert_eq!(
+            upstream("http://127.0.0.1:8787/antigravity/http://relay.example.com"),
+            "http://relay.example.com"
+        );
+        assert_eq!(
+            gateway(&Provider::default()).unwrap_err(),
+            CONFIGURATION_INCOMPLETE
+        );
     }
 
     #[test]
@@ -468,7 +794,97 @@ mod tests {
         }
     }
 
+    #[test]
+    fn copools_block_ends_env_and_leaves_the_users_lines() {
+        let url = "https://relay.example.com/antigravity";
+        let block = |text: Option<&str>, variable: &str| with_block(text, variable, url).unwrap();
+        let own = "# mine\nGEMINI_API_KEY=k\nGOOGLE_GEMINI_BASE_URL=https://old\n";
+        let applied = block(Some(own), "RELAY_KEY");
+        assert_eq!(
+            applied,
+            format!("{own}\n{BLOCK_START}\nGEMINI_API_KEY=\"${{RELAY_KEY}}\"\nGOOGLE_GEMINI_BASE_URL='{url}'\n{BLOCK_END}\n")
+        );
+        // Rewritten in place on the next switch, the user's lines kept.
+        // GEMINI_API_KEY itself is the user's to export.
+        assert_eq!(
+            block(Some(&applied), API_KEY),
+            format!("{own}\n{BLOCK_START}\nGOOGLE_GEMINI_BASE_URL='{url}'\n{BLOCK_END}\n")
+        );
+        // Removed with its blank line; a blank line of the user's stays.
+        assert_eq!(without_block(&applied), own);
+        let spaced = format!("{own}\n");
+        assert_eq!(without_block(&block(Some(&spaced), "RELAY_KEY")), spaced);
+        // A `.env` of Copool's block alone starts with it.
+        assert!(block(None, "RELAY_KEY").starts_with(BLOCK_START));
+        // The file's newlines, after a last line without one.
+        assert_eq!(
+            block(Some("A=1\r\nB=2"), "RELAY_KEY"),
+            format!("A=1\r\nB=2\r\n\r\n{BLOCK_START}\r\nGEMINI_API_KEY=\"${{RELAY_KEY}}\"\r\nGOOGLE_GEMINI_BASE_URL='{url}'\r\n{BLOCK_END}\r\n")
+        );
+        // Only a variable's name, never a key, and no address to escape.
+        for invalid in ["sk-1", "1KEY", "A B", "${A}", ""] {
+            assert_eq!(
+                with_block(None, invalid, url).unwrap_err(),
+                API_KEY_VARIABLE_INVALID,
+                "{invalid:?}"
+            );
+        }
+        assert!(with_block(None, API_KEY, "https://a/'b").is_err());
+    }
+
+    #[test]
+    fn leaving_removes_copools_block_and_restores_it_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cli/settings.json");
+        fs_write(&path, r#"{"modelProvider":"gemini"}"#);
+        let env = env_path(&path);
+        let own = "GEMINI_API_KEY=k\n";
+        let applied = with_block(Some(own), "RELAY_KEY", "https://r").unwrap();
+        fs_write(&env, &applied);
+        let left = leave_api_key(&path, &mut record(None)).unwrap();
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), own);
+        restore_settings(&path, left);
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), applied);
+        // A `.env` of Copool's block alone goes with it.
+        let only = with_block(None, "RELAY_KEY", "https://r").unwrap();
+        fs_write(&env, &only);
+        leave_api_key(&path, &mut record(None)).unwrap();
+        assert!(!env.exists());
+    }
+
+    #[test]
+    fn a_startup_file_loads_env_last_once_and_is_put_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (rc, env) = (dir.path().join("zshrc"), dir.path().join(".env"));
+        let lines = rc_lines(&env).unwrap();
+        // Absent: created, then removed.
+        let before = load_env_in(&rc, &env).unwrap().unwrap();
+        assert_eq!(std::fs::read_to_string(&rc).unwrap(), lines);
+        assert_eq!(load_env_in(&rc, &env).unwrap(), None);
+        unload_env_in(&rc, before);
+        assert!(!rc.exists());
+        for (text, separator) in [("", ""), ("a=1\n", "\n"), ("a=1", "\n\n")] {
+            fs_write(&rc, text);
+            let before = load_env_in(&rc, &env).unwrap().unwrap();
+            assert_eq!(
+                std::fs::read_to_string(&rc).unwrap(),
+                format!("{text}{separator}{lines}")
+            );
+            unload_env_in(&rc, before);
+            assert_eq!(std::fs::read_to_string(&rc).unwrap(), text);
+        }
+        // Loaded earlier but exported over since: loaded last again.
+        fs_write(&rc, &format!("{lines}export GOOGLE_GEMINI_BASE_URL=x\n"));
+        assert!(load_env_in(&rc, &env).unwrap().is_some());
+        assert!(std::fs::read_to_string(&rc).unwrap().ends_with(&lines));
+        assert_eq!(
+            env_path(Path::new("/h/.gemini/antigravity-cli/settings.json")),
+            Path::new("/h/.gemini/.env")
+        );
+    }
+
     fn fs_write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
 }

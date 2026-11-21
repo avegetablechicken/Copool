@@ -546,7 +546,10 @@
 "settings.sub2api.antigravity_name_placeholder" = "Een naam voor deze Sub2api-provider";
 "settings.sub2api.antigravity_base_url" = "Sub2api-URL";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
-"accounts.notice.antigravity_provider_switched_format" = "agy gebruikt nu Sub2api %@ met GEMINI_API_KEY; start agy opnieuw om het te gebruiken";
-"error.antigravity.gemini_api_key_missing" = "Exporteer GEMINI_API_KEY, de Sub2api-API-sleutel die agy verstuurt, voordat je naar een Sub2api-kaart wisselt";
-"error.antigravity.gemini_base_url_missing" = "Exporteer GOOGLE_GEMINI_BASE_URL, het …/antigravity-adres van Sub2api, voordat je naar een Sub2api-kaart wisselt";
+"settings.sub2api.antigravity_api_key_variable" = "API-sleutelvariabele";
+"settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
+"accounts.notice.antigravity_provider_switched_format" = "agy gebruikt nu Sub2api %@; start agy in een nieuwe terminal om het te gebruiken";
+"error.antigravity.gemini_api_key_missing" = "De API-sleutelvariabele van de provider is niet geëxporteerd; exporteer die in je shell voordat je naar een Sub2api-kaart wisselt";
+"error.antigravity.api_key_variable_invalid" = "Vul de naam in van de variabele met de API-sleutel, zoals GEMINI_API_KEY, niet de sleutel zelf";
+"error.antigravity.gemini_env_not_loaded" = "Een nieuwe shell heeft nog een andere GOOGLE_GEMINI_BASE_URL of GEMINI_API_KEY, hoewel Copool ze in ~/.gemini/.env schreef en door ~/.zshrc of ~/.bashrc laat laden; verwijder de andere export en probeer het opnieuw";
 "error.antigravity.settings_invalid" = "De settings.json van agy is geen JSON-object; herstel eerst ~/.gemini/antigravity-cli/settings.json";

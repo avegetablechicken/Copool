@@ -45,18 +45,49 @@ pub(crate) fn environment_key(name: &str, shell: Shell) -> Option<String> {
     }
     shell_key(name, shell)
 }
+/// Environment variables as one shell the user opens now exports them,
+/// which is what the tools started from it get: asked again, not this
+/// process's. Elsewhere than Unix, where no shell is asked, this process's.
+pub(crate) fn new_shell_keys(names: &[&str], shell: Shell) -> Vec<Option<String>> {
+    #[cfg(unix)]
+    if names.iter().all(|name| is_variable(name)) {
+        let program = std::env::var("SHELL").unwrap_or("/bin/sh".into());
+        let (flags, timeout) = shell_flags(shell);
+        return login_shell_keys(&program, flags, names, timeout);
+    }
+    #[cfg(not(unix))]
+    let _ = shell;
+    names
+        .iter()
+        .map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()))
+        .collect()
+}
+/// Whether `name` is an environment variable's name a shell can expand.
+pub(crate) fn is_variable(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+#[cfg(unix)]
+fn shell_flags(shell: Shell) -> (&'static str, std::time::Duration) {
+    match shell {
+        Shell::Login => ("-lc", std::time::Duration::from_secs(3)),
+        // Interactive startup files load more; they get longer.
+        Shell::Interactive => ("-lic", std::time::Duration::from_secs(5)),
+    }
+}
 #[cfg_attr(not(unix), allow(unused_variables))]
 fn shell_key(name: &str, shell: Shell) -> Option<String> {
     #[cfg(unix)]
-    if !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
+    if is_variable(name) {
         let program = std::env::var("SHELL").unwrap_or("/bin/sh".into());
         use std::sync::{LazyLock, Mutex};
         type Lookups = std::collections::BTreeMap<String, (std::time::Instant, Option<String>)>;
         static CACHE: LazyLock<Mutex<Lookups>> = LazyLock::new(Default::default);
-        let (flags, timeout, key) = match shell {
-            Shell::Login => ("-lc", 3, name.to_owned()),
-            // Interactive startup files load more; they get longer.
-            Shell::Interactive => ("-lic", 5, format!("interactive:{name}")),
+        let (flags, timeout) = shell_flags(shell);
+        let key = match shell {
+            Shell::Login => name.to_owned(),
+            Shell::Interactive => format!("interactive:{name}"),
         };
         let mut cache = CACHE.lock().ok()?;
         if let Some((time, value)) = cache.get(&key) {
@@ -64,12 +95,7 @@ fn shell_key(name: &str, shell: Shell) -> Option<String> {
                 return value.clone();
             }
         }
-        let value = login_shell_key(
-            &program,
-            flags,
-            name,
-            std::time::Duration::from_secs(timeout),
-        );
+        let value = login_shell_keys(&program, flags, &[name], timeout).remove(0);
         cache.insert(key, (std::time::Instant::now(), value.clone()));
         return value;
     }
@@ -95,21 +121,47 @@ fn codex_dotenv(paths: &Paths, name: &str) -> Option<String> {
         (!value.is_empty()).then(|| value.to_owned())
     })
 }
+/// Each of `names` as one shell exports them; none for each when it fails.
+/// The names are variable names, which `is_variable` checked.
 #[cfg(unix)]
-fn login_shell_key(
+fn login_shell_keys(
     shell: &str,
     flags: &str,
-    name: &str,
+    names: &[&str],
+    timeout: std::time::Duration,
+) -> Vec<Option<String>> {
+    let output = login_shell_output(shell, flags, names, timeout);
+    (0..names.len())
+        .map(|i| {
+            let value = output
+                .as_deref()?
+                .rsplit_once(&format!("__COPOOL_ENV{i}__"))?
+                .1
+                .split_once("__COPOOL_END__")?
+                .0
+                .trim();
+            (!value.is_empty()).then(|| value.to_owned())
+        })
+        .collect()
+}
+#[cfg(unix)]
+fn login_shell_output(
+    shell: &str,
+    flags: &str,
+    names: &[&str],
     timeout: std::time::Duration,
 ) -> Option<String> {
     use std::io::Read;
     let output = tempfile::NamedTempFile::new().ok()?;
+    // Profiles may print banners; only the marked values are the keys.
+    let command = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| format!("printf '__COPOOL_ENV{i}__%s__COPOOL_END__' \"${name}\""))
+        .collect::<Vec<_>>()
+        .join("; ");
     let mut child = std::process::Command::new(shell)
-        // Profiles may print banners; only the marked value is the key.
-        .args([
-            flags,
-            &format!("printf '__COPOOL_ENV__%s__COPOOL_END__' \"${name}\""),
-        ])
+        .args([flags, &command])
         .stdin(std::process::Stdio::null())
         .stdout(output.reopen().ok()?)
         .stderr(std::process::Stdio::null())
@@ -138,20 +190,15 @@ fn login_shell_key(
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    let mut value = String::new();
+    let mut text = String::new();
     output
         .reopen()
         .ok()?
         .take(65536)
-        .read_to_string(&mut value)
+        .read_to_string(&mut text)
         .ok()?;
-    let value = value
-        .rsplit_once("__COPOOL_ENV__")?
-        .1
-        .split_once("__COPOOL_END__")?
-        .0
-        .trim();
-    (!value.is_empty() && value.len() < 65536).then(|| value.to_owned())
+    // Output cut at the limit may hold a partial value: none of it counts.
+    (text.len() < 65536).then_some(text)
 }
 
 pub(crate) fn candidates(paths: &Paths) -> Result<Vec<StoredAccount>, String> {

@@ -23,8 +23,10 @@ mod sub2api;
 
 pub(crate) use api::{sign_in_url, sub2api_usage, Network};
 
-/// An environment variable as agy would have it.
-type Environment = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// Environment variables as agy would have them; with `now`, as agy started
+/// from a terminal opened now would, all from one shell, after Copool
+/// changed what it loads.
+type Environment = Arc<dyn Fn(&[&str], bool) -> Vec<Option<String>> + Send + Sync>;
 
 /// A Google sign-in's login document, from its code.
 pub(crate) async fn sign_in(code: &str, verifier: &str, redirect: &str) -> Result<Value> {
@@ -50,10 +52,16 @@ const EXPIRY_MARGIN: i64 = 60;
 pub(crate) struct State {
     network: std::sync::RwLock<Arc<dyn Network>>,
     live: std::sync::RwLock<Arc<dyn LiveStore>>,
-    /// agy's settings, whose `modelProvider` a provider's card sets.
+    /// agy's settings, whose `modelProvider` a provider's card sets; the
+    /// `.env` with its key and gateway is two levels up, as `~/.gemini/.env`
+    /// is.
     settings: std::sync::RwLock<PathBuf>,
-    /// agy's environment, which a provider's card needs its key in.
+    /// agy's environment, which a provider's card checks its key and
+    /// gateway in.
     environment: std::sync::RwLock<Environment>,
+    /// The startup file of the user's shell that a provider's card has load
+    /// the `.env` when it does not: none for a shell Copool cannot write.
+    shell_rc: std::sync::RwLock<Option<PathBuf>>,
     /// Held across a load and save of the store.
     lock: tokio::sync::Mutex<()>,
     /// Serializes imports, switches and refreshes.
@@ -74,24 +82,34 @@ impl Default for State {
             settings: std::sync::RwLock::new(
                 std::env::temp_dir()
                     .join(format!("copool-test-agy-{}", uuid::Uuid::new_v4()))
-                    .join("settings.json"),
+                    .join("antigravity-cli/settings.json"),
             ),
             #[cfg(not(test))]
-            environment: std::sync::RwLock::new(Arc::new(|name: &str| {
-                crate::proxy_integration::environment_key(
-                    name,
-                    crate::proxy_integration::Shell::Interactive,
-                )
+            environment: std::sync::RwLock::new(Arc::new(|names: &[&str], now: bool| {
+                use crate::proxy_integration::{environment_key, new_shell_keys, Shell};
+                if now {
+                    new_shell_keys(names, Shell::Interactive)
+                } else {
+                    let lookup = |name: &&str| environment_key(name, Shell::Interactive);
+                    names.iter().map(lookup).collect()
+                }
             })),
             #[cfg(test)]
-            environment: std::sync::RwLock::new(Arc::new(|_: &str| None)),
+            environment: std::sync::RwLock::new(Arc::new(|names: &[&str], _: bool| {
+                vec![None; names.len()]
+            })),
+            #[cfg(not(test))]
+            shell_rc: std::sync::RwLock::new(shell_rc()),
+            #[cfg(test)]
+            shell_rc: Default::default(),
             lock: Default::default(),
             operations: Default::default(),
         }
     }
 }
 /// agy's global settings: `COPOOL_ANTIGRAVITY_SETTINGS_FILE` for a smoke
-/// test, else `~/.gemini/antigravity-cli/settings.json`.
+/// test, else `~/.gemini/antigravity-cli/settings.json`. A smoke test's
+/// `.env` is two levels above its settings too.
 #[cfg(not(test))]
 fn settings_path() -> PathBuf {
     std::env::var_os("COPOOL_ANTIGRAVITY_SETTINGS_FILE")
@@ -99,6 +117,30 @@ fn settings_path() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".gemini/antigravity-cli/settings.json")))
         .unwrap_or_default()
+}
+/// The interactive startup file of the user's `$SHELL`, zsh's or bash's;
+/// none for another shell, or where Copool asks no shell. A smoke test
+/// names its own in `COPOOL_ANTIGRAVITY_SHELL_RC`.
+#[cfg(not(test))]
+fn shell_rc() -> Option<PathBuf> {
+    if let Some(rc) = std::env::var_os("COPOOL_ANTIGRAVITY_SHELL_RC").filter(|v| !v.is_empty()) {
+        return Some(rc.into());
+    }
+    if !cfg!(unix) {
+        return None;
+    }
+    let shell = PathBuf::from(std::env::var_os("SHELL")?);
+    let home = dirs::home_dir()?;
+    match shell.file_name()?.to_str()? {
+        "zsh" => Some(
+            std::env::var_os("ZDOTDIR")
+                .filter(|v| !v.is_empty())
+                .map_or(home, PathBuf::from)
+                .join(".zshrc"),
+        ),
+        "bash" => Some(home.join(".bashrc")),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -482,6 +524,13 @@ impl Application {
     #[cfg(test)]
     fn set_antigravity_environment(&self, environment: Environment) {
         *self.antigravity.environment.write().unwrap() = environment;
+    }
+    fn antigravity_shell_rc(&self) -> Option<PathBuf> {
+        self.antigravity.shell_rc.read().unwrap().clone()
+    }
+    #[cfg(test)]
+    fn set_antigravity_shell_rc(&self, rc: PathBuf) {
+        *self.antigravity.shell_rc.write().unwrap() = Some(rc);
     }
     /// Antigravity's login: none when absent; an error when it cannot be
     /// read or is no login.

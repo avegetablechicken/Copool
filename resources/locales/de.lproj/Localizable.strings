@@ -546,7 +546,10 @@
 "settings.sub2api.antigravity_name_placeholder" = "Ein Name für diesen Sub2api-Anbieter";
 "settings.sub2api.antigravity_base_url" = "Sub2api-URL";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
-"accounts.notice.antigravity_provider_switched_format" = "agy verwendet jetzt Sub2api %@ mit GEMINI_API_KEY; starte agy neu, um es zu nutzen";
-"error.antigravity.gemini_api_key_missing" = "Exportiere GEMINI_API_KEY, den Sub2api-API-Schlüssel für agy, bevor du zu einer Sub2api-Karte wechselst";
-"error.antigravity.gemini_base_url_missing" = "Exportiere GOOGLE_GEMINI_BASE_URL, die …/antigravity-Adresse von Sub2api, bevor du zu einer Sub2api-Karte wechselst";
+"settings.sub2api.antigravity_api_key_variable" = "API-Key-Variable";
+"settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
+"accounts.notice.antigravity_provider_switched_format" = "agy verwendet jetzt Sub2api %@; starte agy in einem neuen Terminal, um es zu nutzen";
+"error.antigravity.gemini_api_key_missing" = "Die API-Key-Variable des Anbieters ist nicht exportiert; exportiere sie in deiner Shell, bevor du zu einer Sub2api-Karte wechselst";
+"error.antigravity.api_key_variable_invalid" = "Gib den Namen der Variable mit dem API-Key ein, etwa GEMINI_API_KEY, nicht den Key selbst";
+"error.antigravity.gemini_env_not_loaded" = "Eine neue Shell hat noch ein anderes GOOGLE_GEMINI_BASE_URL oder GEMINI_API_KEY, obwohl Copool sie in ~/.gemini/.env geschrieben und von ~/.zshrc oder ~/.bashrc laden lässt; entferne den anderen Export und versuche es erneut";
 "error.antigravity.settings_invalid" = "agys settings.json ist kein JSON-Objekt; korrigiere zuerst ~/.gemini/antigravity-cli/settings.json";

@@ -156,11 +156,15 @@ test("Antigravity's Sub2api form keeps agy's key out and its password secret", (
   const providers = new Providers(null, "antigravity");
   assert.deepEqual(
     providers.form.fields.map(([key]) => key),
-    ["name", "baseURL", "adminBaseURL", "username", "password"],
+    ["name", "baseURL", "apiKeyVariable", "adminBaseURL", "username", "password"],
   );
+  // The key's variable is a name, shown as saved; the key is never asked.
   assert.deepEqual(providers.form.secrets, ["password"]);
   const id = providers.add();
   assert.equal(providers.providers.get(id).baseURL, "");
+  assert.equal(providers.providers.get(id).apiKeyVariable, "");
+  const saved = { id: "p", name: "Relay", apiKeyVariable: "RELAY_KEY", password: "" };
+  assert.equal(providers.draft(saved).apiKeyVariable, "RELAY_KEY");
   assert.equal(providers.key({ id: "p", name: "Relay" }), "p");
   assert.equal(providers.name({ id: "p", name: "Relay" }), "Relay");
 });

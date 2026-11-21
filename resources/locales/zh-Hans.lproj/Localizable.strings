@@ -576,7 +576,10 @@
 "settings.sub2api.antigravity_name_placeholder" = "此 Sub2api 提供方的名称";
 "settings.sub2api.antigravity_base_url" = "Sub2api 地址";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
-"accounts.notice.antigravity_provider_switched_format" = "agy 已通过 GEMINI_API_KEY 改用 Sub2api %@，重启 agy 后生效";
-"error.antigravity.gemini_api_key_missing" = "切换到 Sub2api 卡片前，请先导出 GEMINI_API_KEY（agy 发送的 Sub2api API key）";
-"error.antigravity.gemini_base_url_missing" = "切换到 Sub2api 卡片前，请先导出 GOOGLE_GEMINI_BASE_URL（Sub2api 的 …/antigravity 地址）";
+"settings.sub2api.antigravity_api_key_variable" = "API Key 变量";
+"settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
+"accounts.notice.antigravity_provider_switched_format" = "agy 已改用 Sub2api %@，在新终端中启动 agy 后生效";
+"error.antigravity.gemini_api_key_missing" = "提供方的 API Key 变量未导出；请先在 shell 中导出它，再切换到 Sub2api 卡片";
+"error.antigravity.api_key_variable_invalid" = "请填写存放 API Key 的变量名，例如 GEMINI_API_KEY，而不是 Key 本身";
+"error.antigravity.gemini_env_not_loaded" = "Copool 已把 GOOGLE_GEMINI_BASE_URL 和 GEMINI_API_KEY 写入 ~/.gemini/.env 并让 ~/.zshrc 或 ~/.bashrc 加载它，但新 shell 中的值仍不同；请移除其他地方的导出后重试";
 "error.antigravity.settings_invalid" = "agy 的 settings.json 不是 JSON 对象，请先修复 ~/.gemini/antigravity-cli/settings.json";

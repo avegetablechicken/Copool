@@ -58,10 +58,13 @@
     antigravity: {
       key: "id",
       name: "name",
-      // agy's key and gateway stay in its environment, never in the form.
+      // agy's key stays in the environment: the form names its variable,
+      // never the key. A switch writes the variable and the Sub2api URL,
+      // agy's gateway, to ~/.gemini/.env.
       fields: [
         ["name", "antigravity_name"],
         ["baseURL", "antigravity_base_url"],
+        ["apiKeyVariable", "antigravity_api_key_variable"],
         ["adminBaseURL", "admin_base_url"],
         ["username", "username"],
         ["password", "password", "password"],
@@ -70,6 +73,7 @@
       blank: () => ({
         name: "",
         baseURL: "",
+        apiKeyVariable: "",
         adminBaseURL: "",
         username: "",
         password: "",

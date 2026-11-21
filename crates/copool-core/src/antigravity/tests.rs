@@ -1041,16 +1041,62 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     let original = "{\n  \"trustedWorkspaces\": [\n    \"/w\"\n  ]\n}\n";
     fs::write(&settings, original).unwrap();
     h.app.set_antigravity_settings(settings.clone());
-    let exported = Arc::new(Mutex::new(Vec::<&'static str>::new()));
-    let environment = exported.clone();
+    // Gemini's `.env` and the shell's startup file, beside agy's settings.
+    let env = h._dir.path().join(".env");
+    let env_original = "# mine\nexport GOOGLE_GEMINI_BASE_URL=\"https://old.invalid\"\n";
+    fs::write(&env, env_original).unwrap();
+    let rc = h._dir.path().join("zshrc");
+    let rc_original = "alias ll='ls -l'";
+    fs::write(&rc, rc_original).unwrap();
+    h.app.set_antigravity_shell_rc(rc.clone());
+    // A fake shell: its profile's exports, then the `.env` in order, which
+    // its startup file loads itself ("loads"), once Copool has it ("not"),
+    // or before another gateway is exported over it ("broken").
+    type Exports = std::collections::BTreeMap<String, String>;
+    let profile = Arc::new(Mutex::new(Exports::new()));
+    let shell = Arc::new(Mutex::new("broken"));
+    let (exports, mode) = (profile.clone(), shell.clone());
+    let (env_file, rc_file) = (env.clone(), rc.clone());
     h.app
-        .set_antigravity_environment(Arc::new(move |name: &str| {
-            environment
-                .lock()
-                .unwrap()
-                .contains(&name)
-                .then(|| "exported".to_owned())
+        .set_antigravity_environment(Arc::new(move |names: &[&str], _now: bool| {
+            let mut vars = exports.lock().unwrap().clone();
+            let mode = *mode.lock().unwrap();
+            let loads = mode != "not"
+                || fs::read_to_string(&rc_file)
+                    .unwrap_or_default()
+                    .contains(&format!(". '{}'", env_file.display()));
+            let text = fs::read_to_string(&env_file).unwrap_or_default();
+            for line in text.lines().filter(|line| loads && !line.starts_with('#')) {
+                let line = line.strip_prefix("export ").unwrap_or(line);
+                let Some((name, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let value = match value.strip_prefix('\'') {
+                    Some(literal) => literal.trim_end_matches('\'').to_owned(),
+                    None => {
+                        let value = value.trim_matches('"');
+                        match value.strip_prefix("${").and_then(|v| v.strip_suffix('}')) {
+                            Some(other) => vars.get(other).cloned().unwrap_or_default(),
+                            None => value.to_owned(),
+                        }
+                    }
+                };
+                vars.insert(name.to_owned(), value);
+            }
+            if mode == "broken" {
+                vars.insert(sub2api::BASE_URL.into(), "https://elsewhere.invalid".into());
+            }
+            names
+                .iter()
+                .map(|name| vars.get(*name).filter(|v| !v.is_empty()).cloned())
+                .collect()
         }));
+    let export = |name: &str, value: &str| {
+        profile
+            .lock()
+            .unwrap()
+            .insert(name.to_owned(), value.to_owned());
+    };
     let requests = Arc::new(Mutex::new(Vec::new()));
     let base = sub2api_server(requests.clone(), Arc::new(Mutex::new(Some("0.2.24")))).await;
     // The address agy's gateway names works as well as the root.
@@ -1065,7 +1111,21 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
         .unwrap();
     assert_eq!(saved["baseURL"], base);
     assert!(saved.get("password").is_none());
+    // agy's key is GEMINI_API_KEY's unless a variable is named; a key
+    // itself is refused, never kept.
+    assert_eq!(saved["apiKeyVariable"], sub2api::API_KEY);
     let id = saved["id"].as_str().unwrap().to_owned();
+    let edit = |variable: &str, url: &str| {
+        json!({"id": id, "name": "Relay", "baseURL": url,
+               "username": "admin@example.com", "apiKeyVariable": variable})
+    };
+    assert_eq!(
+        h.app
+            .save_provider(Pool::Antigravity, edit("sk-relay", &base))
+            .await
+            .unwrap_err(),
+        sub2api::API_KEY_VARIABLE_INVALID
+    );
     assert_eq!(
         h.app.providers(Pool::Antigravity).unwrap()[0]["name"],
         "Relay"
@@ -1117,12 +1177,15 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     assert_eq!(fs::read_to_string(&settings).unwrap(), original);
     let writes = h.live.writes();
 
-    // Without agy's key or gateway exported, nothing changes.
-    for (names, error) in [
-        (vec![], sub2api::API_KEY_MISSING),
-        (vec![sub2api::API_KEY], sub2api::BASE_URL_MISSING),
+    // Without agy's key, or with a shell that has another gateway even after
+    // loading the `.env` last, nothing changes.
+    for (exported, error) in [
+        (false, sub2api::API_KEY_MISSING),
+        (true, sub2api::ENV_NOT_LOADED),
     ] {
-        *exported.lock().unwrap() = names;
+        if exported {
+            export(sub2api::API_KEY, "sk-profile");
+        }
         assert_eq!(
             h.app
                 .switch_account(Pool::Antigravity, &card.id)
@@ -1131,8 +1194,11 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
             error
         );
         assert_eq!(fs::read_to_string(&settings).unwrap(), original);
+        assert_eq!(fs::read_to_string(&env).unwrap(), env_original);
+        assert_eq!(fs::read_to_string(&rc).unwrap(), rc_original);
     }
-    *exported.lock().unwrap() = vec![sub2api::API_KEY, sub2api::BASE_URL];
+    // A shell that does not load the `.env` gets it loaded, last.
+    *shell.lock().unwrap() = "not";
     let execution = h
         .app
         .switch_account(Pool::Antigravity, &card.id)
@@ -1143,6 +1209,63 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
         read_json(&settings),
         json!({"trustedWorkspaces": ["/w"], "modelProvider": "gemini"})
     );
+    // The user's own lines stay; Copool's block after them wins.
+    let block = |key: &str, url: &str| {
+        format!(
+            "{env_original}\n# >>> Copool: agy's Sub2api provider (rewritten on each switch) >>>\n\
+             {key}GOOGLE_GEMINI_BASE_URL='{url}/antigravity'\n# <<< Copool <<<\n"
+        )
+    };
+    assert_eq!(fs::read_to_string(&env).unwrap(), block("", &base));
+    let rc_loaded = fs::read_to_string(&rc).unwrap();
+    assert!(
+        rc_loaded.starts_with("alias ll='ls -l'\n\n# Copool:"),
+        "{rc_loaded}"
+    );
+    // Once loaded, another switch adds nothing more.
+    h.app
+        .switch_account(Pool::Antigravity, &card.id)
+        .await
+        .unwrap();
+    assert_eq!(fs::read_to_string(&rc).unwrap(), rc_loaded);
+    // Through Coport, the address is Coport's with Sub2api's in its path,
+    // as Coport routes an upstream URL; the admin API is still Sub2api's,
+    // reached directly. Another variable's value is agy's key, once a shell
+    // exports it.
+    let coport = format!("http://127.0.0.1:8787/antigravity/{base}");
+    let saved = h
+        .app
+        .save_provider(
+            Pool::Antigravity,
+            edit("RELAY_KEY", &format!("{coport}/antigravity/")),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved["baseURL"], coport);
+    requests.lock().unwrap().clear();
+    assert_eq!(
+        h.app
+            .refresh_provider(Pool::Antigravity, &id, true)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(!requests.lock().unwrap().is_empty());
+    assert_eq!(
+        h.app
+            .switch_account(Pool::Antigravity, &card.id)
+            .await
+            .unwrap_err(),
+        sub2api::API_KEY_MISSING
+    );
+    assert_eq!(fs::read_to_string(&env).unwrap(), block("", &base));
+    export("RELAY_KEY", "sk-relay");
+    h.app
+        .switch_account(Pool::Antigravity, &card.id)
+        .await
+        .unwrap();
+    let applied = block("GEMINI_API_KEY=\"${RELAY_KEY}\"\n", &coport);
+    assert_eq!(fs::read_to_string(&env).unwrap(), applied);
     // The login stays in the Keychain, for an account's switch.
     assert_eq!(h.live.writes(), writes);
     for account in cards(&h.app).await {
@@ -1165,6 +1288,7 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
         .await
         .is_err());
     assert_eq!(read_json(&settings)["modelProvider"], "gemini");
+    assert_eq!(fs::read_to_string(&env).unwrap(), applied);
     assert!(cards(&h.app)
         .await
         .iter()
@@ -1181,6 +1305,9 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
         read_json(&settings),
         json!({"trustedWorkspaces": ["/w", "/x"]})
     );
+    // The user's `.env` is theirs again; the startup file keeps loading it.
+    assert_eq!(fs::read_to_string(&env).unwrap(), env_original);
+    assert_eq!(fs::read_to_string(&rc).unwrap(), rc_loaded);
     assert_eq!(
         login::refresh_token(&h.live.document().value).as_deref(),
         Some("refresh-alice")
