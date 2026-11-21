@@ -557,7 +557,7 @@ async fn imports_are_checked_whole_and_folded_into_known_accounts() {
 }
 
 #[tokio::test]
-async fn the_pool_has_no_proxy_or_providers() {
+async fn the_pool_has_no_proxy_and_starts_without_providers() {
     let h = harness(true).await;
     assert!(h.app.proxy_status(Pool::Antigravity).await.is_err());
     assert!(h.app.start_proxy(Pool::Antigravity).await.is_err());
@@ -929,5 +929,268 @@ fn antigravitys_item_is_reached_only_through_the_security_tool() {
         ] {
             assert!(!source.contains(call), "{file} uses {call}");
         }
+    }
+}
+
+/// A Sub2api admin API with Antigravity accounts, recording request paths:
+/// one in use, and a Gemini CLI account the pool must not show.
+async fn sub2api_server(requests: Arc<Mutex<Vec<String>>>) -> String {
+    use axum::{extract::Request, response::IntoResponse, routing::any, Json, Router};
+    let router = Router::new().fallback(any(move |request: Request| {
+        let requests = requests.clone();
+        async move {
+            let uri = request.uri().path_and_query().unwrap().to_string();
+            requests.lock().unwrap().push(uri.clone());
+            if !uri.starts_with("/api/v1/auth/login") {
+                assert_eq!(
+                    request.headers().get("authorization").unwrap(),
+                    "Bearer admin"
+                );
+            }
+            let data = if uri.starts_with("/api/v1/auth/login") {
+                json!({"access_token": "admin"})
+            } else if uri.starts_with("/api/v1/admin/accounts?") {
+                json!({"items": [
+                    {"id": 7, "name": "pro@gmail.com", "platform": "antigravity", "type": "oauth", "status": "active"},
+                    {"id": 8, "name": "cli@gmail.com", "platform": "gemini", "type": "oauth", "status": "active"}
+                ], "pages": 1})
+            } else {
+                json!({"subscription_tier": "PRO", "antigravity_quota_groups": [
+                    {"key": "gemini", "windows": [
+                        {"window": "5h", "utilization": 25, "resets_at": "2099-01-01T00:00:00Z"},
+                        {"window": "weekly", "utilization": 10, "resets_at": "2099-01-05T00:00:00Z"}]},
+                    {"key": "3p", "windows": [
+                        {"window": "5h", "utilization": 50, "resets_at": "2099-01-01T00:00:00Z"}]}
+                ]})
+            };
+            Json(json!({"code": 0, "data": data})).into_response()
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    format!("http://{address}")
+}
+
+fn read_json(path: &std::path::Path) -> Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+// agy's settings, environment and the Sub2api server are all temporary: no
+// real settings, shell, Keychain item or relay is used.
+#[tokio::test]
+async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back() {
+    let h = harness(true).await;
+    let settings = h._dir.path().join("agy/settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let original = "{\n  \"trustedWorkspaces\": [\n    \"/w\"\n  ]\n}\n";
+    fs::write(&settings, original).unwrap();
+    h.app.set_antigravity_settings(settings.clone());
+    let exported = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+    let environment = exported.clone();
+    h.app
+        .set_antigravity_environment(Arc::new(move |name: &str| {
+            environment
+                .lock()
+                .unwrap()
+                .contains(&name)
+                .then(|| "exported".to_owned())
+        }));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let base = sub2api_server(requests.clone()).await;
+    // The address agy's gateway names works as well as the root.
+    let saved = h
+        .app
+        .save_provider(
+            Pool::Antigravity,
+            json!({"name": "Relay", "baseURL": format!("{base}/antigravity/"),
+                   "username": "admin@example.com", "password": "secret"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved["baseURL"], base);
+    assert!(saved.get("password").is_none());
+    let id = saved["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        h.app.providers(Pool::Antigravity).unwrap()[0]["name"],
+        "Relay"
+    );
+    assert_eq!(
+        h.app
+            .refresh_provider(Pool::Antigravity, &id, true)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|uri| uri.contains("platform=antigravity")));
+
+    // An account beside the provider's card, in use.
+    h.app
+        .import_json(
+            Pool::Antigravity,
+            &json!({"document": login_of("alice", "access-alice", later()), "wrapped": true})
+                .to_string(),
+        )
+        .await
+        .unwrap();
+    let accounts = cards(&h.app).await;
+    assert_eq!(accounts.len(), 2);
+    let is_card = |a: &&AccountSummary| crate::sub2api::is_card(Pool::Antigravity, &a.id);
+    let card = accounts.iter().find(is_card).unwrap().clone();
+    let alice = accounts.iter().find(|a| !is_card(a)).unwrap().clone();
+    assert_eq!(card.source_tag.as_deref(), Some("SUB2API"));
+    assert_eq!(card.email.as_deref(), Some("pro@gmail.com"));
+    assert_eq!(card.plan_type.as_deref(), Some("pro"));
+    let usage = card.usage.as_ref().unwrap();
+    assert_eq!(usage.five_hour.as_ref().unwrap().used_percent, 25.0);
+    assert_eq!(usage.one_week.as_ref().unwrap().used_percent, 10.0);
+    assert_eq!(
+        usage.third_party_five_hour.as_ref().unwrap().used_percent,
+        50.0
+    );
+    assert!(!card.is_current);
+    h.app
+        .switch_account(Pool::Antigravity, &alice.id)
+        .await
+        .unwrap();
+    // The account's switch had nothing to take back.
+    assert_eq!(fs::read_to_string(&settings).unwrap(), original);
+    let writes = h.live.writes();
+
+    // Without agy's key or gateway exported, nothing changes.
+    for (names, error) in [
+        (vec![], sub2api::API_KEY_MISSING),
+        (vec![sub2api::API_KEY], sub2api::BASE_URL_MISSING),
+    ] {
+        *exported.lock().unwrap() = names;
+        assert_eq!(
+            h.app
+                .switch_account(Pool::Antigravity, &card.id)
+                .await
+                .unwrap_err(),
+            error
+        );
+        assert_eq!(fs::read_to_string(&settings).unwrap(), original);
+    }
+    *exported.lock().unwrap() = vec![sub2api::API_KEY, sub2api::BASE_URL];
+    let execution = h
+        .app
+        .switch_account(Pool::Antigravity, &card.id)
+        .await
+        .unwrap();
+    assert_eq!(execution.provider.as_deref(), Some("Relay"));
+    assert_eq!(
+        read_json(&settings),
+        json!({"trustedWorkspaces": ["/w"], "modelProvider": "gemini"})
+    );
+    // The login stays in the Keychain, for an account's switch.
+    assert_eq!(h.live.writes(), writes);
+    for account in cards(&h.app).await {
+        assert_eq!(account.is_current, account.id == card.id, "{}", account.id);
+    }
+    // agy's own edits while on the provider stay.
+    fs::write(
+        &settings,
+        "{\"trustedWorkspaces\":[\"/w\",\"/x\"],\"modelProvider\":\"gemini\"}",
+    )
+    .unwrap();
+
+    // A Keychain that refuses the login leaves agy on the provider.
+    h.live
+        .refused
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h
+        .app
+        .switch_account(Pool::Antigravity, &alice.id)
+        .await
+        .is_err());
+    assert_eq!(read_json(&settings)["modelProvider"], "gemini");
+    assert!(cards(&h.app)
+        .await
+        .iter()
+        .any(|a| a.id == card.id && a.is_current));
+    h.live
+        .refused
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
+    h.app
+        .switch_account(Pool::Antigravity, &alice.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_json(&settings),
+        json!({"trustedWorkspaces": ["/w", "/x"]})
+    );
+    assert_eq!(
+        login::refresh_token(&h.live.document().value).as_deref(),
+        Some("refresh-alice")
+    );
+    for account in cards(&h.app).await {
+        assert_eq!(account.is_current, account.id == alice.id, "{}", account.id);
+    }
+    let store = h.app.antigravity_load().unwrap();
+    assert!(store.settings_provider.is_none() && store.settings_record.is_none());
+
+    // Settings set to the Gemini API by hand show the login as not in use;
+    // a provider's card is current only once applied.
+    fs::write(&settings, "{\"modelProvider\":\"gemini\"}").unwrap();
+    assert!(cards(&h.app).await.iter().all(|a| !a.is_current));
+    // A provider's cards say no hi.
+    assert_eq!(
+        h.app.say_hi(Pool::Antigravity, &card.id).await.unwrap_err(),
+        NOT_AVAILABLE
+    );
+}
+
+#[test]
+fn sub2apis_antigravity_usage_is_its_quota_groups_else_each_models() {
+    let now = 1_000;
+    let groups = sub2api_usage(
+        &json!({"subscription_tier": "ULTRA", "antigravity_quota_groups": [
+            {"key": "gemini", "windows": [{"window": "5h", "utilization": 12.5, "resets_at": "2099-01-01T00:00:00Z"}]},
+            {"key": "other", "windows": [{"window": "5h", "utilization": 99}]}
+        ]}),
+        now,
+    )
+    .unwrap();
+    assert_eq!(groups.plan_type.as_deref(), Some("ultra"));
+    assert_eq!(groups.five_hour.as_ref().unwrap().used_percent, 12.5);
+    assert!(groups.third_party_five_hour.is_none() && groups.one_week.is_none());
+    // Each model's, pooled by the one with the least left.
+    let models = sub2api_usage(
+        &json!({"subscription_tier": "UNKNOWN", "antigravity_quota": {
+            "gemini-3-pro": {"utilization": 40, "reset_time": "2099-01-01T00:00:00Z"},
+            "gemini-3-flash": {"utilization": 20, "reset_time": "2099-01-01T00:00:00Z"},
+            "claude-sonnet": {"utilization": 70, "reset_time": "2099-01-01T00:00:00Z"}
+        }}),
+        now,
+    )
+    .unwrap();
+    assert!(models.plan_type.is_none());
+    assert_eq!(models.five_hour.as_ref().unwrap().used_percent, 40.0);
+    assert_eq!(
+        models.third_party_five_hour.as_ref().unwrap().used_percent,
+        70.0
+    );
+    // An account Sub2api cannot use says why.
+    for (body, error) in [
+        (
+            json!({"is_forbidden": true, "forbidden_reason": "verify"}),
+            "verify",
+        ),
+        (
+            json!({"needs_reauth": true}),
+            "The account must sign in to Sub2api again",
+        ),
+        (
+            json!({}),
+            "Sub2api reports no Antigravity quota for this account",
+        ),
+    ] {
+        assert_eq!(sub2api_usage(&body, now).unwrap_err(), error);
     }
 }

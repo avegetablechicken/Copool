@@ -38,19 +38,24 @@ fn normalize_times(times: &mut Vec<String>) -> Result<()> {
     times.dedup();
     Ok(())
 }
-/// A card that may say hi: any Claude or Antigravity card; an official
-/// Codex Plus card.
+/// A card that may say hi: any Claude card; an Antigravity account's, not
+/// a Sub2api provider's; an official Codex Plus card.
 fn eligible(account: &AccountSummary, pool: Pool) -> bool {
     !account.awaiting_first_request
-        && (pool != Pool::Codex
-            || (!crate::sub2api::is_card(pool, &account.id)
-                && account
-                    .usage
-                    .as_ref()
-                    .and_then(|u| u.plan_type.as_deref())
-                    .filter(|s| !s.trim().is_empty())
-                    .or(account.plan_type.as_deref())
-                    .is_some_and(|p| p.trim().eq_ignore_ascii_case("plus"))))
+        && match pool {
+            Pool::Claude => true,
+            Pool::Antigravity => !crate::sub2api::is_card(pool, &account.id),
+            Pool::Codex => {
+                !crate::sub2api::is_card(pool, &account.id)
+                    && account
+                        .usage
+                        .as_ref()
+                        .and_then(|u| u.plan_type.as_deref())
+                        .filter(|s| !s.trim().is_empty())
+                        .or(account.plan_type.as_deref())
+                        .is_some_and(|p| p.trim().eq_ignore_ascii_case("plus"))
+            }
+        }
 }
 impl GreetingSchedule {
     fn due(

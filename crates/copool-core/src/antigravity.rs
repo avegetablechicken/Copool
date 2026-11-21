@@ -1,7 +1,8 @@
 //! Antigravity account pool (Google AI Pro): the logins Copool keeps, the
 //! one Antigravity uses (`login`), the quota of each (`api`) and switching.
 //! As in the Codex pool, the logins are kept in the pool's file in Copool's
-//! data directory. Antigravity has no API proxy, Sub2api or greeting here.
+//! data directory, with the pool's Sub2api providers (`sub2api`), whose
+//! cards put agy on the Gemini API. Antigravity has no API proxy here.
 use crate::{
     application::{Application, SwitchExecution},
     models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
@@ -18,8 +19,12 @@ mod api;
 mod login;
 #[cfg(any(target_os = "macos", test))]
 mod security;
+mod sub2api;
 
-pub(crate) use api::{sign_in_url, Network};
+pub(crate) use api::{sign_in_url, sub2api_usage, Network};
+
+/// An environment variable as agy would have it.
+type Environment = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// A Google sign-in's login document, from its code.
 pub(crate) async fn sign_in(code: &str, verifier: &str, redirect: &str) -> Result<Value> {
@@ -45,6 +50,10 @@ const EXPIRY_MARGIN: i64 = 60;
 pub(crate) struct State {
     network: std::sync::RwLock<Arc<dyn Network>>,
     live: std::sync::RwLock<Arc<dyn LiveStore>>,
+    /// agy's settings, whose `modelProvider` a provider's card sets.
+    settings: std::sync::RwLock<PathBuf>,
+    /// agy's environment, which a provider's card needs its key in.
+    environment: std::sync::RwLock<Environment>,
     /// Held across a load and save of the store.
     lock: tokio::sync::Mutex<()>,
     /// Serializes imports, switches and refreshes.
@@ -54,15 +63,42 @@ impl Default for State {
     fn default() -> Self {
         Self {
             network: std::sync::RwLock::new(Arc::new(api::Http)),
-            // Tests never reach the user's own login.
+            // Tests never reach the user's own login, settings or shell.
             #[cfg(not(test))]
             live: std::sync::RwLock::new(login::system_store()),
             #[cfg(test)]
             live: std::sync::RwLock::new(Arc::new(tests::Live::default())),
+            #[cfg(not(test))]
+            settings: std::sync::RwLock::new(settings_path()),
+            #[cfg(test)]
+            settings: std::sync::RwLock::new(
+                std::env::temp_dir()
+                    .join(format!("copool-test-agy-{}", uuid::Uuid::new_v4()))
+                    .join("settings.json"),
+            ),
+            #[cfg(not(test))]
+            environment: std::sync::RwLock::new(Arc::new(|name: &str| {
+                crate::proxy_integration::environment_key(
+                    name,
+                    crate::proxy_integration::Shell::Interactive,
+                )
+            })),
+            #[cfg(test)]
+            environment: std::sync::RwLock::new(Arc::new(|_: &str| None)),
             lock: Default::default(),
             operations: Default::default(),
         }
     }
+}
+/// agy's global settings: `COPOOL_ANTIGRAVITY_SETTINGS_FILE` for a smoke
+/// test, else `~/.gemini/antigravity-cli/settings.json`.
+#[cfg(not(test))]
+fn settings_path() -> PathBuf {
+    std::env::var_os("COPOOL_ANTIGRAVITY_SETTINGS_FILE")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".gemini/antigravity-cli/settings.json")))
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -71,6 +107,15 @@ struct Store {
     accounts: Vec<Stored>,
     /// The account whose login Antigravity was last seen to use.
     current_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    providers: Vec<sub2api::Provider>,
+    /// The provider agy's settings were last pointed at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settings_provider: Option<String>,
+    /// What a provider replaced in agy's settings, until an account's
+    /// switch returns it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settings_record: Option<sub2api::SettingsRecord>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -426,6 +471,17 @@ impl Application {
     fn set_antigravity_live(&self, live: Arc<dyn LiveStore>) {
         *self.antigravity.live.write().unwrap() = live;
     }
+    fn antigravity_settings_path(&self) -> PathBuf {
+        self.antigravity.settings.read().unwrap().clone()
+    }
+    #[cfg(test)]
+    fn set_antigravity_settings(&self, path: PathBuf) {
+        *self.antigravity.settings.write().unwrap() = path;
+    }
+    #[cfg(test)]
+    fn set_antigravity_environment(&self, environment: Environment) {
+        *self.antigravity.environment.write().unwrap() = environment;
+    }
     /// Antigravity's login: none when absent; an error when it cannot be
     /// read or is no login.
     async fn antigravity_read_live(&self, access: KeychainAccess) -> Result<Option<Document>> {
@@ -453,18 +509,26 @@ impl Application {
         if follow_live(&mut store, live.as_ref()) {
             self.antigravity_save(&store)?;
         }
+        // On the Gemini API agy uses the provider last applied; else its login.
+        let api = sub2api::api_key_mode(&self.antigravity_settings_path());
+        let provider = store.settings_provider.as_deref().filter(|_| api);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
-            .map(|a| a.summary(store.current_account_id.as_deref() == Some(a.id.as_str())))
+            .map(|a| a.summary(!api && store.current_account_id.as_deref() == Some(a.id.as_str())))
+            .chain(self.provider_cards(Pool::Antigravity, provider)?)
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.schedule(Pool::Antigravity) {
             for card in &mut summaries {
-                let account = store.accounts.iter().find(|a| a.id == card.id);
-                card.next_refresh_at = account
-                    .filter(|a| !a.first_request_pending)
-                    .map(|a| schedule.next_refresh_at(true, a.updated_at + schedule.interval));
+                // A provider's cards refresh every round, as Claude's.
+                card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
+                    None => Some(schedule.next_refresh_at(true, 0)),
+                    Some(a) if a.first_request_pending => None,
+                    Some(a) => {
+                        Some(schedule.next_refresh_at(true, a.updated_at + schedule.interval))
+                    }
+                };
             }
         }
         Ok(summaries)
@@ -604,14 +668,19 @@ impl Application {
         }
         Ok(())
     }
-    /// Gives Antigravity this account's login. A login there that the pool
-    /// does not hold is kept in `antigravity-before-switch.json` first.
+    /// Gives Antigravity this account's login, off the Gemini API a
+    /// provider put it on, or a Sub2api card's provider. A login there that
+    /// the pool does not hold is kept in `antigravity-before-switch.json`
+    /// first; a failed step is rolled back.
     pub(crate) async fn antigravity_switch_account(
         &self,
         id: &str,
         access: KeychainAccess,
     ) -> Result<SwitchExecution> {
         let _op = self.antigravity.operations.lock().await;
+        if crate::sub2api::is_card(Pool::Antigravity, id) {
+            return self.antigravity_switch_sub2api(id).await;
+        }
         let live = self.antigravity_read_live(access).await?;
         let _lock = self.antigravity.lock.lock().await;
         let mut store = self.antigravity_load()?;
@@ -626,7 +695,11 @@ impl Application {
             let backup = self.paths.data_dir.join("antigravity-before-switch.json");
             write_json(&backup, &live.value)?;
         }
-        self.antigravity_live()
+        // agy keeps to the Gemini API while its settings say so.
+        let path = self.antigravity_settings_path();
+        let settings = sub2api::leave_api_key(&path, &mut store)?;
+        if let Err(error) = self
+            .antigravity_live()
             .write(
                 login::encode(&Document {
                     value: target.document.clone(),
@@ -634,7 +707,11 @@ impl Application {
                 }),
                 access,
             )
-            .await?;
+            .await
+        {
+            sub2api::restore_settings(&path, settings);
+            return Err(error);
+        }
         store.current_account_id = Some(target.id);
         self.antigravity_save(&store)?;
         Ok(SwitchExecution::default())

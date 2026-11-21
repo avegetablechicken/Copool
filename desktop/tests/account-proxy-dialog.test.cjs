@@ -111,12 +111,16 @@ test("Sub2api cards group by the provider in their id, even before the provider 
   const providerControllers = {
     claude: new Providers(null, "claude"),
     codex: new Providers(null, "codex"),
+    antigravity: new Providers(null, "antigravity"),
   };
   // Read before card 2 was synced.
   providerControllers.claude.persisted = [
     { id: "srv", name: "myServer", cachedAccounts: [{ id: 1 }] },
   ];
   providerControllers.codex.persisted = [{ id: "x", providerID: "Team-A", cachedAccounts: [] }];
+  providerControllers.antigravity.persisted = [
+    { id: "0b9e-4f1a", name: "Relay", cachedAccounts: [] },
+  ];
   const scope = { pool: "claude", providerControllers };
   vm.createContext(scope);
   vm.runInContext(source.slice(source.indexOf("function providerKey("),
@@ -130,4 +134,33 @@ test("Sub2api cards group by the provider in their id, even before the provider 
   assert.equal(scope.providerTitle(card("sub2api-team-a-17")), "Team-A");
   // An unknown provider still groups, under its id.
   assert.equal(scope.providerTitle(card("sub2api-gone-3")), "gone");
+  // Antigravity's cards name their provider's id, dashes and all.
+  scope.pool = "antigravity";
+  assert.equal(scope.providerKey(card("antigravity-sub2api-0b9e-4f1a-7")), "0b9e-4f1a");
+  assert.equal(scope.providerTitle(card("antigravity-sub2api-0b9e-4f1a-7")), "Relay");
+});
+test("Antigravity accounts say hi, its Sub2api cards do not", () => {
+  const start = source.indexOf("function supportsSayHi(");
+  const end = source.indexOf("/// Known usage with no future reset");
+  assert.ok(start >= 0 && end > start);
+  const scope = { pool: "antigravity" };
+  vm.createContext(scope);
+  vm.runInContext(source.slice(start, end), scope);
+  assert.equal(scope.supportsSayHi({ id: "a" }), true);
+  assert.equal(scope.supportsSayHi({ id: "antigravity-sub2api-p-1", sourceTag: "SUB2API" }), false);
+  scope.pool = "claude";
+  assert.equal(scope.supportsSayHi({ id: "claude-sub2api-p-1", sourceTag: "SUB2API" }), true);
+});
+test("Antigravity's Sub2api form keeps agy's key out and its password secret", () => {
+  const { Providers } = require("../ui/controllers.js");
+  const providers = new Providers(null, "antigravity");
+  assert.deepEqual(
+    providers.form.fields.map(([key]) => key),
+    ["name", "baseURL", "adminBaseURL", "username", "password"],
+  );
+  assert.deepEqual(providers.form.secrets, ["password"]);
+  const id = providers.add();
+  assert.equal(providers.providers.get(id).baseURL, "");
+  assert.equal(providers.key({ id: "p", name: "Relay" }), "p");
+  assert.equal(providers.name({ id: "p", name: "Relay" }), "Relay");
 });

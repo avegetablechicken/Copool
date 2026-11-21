@@ -82,12 +82,14 @@ impl Account {
         }
     }
 }
-/// The upstream platform whose OAuth accounts a pool shows.
+/// The upstream platform whose OAuth accounts a pool shows. Sub2api keeps
+/// Antigravity's apart from Gemini CLI's (`gemini`); its `/antigravity`
+/// gateway serves only these.
 fn platform(pool: Pool) -> &'static str {
     match pool {
         Pool::Codex => "openai",
         Pool::Claude => "anthropic",
-        Pool::Antigravity => "gemini",
+        Pool::Antigravity => "antigravity",
     }
 }
 /// A card's id: its pool, provider and account.
@@ -433,10 +435,10 @@ impl Connection {
     ) -> Result<Vec<Account>, String> {
         let client = self.client()?;
         let token = &self.admin_token(&client).await?;
-        // A Claude card Sub2api stopped serving, such as one whose token
-        // expired, says why; the Codex pool drops it.
+        // A Claude or Antigravity card Sub2api stopped serving, such as one
+        // whose token expired, says why; the Codex pool drops it.
         let inactive_shown = |id: i64| {
-            pool == Pool::Claude
+            pool != Pool::Codex
                 && ids
                     .unwrap_or(&self.configuration.imported_account_ids)
                     .contains(&id)
@@ -453,7 +455,7 @@ impl Connection {
                 ("sort_by", "name".into()),
                 ("sort_order", "asc".into()),
             ];
-            if pool != Pool::Claude
+            if pool == Pool::Codex
                 || (ids.is_none() && self.configuration.imported_account_ids.is_empty())
             {
                 query.push(("status", "active".into()));
@@ -566,8 +568,12 @@ impl Connection {
             }
             .await;
             match quota {
-                Ok(value) if pool == Pool::Claude => {
-                    match crate::claude::sub2api_usage(&value, now) {
+                Ok(value) if pool != Pool::Codex => {
+                    let usage = match pool {
+                        Pool::Claude => crate::claude::sub2api_usage(&value, now),
+                        _ => crate::antigravity::sub2api_usage(&value, now),
+                    };
+                    match usage {
                         Ok(usage) => {
                             account.plan_type = usage.plan_type.clone();
                             account.usage = Some(usage);

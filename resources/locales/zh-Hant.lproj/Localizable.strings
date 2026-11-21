@@ -540,3 +540,11 @@
 "accounts.card.antigravity_say_hi.sent" = "已傳送招呼，等待 Antigravity 回覆";
 "accounts.card.antigravity_say_hi.received" = "已收到 Antigravity 回覆，等待 5 小時計時顯示";
 "error.antigravity.say_hi_window_not_started" = "Antigravity 已接受招呼，但 5 小時計時沒有開始";
+"settings.sub2api.antigravity_name" = "名稱";
+"settings.sub2api.antigravity_name_placeholder" = "此 Sub2api 提供者的名稱";
+"settings.sub2api.antigravity_base_url" = "Sub2api 位址";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"accounts.notice.antigravity_provider_switched_format" = "agy 已透過 GEMINI_API_KEY 改用 Sub2api %@，重新啟動 agy 後生效";
+"error.antigravity.gemini_api_key_missing" = "切換到 Sub2api 卡片前，請先匯出 GEMINI_API_KEY（agy 傳送的 Sub2api API 金鑰）";
+"error.antigravity.gemini_base_url_missing" = "切換到 Sub2api 卡片前，請先匯出 GOOGLE_GEMINI_BASE_URL（Sub2api 的 …/antigravity 位址）";
+"error.antigravity.settings_invalid" = "agy 的 settings.json 不是 JSON 物件，請先修正 ~/.gemini/antigravity-cli/settings.json";

@@ -1231,7 +1231,7 @@ fn write_account(location: &Location, account: &Value) -> Result<()> {
     let updated = set_member(&document, "oauthAccount", &account)?;
     write_text(&path, &updated)
 }
-fn write_text(path: &std::path::Path, text: &str) -> Result<()> {
+pub(crate) fn write_text(path: &std::path::Path, text: &str) -> Result<()> {
     use std::io::Write;
     // Replace a symlink's target (a dotfiles checkout, say), not the link.
     let path = &fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());

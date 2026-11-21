@@ -4,7 +4,7 @@ let installedEditors = [];
 const settingsController = new window.CopoolControllers.Settings(invoke);
 /// Each pool's Sub2api providers and their forms.
 const providerControllers = Object.fromEntries(
-  POOLS.map((target) => [
+  PROVIDER_POOLS.map((target) => [
     target,
     new window.CopoolControllers.Providers(invoke, target),
   ]),
@@ -100,10 +100,10 @@ function settingsFileButton(field, provider, rerender) {
   field.append(choose);
 }
 const expandedProviders = new Set();
-/// Both pools' provider forms, or one pool's.
+/// Every pool's provider forms, or one pool's.
 function renderProviders(target = null) {
   if (target === null) {
-    for (const each of POOLS) renderProviders(each);
+    for (const each of PROVIDER_POOLS) renderProviders(each);
     return;
   }
   const providers = providerControllers[target];
@@ -213,7 +213,7 @@ async function initializeFeatures() {
   // A pool's provider store that cannot be read must not keep the rest of
   // the app from rendering.
   await Promise.all(
-    POOLS.map((target) =>
+    PROVIDER_POOLS.map((target) =>
       providerControllers[target].load().catch((error) => notice(error, true)),
     ),
   );
@@ -261,7 +261,7 @@ $("provider-add").onclick = ({ currentTarget: trigger }) => {
   }
   showMenu(trigger, [{
     label: "Sub2API",
-    run: () => showMenu(trigger, POOLS.map((target) => ({
+    run: () => showMenu(trigger, PROVIDER_POOLS.map((target) => ({
       label: tr(`pool.${target}`),
       icon: brandIcon(target),
       run: () => addProvider(target),

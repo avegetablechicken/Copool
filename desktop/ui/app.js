@@ -21,8 +21,10 @@ let iconFrame = 0;
 // The account pools, left to right as their buttons, for ⌘1–⌘3 and the way
 // the cards slide.
 const ACCOUNT_POOLS = ["codex", "claude", "antigravity"];
-// The pools with an API proxy, their Sub2api providers and remote servers.
+// The pools with an API proxy and remote servers.
 const POOLS = ["codex", "claude"];
+// The pools with Sub2api providers: every account pool.
+const PROVIDER_POOLS = ACCOUNT_POOLS;
 // The account pool on the accounts page: Codex, Claude Code or Antigravity.
 let pool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.pool"))
   ? localStorage.getItem("copool.pool")
@@ -477,11 +479,12 @@ async function droppingNewCards(origin, task) {
   }
 }
 /// The provider of a Sub2api card, from its id (`sub2api-<provider>-<n>`,
-/// `claude-sub2api-<provider>-<n>`): cards synced since the provider list
-/// was last read still group with their provider.
+/// `claude-sub2api-<provider>-<n>`, `antigravity-sub2api-<provider>-<n>`):
+/// cards synced since the provider list was last read still group with
+/// their provider.
 function providerKey(account) {
   if (account.sourceTag !== "SUB2API") return null;
-  return /^(?:claude-)?sub2api-(.+)-\d+$/.exec(account.id)?.[1] ?? null;
+  return /^(?:claude-|antigravity-)?sub2api-(.+)-\d+$/.exec(account.id)?.[1] ?? null;
 }
 /// The saved Sub2api provider a card belongs to, if any.
 function accountProvider(account) {
@@ -685,7 +688,9 @@ function canSayHi(account) {
   return fiveHourIdle(account) && supportsSayHi(account);
 }
 function supportsSayHi(account) {
-  if (pool === "claude" || pool === "antigravity") return true;
+  if (pool === "claude") return true;
+  // An Antigravity provider's cards say no hi, as Codex's.
+  if (pool === "antigravity") return account.sourceTag !== "SUB2API";
   const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
   return account.sourceTag !== "SUB2API" && plan === "plus";
 }
@@ -2452,9 +2457,10 @@ function switchNotice(execution) {
   const segments = [
     execution.provider
       ? tr(
-          pool === "claude"
-            ? "accounts.notice.claude_provider_switched_format"
-            : "accounts.notice.provider_switched_format",
+          {
+            claude: "accounts.notice.claude_provider_switched_format",
+            antigravity: "accounts.notice.antigravity_provider_switched_format",
+          }[pool] || "accounts.notice.provider_switched_format",
           execution.provider,
         )
       : tr(

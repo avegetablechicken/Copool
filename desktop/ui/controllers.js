@@ -55,6 +55,27 @@
         allowInsecureTLS: false,
       }),
     },
+    antigravity: {
+      key: "id",
+      name: "name",
+      // agy's key and gateway stay in its environment, never in the form.
+      fields: [
+        ["name", "antigravity_name"],
+        ["baseURL", "antigravity_base_url"],
+        ["adminBaseURL", "admin_base_url"],
+        ["username", "username"],
+        ["password", "password", "password"],
+      ],
+      secrets: ["password"],
+      blank: () => ({
+        name: "",
+        baseURL: "",
+        adminBaseURL: "",
+        username: "",
+        password: "",
+        allowInsecureTLS: false,
+      }),
+    },
   };
   /// One pool's Sub2api providers: those saved, and the forms editing them.
   class Providers {

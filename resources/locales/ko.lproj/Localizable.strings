@@ -560,3 +560,11 @@
 "accounts.card.antigravity_say_hi.sent" = "인사를 보냈습니다. Antigravity의 응답을 기다리는 중";
 "accounts.card.antigravity_say_hi.received" = "Antigravity가 응답했습니다. 5시간 창이 표시되기를 기다리는 중";
 "error.antigravity.say_hi_window_not_started" = "Antigravity가 인사를 받았지만 5시간 창이 시작되지 않았습니다";
+"settings.sub2api.antigravity_name" = "이름";
+"settings.sub2api.antigravity_name_placeholder" = "이 Sub2api 공급자의 이름";
+"settings.sub2api.antigravity_base_url" = "Sub2api URL";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"accounts.notice.antigravity_provider_switched_format" = "agy가 이제 GEMINI_API_KEY로 Sub2api %@을(를) 사용합니다. agy를 다시 시작하면 적용됩니다";
+"error.antigravity.gemini_api_key_missing" = "Sub2api 카드로 전환하기 전에 agy가 보내는 Sub2api API 키 GEMINI_API_KEY를 export하세요";
+"error.antigravity.gemini_base_url_missing" = "Sub2api 카드로 전환하기 전에 Sub2api의 …/antigravity 주소 GOOGLE_GEMINI_BASE_URL을 export하세요";
+"error.antigravity.settings_invalid" = "agy의 settings.json이 JSON 객체가 아닙니다. 먼저 ~/.gemini/antigravity-cli/settings.json을 고치세요";

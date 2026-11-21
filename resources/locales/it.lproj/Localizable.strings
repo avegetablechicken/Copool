@@ -540,3 +540,11 @@
 "accounts.card.antigravity_say_hi.sent" = "Saluto inviato; in attesa della risposta di Antigravity";
 "accounts.card.antigravity_say_hi.received" = "Antigravity ha risposto; in attesa che compaia la finestra di 5 ore";
 "error.antigravity.say_hi_window_not_started" = "Antigravity ha accettato il saluto, ma la finestra di 5 ore non è iniziata";
+"settings.sub2api.antigravity_name" = "Nome";
+"settings.sub2api.antigravity_name_placeholder" = "Un nome per questo provider Sub2api";
+"settings.sub2api.antigravity_base_url" = "URL Sub2api";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"accounts.notice.antigravity_provider_switched_format" = "agy ora usa Sub2api %@ con GEMINI_API_KEY; riavvia agy per usarlo";
+"error.antigravity.gemini_api_key_missing" = "Esporta GEMINI_API_KEY, la chiave API di Sub2api che agy invia, prima di passare a una scheda Sub2api";
+"error.antigravity.gemini_base_url_missing" = "Esporta GOOGLE_GEMINI_BASE_URL, l'indirizzo …/antigravity di Sub2api, prima di passare a una scheda Sub2api";
+"error.antigravity.settings_invalid" = "Il settings.json di agy non è un oggetto JSON; correggi prima ~/.gemini/antigravity-cli/settings.json";

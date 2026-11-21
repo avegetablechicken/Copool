@@ -293,6 +293,111 @@ pub(super) fn quota_summary(value: &Value, now: i64) -> Option<UsageSnapshot> {
     Some(usage)
 }
 
+/// A Sub2api Antigravity account's usage (`/admin/accounts/{id}/usage`): the
+/// same pools as `retrieveUserQuotaSummary`, which Sub2api reads, as groups
+/// of windows with the share used (0-100); else, for an account without
+/// the summary, each model's, pooled as `available_models` does. An account
+/// Sub2api cannot use says why.
+pub(crate) fn sub2api_usage(value: &Value, now: i64) -> Result<UsageSnapshot, String> {
+    if value.get("is_forbidden").and_then(Value::as_bool) == Some(true) {
+        return Err(value
+            .get("forbidden_reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .unwrap_or("Google refuses this account in Sub2api")
+            .to_owned());
+    }
+    if value.get("needs_reauth").and_then(Value::as_bool) == Some(true) {
+        return Err("The account must sign in to Sub2api again".into());
+    }
+    let mut usage = snapshot(now);
+    usage.plan_type = value
+        .get("subscription_tier")
+        .and_then(Value::as_str)
+        .map(|tier| tier.trim().to_ascii_lowercase())
+        .filter(|tier| !tier.is_empty() && tier != "unknown");
+    let left = |entry: &Value| {
+        entry
+            .get("utilization")
+            .and_then(number)
+            .map(|used| 1.0 - used / 100.0)
+    };
+    let mut found = false;
+    for group in value
+        .get("antigravity_quota_groups")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let third_party = match group.get("key").and_then(Value::as_str) {
+            Some("gemini") => false,
+            Some("3p") => true,
+            _ => continue,
+        };
+        for entry in group
+            .get("windows")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(remaining) = left(entry) else {
+                continue;
+            };
+            let (slot, seconds) = match (entry.get("window").and_then(Value::as_str), third_party) {
+                (Some("5h"), false) => (&mut usage.five_hour, FIVE_HOURS),
+                (Some("weekly"), false) => (&mut usage.one_week, ONE_WEEK),
+                (Some("5h"), true) => (&mut usage.third_party_five_hour, FIVE_HOURS),
+                (Some("weekly"), true) => (&mut usage.third_party_one_week, ONE_WEEK),
+                _ => continue,
+            };
+            if slot.is_none() {
+                *slot = Some(window(
+                    remaining,
+                    entry.get("resets_at").and_then(reset_at),
+                    seconds,
+                    now,
+                ));
+                found = true;
+            }
+        }
+    }
+    if !found {
+        for (model, quota) in value
+            .get("antigravity_quota")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            let Some(remaining) = left(quota) else {
+                continue;
+            };
+            let slot = if model.to_ascii_lowercase().contains("gemini") {
+                &mut usage.five_hour
+            } else {
+                &mut usage.third_party_five_hour
+            };
+            let candidate = window(
+                remaining,
+                quota.get("reset_time").and_then(reset_at),
+                FIVE_HOURS,
+                now,
+            );
+            if slot
+                .as_ref()
+                .is_none_or(|w| candidate.used_percent > w.used_percent)
+            {
+                *slot = Some(candidate);
+            }
+            found = true;
+        }
+    }
+    if found {
+        Ok(usage)
+    } else {
+        Err("Sub2api reports no Antigravity quota for this account".into())
+    }
+}
 /// Models that hold no quota of the shared pools.
 const MODEL_BLACKLIST: [&str; 9] = [
     "MODEL_CHAT_20706",

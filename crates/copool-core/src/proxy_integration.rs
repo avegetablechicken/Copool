@@ -21,23 +21,57 @@ fn api_key(definition: &codex_config::Definition, paths: &Paths) -> Option<Strin
         if let Some(value) = codex_dotenv(paths, name) {
             return Some(value);
         }
-        #[cfg(unix)]
-        if !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
-            let shell = std::env::var("SHELL").unwrap_or("/bin/sh".into());
-            use std::sync::{LazyLock, Mutex};
-            static CACHE: LazyLock<
-                Mutex<std::collections::BTreeMap<String, (std::time::Instant, Option<String>)>>,
-            > = LazyLock::new(Default::default);
-            let mut cache = CACHE.lock().ok()?;
-            if let Some((time, value)) = cache.get(name) {
-                if time.elapsed() < std::time::Duration::from_secs(30) {
-                    return value.clone();
-                }
-            }
-            let value = login_shell_key(&shell, name, std::time::Duration::from_secs(3));
-            cache.insert(name.clone(), (std::time::Instant::now(), value.clone()));
-            return value;
+        return shell_key(name, Shell::Login);
+    }
+    None
+}
+
+/// The shell startup files a probe reads.
+#[derive(Clone, Copy)]
+pub(crate) enum Shell {
+    /// A login shell's, as an app started from the Dock gets none of.
+    Login,
+    /// An interactive login shell's too, such as `~/.zshrc`, where keys for
+    /// tools started from a terminal are often exported.
+    Interactive,
+}
+/// An environment variable as this process has it, else as the user's shell
+/// exports it, asked at most every 30 seconds per variable.
+pub(crate) fn environment_key(name: &str, shell: Shell) -> Option<String> {
+    if let Ok(value) = std::env::var(name) {
+        if !value.trim().is_empty() {
+            return Some(value);
         }
+    }
+    shell_key(name, shell)
+}
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn shell_key(name: &str, shell: Shell) -> Option<String> {
+    #[cfg(unix)]
+    if !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
+        let program = std::env::var("SHELL").unwrap_or("/bin/sh".into());
+        use std::sync::{LazyLock, Mutex};
+        type Lookups = std::collections::BTreeMap<String, (std::time::Instant, Option<String>)>;
+        static CACHE: LazyLock<Mutex<Lookups>> = LazyLock::new(Default::default);
+        let (flags, timeout, key) = match shell {
+            Shell::Login => ("-lc", 3, name.to_owned()),
+            // Interactive startup files load more; they get longer.
+            Shell::Interactive => ("-lic", 5, format!("interactive:{name}")),
+        };
+        let mut cache = CACHE.lock().ok()?;
+        if let Some((time, value)) = cache.get(&key) {
+            if time.elapsed() < std::time::Duration::from_secs(30) {
+                return value.clone();
+            }
+        }
+        let value = login_shell_key(
+            &program,
+            flags,
+            name,
+            std::time::Duration::from_secs(timeout),
+        );
+        cache.insert(key, (std::time::Instant::now(), value.clone()));
+        return value;
     }
     None
 }
@@ -62,13 +96,18 @@ fn codex_dotenv(paths: &Paths, name: &str) -> Option<String> {
     })
 }
 #[cfg(unix)]
-fn login_shell_key(shell: &str, name: &str, timeout: std::time::Duration) -> Option<String> {
+fn login_shell_key(
+    shell: &str,
+    flags: &str,
+    name: &str,
+    timeout: std::time::Duration,
+) -> Option<String> {
     use std::io::Read;
     let output = tempfile::NamedTempFile::new().ok()?;
     let mut child = std::process::Command::new(shell)
         // Profiles may print banners; only the marked value is the key.
         .args([
-            "-lc",
+            flags,
             &format!("printf '__COPOOL_ENV__%s__COPOOL_END__' \"${name}\""),
         ])
         .stdin(std::process::Stdio::null())
