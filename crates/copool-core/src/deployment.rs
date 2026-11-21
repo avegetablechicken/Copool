@@ -76,16 +76,24 @@ pub fn prebuilt(
             return Ok(Some(path));
         }
     }
-    let Some(resources) = resources else {
+    let archive = resources
+        .map(|dir| {
+            dir.join("proxyd-prebuilt-archives")
+                .join(target)
+                .join("codex-tools-proxyd.zlib")
+        })
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            repo.map(|dir| {
+                dir.join("resources/proxyd-prebuilt-archives")
+                    .join(target)
+                    .join("codex-tools-proxyd.zlib")
+            })
+            .filter(|path| path.is_file())
+        });
+    let Some(archive) = archive else {
         return Ok(None);
     };
-    let archive = resources
-        .join("proxyd-prebuilt-archives")
-        .join(target)
-        .join("codex-tools-proxyd.zlib");
-    if !archive.is_file() {
-        return Ok(None);
-    }
     let compressed = fs::read(&archive).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     let max = 128 * 1024 * 1024;

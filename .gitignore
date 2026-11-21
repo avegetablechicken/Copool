@@ -1,6 +1,7 @@
 .DS_Store
 .build/
 resources/proxyd-src/proxyd/target/
+resources/proxyd-prebuilt/
 build/
 dist/
 DerivedData/

@@ -124,3 +124,23 @@ fn testPrebuiltBinaryExtractsBundledCompressedArtifactToCacheRoot() {
     assert!(executable(&resolved));
     assert_eq!(std::fs::read_to_string(resolved).unwrap(), STUB);
 }
+#[test]
+fn testPrebuiltBinaryFallsBackToRepoCompressedArchiveWhenUncompressedMissing() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = root.path().join("cache");
+    let target = "x86_64-unknown-linux-musl";
+    compressed_stub(&root.path().join("resources"), target);
+    let resolved = prebuilt(Some(root.path()), None, &cache, target)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        resolved,
+        cache
+            .join("proxyd-prebuilt")
+            .join(target)
+            .join("codex-tools-proxyd")
+    );
+    assert!(resolved.is_file());
+    assert!(executable(&resolved));
+    assert_eq!(std::fs::read_to_string(resolved).unwrap(), STUB);
+}
