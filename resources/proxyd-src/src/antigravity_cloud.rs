@@ -1,6 +1,6 @@
 //! Cloud Code quota and OAuth operations shared by the desktop pool and remote daemon.
 use crate::{
-    models::{UsageSnapshot, UsageWindow},
+    models::{CreditSnapshot, UsageSnapshot, UsageWindow},
     utils::now_unix_seconds,
 };
 use serde_json::{json, Value};
@@ -178,6 +178,41 @@ pub(crate) fn snapshot(now: i64) -> UsageSnapshot {
         third_party_five_hour: None,
         third_party_one_week: None,
     }
+}
+
+/// `loadCodeAssist`'s Google One AI credits, which pay for requests once the
+/// plan's quota is used up: the `availableCredits` of the paid tier, else
+/// of the current tier. Proto3 JSON leaves out a zero amount and may send
+/// an int64 as a string. The credits carry no expiry. None without the
+/// list, or when an amount cannot be read.
+pub(crate) fn credits(value: &Value) -> Option<CreditSnapshot> {
+    let list = [
+        "/paidTier/availableCredits",
+        "/currentTier/availableCredits",
+    ]
+    .iter()
+    .find_map(|path| value.pointer(path).and_then(Value::as_array))?;
+    let whole = |entry: &Value, key: &str| match entry.get(key) {
+        None | Some(Value::Null) => Some(0),
+        Some(value) => value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok())),
+    };
+    let (mut balance, mut minimum, mut found) = (0_i64, 0_i64, false);
+    for entry in list
+        .iter()
+        .filter(|entry| entry.get("creditType").and_then(Value::as_str) == Some("GOOGLE_ONE_AI"))
+    {
+        balance = balance.saturating_add(whole(entry, "creditAmount")?);
+        minimum = minimum.max(whole(entry, "minimumCreditAmountForUsage")?);
+        found = true;
+    }
+    found.then(|| CreditSnapshot {
+        expiries: Vec::new(),
+        has_credits: balance > 0 && balance >= minimum,
+        unlimited: false,
+        balance: Some(balance.max(0).to_string()),
+    })
 }
 
 /// `retrieveUserQuotaSummary`: the shared pools by bucket; none without

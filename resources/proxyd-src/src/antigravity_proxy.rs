@@ -360,15 +360,20 @@ pub(super) async fn remote_usage(
     storage: &super::ProxyStorageContext,
     candidate: &ProxyCandidate,
 ) -> Result<crate::models::UsageSnapshot, String> {
-    use crate::antigravity_cloud::{fetch_usage, Failure, Http};
+    use crate::antigravity_cloud::{
+        credits, empty, fetch_usage, Failure, Http, Network, LOAD_CODE_ASSIST_PATH,
+    };
     async fn fetch(candidate: &ProxyCandidate) -> Result<crate::models::UsageSnapshot, Failure> {
-        fetch_usage(
-            &Http,
-            &candidate.access_token,
-            &candidate.proxy_url,
-            crate::utils::now_unix_seconds(),
-        )
-        .await
+        let (token, proxy) = (&candidate.access_token, &candidate.proxy_url);
+        let mut usage = fetch_usage(&Http, token, proxy, crate::utils::now_unix_seconds()).await?;
+        // The credits, from `loadCodeAssist`; none when it fails.
+        usage.credits = Http
+            .cloud(LOAD_CODE_ASSIST_PATH, token, empty(), &agent(), proxy)
+            .await
+            .ok()
+            .filter(|(status, _)| (200..300).contains(status))
+            .and_then(|(_, body)| credits(&body));
+        Ok(usage)
     }
     let result = match fetch(candidate).await {
         Err(Failure::Expired) if candidate.renews => {

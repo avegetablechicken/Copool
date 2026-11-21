@@ -58,6 +58,8 @@ struct Fake {
     /// their quota one by one, as for a client Cloud Code does not show the
     /// Gemini pool.
     per_model_gemini: std::sync::atomic::AtomicBool,
+    /// `loadCodeAssist` fails, as a server error.
+    assist_down: std::sync::atomic::AtomicBool,
     /// Logins another app gives Antigravity's item during the first call
     /// starting with each prefix.
     meanwhile: Mutex<Vec<(String, Arc<Live>, Value)>>,
@@ -108,6 +110,7 @@ impl Network for Fake {
         let per_model = self
             .per_model_gemini
             .load(std::sync::atomic::Ordering::Relaxed);
+        let assist_down = self.assist_down.load(std::sync::atomic::Ordering::Relaxed);
         let versioned = agent.starts_with("antigravity/");
         let agent = agent.to_owned();
         Box::pin(async move {
@@ -159,9 +162,12 @@ impl Network for Fake {
                     200,
                     json!({"ineligibleTiers": [{"reasonCode": "UNSUPPORTED_CLIENT"}]}),
                 ),
+                api::LOAD_CODE_ASSIST_PATH if assist_down => (503, Value::Null),
                 api::LOAD_CODE_ASSIST_PATH => (
                     200,
-                    json!({"paidTier": {"name": "Google AI Pro"}, "cloudaicompanionProject": "project-1"}),
+                    json!({"paidTier": {"name": "Google AI Pro", "availableCredits": [
+                        {"creditType": "GOOGLE_ONE_AI", "creditAmount": "1000", "minimumCreditAmountForUsage": "50"}
+                    ]}, "cloudaicompanionProject": "project-1"}),
                 ),
                 api::FETCH_MODELS_PATH => (
                     200,
@@ -294,6 +300,9 @@ async fn an_imported_login_waits_then_shows_its_quota_name_and_plan() {
     assert_eq!(usage.one_week.unwrap().used_percent, 10.0);
     assert_eq!(usage.third_party_five_hour.unwrap().used_percent, 50.0);
     assert!(usage.third_party_one_week.is_none());
+    let credits = usage.credits.unwrap();
+    assert_eq!(credits.balance.as_deref(), Some("1000"));
+    assert!(credits.has_credits);
     // Every request goes through the account's proxy, as Antigravity's.
     assert_eq!(
         h.fake.calls(),
@@ -313,6 +322,44 @@ async fn an_imported_login_waits_then_shows_its_quota_name_and_plan() {
     );
     // A refresh that renews nothing writes nothing to Antigravity's login.
     assert_eq!(h.live.writes(), 0);
+}
+
+#[tokio::test]
+async fn a_failed_code_assist_keeps_the_last_credits() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let h = harness(false).await;
+    h.app
+        .import_json(
+            Pool::Antigravity,
+            &login_of("alice", "access-alice", later()).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = cards(&h.app).await.remove(0).id;
+    let balance = || async {
+        cards(&h.app)
+            .await
+            .remove(0)
+            .usage
+            .and_then(|u| u.credits)
+            .and_then(|c| c.balance)
+    };
+    h.app
+        .refresh_now(Pool::Antigravity, Some(&id))
+        .await
+        .unwrap();
+    assert_eq!(balance().await.as_deref(), Some("1000"));
+    // The quota refreshes; the credits it could not read stay.
+    h.fake.assist_down.store(true, Relaxed);
+    *h.fake.remaining.lock().unwrap() = 0.5;
+    h.app
+        .refresh_now(Pool::Antigravity, Some(&id))
+        .await
+        .unwrap();
+    let card = cards(&h.app).await.remove(0);
+    assert_eq!(card.usage.unwrap().five_hour.unwrap().used_percent, 50.0);
+    assert_eq!(card.plan_type.as_deref(), Some("pro"));
+    assert_eq!(balance().await.as_deref(), Some("1000"));
 }
 
 #[tokio::test]

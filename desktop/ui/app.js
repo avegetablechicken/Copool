@@ -966,7 +966,8 @@ function providerControls(group, title, current) {
 function switchTarget(group) {
   return group.accounts.find((a) => a.available !== false) || group.accounts[0];
 }
-function accountBalanceText(usage, credits, inventory = P.resetInventory(usage)) {
+/// Without resets (Antigravity, which has none), the credits alone.
+function accountBalanceText(usage, credits, inventory = P.resetInventory(usage), resets = true) {
   const footerText = el("span", "account-footer-text");
   const details = P.balanceTooltips(usage);
   const expiry = (at) => at == null
@@ -975,6 +976,10 @@ function accountBalanceText(usage, credits, inventory = P.resetInventory(usage))
   const creditText = el("span", "account-credits", tr("accounts.card.credits_format", credits));
   creditText.title = details.creditDates.length
     ? details.creditDates.map(expiry).join("\n") : expiry(null);
+  if (!resets) {
+    footerText.append(creditText);
+    return footerText;
+  }
   const resetCount = el("span", "account-resets", tr(
     inventory.count !== null
       ? "accounts.card.remaining_resets_format" : "accounts.card.resets_unavailable_format",
@@ -1065,10 +1070,8 @@ function accountCard(account, grouped = false) {
     view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
   const inventory = P.resetInventory(account.usage);
   const footer = el("div", "account-footer");
-  // Antigravity reports no credits or resets.
-  const footerText = pool === "antigravity"
-    ? el("span", "account-footer-text")
-    : accountBalanceText(account.usage, credits, inventory);
+  // Antigravity reports credits but no resets.
+  const footerText = accountBalanceText(account.usage, credits, inventory, pool !== "antigravity");
   footer.append(footerText, accountControls(account, full, view, grouped));
   card.append(
     // A provider's account without a plan tag has no tag row to show.

@@ -829,6 +829,9 @@ impl Application {
         // The account's name and plan, with the token that worked.
         let token = login::access_token(&document).unwrap_or_default();
         let (mut identity, mut plan, mut project) = (None, None, None);
+        // The credits of a successful `loadCodeAssist`; when it fails, the
+        // card keeps those it had.
+        let mut credits = None;
         if matches!(outcome, Ok(Some(_))) {
             if account.google_id.is_none() {
                 identity = network
@@ -852,6 +855,7 @@ impl Application {
                 .map(|(_, body)| body);
             plan = assist.as_ref().and_then(api::plan);
             project = assist.as_ref().and_then(api::project);
+            credits = assist.as_ref().map(api::credits);
         }
         let _lock = self.antigravity.lock.lock().await;
         let mut store = self.antigravity_load()?;
@@ -890,6 +894,8 @@ impl Application {
             Ok(Some(usage)) => {
                 let mut usage = usage.clone();
                 usage.plan_type = stored.plan.clone();
+                usage.credits = credits
+                    .unwrap_or_else(|| stored.usage.as_ref().and_then(|u| u.credits.clone()));
                 stored.usage = Some(usage);
                 stored.usage_error = None;
                 stored.updated_at = now;

@@ -15,7 +15,8 @@ https://www.googleapis.com/auth/userinfo.profile \
 https://www.googleapis.com/auth/cclog \
 https://www.googleapis.com/auth/experimentsandconfigs openid";
 pub(crate) use crate::antigravity_cloud::{
-    agent, empty, Http, Network, Reply, FETCH_MODELS_PATH, GENERATE_PATH, LOAD_CODE_ASSIST_PATH,
+    agent, credits, empty, Http, Network, Reply, FETCH_MODELS_PATH, GENERATE_PATH,
+    LOAD_CODE_ASSIST_PATH,
 };
 #[cfg(test)]
 use crate::antigravity_cloud::{available_models, quota_summary};
@@ -406,5 +407,64 @@ mod tests {
             Some("Standard".into())
         );
         assert_eq!(plan_of(json!({})), None);
+    }
+
+    #[test]
+    fn credits_are_the_paid_tiers_google_one_ai_credits() {
+        let balance = |value: Value| credits(&value).map(|c| (c.balance, c.has_credits));
+        // As proto3 JSON writes an int64: a string.
+        let usage = credits(&json!({"paidTier": {"id": "g1-pro-tier", "availableCredits": [
+            {"creditType": "GOOGLE_ONE_AI", "creditAmount": "1000", "minimumCreditAmountForUsage": "50"}
+        ]}}))
+        .unwrap();
+        assert_eq!(usage.balance.as_deref(), Some("1000"));
+        assert!(usage.has_credits && !usage.unlimited && usage.expiries.is_empty());
+        // The paid tier's, before the current tier's; other types left out.
+        assert_eq!(
+            balance(json!({
+                "currentTier": {"availableCredits": [{"creditType": "GOOGLE_ONE_AI", "creditAmount": "9"}]},
+                "paidTier": {"availableCredits": [
+                    {"creditType": "GOOGLE_ONE_AI", "creditAmount": 30},
+                    {"creditType": "CREDIT_TYPE_UNSPECIFIED", "creditAmount": "500"},
+                    {"creditType": "GOOGLE_ONE_AI", "creditAmount": "12"}
+                ]}
+            })),
+            Some((Some("42".into()), true))
+        );
+        assert_eq!(
+            balance(
+                json!({"currentTier": {"availableCredits": [{"creditType": "GOOGLE_ONE_AI", "creditAmount": "9"}]}})
+            ),
+            Some((Some("9".into()), true))
+        );
+        // A zero amount is left out; below the minimum, none can be used.
+        assert_eq!(
+            balance(json!({"paidTier": {"availableCredits": [{"creditType": "GOOGLE_ONE_AI"}]}})),
+            Some((Some("0".into()), false))
+        );
+        assert_eq!(
+            balance(json!({"paidTier": {"availableCredits": [
+                {"creditType": "GOOGLE_ONE_AI", "creditAmount": "20", "minimumCreditAmountForUsage": "50"}
+            ]}})),
+            Some((Some("20".into()), false))
+        );
+        // Unknown, not zero: no list, no Google One AI credits, or an
+        // amount that cannot be read.
+        assert_eq!(
+            balance(json!({"paidTier": {"name": "Google AI Pro"}})),
+            None
+        );
+        assert_eq!(
+            balance(
+                json!({"paidTier": {"availableCredits": [{"creditType": "OTHER", "creditAmount": "5"}]}})
+            ),
+            None
+        );
+        assert_eq!(
+            balance(
+                json!({"paidTier": {"availableCredits": [{"creditType": "GOOGLE_ONE_AI", "creditAmount": "lots"}]}})
+            ),
+            None
+        );
     }
 }

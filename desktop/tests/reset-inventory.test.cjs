@@ -123,6 +123,14 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   const unknown = context.accountBalanceText({}, "--");
   assert.match(unknown.children[0].title, /expiry_unknown/);
   assert.match(unknown.children[2].title, /expiry_unknown/);
+  // Antigravity: its credits alone, even with resets in the usage.
+  const creditsOnly = context.accountBalanceText({credits: {balance: "1000"},
+    resetGrants: [grant("partial", 1, future)]}, "1000", undefined, false);
+  assert.equal(creditsOnly.children.length, 1);
+  assert.equal(creditsOnly.children[0].className, "account-credits");
+  assert.match(creditsOnly.children[0].textContent, /credits_format:1000$/);
+  assert.match(creditsOnly.children[0].title, /expiry_unknown/);
+  assert.match(source, /accountBalanceText\(account\.usage, credits, inventory, pool !== "antigravity"\)/);
 });
 
 
