@@ -146,6 +146,8 @@
 "accounts.window.remaining_format" = "剩余 %@";
 "accounts.window.reset_at_format" = "重置时间：%@";
 "accounts.window.no_data" = "无数据";
+"accounts.window.sub2api_weekly_unavailable_format" = "Sub2api %@ 不提供周用量。";
+"accounts.window.sub2api_weekly_upgrade" = "将 Sub2api 升级到 0.2.20 或更高版本后即可显示。";
 "accounts.window.reset_unavailable" = "重置时间不可用";
 "accounts.window.resets_in_format" = "%@后重置";
 "accounts.window.resets_soon" = "即将重置";

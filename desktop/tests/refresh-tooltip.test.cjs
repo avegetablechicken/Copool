@@ -138,7 +138,7 @@ test("A visible meter changes from red to amber without a data refresh", () => {
 });
 
 test("Antigravity cards show Gemini's windows as the others, and Claude's in an inset", () => {
-  const rows = (pool, usage) => {
+  const rows = (pool, usage, account = {}) => {
     const el = (tag, className, text) => ({
       className, text, children: [],
       append(...nodes) { this.children.push(...nodes); },
@@ -147,6 +147,8 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
       pool, el,
       tr: (key) => ({ "accounts.window.five_hour": "5h", "accounts.window.one_week": "1 week" })[key],
       usageWindow: (view, title, tone) => [title, tone, view.available],
+      // The weekly rows carry the outdated Sub2api version they warn about.
+      weeklyNotice: (row, version) => (version ? [...row, version] : row),
     });
     vm.runInContext(body("usageWindows"), context);
     // The inset as its title and its rows; arrays from the context's realm
@@ -156,7 +158,7 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
       : { [node.className]: node.children.map((child) =>
           Array.isArray(child) ? child : child.children.map((title) => title.text)[0]) };
     return JSON.parse(JSON.stringify(
-      context.usageWindows(P.card({ usage }, false, "used", String)).map(plain),
+      context.usageWindows(P.card({ usage, ...account }, false, "used", String)).map(plain),
     ));
   };
   const window = (usedPercent, windowSeconds) => ({ usedPercent, windowSeconds, resetAt: null });
@@ -191,4 +193,55 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
     ["5h", "five-hour", false],
     ["1 week", "one-week", false],
   ]);
+  // A Sub2api too old for weekly usage: every weekly row says so.
+  assert.deepEqual(
+    rows(
+      "antigravity",
+      { fiveHour: window(0, 18000), thirdPartyFiveHour: window(0, 18000) },
+      { outdatedSub2apiVersion: " 0.1.177 " },
+    ),
+    [
+      ["5h", "five-hour", true],
+      ["1 week", "one-week", false, "0.1.177"],
+      { "account-member": ["Claude", ["5h", "five-hour", true], ["1 week", "one-week", false, "0.1.177"]] },
+    ],
+  );
+});
+
+test("A weekly row of an outdated Sub2api opens a notice naming its version", () => {
+  const opened = [];
+  const node = () => ({
+    attributes: {}, children: [], listeners: {},
+    append(...nodes) { this.children.push(...nodes); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener(name, handler) { this.listeners[name] = handler; },
+  });
+  const context = vm.createContext({
+    tr: (key, ...args) => (args.length ? `${key}:${args.join(",")}` : key),
+    el: (tag, className) => Object.assign(node(), { tag, className }),
+    icon: (name) => ({ glyph: name }),
+    showResetPopover: (...args) => opened.push(args),
+  });
+  vm.runInContext(body("button") + body("weeklyNotice"), context);
+  const value = node();
+  const row = { querySelector: (selector) => (selector === ".usage-value" ? value : null) };
+  // A current Sub2api's row is left as it is.
+  assert.equal(context.weeklyNotice(row, null), row);
+  assert.equal(value.children.length, 0);
+  assert.equal(context.weeklyNotice(row, "0.1.177"), row);
+  const [notice] = value.children;
+  assert.equal(notice.className, "reset-warning");
+  assert.equal(notice.type, "button");
+  assert.equal(notice.children[0].glyph, "reset-notice");
+  const lines = [
+    "accounts.window.sub2api_weekly_unavailable_format:0.1.177",
+    "accounts.window.sub2api_weekly_upgrade",
+  ];
+  assert.equal(notice.attributes["aria-label"], lines.join("\n"));
+  assert.equal(notice.attributes["aria-haspopup"], "dialog");
+  notice.listeners.click();
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0][0], notice);
+  assert.deepEqual([...opened[0][1]], lines);
+  assert.equal(opened[0][2], true);
 });

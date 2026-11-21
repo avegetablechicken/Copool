@@ -686,6 +686,7 @@ impl Stored {
             token_expires_at: crate::models::displayed_expiry(expires_at(&self.oauth) / 1000),
             renewal: Some(Renewal::of(self.renewal).as_str().into()),
             next_refresh_at: None,
+            outdated_sub2api_version: None,
         }
     }
 }

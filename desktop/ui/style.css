@@ -2176,6 +2176,10 @@ button.reset-warning[aria-expanded="true"] {
   line-height: 1.6;
   white-space: nowrap;
 }
+/* Sentences, as a Sub2api weekly notice's, wrap within the panel. */
+.reset-popover.wrapping {
+  white-space: normal;
+}
 
 /* Keep time labels aligned; reveal their inline remove action on the active row. */
 .menu-removable-row {

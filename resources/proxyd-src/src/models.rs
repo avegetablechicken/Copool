@@ -110,6 +110,11 @@ pub struct AccountSummary {
     /// leaves to manual refreshes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_refresh_at: Option<i64>,
+    /// The Sub2api version of an Antigravity card's provider when it is too
+    /// old to report weekly usage; the card's weekly rows then say why they
+    /// have none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outdated_sub2api_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -617,6 +622,7 @@ impl StoredAccount {
                 .and_then(displayed_expiry),
             renewal: None,
             next_refresh_at: None,
+            outdated_sub2api_version: None,
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),

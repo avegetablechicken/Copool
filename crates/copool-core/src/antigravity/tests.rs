@@ -933,11 +933,16 @@ fn antigravitys_item_is_reached_only_through_the_security_tool() {
 }
 
 /// A Sub2api admin API with Antigravity accounts, recording request paths:
-/// one in use, and a Gemini CLI account the pool must not show.
-async fn sub2api_server(requests: Arc<Mutex<Vec<String>>>) -> String {
+/// one in use, and a Gemini CLI account the pool must not show. It reports
+/// `version`, and refuses to without one.
+async fn sub2api_server(
+    requests: Arc<Mutex<Vec<String>>>,
+    version: Arc<Mutex<Option<&'static str>>>,
+) -> String {
     use axum::{extract::Request, response::IntoResponse, routing::any, Json, Router};
     let router = Router::new().fallback(any(move |request: Request| {
         let requests = requests.clone();
+        let version = *version.lock().unwrap();
         async move {
             let uri = request.uri().path_and_query().unwrap().to_string();
             requests.lock().unwrap().push(uri.clone());
@@ -949,6 +954,14 @@ async fn sub2api_server(requests: Arc<Mutex<Vec<String>>>) -> String {
             }
             let data = if uri.starts_with("/api/v1/auth/login") {
                 json!({"access_token": "admin"})
+            } else if uri == "/api/v1/admin/system/version" {
+                match version {
+                    Some(version) => json!({"version": version}),
+                    None => {
+                        return Json(json!({"code": 500, "message": "unavailable"}))
+                            .into_response()
+                    }
+                }
             } else if uri.starts_with("/api/v1/admin/accounts?") {
                 json!({"items": [
                     {"id": 7, "name": "pro@gmail.com", "platform": "antigravity", "type": "oauth", "status": "active"},
@@ -970,6 +983,48 @@ async fn sub2api_server(requests: Arc<Mutex<Vec<String>>>) -> String {
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     format!("http://{address}")
+}
+
+// A Sub2api before 0.2.20 reports no weekly windows: its cards name its
+// version, kept while Sub2api does not say, until an upgrade reports them.
+#[tokio::test]
+async fn a_card_of_a_sub2api_without_weekly_usage_names_its_version() {
+    let h = harness(true).await;
+    let version = Arc::new(Mutex::new(Some("0.1.177")));
+    let base = sub2api_server(Arc::new(Mutex::new(Vec::new())), version.clone()).await;
+    let saved = h
+        .app
+        .save_provider(
+            Pool::Antigravity,
+            json!({"name": "Relay", "baseURL": base,
+                   "username": "admin@example.com", "password": "secret"}),
+        )
+        .await
+        .unwrap();
+    let id = saved["id"].as_str().unwrap().to_owned();
+    let outdated = |accounts: Vec<AccountSummary>| {
+        accounts
+            .into_iter()
+            .find(|a| crate::sub2api::is_card(Pool::Antigravity, &a.id))
+            .unwrap()
+            .outdated_sub2api_version
+    };
+    for (reported, shown, sync) in [
+        (Some("0.1.177"), Some("0.1.177"), true),
+        (None, Some("0.1.177"), false),
+        (Some("v0.2.20"), None, false),
+    ] {
+        *version.lock().unwrap() = reported;
+        h.app
+            .refresh_provider(Pool::Antigravity, &id, sync)
+            .await
+            .unwrap();
+        assert_eq!(
+            outdated(cards(&h.app).await).as_deref(),
+            shown,
+            "{reported:?}"
+        );
+    }
 }
 
 fn read_json(path: &std::path::Path) -> Value {
@@ -997,7 +1052,7 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
                 .then(|| "exported".to_owned())
         }));
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let base = sub2api_server(requests.clone()).await;
+    let base = sub2api_server(requests.clone(), Arc::new(Mutex::new(Some("0.2.24")))).await;
     // The address agy's gateway names works as well as the root.
     let saved = h
         .app
@@ -1043,6 +1098,7 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     let card = accounts.iter().find(is_card).unwrap().clone();
     let alice = accounts.iter().find(|a| !is_card(a)).unwrap().clone();
     assert_eq!(card.source_tag.as_deref(), Some("SUB2API"));
+    assert_eq!(card.outdated_sub2api_version, None);
     assert_eq!(card.email.as_deref(), Some("pro@gmail.com"));
     assert_eq!(card.plan_type.as_deref(), Some("pro"));
     let usage = card.usage.as_ref().unwrap();

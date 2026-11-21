@@ -146,6 +146,8 @@
 "accounts.window.remaining_format" = "Remaining %@";
 "accounts.window.reset_at_format" = "Reset at: %@";
 "accounts.window.no_data" = "No data";
+"accounts.window.sub2api_weekly_unavailable_format" = "Sub2api %@ does not report weekly usage.";
+"accounts.window.sub2api_weekly_upgrade" = "Upgrade Sub2api to 0.2.20 or later to see it.";
 "accounts.window.reset_unavailable" = "Reset unavailable";
 "accounts.window.resets_in_format" = "Resets in %@";
 "accounts.window.resets_soon" = "Resets soon";

@@ -29,6 +29,10 @@ pub struct Account {
     pub usage_error: Option<String>,
     #[serde(default, rename = "providerID", alias = "providerId")]
     pub provider_id: Option<String>,
+    /// The provider's Sub2api version, for an Antigravity account, when it
+    /// predates weekly usage (`ANTIGRAVITY_WEEKLY_SINCE`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outdated_version: Option<String>,
 }
 impl Account {
     pub fn display_email(&self) -> &str {
@@ -79,6 +83,7 @@ impl Account {
             next_refresh_at: None,
             available: self.status.eq_ignore_ascii_case("active"),
             proxy_url: String::new(),
+            outdated_sub2api_version: self.outdated_version.clone(),
         }
     }
 }
@@ -528,6 +533,7 @@ impl Connection {
                                 .unwrap_or_else(|| format!("The account is {status} in Sub2api")),
                         ),
                         provider_id: Some(self.configuration.provider_id.clone()),
+                        outdated_version: None,
                     });
                 }
                 continue;
@@ -546,6 +552,7 @@ impl Connection {
                 usage: None,
                 usage_error: item["error_message"].as_str().map(str::to_owned),
                 provider_id: Some(self.configuration.provider_id.clone()),
+                outdated_version: None,
             };
             if ids.is_some_and(|ids| !ids.contains(&id)) {
                 accounts.push(account);
@@ -608,6 +615,74 @@ impl Connection {
             }
             accounts.push(account);
         }
+        // Without a version, each account keeps the one last seen.
+        if pool == Pool::Antigravity {
+            let version = self.version(&client, token).await;
+            for account in &mut accounts {
+                account.outdated_version = match &version {
+                    Some(v) => Some(v.clone()).filter(|v| lacks_antigravity_weekly(v)),
+                    None => self
+                        .cached_account(account.id)
+                        .and_then(|last| last.outdated_version),
+                };
+            }
+        }
         Ok(accounts)
+    }
+    /// Sub2api's version; none when it does not say.
+    async fn version(&self, client: &reqwest::Client, token: &str) -> Option<String> {
+        let response = client
+            .get(format!("{}/admin/system/version", self.admin_base))
+            .bearer_auth(token)
+            .send()
+            .await
+            .ok()?;
+        let data = payload(response).await.ok()?;
+        let version = data.get("version")?.as_str()?.trim();
+        (!version.is_empty()).then(|| version.to_owned())
+    }
+}
+/// The first Sub2api release whose Antigravity usage has weekly windows
+/// (`antigravity_quota_groups`); before it, only each model's five hours.
+const ANTIGRAVITY_WEEKLY_SINCE: [u64; 3] = [0, 2, 20];
+/// Whether a Sub2api version predates `ANTIGRAVITY_WEEKLY_SINCE`. A version
+/// it cannot read, or a development build's 0.0.0, is taken as recent.
+fn lacks_antigravity_weekly(version: &str) -> bool {
+    let mut parts = version.trim().trim_start_matches(['v', 'V']).split('.');
+    let mut number = [0u64; 3];
+    for slot in &mut number {
+        let digits: String = parts
+            .next()
+            .unwrap_or("0")
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        match digits.parse() {
+            Ok(n) => *slot = n,
+            Err(_) => return false,
+        }
+    }
+    number != [0, 0, 0] && number < ANTIGRAVITY_WEEKLY_SINCE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lacks_antigravity_weekly;
+
+    #[test]
+    fn antigravity_weekly_usage_needs_sub2api_0_2_20() {
+        for (version, lacks) in [
+            ("0.1.177", true),
+            ("v0.1.185", true),
+            ("0.2.19", true),
+            ("0.2.20", false),
+            ("0.2.20-beta.1", false),
+            ("0.2.24", false),
+            ("1.0", false),
+            ("0.0.0-dev", false),
+            ("unknown", false),
+        ] {
+            assert_eq!(lacks_antigravity_weekly(version), lacks, "{version}");
+        }
     }
 }

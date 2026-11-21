@@ -135,6 +135,8 @@
 "accounts.window.remaining_format" = "残り %@";
 "accounts.window.reset_at_format" = "リセット時刻: %@";
 "accounts.window.no_data" = "データなし";
+"accounts.window.sub2api_weekly_unavailable_format" = "Sub2api %@ は週間の使用量を報告しません。";
+"accounts.window.sub2api_weekly_upgrade" = "Sub2api を 0.2.20 以降に更新すると表示されます。";
 "accounts.window.reset_unavailable" = "リセット時刻は不明";
 "accounts.window.resets_in_format" = "%@後にリセット";
 "accounts.window.resets_soon" = "まもなくリセット";

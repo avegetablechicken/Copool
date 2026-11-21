@@ -284,6 +284,8 @@
       // Antigravity's third-party (Claude) pool.
       thirdPartyFiveHour: windowPresentation(account.usage?.thirdPartyFiveHour, mode, formatDate),
       thirdPartyOneWeek: windowPresentation(account.usage?.thirdPartyOneWeek, mode, formatDate),
+      // The Sub2api version too old to report the card's weekly usage.
+      outdatedSub2api: clean(account.outdatedSub2apiVersion) || null,
       compact: [
         displayPercent(account.usage?.fiveHour, mode),
         displayPercent(account.usage?.oneWeek, mode),

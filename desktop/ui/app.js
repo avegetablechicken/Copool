@@ -1074,12 +1074,13 @@ function accountCard(account, grouped = false) {
 }
 /// A card's usage rows: five hours and the week. An Antigravity card's are
 /// Gemini's; its third-party (Claude) pool, once reported, follows
-/// in an inset of its own, as a Sub2api provider's accounts.
+/// in an inset of its own, as a Sub2api provider's accounts. The weekly
+/// rows of a Sub2api too old to report them say so when clicked.
 function usageWindows(view) {
   const five = tr("accounts.window.five_hour"), week = tr("accounts.window.one_week");
   const rows = (fiveHour, oneWeek) => [
     usageWindow(fiveHour, five, "five-hour"),
-    usageWindow(oneWeek, week, "one-week"),
+    weeklyNotice(usageWindow(oneWeek, week, "one-week"), view.outdatedSub2api),
   ];
   const shown = rows(view.fiveHour, view.oneWeek);
   if (
@@ -1093,6 +1094,23 @@ function usageWindows(view) {
     shown.push(inset);
   }
   return shown;
+}
+/// A weekly row's notice that its Sub2api `version` reports no weekly usage.
+function weeklyNotice(row, version) {
+  if (!version) return row;
+  const lines = [
+    tr("accounts.window.sub2api_weekly_unavailable_format", version),
+    tr("accounts.window.sub2api_weekly_upgrade"),
+  ];
+  const notice = button("", "reset-notice", "reset-warning", () =>
+    showResetPopover(notice, lines, true),
+  );
+  notice.type = "button";
+  notice.setAttribute("aria-label", lines.join("\n"));
+  notice.setAttribute("aria-haspopup", "dialog");
+  notice.setAttribute("aria-expanded", "false");
+  row.querySelector(".usage-value").append(notice);
+  return row;
 }
 /// A Sub2api provider's cards close together in one card, which shows once
 /// whether the provider is in use, with its controls where a single
@@ -1936,13 +1954,13 @@ function importMenuLayout(panel, preferredLeft) {
 function menuLeft(panel, width, preferredLeft) {
   return Math.max(panel.left + 8, Math.min(preferredLeft, panel.right - width - 8));
 }
-function showResetPopover(trigger, lines) {
+function showResetPopover(trigger, lines, wrapping = false) {
   if (openMenu?.trigger === trigger) {
     closeMenu(true);
     return;
   }
   closeMenu();
-  const menu = el("div", "select-menu reset-popover");
+  const menu = el("div", `select-menu reset-popover${wrapping ? " wrapping" : ""}`);
   menu.setAttribute("role", "dialog");
   menu.setAttribute("aria-label", trigger.getAttribute("aria-label"));
   menu.tabIndex = -1;
