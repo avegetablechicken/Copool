@@ -491,6 +491,32 @@ main > section.page-leaving {
   padding: 2px 0;
 }
 
+.proxy-stats {
+  display: flex;
+  gap: 12px;
+  color: var(--secondary);
+}
+
+#proxy-status {
+  gap: 6px;
+}
+
+#proxy-status:not(.running) {
+  color: var(--secondary);
+}
+
+/* In the summary line the key is the size of its text. */
+#proxy-status .icon-btn.proxy-power {
+  width: 18px;
+  height: 18px;
+  margin-left: -1px;
+}
+
+#proxy-status .icon-btn.proxy-power .icon {
+  width: 9px;
+  height: 9px;
+}
+
 .stat-value {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -646,27 +672,33 @@ main > section.page-leaving {
   color: var(--accent);
 }
 
-/* The proxy's start and stop as round media keys, tinted by what they do. */
+/* The proxy's start and stop stand in for the state's dot, so they take its
+   colors: green while running (the key stops it), gray while stopped (the
+   key starts it). */
 .icon-btn.proxy-power {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  color: var(--green);
-  background: color-mix(in srgb, var(--green) 16%, transparent);
 }
 
 .icon-btn.proxy-power.stop {
-  color: var(--red);
-  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 18%, transparent);
 }
 
-.icon-btn.proxy-power:hover {
-  color: var(--green);
-  filter: brightness(0.92);
+.icon-btn.proxy-power.start {
+  color: var(--secondary);
+  background: var(--track);
 }
 
 .icon-btn.proxy-power.stop:hover {
-  color: var(--red);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 28%, transparent);
+}
+
+.icon-btn.proxy-power.start:hover {
+  color: var(--label);
+  background: color-mix(in srgb, var(--label) 14%, transparent);
 }
 
 .icon-btn.proxy-power .icon {

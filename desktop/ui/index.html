@@ -154,16 +154,7 @@
                   data-l10n="proxy.section.api_proxy"
                 ></span>
                 <span class="block-aside">
-                  <span id="proxy-status" class="state"
-                    ><span class="dot"></span><span id="proxy-state"></span
-                  ></span>
                   <button
-                    id="proxy-refresh"
-                    class="icon-btn"
-                    data-title="common.refresh"
-                  >
-                    <span data-icon="refresh"></span></button
-                  ><button
                     class="icon-btn disclosure"
                     data-target="api-details"
                     aria-expanded="false"
@@ -172,9 +163,27 @@
                   </button>
                 </span>
               </div>
-              <div class="strip">
-                <span id="proxy-port-status" class="stat-value"></span
-                ><span id="proxy-count" class="stat-value"></span>
+              <div class="strip proxy-summary">
+                <!-- Start or stop stands where the state's dot would. -->
+                <span id="proxy-status" class="state"
+                  ><button
+                    id="proxy-start"
+                    class="icon-btn proxy-power start"
+                    data-title="proxy.action.start_api_proxy"
+                  >
+                    <span data-icon="play"></span></button
+                  ><button
+                    id="proxy-stop"
+                    class="icon-btn proxy-power stop"
+                    data-title="proxy.action.stop_api_proxy"
+                  >
+                    <span data-icon="stop"></span></button
+                  ><span id="proxy-state"></span
+                ></span>
+                <span class="proxy-stats"
+                  ><span id="proxy-port-status" class="stat-value"></span
+                  ><span id="proxy-count" class="stat-value"></span
+                ></span>
               </div>
               <div id="api-details" class="section-details" hidden>
                 <div class="row">
@@ -193,18 +202,13 @@
                       placeholder="8787"
                       data-title="proxy.remote.field.proxy_port"
                   /></span>
+                  <!-- Beside the port, as the hero row's Refresh Status. -->
                   <button
-                    id="proxy-start"
-                    class="icon-btn proxy-power start"
-                    data-title="proxy.action.start_api_proxy"
+                    id="proxy-refresh"
+                    class="icon-btn"
+                    data-title="proxy.action.refresh_status"
                   >
-                    <span data-icon="play"></span></button
-                  ><button
-                    id="proxy-stop"
-                    class="icon-btn proxy-power stop"
-                    data-title="proxy.action.stop_api_proxy"
-                  >
-                    <span data-icon="stop"></span>
+                    <span data-icon="refresh"></span>
                   </button>
                 </div>
                 <label class="row"
