@@ -1,3 +1,5 @@
+#[path = "antigravity_proxy.rs"]
+pub(crate) mod antigravity;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -93,6 +95,7 @@ const CLAUDE_USAGE_REFRESH_INTERVAL_SECONDS: u64 = 300;
 pub(crate) type RenewCandidate = Arc<
     dyn Fn(
             String,
+            String,
         )
             -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send>>
         + Send
@@ -161,6 +164,7 @@ struct ProxyContext {
     upstream_base_url: String,
     client: reqwest::Client,
     shared: Arc<tokio::sync::Mutex<ApiProxyRuntimeSnapshot>>,
+    antigravity_models: antigravity::Catalog,
     /// The model list last fetched from the upstream.
     models: Arc<tokio::sync::Mutex<Option<FetchedModels>>>,
 }
@@ -377,10 +381,6 @@ pub(crate) async fn start_api_proxy_with_runtime(
     preferred_port: Option<u16>,
     bind_host: &str,
 ) -> Result<ApiProxyStatus, String> {
-    // The pools without a proxy reach the arms they share with Codex never.
-    if !storage.pool.proxied() {
-        return Err("This account pool has no API proxy".into());
-    }
     let existing_handle = {
         let mut guard = runtime_slot.lock().await;
         if let Some(existing) = guard.as_ref() {
@@ -436,12 +436,14 @@ pub(crate) async fn start_api_proxy_with_runtime(
         api_key: shared_api_key.clone(),
         upstream_base_url: storage.upstream_base_url.clone().unwrap_or_else(|| {
             match storage.pool {
-                Pool::Codex | Pool::Antigravity => resolve_codex_upstream_base_url(),
+                Pool::Antigravity => antigravity::CLOUD_BASE.into(),
+                Pool::Codex => resolve_codex_upstream_base_url(),
                 Pool::Claude => crate::claude_api::API_ROOT.into(),
             }
         }),
         client,
         shared: shared.clone(),
+        antigravity_models: Default::default(),
         models: Default::default(),
     });
     let request_body_limit = resolve_proxy_request_body_limit_bytes();
@@ -449,7 +451,11 @@ pub(crate) async fn start_api_proxy_with_runtime(
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let router = Router::new().route("/health", get(health_handler));
     let router = match storage.pool {
-        Pool::Codex | Pool::Antigravity => router
+        Pool::Antigravity => router.route(
+            "/antigravity/v1beta/models/:operation",
+            post(antigravity::handle),
+        ),
+        Pool::Codex => router
             .route("/v1/models", get(models_handler))
             .route("/v1/chat/completions", post(chat_completions_handler))
             .route("/v1/responses", post(responses_handler)),
@@ -585,7 +591,7 @@ async fn models_handler(
     State(context): State<Arc<ProxyContext>>,
     headers: HeaderMap,
 ) -> Response<Body> {
-    if let Some(response) = ensure_authorized(&headers, &context.api_key) {
+    if let Some(response) = ensure_authorized(&headers, &context) {
         return response;
     }
     let ids = match listed_models(&context, &headers).await {
@@ -774,7 +780,7 @@ async fn chat_completions_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
-    if let Some(response) = ensure_authorized(&headers, &context.api_key) {
+    if let Some(response) = ensure_authorized(&headers, &context) {
         return response;
     }
 
@@ -838,7 +844,7 @@ async fn responses_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
-    if let Some(response) = ensure_authorized(&headers, &context.api_key) {
+    if let Some(response) = ensure_authorized(&headers, &context) {
         return response;
     }
 
@@ -905,7 +911,7 @@ async fn claude_messages_handler(
     uri: Uri,
     body: Bytes,
 ) -> Response<Body> {
-    if let Some(response) = ensure_authorized(&headers, &context.api_key) {
+    if let Some(response) = ensure_authorized(&headers, &context) {
         return response;
     }
     if is_payload_oversized(&body, resolve_proxy_request_body_limit_bytes()) {
@@ -939,14 +945,15 @@ async fn unsupported_proxy_handler(
         return health_handler().await.into_response();
     }
 
-    if let Some(response) = ensure_authorized(&headers, &context.api_key) {
+    if let Some(response) = ensure_authorized(&headers, &context) {
         return response;
     }
 
     let supported = match context.storage.pool {
-        Pool::Codex | Pool::Antigravity => {
-            "GET /v1/models, POST /v1/chat/completions and POST /v1/responses"
+        Pool::Antigravity => {
+            "POST /antigravity/v1beta/models/{model}:streamGenerateContent or :generateContent"
         }
+        Pool::Codex => "GET /v1/models, POST /v1/chat/completions and POST /v1/responses",
         Pool::Claude => "POST /anthropic/v1/messages and POST /anthropic/v1/messages/count_tokens",
     };
     json_error_response(
@@ -958,8 +965,16 @@ async fn unsupported_proxy_handler(
     )
 }
 
-fn ensure_authorized(headers: &HeaderMap, api_key: &Arc<RwLock<String>>) -> Option<Response<Body>> {
-    if is_authorized(headers, &read_current_api_key(api_key)) {
+fn ensure_authorized(headers: &HeaderMap, context: &ProxyContext) -> Option<Response<Body>> {
+    let key = read_current_api_key(&context.api_key);
+    let authorized = match context.storage.pool {
+        Pool::Antigravity => headers
+            .get("x-goog-api-key")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|value| !key.is_empty() && constant_time_eq(value, &key)),
+        Pool::Codex | Pool::Claude => is_authorized(headers, &key),
+    };
+    if authorized {
         None
     } else {
         Some(json_error_response(
@@ -1729,6 +1744,7 @@ fn map_text_settings(root: &mut Map<String, Value>, text: &Value) {
 /// passed through as it came.
 enum Outbound<'a> {
     Codex(&'a Value),
+    Antigravity(&'a antigravity::Generate),
     Claude { path: &'a str, body: &'a Bytes },
 }
 
@@ -1760,6 +1776,9 @@ async fn send_over_candidates(
 
         loop {
             let forwarded = match outbound {
+                Outbound::Antigravity(generate) => {
+                    antigravity::forward(context, &candidate, generate).await
+                }
                 Outbound::Codex(payload) => {
                     forward_codex_request_with_candidate(context, &candidate, headers, payload)
                         .await
@@ -2249,7 +2268,8 @@ fn candidate_client(
         .auth_json
         .get("copoolProvider")
         .is_some_and(|p| p["allowInsecureTLS"] == true);
-    if candidate.proxy_url.trim().is_empty() && !insecure {
+    let follow_redirects = context.storage.pool != Pool::Antigravity;
+    if candidate.proxy_url.trim().is_empty() && !insecure && follow_redirects {
         return Ok(context.client.clone());
     }
     // Cached per proxy, so a shared account proxy keeps its connections.
@@ -2259,6 +2279,7 @@ fn candidate_client(
             timeout: std::time::Duration::from_secs(180),
             user_agent: "codex-tools-proxy/0.1".into(),
             insecure,
+            follow_redirects,
         },
     )
 }
@@ -2362,7 +2383,13 @@ async fn load_proxy_candidates(
     };
     let mut accounts = store.accounts;
     if let Some(load) = &storage.provider_candidates {
-        accounts.extend(load()?);
+        // Provider credentials can require a shell or keyring lookup.
+        let load = Arc::clone(load);
+        accounts.extend(
+            tokio::task::spawn_blocking(move || load())
+                .await
+                .map_err(|e| e.to_string())??,
+        );
     }
     let account_proxy = storage
         .account_proxy
@@ -2404,14 +2431,19 @@ fn account_to_proxy_candidate(pool: Pool, account: StoredAccount) -> Option<Prox
         return None;
     }
     let extracted = match (pool, account.auth_json.get("copoolProvider")) {
-        (Pool::Codex | Pool::Antigravity, Some(provider)) => {
+        (Pool::Codex, Some(provider)) => {
             let mut auth = extract_auth(&account.auth_json).ok()?;
             auth.access_token = provider["apiKey"].as_str()?.into();
             auth
         }
-        (Pool::Codex | Pool::Antigravity, None) => extract_auth(&account.auth_json).ok()?,
-        // A Claude login, or a Claude provider's key; the account is the
-        // stored one's.
+        (Pool::Codex, None) => extract_auth(&account.auth_json).ok()?,
+        (Pool::Antigravity, provider) => crate::models::ExtractedAuth {
+            account_id: account.account_id.clone(),
+            access_token: crate::claude_api::text(
+                provider.map_or(&account.auth_json["accessToken"], |p| &p["apiKey"]),
+            )?,
+            ..Default::default()
+        },
         (Pool::Claude, provider) => crate::models::ExtractedAuth {
             access_token: match provider {
                 Some(provider) => provider["apiKey"].as_str()?.into(),
@@ -2555,8 +2587,8 @@ fn compare_runtime_proxy_candidates(
 
 async fn sleep_usage_refresh_interval(pool: Pool) {
     tokio::time::sleep(std::time::Duration::from_secs(match pool {
-        Pool::Codex | Pool::Antigravity => ACTIVE_USAGE_REFRESH_INTERVAL_SECONDS,
-        Pool::Claude => CLAUDE_USAGE_REFRESH_INTERVAL_SECONDS,
+        Pool::Codex => ACTIVE_USAGE_REFRESH_INTERVAL_SECONDS,
+        Pool::Claude | Pool::Antigravity => CLAUDE_USAGE_REFRESH_INTERVAL_SECONDS,
     }))
     .await;
 }
@@ -2602,10 +2634,10 @@ async fn refresh_proxy_account_usage_for_tick(context: &ProxyContext, tick: u64)
     };
     // Each Claude round asks for every account.
     let refresh_candidates = match context.storage.pool {
-        Pool::Codex | Pool::Antigravity => {
+        Pool::Codex => {
             usage_refresh_candidates_for_tick(tick, active_account_id.as_deref(), candidates)
         }
-        Pool::Claude => candidates,
+        Pool::Claude | Pool::Antigravity => candidates,
     };
     refresh_proxy_candidate_usage(&context.storage, refresh_candidates).await;
 }
@@ -2635,7 +2667,8 @@ async fn refresh_proxy_candidate_usage(
 ) {
     // The upstream the proxy forwards to is also where usage is read.
     let origin = match storage.pool {
-        Pool::Codex | Pool::Antigravity => storage
+        Pool::Antigravity => return, // The desktop pool refreshes its own usage.
+        Pool::Codex => storage
             .upstream_base_url
             .as_deref()
             .map(|configured| chatgpt_base_origin(Some(configured)))
@@ -2652,7 +2685,8 @@ async fn refresh_proxy_candidate_usage(
         .filter(|c| c.auth_json.get("copoolProvider").is_none())
     {
         let result = match storage.pool {
-            Pool::Codex | Pool::Antigravity => {
+            Pool::Antigravity => return,
+            Pool::Codex => {
                 fetch_usage_snapshot_from(
                     &origin,
                     &candidate.access_token,
@@ -2775,10 +2809,13 @@ async fn refresh_proxy_candidate_auth(
     }
     let refreshed_auth_json = match &storage.renew_candidate {
         // The pool renews the login where it keeps it.
-        Some(renew) => renew(candidate.id.clone()).await?,
+        Some(renew) => renew(candidate.id.clone(), candidate.access_token.clone()).await?,
         None => {
             let refreshed = match storage.pool {
-                Pool::Codex | Pool::Antigravity => {
+                Pool::Antigravity => {
+                    return Err("Antigravity login renewal requires its account pool".into())
+                }
+                Pool::Codex => {
                     refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?
                 }
                 Pool::Claude => {
@@ -2800,7 +2837,13 @@ async fn refresh_proxy_candidate_auth(
     };
 
     let extracted = match storage.pool {
-        Pool::Codex | Pool::Antigravity => extract_auth(&refreshed_auth_json).map_err(|error| {
+        Pool::Antigravity => crate::models::ExtractedAuth {
+            account_id: candidate.account_id.clone(),
+            access_token: crate::claude_api::text(&refreshed_auth_json["accessToken"])
+                .ok_or("Antigravity returned no access token")?,
+            ..Default::default()
+        },
+        Pool::Codex => extract_auth(&refreshed_auth_json).map_err(|error| {
             format!(
                 "Failed to parse the account login after refresh: {}",
                 unlocalized(&error)
@@ -2849,7 +2892,8 @@ async fn persist_refreshed_candidate_auth(
         .find(|account| account.id == account_id)
     {
         let replaces = match storage.pool {
-            Pool::Codex | Pool::Antigravity => {
+            Pool::Antigravity => return Err("Antigravity stores its own logins".into()),
+            Pool::Codex => {
                 crate::auth::renewal_replaces(refreshed_auth_json, from, &account.auth_json)
             }
             Pool::Claude => {
@@ -4022,10 +4066,12 @@ impl SseDecoder {
 }
 
 fn find_sse_boundary(buffer: &[u8]) -> Option<usize> {
-    buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .or_else(|| buffer.windows(2).position(|window| window == b"\n\n"))
+    // Respect wire order even when adjacent events use different line endings.
+    buffer.iter().enumerate().position(|(i, byte)| match byte {
+        b'\n' => buffer[i..].starts_with(b"\n\n"),
+        b'\r' => buffer[i..].starts_with(b"\r\n\r\n"),
+        _ => false,
+    })
 }
 
 fn parse_sse_event(block: &[u8]) -> Option<SseEvent> {

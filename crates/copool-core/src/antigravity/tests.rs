@@ -557,9 +557,11 @@ async fn imports_are_checked_whole_and_folded_into_known_accounts() {
 }
 
 #[tokio::test]
-async fn the_pool_has_no_proxy_and_starts_without_providers() {
+async fn the_empty_pool_has_no_proxy_candidates_or_providers() {
     let h = harness(true).await;
-    assert!(h.app.proxy_status(Pool::Antigravity).await.is_err());
+    let proxy = h.app.proxy_status(Pool::Antigravity).await.unwrap();
+    assert!(!proxy.running);
+    assert_eq!(proxy.available_accounts, 0);
     assert!(h.app.start_proxy(Pool::Antigravity).await.is_err());
     assert_eq!(h.app.providers(Pool::Antigravity).unwrap(), json!([]));
     h.app
@@ -1376,4 +1378,185 @@ fn sub2apis_antigravity_usage_is_its_quota_groups_else_each_models() {
     ] {
         assert_eq!(sub2api_usage(&body, now).unwrap_err(), error);
     }
+}
+
+#[tokio::test]
+async fn agy_proxy_fails_over_and_unwraps_cloud_code_streams() {
+    use crate::proxy_service::start_api_proxy_with_runtime;
+    use axum::{
+        extract::Request, http::StatusCode, response::IntoResponse, routing::post, Json, Router,
+    };
+
+    let h = harness(true).await;
+    let app = h.app.into_shared();
+    for name in ["alice", "bob"] {
+        h.live
+            .sign_in(&login_of(name, &format!("access-{name}"), later()));
+        app.antigravity_import_current().await.unwrap();
+    }
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let router = Router::new().fallback(post({
+        let calls = calls.clone();
+        move |req: Request| {
+            let calls = calls.clone();
+            async move {
+                let token = req.headers()["authorization"].to_str().unwrap().to_owned();
+                assert!(req.headers().get("x-goog-api-key").is_none());
+                assert_eq!(req.headers()["user-agent"], api::agent());
+                if req.uri().path() == api::FETCH_MODELS_PATH {
+                    return Json(json!({"models":{"gemini-3.1-pro-high":{}}})).into_response();
+                }
+                assert_eq!(
+                    req.uri().path_and_query().unwrap().as_str(),
+                    "/v1internal:streamGenerateContent?alt=sse"
+                );
+                let bytes = axum::body::to_bytes(req.into_body(), 4 * 1024 * 1024)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                calls.lock().unwrap().push(token.clone());
+                if token == "Bearer access-bob" {
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        Json(json!({"error":{"message":"rate limited"}})),
+                    )
+                        .into_response();
+                }
+                if token == "Bearer access-alice" {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error":{"message":"token expired"}})),
+                    )
+                        .into_response();
+                }
+                assert_eq!(body["project"], "project-1");
+                assert_eq!(body["model"], "gemini-3.1-pro-high");
+                assert!(body["request"]["contents"].is_array());
+                let frame = |text, finish| {
+                    let mut candidate = json!({"content":{"role":"model","parts":[{"text":text}]}});
+                    if finish {
+                        candidate["finishReason"] = "STOP".into();
+                    }
+                    format!(
+                        "data: {}\r\n\r\n",
+                        json!({"response":{"candidates":[candidate]}})
+                    )
+                };
+                (
+                    [("content-type", "text/event-stream")],
+                    frame("MOCK_", false).replace("\r\n", "\n") + &frame("OK", true),
+                )
+                    .into_response()
+            }
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut storage = app.proxy_storage(Pool::Antigravity);
+    storage.upstream_base_url = Some(format!("http://{}", listener.local_addr().unwrap()));
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let status = start_api_proxy_with_runtime(
+        &storage,
+        &app.state.antigravity_api_proxy,
+        Some(0),
+        "127.0.0.1",
+    )
+    .await
+    .unwrap();
+    let base = status.base_url.unwrap();
+    let key = status.api_key.unwrap();
+    let post = |key: &str| {
+        reqwest::Client::new().post(format!("{base}/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse"))
+        .header("x-goog-api-key", key).json(&json!({"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":-1}}})).send()
+    };
+    assert_eq!(post("wrong").await.unwrap().status(), 401);
+    assert!(calls.lock().unwrap().is_empty());
+    let response = post(&key).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let text = response.text().await.unwrap();
+    let parts: Vec<Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(
+        parts[0]["candidates"][0]["content"]["parts"][0]["text"],
+        "MOCK_"
+    );
+    assert_eq!(parts[1]["candidates"][0]["finishReason"], "STOP");
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [
+            "Bearer access-bob",
+            "Bearer access-alice",
+            "Bearer fresh-refresh-alice"
+        ]
+    );
+    assert!(!app.proxy_status(Pool::Codex).await.unwrap().running);
+    let rotated = app.rotate_proxy_key(Pool::Antigravity).await.unwrap();
+    assert_eq!(post(&key).await.unwrap().status(), 401);
+    assert_eq!(
+        post(rotated.api_key.as_deref().unwrap())
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    app.stop_proxy(Pool::Antigravity).await.unwrap();
+}
+
+#[tokio::test]
+async fn agy_proxy_forwards_to_the_imported_gateway_with_its_own_key() {
+    use axum::{http::HeaderMap, routing::post, Json, Router};
+    let h = harness(true).await;
+    let app = h.app.into_shared();
+    app.set_antigravity_environment(Arc::new(|names, _| {
+        names
+            .iter()
+            .map(|name| (*name == "RELAY_KEY").then(|| "upstream-key".to_owned()))
+            .collect()
+    }));
+    let router = Router::new().route(
+        "/antigravity/v1beta/models/gemini-4-neon:generateContent",
+        post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+            assert_eq!(headers["x-goog-api-key"], "upstream-key");
+            assert!(headers.get("authorization").is_none());
+            assert_eq!(body["tools"], json!([{"functionDeclarations":[]}]));
+            Json(json!({"candidates":[{"finishReason":"STOP"}]}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut store = app.antigravity_load().unwrap();
+    store.providers.push(serde_json::from_value(json!({
+        "id":"relay", "name":"relay", "baseURL":base, "apiKeyVariable":"RELAY_KEY",
+        "importedAccountIDs":[7], "cachedAccounts":[{"id":7,"name":"alice","accountType":"oauth","status":"active"}]
+    })).unwrap());
+    app.antigravity_save(&store).unwrap();
+    let storage = app.proxy_storage(Pool::Antigravity);
+    let status = crate::proxy_service::start_api_proxy_with_runtime(
+        &storage,
+        &app.state.antigravity_api_proxy,
+        Some(0),
+        "127.0.0.1",
+    )
+    .await
+    .unwrap();
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/v1beta/models/gemini-4-neon:generateContent",
+            status.base_url.unwrap()
+        ))
+        .header("x-goog-api-key", status.api_key.unwrap())
+        .json(&json!({"tools":[{"functionDeclarations":[]}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["candidates"][0]["finishReason"],
+        "STOP"
+    );
+    app.stop_proxy(Pool::Antigravity).await.unwrap();
 }

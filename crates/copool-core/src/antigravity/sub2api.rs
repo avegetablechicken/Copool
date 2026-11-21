@@ -78,7 +78,7 @@ fn root(url: &str) -> String {
         .to_owned()
 }
 /// agy's gateway at a provider, its `GOOGLE_GEMINI_BASE_URL`.
-fn gateway(p: &Provider) -> Result<String> {
+pub(super) fn gateway(p: &Provider) -> Result<String> {
     if p.base_url.is_empty() {
         return Err(CONFIGURATION_INCOMPLETE.into());
     }
@@ -94,7 +94,7 @@ fn upstream(url: &str) -> &str {
         .map_or(url, |at| &url[at + 1..])
 }
 /// The variable holding a provider's key.
-fn key_variable(p: &Provider) -> &str {
+pub(super) fn key_variable(p: &Provider) -> &str {
     match p.api_key_variable.as_str() {
         "" => API_KEY,
         name => name,

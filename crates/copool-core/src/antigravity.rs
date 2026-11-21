@@ -2,7 +2,7 @@
 //! one Antigravity uses (`login`), the quota of each (`api`) and switching.
 //! As in the Codex pool, the logins are kept in the pool's file in Copool's
 //! data directory, with the pool's Sub2api providers (`sub2api`), whose
-//! cards put agy on the Gemini API. Antigravity has no API proxy here.
+//! cards put agy on the Gemini API. The local proxy serves agy in that mode.
 use crate::{
     application::{Application, SwitchExecution},
     models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
@@ -17,6 +17,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 
 mod api;
 mod login;
+mod proxy;
 #[cfg(any(target_os = "macos", test))]
 mod security;
 mod sub2api;
@@ -841,7 +842,19 @@ impl Application {
         id: &str,
         renew_now: Option<&mut bool>,
     ) -> Result<()> {
-        let forced = renew_now.is_some();
+        self.antigravity_refresh_login(id, renew_now, None).await
+    }
+    async fn antigravity_refresh_after_rejection(&self, id: &str, rejected: &str) -> Result<()> {
+        self.antigravity_refresh_login(id, None, Some(rejected))
+            .await
+    }
+    async fn antigravity_refresh_login(
+        &self,
+        id: &str,
+        renew_now: Option<&mut bool>,
+        rejected: Option<&str>,
+    ) -> Result<()> {
+        let forced = renew_now.is_some() || rejected.is_some();
         let _activity = (!forced).then(|| self.begin_refresh(id));
         let _op = self.antigravity.operations.lock().await;
         let live = self
@@ -863,6 +876,14 @@ impl Application {
         };
         if account.first_request_pending {
             return Ok(());
+        }
+        if let Some(rejected) = rejected {
+            if login::access_token(&account.document).as_deref() != Some(rejected) {
+                return Ok(());
+            }
+            if Renewal::of(account.renewal) == Renewal::Never {
+                return Err(RENEWAL_OFF.into());
+            }
         }
         let network = self.antigravity_network();
         let network = &*network;

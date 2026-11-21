@@ -40,7 +40,7 @@ let accountsController = poolControllers[pool];
 let lastProxyNotice;
 /// Each pool's API proxy page; only the shown one renders.
 const proxyControllers = Object.fromEntries(
-  POOLS.map((target) => {
+  ACCOUNT_POOLS.map((target) => {
     const controller = new window.CopoolControllers.Proxy(
       poolInvoke(target),
       () => {
@@ -975,7 +975,7 @@ async function refreshFeatureState() {
     invoke("configuration"),
     invoke("current_provider"),
     invoke("refresh_activity"),
-    ...POOLS.map((target) =>
+    ...ACCOUNT_POOLS.map((target) =>
       proxyControllers[target].invoke("tunnel_action", { action: "status", value: null }),
     ),
   ]);
@@ -984,7 +984,7 @@ async function refreshFeatureState() {
     controller.syncActivity(
       activity.filter((id) => controller.accounts.some((a) => a.id === id)),
     );
-  POOLS.forEach((target, index) => {
+  ACCOUNT_POOLS.forEach((target, index) => {
     const controller = proxyControllers[target];
     controller.tunnelStatus = tunnels[index];
     controller.remoteServers = controller.ownServers(settings.remoteServers);

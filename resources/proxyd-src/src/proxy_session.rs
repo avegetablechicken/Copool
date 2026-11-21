@@ -11,6 +11,7 @@ pub(crate) struct Options {
     pub(crate) timeout: Duration,
     pub(crate) user_agent: String,
     pub(crate) insecure: bool,
+    pub(crate) follow_redirects: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -18,6 +19,7 @@ impl Default for Options {
             timeout: Duration::from_secs(18),
             user_agent: "codex-tools/0.1".into(),
             insecure: false,
+            follow_redirects: true,
         }
     }
 }
@@ -35,6 +37,11 @@ impl Session {
             .timeout(options.timeout)
             .user_agent(&options.user_agent)
             .danger_accept_invalid_certs(options.insecure);
+        let builder = if options.follow_redirects {
+            builder
+        } else {
+            builder.redirect(reqwest::redirect::Policy::none())
+        };
         let client =
             crate::utils::with_account_proxy(builder, proxy_url.as_deref().unwrap_or_default())?
                 .build()

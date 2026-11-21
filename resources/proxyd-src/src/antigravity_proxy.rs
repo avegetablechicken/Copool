@@ -1,0 +1,271 @@
+//! The Gemini API request agy sends in API-key mode, and Cloud Code's
+//! envelope around the same request and each streamed response.
+use super::{
+    build_streamed_response, candidate_client, invalid_request_response, json_error_response,
+    parse_json_request, read_current_api_key, send_over_candidates, sse_data_chunk, Outbound,
+    ProxyCandidate, ProxyContext, SseDecoder,
+};
+use async_stream::stream;
+use axum::{
+    body::{Body, Bytes},
+    extract::{Path, State},
+    http::{HeaderMap, Response, StatusCode},
+};
+use serde_json::{json, Value};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+pub(crate) const CLOUD_BASE: &str = "https://daily-cloudcode-pa.googleapis.com";
+pub(super) type Catalog = Arc<tokio::sync::Mutex<HashMap<String, (Instant, Arc<HashSet<String>>)>>>;
+pub(super) struct Generate {
+    model: String,
+    body: Value,
+    streaming: bool,
+}
+
+pub(super) async fn handle(
+    State(context): State<Arc<ProxyContext>>,
+    Path(operation): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response<Body> {
+    if let Some(response) = super::ensure_authorized(&headers, &context) {
+        return response;
+    }
+    let Some((model, method)) = operation.split_once(':') else {
+        return invalid_request_response("Missing model operation");
+    };
+    if model.is_empty()
+        || !model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    {
+        return invalid_request_response("Invalid model name");
+    }
+    let streaming = match method {
+        "streamGenerateContent" => true,
+        "generateContent" => false,
+        _ => return json_error_response(StatusCode::NOT_FOUND, "Unknown model operation"),
+    };
+    let body = match parse_json_request(&body) {
+        Ok(body) if body.is_object() => body,
+        Ok(_) => return invalid_request_response("Expected a Gemini request object"),
+        Err(response) => return response,
+    };
+    let generate = Generate {
+        model: model.into(),
+        body,
+        streaming,
+    };
+    let (candidate, response) =
+        match send_over_candidates(&context, &headers, &Outbound::Antigravity(&generate)).await {
+            Ok(pair) => pair,
+            Err(response) => return response,
+        };
+    if candidate.auth_json.get("copoolProvider").is_some() {
+        return build_streamed_response(response);
+    }
+    if streaming {
+        unwrap_stream(response)
+    } else {
+        match response.json::<Value>().await {
+            Ok(mut v) if v["response"].is_object() => {
+                axum::response::IntoResponse::into_response(axum::Json(v["response"].take()))
+            }
+            _ => json_error_response(StatusCode::BAD_GATEWAY, "Invalid Cloud Code response"),
+        }
+    }
+}
+
+impl Generate {
+    fn method(&self) -> &'static str {
+        if self.streaming {
+            "streamGenerateContent?alt=sse"
+        } else {
+            "generateContent"
+        }
+    }
+
+    fn cloud_model(&self, models: &HashSet<String>) -> String {
+        let base = self.model.strip_suffix("-preview").unwrap_or(&self.model);
+        let thinking = &self.body["generationConfig"]["thinkingConfig"];
+        let level = thinking["thinkingLevel"]
+            .as_str()
+            .map(str::to_ascii_lowercase)
+            .or_else(|| {
+                thinking["thinkingBudget"].as_i64().map(|budget| {
+                    if budget < 0 || budget > 1024 {
+                        "high".into()
+                    } else {
+                        "low".into()
+                    }
+                })
+            });
+        if let Some(level) = level {
+            let id = format!("{base}-{level}");
+            if models.contains(&id) {
+                return id;
+            }
+        }
+        if !models.contains(&self.model) && models.contains(base) {
+            return base.into();
+        }
+        self.model.clone()
+    }
+}
+
+pub(super) async fn forward(
+    context: &ProxyContext,
+    candidate: &ProxyCandidate,
+    generate: &Generate,
+) -> Result<reqwest::Response, String> {
+    let client = candidate_client(context, candidate)?;
+    let method = generate.method();
+    let token = &candidate.access_token;
+    let net_error = |e: reqwest::Error| e.without_url().to_string();
+    if let Some(provider) = candidate.auth_json.get("copoolProvider") {
+        if crate::utils::constant_time_eq(token, &read_current_api_key(&context.api_key)) {
+            return Err("The gateway requires its own upstream API key".into());
+        }
+        let base = provider["baseUrl"]
+            .as_str()
+            .ok_or("Missing Antigravity gateway")?
+            .trim_end_matches('/');
+        let url = format!("{base}/v1beta/models/{}:{method}", generate.model);
+        let response = client
+            .post(url)
+            .header("x-goog-api-key", token)
+            .json(&generate.body)
+            .send()
+            .await
+            .map_err(net_error)?;
+        if response.status().is_redirection() {
+            return Err("Antigravity gateway returned a redirect".into());
+        }
+        return Ok(response);
+    }
+    let cloud = |path: &str| {
+        client
+            .post(format!(
+                "{}/v1internal:{path}",
+                context.upstream_base_url.trim_end_matches('/')
+            ))
+            .bearer_auth(token)
+            .header("user-agent", agent())
+    };
+    let project = match candidate.auth_json["project"].as_str() {
+        Some(project) => project.to_owned(),
+        None => {
+            let response = cloud("loadCodeAssist")
+                .json(&json!({}))
+                .send()
+                .await
+                .map_err(net_error)?;
+            if !response.status().is_success() {
+                return Ok(response);
+            }
+            let body = response.json::<Value>().await.map_err(net_error)?;
+            body["cloudaicompanionProject"]
+                .as_str()
+                .filter(|v| !v.is_empty())
+                .ok_or("Antigravity reported no project")?
+                .to_owned()
+        }
+    };
+    let cached = {
+        let mut catalog = context.antigravity_models.lock().await;
+        catalog.retain(|_, (since, _)| since.elapsed() < Duration::from_secs(300));
+        catalog.get(&candidate.id).map(|(_, models)| models.clone())
+    };
+    let model = if let Some(models) = cached {
+        generate.cloud_model(&models)
+    } else {
+        let response = cloud("fetchAvailableModels")
+            .json(&json!({}))
+            .send()
+            .await
+            .map_err(net_error)?;
+        if !response.status().is_success() {
+            return Ok(response);
+        }
+        let body = response.json::<Value>().await.map_err(net_error)?;
+        let models = Arc::new(
+            body["models"]
+                .as_object()
+                .ok_or("Antigravity reported no model catalog")?
+                .keys()
+                .cloned()
+                .collect(),
+        );
+        context
+            .antigravity_models
+            .lock()
+            .await
+            .insert(candidate.id.clone(), (Instant::now(), Arc::clone(&models)));
+        generate.cloud_model(&models)
+    };
+    cloud(method)
+        .json(&envelope(&project, &model, &generate.body))
+        .send()
+        .await
+        .map_err(net_error)
+}
+
+pub(crate) fn envelope(project: &str, model: &str, request: &Value) -> Value {
+    json!({"project":project, "model":model, "userAgent":"antigravity",
+        "requestId":uuid::Uuid::new_v4().to_string(), "request":request})
+}
+
+fn unwrap_stream(mut upstream: reqwest::Response) -> Response<Body> {
+    let events = stream! {
+        let mut decoder = SseDecoder::default();
+        loop {
+            let chunk = upstream.chunk().await.map_err(io::Error::other)?;
+            let events = match &chunk {
+                Some(bytes) => decoder.push(bytes),
+                None => decoder.finish(),
+            };
+            for event in events {
+                let mut value: Value = serde_json::from_str(&event.data).map_err(io::Error::other)?;
+                let data = if value["response"].is_object() {
+                    value["response"].take()
+                } else if value.get("error").is_some() {
+                    value
+                } else {
+                    Err(io::Error::other("Invalid Cloud Code stream response"))?
+                };
+                yield Ok::<_, io::Error>(sse_data_chunk(&data));
+            }
+            if chunk.is_none() { break; }
+        }
+    };
+    Response::builder()
+        .header("content-type", "text/event-stream")
+        .body(Body::from_stream(events))
+        .unwrap()
+}
+
+/// The Antigravity version Copool's requests name.
+const CLIENT_VERSION: &str = "3.0.0";
+/// Antigravity's agent, `antigravity/<version> <os>/<arch>` with Go's names
+/// of the system. Cloud Code answers by it: `loadCodeAssist` refuses other
+/// clients (`agy`'s included) and reports no plan, and the quota summary
+/// leaves out the Gemini pool for a client without a version or one before
+/// 2.6, so that a Google AI Pro account would show only its Claude pool.
+pub(crate) fn agent() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        other => other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        "x86" => "386",
+        other => other,
+    };
+    format!("antigravity/{CLIENT_VERSION} {os}/{arch}")
+}

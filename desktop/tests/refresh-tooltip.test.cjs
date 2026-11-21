@@ -90,14 +90,12 @@ test("Cmd+1 to Cmd+3 switch the proxy page's pool there, and the accounts page's
     ["proxy", "1", [["proxy", "codex"]]],
     ["accounts", "2", [["accounts", "claude"]]],
     ["settings", "1", [["page", "accounts"], ["accounts", "codex"]]],
-    // Antigravity has no proxy: its shortcut shows its accounts.
-    ["proxy", "3", [["page", "accounts"], ["accounts", "antigravity"]]],
+    ["proxy", "3", [["proxy", "antigravity"]]],
     ["accounts", "3", [["accounts", "antigravity"]]],
   ]) {
     const calls = [];
     const scope = {
       ACCOUNT_POOLS: ["codex", "claude", "antigravity"],
-      POOLS: ["codex", "claude"],
       selectedPage: page,
       showProxyPool: (target) => calls.push(["proxy", target]),
       showPool: (target) => calls.push(["accounts", target]),

@@ -10,6 +10,9 @@ use std::{io::Write, path::PathBuf, time::Duration};
 use tokio::io::AsyncWriteExt;
 
 fn validate(s: &RemoteServerConfig) -> Result<(), String> {
+    if s.pool == Pool::Antigravity {
+        return Err("Antigravity remote deployment is unavailable".into());
+    }
     if s.host.is_empty()
         || s.host.starts_with('-')
         || s.host
@@ -381,7 +384,7 @@ impl Application {
                             )?,
                             Pool::Claude => self.claude_remote_payload()?,
                             Pool::Antigravity => {
-                                return Err("This account pool has no API proxy".into())
+                                return Err("Antigravity remote deployment is unavailable".into())
                             }
                         };
                         ssh(

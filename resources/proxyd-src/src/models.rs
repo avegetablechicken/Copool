@@ -467,8 +467,7 @@ pub(crate) struct AppSettingsPatch {
     pub(crate) locale: Option<AppLocale>,
 }
 
-/// An account pool. Each has its own accounts; Codex and Claude also have
-/// their own API proxy, Antigravity none.
+/// An account pool and its client-specific API proxy.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
@@ -482,9 +481,6 @@ pub enum Pool {
 impl Pool {
     #[allow(dead_code)]
     pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Antigravity];
-    /// The pools with an API proxy, its tunnel and remote servers.
-    #[allow(dead_code)]
-    pub const PROXIED: [Self; 2] = [Self::Codex, Self::Claude];
     pub fn name(self) -> &'static str {
         match self {
             Self::Codex => "codex",
@@ -492,17 +488,13 @@ impl Pool {
             Self::Antigravity => "antigravity",
         }
     }
-    /// Whether the pool has an API proxy.
-    #[allow(dead_code)]
-    pub fn proxied(self) -> bool {
-        self != Self::Antigravity
-    }
     /// The path of a proxy's base URL, as its clients take it: OpenAI
     /// clients name the `/v1` root, Claude Code (`ANTHROPIC_BASE_URL`) the
     /// `/anthropic` one and adds `/v1/messages` itself.
     pub fn base_path(self) -> &'static str {
         match self {
-            Self::Codex | Self::Antigravity => "/v1",
+            Self::Codex => "/v1",
+            Self::Antigravity => "/antigravity",
             Self::Claude => "/anthropic",
         }
     }

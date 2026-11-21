@@ -21,8 +21,6 @@ let iconFrame = 0;
 // The account pools, left to right as their buttons, for ⌘1–⌘3 and the way
 // the cards slide.
 const ACCOUNT_POOLS = ["codex", "claude", "antigravity"];
-// The pools with an API proxy and remote servers.
-const POOLS = ["codex", "claude"];
 // The pools with Sub2api providers: every account pool.
 const PROVIDER_POOLS = ACCOUNT_POOLS;
 // The account pool on the accounts page: Codex, Claude Code or Antigravity.
@@ -30,11 +28,12 @@ let pool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.pool"))
   ? localStorage.getItem("copool.pool")
   : "codex";
 // The pool whose API proxy the proxy page shows; each has its own.
-let proxyPool =
-  localStorage.getItem("copool.proxyPool") === "claude" ? "claude" : "codex";
+let proxyPool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.proxyPool"))
+  ? localStorage.getItem("copool.proxyPool") : "codex";
 /// The preferences of each pool's proxy on the proxy page.
 const PROXY_PREFERENCES = {
   codex: { port: "proxyPort", autoStart: "autoStartProxy" },
+  antigravity: { port: "antigravityProxyPort", autoStart: "antigravityAutoStartProxy" },
   claude: { port: "claudeProxyPort", autoStart: "claudeAutoStartProxy" },
 };
 // Reset times as the date and time or as the time left, as OpenQuota toggles
@@ -215,7 +214,7 @@ function translate() {
   document.querySelectorAll("#proxy-pool-switch .pool-btn").forEach((button) => {
     button.title = withShortcut(
       tr(`pool.${button.dataset.proxyPool}`),
-      button.dataset.proxyPool === "codex" ? "1" : "2",
+      String(ACCOUNT_POOLS.indexOf(button.dataset.proxyPool) + 1),
     );
     button.setAttribute("aria-label", tr(`pool.${button.dataset.proxyPool}`));
   });
@@ -1825,8 +1824,6 @@ document
 /// The proxy page's pool switch: the header's pool icons, each copy with
 /// its own gradient, as `brandIcon` copies them.
 for (const original of document.querySelectorAll("#pool-switch .pool-btn")) {
-  // Antigravity has no API proxy.
-  if (!POOLS.includes(original.dataset.pool)) continue;
   const copy = original.cloneNode(true);
   const target = copy.dataset.pool;
   delete copy.dataset.pool;
@@ -1840,9 +1837,10 @@ for (const original of document.querySelectorAll("#pool-switch .pool-btn")) {
   copy.onclick = () => showProxyPool(target);
   $("proxy-pool-switch").append(copy);
 }
-/// Shows the Codex or the Claude pool's API proxy; each keeps its state.
+/// Shows the selected pool's API proxy.
 function showProxyPool(next) {
-  if (next !== "codex" && next !== "claude") return;
+  if (!ACCOUNT_POOLS.includes(next)) return;
+  $("remote-add").closest("section").hidden = next === "antigravity";
   document
     .querySelectorAll("#proxy-pool-switch .pool-btn")
     .forEach((button) =>
@@ -2375,9 +2373,8 @@ document.addEventListener("keydown", (event) => {
   } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3"].includes(event.key)) {
     event.preventDefault();
     const target = ACCOUNT_POOLS[Number(event.key) - 1];
-    // The proxy page switches its own pool; elsewhere, and for a pool
-    // without a proxy, the accounts page's.
-    if (selectedPage === "proxy" && POOLS.includes(target)) showProxyPool(target);
+    // The proxy and accounts pages remember their pools independently.
+    if (selectedPage === "proxy") showProxyPool(target);
     else {
       if (selectedPage !== "accounts") showPage("accounts");
       showPool(target);

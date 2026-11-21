@@ -59,6 +59,8 @@ pub struct Preferences {
     /// The Claude pool's API proxy, independent of the Codex one.
     pub claude_auto_start_proxy: bool,
     pub claude_proxy_port: u16,
+    pub antigravity_proxy_port: u16,
+    pub antigravity_auto_start_proxy: bool,
     pub locale: String,
     pub usage_display: String,
     pub launch_at_startup: bool,
@@ -95,6 +97,8 @@ impl Default for Preferences {
             proxy_port: 8787,
             claude_auto_start_proxy: false,
             claude_proxy_port: 8788,
+            antigravity_proxy_port: 8789,
+            antigravity_auto_start_proxy: false,
             locale: String::new(),
             usage_display: "used".into(),
             launch_at_startup: false,
@@ -146,6 +150,13 @@ type SwitchEffect = Arc<
 >;
 impl Preferences {
     fn from_settings(settings: crate::settings::Settings) -> Result<Self> {
+        let port = |name: &str, default| match settings.extra.get(name) {
+            None => Ok(default),
+            Some(port) => port
+                .as_u64()
+                .and_then(|n| u16::try_from(n).ok())
+                .ok_or("Invalid proxy port"),
+        };
         let p = Preferences {
             auto_switch: settings.auto_smart_switch,
             auto_start_proxy: settings.auto_start_api_proxy,
@@ -159,13 +170,13 @@ impl Preferences {
                 .get("claudeAutoStartProxy")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            claude_proxy_port: match settings.extra.get("claudeProxyPort") {
-                None => 8788,
-                Some(port) => port
-                    .as_u64()
-                    .and_then(|port| u16::try_from(port).ok())
-                    .ok_or("Invalid proxy port")?,
-            },
+            claude_proxy_port: port("claudeProxyPort", 8788)?,
+            antigravity_proxy_port: port("antigravityProxyPort", 8789)?,
+            antigravity_auto_start_proxy: settings
+                .extra
+                .get("antigravityAutoStartProxy")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             locale: settings.locale,
             usage_display: settings.usage_progress_display_mode,
             launch_at_startup: settings.launch_at_startup,
@@ -490,6 +501,14 @@ impl Application {
         s.launch_at_startup = p.launch_at_startup;
         s.launch_codex_after_switch = p.launch_codex_after_switch;
         s.sync_opencode_openai_auth = p.sync_opencode_openai_auth;
+        s.extra.insert(
+            "antigravityAutoStartProxy".into(),
+            p.antigravity_auto_start_proxy.into(),
+        );
+        s.extra.insert(
+            "antigravityProxyPort".into(),
+            p.antigravity_proxy_port.into(),
+        );
         s.local_proxy_host_api_only = p.host_api_only;
         s.restart_editors_on_switch = p.restart_editors_on_switch;
         s.restart_editor_targets = p.restart_editor_targets.clone();
@@ -1178,17 +1197,13 @@ impl Application {
         match pool {
             Pool::Codex => self.storage(),
             Pool::Claude => self.claude_proxy_storage(),
-            // Never run: the engine refuses a pool without a proxy.
-            Pool::Antigravity => {
-                let mut storage = self.storage();
-                storage.pool = Pool::Antigravity;
-                storage
-            }
+            Pool::Antigravity => self.antigravity_proxy_storage(),
         }
     }
     fn proxy_slot(&self, pool: Pool) -> &Mutex<Option<crate::state::ApiProxyRuntimeHandle>> {
         match pool {
-            Pool::Codex | Pool::Antigravity => &self.state.api_proxy,
+            Pool::Codex => &self.state.api_proxy,
+            Pool::Antigravity => &self.state.antigravity_api_proxy,
             Pool::Claude => &self.state.claude_api_proxy,
         }
     }
@@ -1197,11 +1212,10 @@ impl Application {
         Ok(match pool {
             Pool::Codex => preferences.proxy_port,
             Pool::Claude => preferences.claude_proxy_port,
-            Pool::Antigravity => return Err(NO_PROXY.into()),
+            Pool::Antigravity => preferences.antigravity_proxy_port,
         })
     }
     pub async fn proxy_status(&self, pool: Pool) -> Result<ApiProxyStatus> {
-        proxied(pool)?;
         proxy_service::get_api_proxy_status_with_runtime(
             &self.proxy_storage(pool),
             self.proxy_slot(pool),
@@ -1209,7 +1223,6 @@ impl Application {
         .await
     }
     pub async fn start_proxy(&self, pool: Pool) -> Result<ApiProxyStatus> {
-        proxied(pool)?;
         let _op = self.proxy_operations.lock().await;
         proxy_service::start_api_proxy_with_runtime(
             &self.proxy_storage(pool),
@@ -1220,13 +1233,11 @@ impl Application {
         .await
     }
     pub async fn stop_proxy(&self, pool: Pool) -> Result<ApiProxyStatus> {
-        proxied(pool)?;
         let _op = self.proxy_operations.lock().await;
         proxy_service::stop_api_proxy_with_runtime(&self.proxy_storage(pool), self.proxy_slot(pool))
             .await
     }
     pub async fn rotate_proxy_key(&self, pool: Pool) -> Result<ApiProxyStatus> {
-        proxied(pool)?;
         let _op = self.proxy_operations.lock().await;
         proxy_service::refresh_api_proxy_key_with_runtime(
             &self.proxy_storage(pool),
@@ -1245,15 +1256,6 @@ impl Application {
         self.this.get()?.upgrade()
     }
 }
-const NO_PROXY: &str = "This account pool has no API proxy";
-/// Antigravity's pool has no API proxy.
-pub(crate) fn proxied(pool: Pool) -> Result<()> {
-    if pool.proxied() {
-        Ok(())
-    } else {
-        Err(NO_PROXY.into())
-    }
-}
 fn validate_preferences(p: &Preferences) -> Result<()> {
     validate_proxy(&p.account_proxy_url).map_err(|_| "Invalid account proxy URL".to_string())?;
     if !["used", "remaining"].contains(&p.usage_display.as_str()) {
@@ -1266,7 +1268,7 @@ fn validate_preferences(p: &Preferences) -> Result<()> {
     {
         return Err("Unsupported locale".into());
     }
-    if p.proxy_port == 0 || p.claude_proxy_port == 0 {
+    if p.proxy_port == 0 || p.claude_proxy_port == 0 || p.antigravity_proxy_port == 0 {
         return Err("Proxy port must be 1–65535".into());
     }
     Ok(())

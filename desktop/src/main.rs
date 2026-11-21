@@ -170,7 +170,7 @@ async fn start_proxy(
         match pool {
             Pool::Codex => preferences.proxy_port = port,
             Pool::Claude => preferences.claude_proxy_port = port,
-            Pool::Antigravity => return Err("This account pool has no API proxy".into()),
+            Pool::Antigravity => preferences.antigravity_proxy_port = port,
         }
         app.save_preferences(preferences).await?;
     }

@@ -584,7 +584,7 @@
   }
   /// Each pool's API proxy: its own port and key, public tunnel and remote
   /// servers. `options.pool` names the pool; the invoke names it to the app.
-  const DEFAULT_PROXY_PORTS = { codex: "8787", claude: "8788" };
+  const DEFAULT_PROXY_PORTS = { codex: "8787", claude: "8788", antigravity: "8789" };
   class Proxy {
     constructor(invoke, onUpdate = () => {}, options = {}) {
       this.invoke = invoke;
@@ -625,8 +625,8 @@
       const proxy = settings.proxyConfiguration || {};
       if (this.pool === "codex") return proxy;
       return {
-        preferredPortText: String(settings.claudeProxyPort ?? DEFAULT_PROXY_PORTS.claude),
-        cloudflared: proxy.claudeCloudflared || {},
+        preferredPortText: String(settings[`${this.pool}ProxyPort`] ?? DEFAULT_PROXY_PORTS[this.pool]),
+        cloudflared: proxy[`${this.pool}Cloudflared`] || {},
       };
     }
     /// The remote servers of the pool.

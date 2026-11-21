@@ -30,6 +30,8 @@ Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管�
 - 基于剩余额度评分的智能切换，可手动或自动
 - Local OpenAI-compatible API proxy with model compatibility mapping
 - 本地 OpenAI 兼容 API 代理与模型兼容映射
+- The Antigravity proxy serves `antigravity-cli` (`agy`). Start it on the API Proxy page, copy its base URL and key into `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY` for the CLI process, then run `agy --settings '{"modelProvider":"gemini"}'`.
+- 在 API 代理页选择 Antigravity 并启动，将页面上的地址和密钥分别作为 `GOOGLE_GEMINI_BASE_URL` 和 `GEMINI_API_KEY` 传给 CLI，再运行 `agy --settings '{"modelProvider":"gemini"}'`。默认地址为 `http://127.0.0.1:8789/antigravity`。
 - Cloudflared public tunnel management
 - Cloudflared 公网隧道管理
 - Remote Linux deployment/start/stop/logs for proxy nodes over SSH

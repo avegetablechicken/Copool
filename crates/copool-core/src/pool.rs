@@ -457,6 +457,7 @@ impl Application {
             for (pool, auto) in [
                 (Pool::Codex, preferences.auto_start_proxy),
                 (Pool::Claude, preferences.claude_auto_start_proxy),
+                (Pool::Antigravity, preferences.antigravity_auto_start_proxy),
             ] {
                 if auto {
                     let _ = self.start_proxy(pool).await;

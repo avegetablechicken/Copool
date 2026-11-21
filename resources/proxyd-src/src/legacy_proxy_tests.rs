@@ -331,6 +331,7 @@ fn desktop_context(store: Value) -> (tempfile::TempDir, ProxyContext) {
         upstream_base_url: "http://127.0.0.1:1".into(),
         client: reqwest::Client::new(),
         shared: Arc::new(tokio::sync::Mutex::new(Default::default())),
+        antigravity_models: Default::default(),
         models: Default::default(),
     };
     (dir, context)

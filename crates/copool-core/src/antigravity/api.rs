@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 /// Tried in turn; the daily endpoint answers first, as for Antigravity.
 const CLOUD_BASES: [&str; 2] = [
-    "https://daily-cloudcode-pa.googleapis.com",
+    crate::proxy_service::antigravity::CLOUD_BASE,
     "https://cloudcode-pa.googleapis.com",
 ];
 pub(super) const QUOTA_SUMMARY_PATH: &str = "/v1internal:retrieveUserQuotaSummary";
@@ -30,26 +30,7 @@ const CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.goo
 // An installed app's OAuth client cannot keep this value confidential; it
 // stays split so that secret scanners do not take it for a deployment secret.
 const CLIENT_SECRET_PARTS: [&str; 2] = ["GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf"];
-/// The Antigravity version Copool's requests name.
-const CLIENT_VERSION: &str = "3.0.0";
-/// Antigravity's agent, `antigravity/<version> <os>/<arch>` with Go's names
-/// of the system. Cloud Code answers by it: `loadCodeAssist` refuses other
-/// clients (`agy`'s included) and reports no plan, and the quota summary
-/// leaves out the Gemini pool for a client without a version or one before
-/// 2.6, so that a Google AI Pro account would show only its Claude pool.
-pub(super) fn agent() -> String {
-    let os = match std::env::consts::OS {
-        "macos" => "darwin",
-        other => other,
-    };
-    let arch = match std::env::consts::ARCH {
-        "aarch64" => "arm64",
-        "x86_64" => "amd64",
-        "x86" => "386",
-        other => other,
-    };
-    format!("antigravity/{CLIENT_VERSION} {os}/{arch}")
-}
+pub(super) use crate::proxy_service::antigravity::agent;
 
 const FIVE_HOURS: i64 = 5 * 60 * 60;
 const ONE_WEEK: i64 = 7 * 24 * 60 * 60;
@@ -496,16 +477,14 @@ pub(super) fn hello_models(value: &Value) -> (Option<String>, Option<String>) {
 }
 /// One short hi with a model, as Antigravity asks Cloud Code.
 pub(super) fn hello(project: &str, model: &str) -> Value {
-    json!({
-        "project": project,
-        "model": model,
-        "requestId": uuid::Uuid::new_v4().to_string(),
-        "userAgent": "antigravity",
-        "request": {
+    crate::proxy_service::antigravity::envelope(
+        project,
+        model,
+        &json!({
             "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
             "generationConfig": {"maxOutputTokens": 16},
-        },
-    })
+        }),
+    )
 }
 
 /// `loadCodeAssist`'s plan: "ultra", "pro" or "free", else as named.

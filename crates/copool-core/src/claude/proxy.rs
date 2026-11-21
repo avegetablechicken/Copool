@@ -56,7 +56,7 @@ impl Application {
                 .claude_proxy_candidates()
         }));
         let renew = weak.clone();
-        storage.renew_candidate = Some(Arc::new(move |id| {
+        storage.renew_candidate = Some(Arc::new(move |id, _| {
             let renew = renew.clone();
             Box::pin(async move {
                 renew
