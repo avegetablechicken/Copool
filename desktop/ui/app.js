@@ -988,8 +988,10 @@ function accountBalanceText(usage, credits, inventory = P.resetInventory(usage))
       full: "accounts.card.reset_full", fable: "accounts.card.reset_fable",
       partial: "accounts.card.reset_partial", unknown: "accounts.card.reset_unknown",
     };
-    const lines = details.types.map(({ kind, count }) => `${tr(kinds[kind])} × ${count}`);
-    const warning = button("", "reset-notice", "reset-warning", () => showResetPopover(warning, lines));
+    const lines = details.types.map(
+      ({ kind, count, at }) => `${tr(kinds[kind])} × ${count} · ${expiry(at)}`,
+    );
+    const warning = button("", "reset-notice", "reset-warning", () => showResetPopover(warning, lines, true));
     warning.type = "button";
     warning.setAttribute("aria-label", lines.join("\n"));
     warning.setAttribute("aria-haspopup", "dialog");

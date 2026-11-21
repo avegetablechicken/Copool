@@ -663,14 +663,19 @@
     const inventory = resetInventory(usage, now);
     const types = new Map();
     const resetDates = new Map();
+    const normalizeDate = (at) => (Number.isFinite(at) && at > 0 ? at : null);
     const addDate = (at, count = 1) => {
-      const date = Number.isFinite(at) && at > 0 ? at : null;
+      const date = normalizeDate(at);
       resetDates.set(date, (resetDates.get(date) ?? 0) + count);
     };
     for (const grant of inventory.grants) {
       const kind = ["full", "fable", "partial"].includes(grant.kind) ? grant.kind : "unknown";
-      types.set(kind, (types.get(kind) ?? 0) + grant.count);
-      addDate(grant.expiresAt, grant.count);
+      const at = normalizeDate(grant.expiresAt);
+      const key = `${kind}:${at ?? ""}`;
+      const existing = types.get(key);
+      if (existing) existing.count += grant.count;
+      else types.set(key, { kind, count: grant.count, at });
+      addDate(at, grant.count);
     }
     if (!inventory.grants.length && inventory.count) {
       const dates = (usage?.resetExpiries ?? []).filter((at) => Number.isFinite(at) && at > now);
@@ -678,7 +683,7 @@
       if (dates.length < inventory.count) addDate(null, inventory.count - dates.length);
     }
     return {
-      types: [...types].map(([kind, count]) => ({ kind, count })),
+      types: [...types.values()].sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity)),
       resetDates: [...resetDates].map(([at, count]) => ({ at, count }))
         .sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity)),
       creditDates: [...new Set((usage?.credits?.expiries ?? [])

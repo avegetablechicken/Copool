@@ -2176,7 +2176,7 @@ button.reset-warning[aria-expanded="true"] {
   line-height: 1.6;
   white-space: nowrap;
 }
-/* Sentences, as a Sub2api weekly notice's, wrap within the panel. */
+/* Long entries, such as reset expiries or Sub2api notices, wrap within the panel. */
 .reset-popover.wrapping {
   white-space: normal;
 }

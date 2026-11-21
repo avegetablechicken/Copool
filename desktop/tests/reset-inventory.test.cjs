@@ -33,11 +33,29 @@ test("Older caches and Codex keep their existing counts", () => {
 });
 
 
-test("Notice groups equal reset types across different expiries", () => {
-  const usage = {resetGrants: [grant("full", 1, 200), grant("fable", 1, 300), grant("fable", 1, 400)]};
+test("Notice groups equal reset types by expiry and sorts earliest first", () => {
+  const usage = {
+    resetGrants: [
+      grant("fable", 1, 400),
+      grant("full", 1, 200),
+      grant("fable", 1, 300),
+      grant("fable", 2, 300),
+      grant("partial", 1, null),
+    ],
+  };
   const details = P.balanceTooltips(usage, 100);
-  assert.deepEqual(details.types, [{kind: "full", count: 1}, {kind: "fable", count: 2}]);
-  assert.deepEqual(details.resetDates, [{at: 200, count: 1}, {at: 300, count: 1}, {at: 400, count: 1}]);
+  assert.deepEqual(details.types, [
+    { kind: "full", count: 1, at: 200 },
+    { kind: "fable", count: 3, at: 300 },
+    { kind: "fable", count: 1, at: 400 },
+    { kind: "partial", count: 1, at: null },
+  ]);
+  assert.deepEqual(details.resetDates, [
+    { at: 200, count: 1 },
+    { at: 300, count: 3 },
+    { at: 400, count: 1 },
+    { at: null, count: 1 },
+  ]);
 });
 
 test("Balance expiry tooltips handle Codex, unknown dates, and stale credits", () => {
@@ -62,12 +80,19 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   let opened;
   const context = {P, el, icon: (name) => ({icon: name}), locale: "en",
     button: (label, glyph, className, onclick) => Object.assign(el("button", className), {onclick}),
-    showResetPopover: (trigger, lines) => {opened = {trigger, lines};},
+    showResetPopover: (trigger, lines, wrapping) => {opened = {trigger, lines, wrapping};},
     tr: (key, ...args) => `${key}:${args.join(",")}`};
   vm.createContext(context);vm.runInContext(fn, context);
   const future = Math.floor(Date.now()/1000) + 86400;
+  const later = future + 86400;
   const footer = context.accountBalanceText({credits: {expiries: [future]},
-    resetGrants: [grant("full", 1, future), grant("fable", 1, future), grant("fable", 1, future+86400)]}, "5");
+    resetGrants: [
+      grant("full", 1, future),
+      grant("fable", 1, future),
+      grant("fable", 1, later),
+      grant("fable", 1, later),
+      grant("partial", 1, null),
+    ]}, "5");
   const [credits, separator, resets, notice] = footer.children;
   assert.match(credits.title, /reset_expires_format/);
   assert.match(resets.title, /reset_expires_format/);
@@ -79,7 +104,15 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   assert.equal(notice["aria-expanded"], "false");
   notice.onclick();
   assert.equal(opened.trigger, notice);
-  assert.equal(opened.lines.join("\n"), "accounts.card.reset_full: × 1\naccounts.card.reset_fable: × 2");
+  assert.equal(opened.wrapping, true);
+  const expected = [
+    `accounts.card.reset_full: × 1 · accounts.card.reset_expires_format:${P.formatReset(future, "en")}`,
+    `accounts.card.reset_fable: × 1 · accounts.card.reset_expires_format:${P.formatReset(future, "en")}`,
+    `accounts.card.reset_fable: × 2 · accounts.card.reset_expires_format:${P.formatReset(later, "en")}`,
+    "accounts.card.reset_partial: × 1 · accounts.card.expiry_unknown:",
+  ].join("\n");
+  assert.equal(opened.lines.join("\n"), expected);
+  assert.equal(notice["aria-label"], expected);
   assert.equal(footer.title, undefined);
   assert.doesNotMatch(resets.title, /last_confirmed/);
   const cached = context.accountBalanceText({remainingResetCount: 2, resetExpiries: [1, future],
@@ -99,7 +132,9 @@ test("Reset popover fits the panel and toggles closed with focus restored", () =
   const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8").replace(/\r\n/g, "\n");
   const body = (name) => {
     const start = source.indexOf(`function ${name}(`);
-    return source.slice(start, source.indexOf("\n}\n", start) + 3);
+    const end = source.indexOf("\n}\n", start);
+    assert.ok(start >= 0 && end > start, name);
+    return source.slice(start, end + 3);
   };
   const panel = {left: 0, right: 300, top: 0, bottom: 200};
   let appended;
