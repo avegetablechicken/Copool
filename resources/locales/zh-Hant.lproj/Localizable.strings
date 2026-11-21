@@ -212,8 +212,6 @@
 "proxy.remote.auth.choose_key_file" = "選擇金鑰檔案";
 "proxy.remote.logs" = "遠端日誌";
 "proxy.remote.error" = "遠端錯誤";
-"proxy.remote.empty.title" = "尚無遠端伺服器";
-"proxy.remote.empty.message" = "請先新增 Linux 伺服器，再上傳 proxyd 並遠端啟動。";
 "proxy.section.public_access" = "公網訪問";
 "proxy.section.public_access_backend" = "公網訪問（後端代管）";
 "proxy.public.backend_managed_message" = "公網通道操作由後端服務代管執行。請在服務端設定 cloudflared，本應用繼續用於帳號與代理控制。";

@@ -224,8 +224,6 @@
 "proxy.remote.auth.choose_key_file" = "Choose key file";
 "proxy.remote.logs" = "Remote logs";
 "proxy.remote.error" = "Remote error";
-"proxy.remote.empty.title" = "No remote servers yet";
-"proxy.remote.empty.message" = "Add a Linux server first, then upload proxyd and start it remotely.";
 "proxy.section.public_access" = "Public Access";
 "proxy.section.public_access_backend" = "Public Access (Backend-managed)";
 "proxy.public.backend_managed_message" = "Public tunnel operations are delegated to your backend service. Configure cloudflared on the server side and keep this app for account and proxy controls.";

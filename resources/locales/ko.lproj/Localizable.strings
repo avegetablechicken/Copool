@@ -212,8 +212,6 @@
 "proxy.remote.auth.choose_key_file" = "키 파일 선택";
 "proxy.remote.logs" = "원격 로그";
 "proxy.remote.error" = "원격 오류";
-"proxy.remote.empty.title" = "원격 서버가 없습니다";
-"proxy.remote.empty.message" = "먼저 Linux 서버를 추가하고 proxyd를 업로드해 원격으로 시작하세요.";
 "proxy.section.public_access" = "공개 접근";
 "proxy.section.public_access_backend" = "공개 접근(백엔드 위임)";
 "proxy.public.backend_managed_message" = "공개 터널 작업은 백엔드 서비스에 위임됩니다. cloudflared는 서버에서 구성하고, 이 앱은 계정/프록시 제어에 사용하세요.";

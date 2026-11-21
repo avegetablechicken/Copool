@@ -212,8 +212,6 @@
 "proxy.remote.auth.choose_key_file" = "Elegir archivo de clave";
 "proxy.remote.logs" = "Registros remotos";
 "proxy.remote.error" = "Error remoto";
-"proxy.remote.empty.title" = "Todavía no hay servidores remotos";
-"proxy.remote.empty.message" = "Añade primero un servidor Linux y luego sube proxyd e inícialo de forma remota.";
 "proxy.section.public_access" = "Acceso público";
 "proxy.section.public_access_backend" = "Acceso público (gestionado por backend)";
 "proxy.public.backend_managed_message" = "Las operaciones del túnel público se delegan a tu servicio backend. Configura cloudflared en el servidor y usa esta app para las cuentas y el control del proxy.";

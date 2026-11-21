@@ -212,8 +212,6 @@
 "proxy.remote.auth.choose_key_file" = "Sleutelbestand kiezen";
 "proxy.remote.logs" = "Externe logs";
 "proxy.remote.error" = "Externe fout";
-"proxy.remote.empty.title" = "Nog geen remote servers";
-"proxy.remote.empty.message" = "Voeg eerst een Linux-server toe en upload daarna proxyd om het extern te starten.";
 "proxy.section.public_access" = "Publieke toegang";
 "proxy.section.public_access_backend" = "Publieke toegang (backend-beheerd)";
 "proxy.public.backend_managed_message" = "Publieke tunnelacties worden gedelegeerd aan je backendservice. Configureer cloudflared aan serverzijde en gebruik deze app voor account- en proxybediening.";

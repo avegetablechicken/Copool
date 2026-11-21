@@ -212,8 +212,6 @@
 "proxy.remote.auth.choose_key_file" = "Выбрать файл ключа";
 "proxy.remote.logs" = "Удалённые логи";
 "proxy.remote.error" = "Удалённая ошибка";
-"proxy.remote.empty.title" = "Пока нет удаленных серверов";
-"proxy.remote.empty.message" = "Сначала добавьте Linux-сервер, затем загрузите proxyd и запустите его удаленно.";
 "proxy.section.public_access" = "Публичный доступ";
 "proxy.section.public_access_backend" = "Публичный доступ (управляется бэкендом)";
 "proxy.public.backend_managed_message" = "Операции публичного туннеля делегированы вашему бэкенд-сервису. Настройте cloudflared на стороне сервера и используйте это приложение для аккаунтов и управления proxy.";

@@ -402,7 +402,6 @@ function shownRemotes() {
 }
 function renderRemotes() {
   $("remote-list").replaceChildren();
-  $("remote-empty").hidden = shownRemotes().length > 0;
   for (const [id, server] of shownRemotes()) {
     const form = el("form", "remote-form");
     form.dataset.serverId = id;

@@ -212,8 +212,6 @@
 "proxy.remote.auth.choose_key_file" = "鍵ファイルを選択";
 "proxy.remote.logs" = "リモートログ";
 "proxy.remote.error" = "リモートエラー";
-"proxy.remote.empty.title" = "リモートサーバーがありません";
-"proxy.remote.empty.message" = "先に Linux サーバーを追加し、proxyd をアップロードして起動してください。";
 "proxy.section.public_access" = "公開アクセス";
 "proxy.section.public_access_backend" = "公開アクセス（バックエンド委譲）";
 "proxy.public.backend_managed_message" = "公開トンネル操作はバックエンドサービスへ委譲されています。cloudflared はサーバー側で設定し、このアプリはアカウント/プロキシ制御に使用してください。";

@@ -224,8 +224,6 @@
 "proxy.remote.auth.choose_key_file" = "选择密钥文件";
 "proxy.remote.logs" = "远程日志";
 "proxy.remote.error" = "远程错误";
-"proxy.remote.empty.title" = "暂无远程服务器";
-"proxy.remote.empty.message" = "请先添加 Linux 服务器，再上传 proxyd 并远程启动。";
 "proxy.section.public_access" = "公网访问";
 "proxy.section.public_access_backend" = "公网访问（后端托管）";
 "proxy.public.backend_managed_message" = "公网隧道操作由后端服务托管执行。请在服务端配置 cloudflared，本应用继续用于账号与代理控制。";

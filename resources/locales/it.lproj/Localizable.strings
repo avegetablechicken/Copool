@@ -212,8 +212,6 @@
 "proxy.remote.auth.choose_key_file" = "Scegli file chiave";
 "proxy.remote.logs" = "Log remoti";
 "proxy.remote.error" = "Errore remoto";
-"proxy.remote.empty.title" = "Nessun server remoto";
-"proxy.remote.empty.message" = "Aggiungi prima un server Linux, poi carica proxyd e avvialo da remoto.";
 "proxy.section.public_access" = "Accesso pubblico";
 "proxy.section.public_access_backend" = "Accesso pubblico (gestito dal backend)";
 "proxy.public.backend_managed_message" = "Le operazioni di tunnel pubblico sono delegate al servizio backend. Configura cloudflared lato server e usa questa app per account e controllo proxy.";
