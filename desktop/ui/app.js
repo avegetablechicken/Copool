@@ -27,9 +27,8 @@ const PROVIDER_POOLS = ACCOUNT_POOLS;
 let pool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.pool"))
   ? localStorage.getItem("copool.pool")
   : "codex";
-// The pool whose API proxy the proxy page shows; each has its own.
-let proxyPool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.proxyPool"))
-  ? localStorage.getItem("copool.proxyPool") : "codex";
+// The pool whose API proxy the proxy page shows: always the accounts page's.
+let proxyPool = pool;
 /// The preferences of each pool's proxy on the proxy page.
 const PROXY_PREFERENCES = {
   codex: { port: "proxyPort", autoStart: "autoStartProxy" },
@@ -1828,17 +1827,25 @@ function slidePoolIn(direction) {
     if (animation) animation.id = "pool";
   }
 }
+/// Selects the pool on both pages: the accounts and proxy pages always show
+/// the same upstream.
 function showPool(next) {
   if (!ACCOUNT_POOLS.includes(next)) return;
+  showAccountsPool(next);
+  showProxyPool(next);
+}
+function showAccountsPool(next) {
   document
     .querySelectorAll("#pool-switch .pool-btn")
     .forEach((button) =>
       button.setAttribute("aria-selected", String(button.dataset.pool === next)),
     );
   if (next === pool) return;
-  // To the pool on the right, the cards leave to the left; and back.
+  // To the pool on the right, the cards leave to the left; and back. Only
+  // the shown page slides: the cards are copied where they are on screen.
   const direction = ACCOUNT_POOLS.indexOf(next) > ACCOUNT_POOLS.indexOf(pool) ? -1 : 1;
-  slidePoolOut(direction);
+  const animate = selectedPage === "accounts";
+  if (animate) slidePoolOut(direction);
   pool = next;
   fullRefreshAt = null;
   localStorage.setItem("copool.pool", pool);
@@ -1847,7 +1854,7 @@ function showPool(next) {
   accountsCache = accountsController.accounts;
   renderAccounts(accountsCache);
   renderPendingWorkspaces();
-  slidePoolIn(direction);
+  if (animate) slidePoolIn(direction);
   syncButtons();
   refreshView().catch((error) => notice(error, true));
 }
@@ -1867,12 +1874,11 @@ for (const original of document.querySelectorAll("#pool-switch .pool-btn")) {
       node.setAttribute("fill", `url(#${id})`);
     gradient.id = id;
   }
-  copy.onclick = () => showProxyPool(target);
+  copy.onclick = () => showPool(target);
   $("proxy-pool-switch").append(copy);
 }
-/// Shows the selected pool's API proxy.
+/// Shows the selected pool's API proxy; only showPool calls it.
 function showProxyPool(next) {
-  if (!ACCOUNT_POOLS.includes(next)) return;
   document
     .querySelectorAll("#proxy-pool-switch .pool-btn")
     .forEach((button) =>
@@ -1884,7 +1890,6 @@ function showProxyPool(next) {
   $("proxy-auto-start").dataset.preference = PROXY_PREFERENCES[next].autoStart;
   if (next === proxyPool && proxyController === proxyControllers[next]) return;
   proxyPool = next;
-  localStorage.setItem("copool.proxyPool", next);
   closeMenu();
   proxyController = proxyControllers[next];
   tunnelConfiguration = proxyController.tunnelConfiguration;
@@ -2405,12 +2410,10 @@ document.addEventListener("keydown", (event) => {
   } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3"].includes(event.key)) {
     event.preventDefault();
     const target = ACCOUNT_POOLS[Number(event.key) - 1];
-    // The proxy and accounts pages remember their pools independently.
-    if (selectedPage === "proxy") showProxyPool(target);
-    else {
-      if (selectedPage !== "accounts") showPage("accounts");
-      showPool(target);
-    }
+    // The pool is shared, so the proxy page switches in place.
+    if (selectedPage !== "proxy" && selectedPage !== "accounts")
+      showPage("accounts");
+    showPool(target);
   } else if (mod && event.key === ",") {
     event.preventDefault();
     showPage("settings");
@@ -2677,8 +2680,8 @@ document.addEventListener(
         invoke("native_symbols"),
       ]);
       applyNativeIcons();
-      showPool(pool);
-      showProxyPool(proxyPool);
+      showAccountsPool(pool);
+      showProxyPool(pool);
       locale = appLocale();
       translate();
       await initializeFeatures();

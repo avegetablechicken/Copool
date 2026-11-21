@@ -78,7 +78,7 @@ test("Refreshing a provider's only account refreshes the entire provider", () =>
   ]);
 });
 
-test("Cmd+1 to Cmd+3 switch the proxy page's pool there, and the accounts page's elsewhere", () => {
+test("Cmd+1 to Cmd+3 select the pool both pages share, in place on the proxy page", () => {
   const app = fs
     .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
     .replace(/\r\n/g, "\n");
@@ -86,19 +86,20 @@ test("Cmd+1 to Cmd+3 switch the proxy page's pool there, and the accounts page's
   const end = app.indexOf('  } else if (mod && event.key === ",") {', start);
   assert(start >= 0 && end > start, "pool shortcut branch found");
   for (const [page, key, expected] of [
-    ["proxy", "2", [["proxy", "claude"]]],
-    ["proxy", "1", [["proxy", "codex"]]],
-    ["accounts", "2", [["accounts", "claude"]]],
-    ["settings", "1", [["page", "accounts"], ["accounts", "codex"]]],
-    ["proxy", "3", [["proxy", "antigravity"]]],
-    ["accounts", "3", [["accounts", "antigravity"]]],
+    ["proxy", "2", [["pool", "claude"]]],
+    ["proxy", "1", [["pool", "codex"]]],
+    ["accounts", "2", [["pool", "claude"]]],
+    ["settings", "1", [["page", "accounts"], ["pool", "codex"]]],
+    ["proxy", "3", [["pool", "antigravity"]]],
+    ["accounts", "3", [["pool", "antigravity"]]],
   ]) {
     const calls = [];
     const scope = {
       ACCOUNT_POOLS: ["codex", "claude", "antigravity"],
       selectedPage: page,
-      showProxyPool: (target) => calls.push(["proxy", target]),
-      showPool: (target) => calls.push(["accounts", target]),
+      showProxyPool: (target) => calls.push(["proxy only", target]),
+      showAccountsPool: (target) => calls.push(["accounts only", target]),
+      showPool: (target) => calls.push(["pool", target]),
       showPage: (target) => calls.push(["page", target]),
     };
     vm.createContext(scope);
@@ -109,6 +110,31 @@ test("Cmd+1 to Cmd+3 switch the proxy page's pool there, and the accounts page's
     scope.route({ key, preventDefault() {} }, true);
     assert.deepEqual(calls, expected, `${page} Cmd+${key}`);
   }
+});
+
+test("Selecting a pool on either page selects it on both", () => {
+  const app = fs
+    .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
+    .replace(/\r\n/g, "\n");
+  const start = app.indexOf("function showPool(next) {");
+  const end = app.indexOf("\n}\n", start);
+  assert(start >= 0 && end > start, "showPool found");
+  const calls = [];
+  const scope = {
+    ACCOUNT_POOLS: ["codex", "claude", "antigravity"],
+    showAccountsPool: (target) => calls.push(["accounts", target]),
+    showProxyPool: (target) => calls.push(["proxy", target]),
+  };
+  vm.createContext(scope);
+  vm.runInContext(app.slice(start, end + 2), scope);
+  scope.showPool("claude");
+  scope.showPool("unknown");
+  assert.deepEqual(calls, [["accounts", "claude"], ["proxy", "claude"]]);
+  assert.match(
+    app,
+    /copy\.onclick = \(\) => showPool\(target\);/,
+    "the proxy page's pool buttons select the shared pool",
+  );
 });
 
 test("A visible meter changes from red to amber without a data refresh", () => {
