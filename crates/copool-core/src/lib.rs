@@ -1,6 +1,8 @@
 //! Platform-independent Copool application services.
 //! The packaged remote daemon and desktop share one proxy engine source tree.
 #![allow(dead_code)]
+#[path = "../../../resources/proxyd-src/src/antigravity_cloud.rs"]
+mod antigravity_cloud;
 mod application;
 #[path = "../../../resources/proxyd-src/src/auth.rs"]
 mod auth;

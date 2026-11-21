@@ -345,104 +345,7 @@ fn parse_import(content: &str) -> Option<Vec<Document>> {
         .collect()
 }
 
-/// Why a usage request failed.
-enum Failure {
-    /// The access token was refused: renewing it may help.
-    Expired,
-    Other(String),
-}
-fn status_error(what: &str, status: u16, body: &Value) -> String {
-    let message = body
-        .pointer("/error/message")
-        .or_else(|| body.get("error_description"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    format!("{what} failed: HTTP {status} {message}")
-        .trim()
-        .to_owned()
-}
-/// One quota request: its parsed usage, none for a reply without quota.
-async fn quota(
-    network: &dyn Network,
-    path: &str,
-    parse: fn(&Value, i64) -> Option<UsageSnapshot>,
-    token: &str,
-    proxy: &str,
-    now: i64,
-) -> std::result::Result<Option<UsageSnapshot>, Failure> {
-    let (status, body) = network
-        .cloud(path, token, api::empty(), &api::agent(), proxy)
-        .await
-        .map_err(Failure::Other)?;
-    match status {
-        401 | 403 => Err(Failure::Expired),
-        200..=299 => Ok(parse(&body, now)),
-        _ => Err(Failure::Other(status_error(
-            "Antigravity usage request",
-            status,
-            &body,
-        ))),
-    }
-}
-/// The account's quota. The summary reports the shared pools; an account
-/// whose Gemini models have no shared pool there (a Google AI Pro account,
-/// say) reports their five-hour window per model, as does any account
-/// without the summary.
-async fn fetch_usage(
-    network: &dyn Network,
-    token: &str,
-    proxy: &str,
-    now: i64,
-) -> std::result::Result<UsageSnapshot, Failure> {
-    let summary = match quota(
-        network,
-        api::QUOTA_SUMMARY_PATH,
-        api::quota_summary,
-        token,
-        proxy,
-        now,
-    )
-    .await
-    {
-        Err(Failure::Expired) => return Err(Failure::Expired),
-        Err(Failure::Other(error)) => Err(error),
-        Ok(summary) => Ok(summary),
-    };
-    if let Ok(Some(usage)) = &summary {
-        if usage.five_hour.is_some() || usage.one_week.is_some() {
-            return Ok(usage.clone());
-        }
-    }
-    let models = quota(
-        network,
-        api::FETCH_MODELS_PATH,
-        api::available_models,
-        token,
-        proxy,
-        now,
-    )
-    .await;
-    match (summary, models) {
-        (_, Err(Failure::Expired)) => Err(Failure::Expired),
-        (Ok(Some(mut usage)), Ok(Some(models))) => {
-            usage.five_hour = models.five_hour;
-            if usage.third_party_five_hour.is_none() && usage.third_party_one_week.is_none() {
-                usage.third_party_five_hour = models.third_party_five_hour;
-            }
-            Ok(usage)
-        }
-        (Ok(Some(usage)), _) | (_, Ok(Some(usage))) => Ok(usage),
-        (Err(error), _) | (_, Err(Failure::Other(error))) => Err(Failure::Other(error)),
-        (Ok(None), Ok(None)) => Err(Failure::Other("Antigravity reported no quota".into())),
-    }
-}
-/// The tokens of a renewal, to put in any document of its login.
-struct Renewed {
-    access: String,
-    expires_at: i64,
-    lifetime: i64,
-    refresh: Option<String>,
-}
+use crate::antigravity_cloud::{fetch_usage, status_error, Failure, Renewed};
 impl Renewed {
     fn apply(&self, document: &mut Value) {
         login::apply_renewal(
@@ -457,31 +360,9 @@ impl Renewed {
 /// Renews the document's access token; an error when Google refuses.
 async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Result<Renewed> {
     let refresh = login::refresh_token(document).ok_or(SIGN_IN_EXPIRED)?;
-    let (status, body) = network.renew(&refresh, proxy).await?;
-    match status {
-        200..=299 => {
-            let access = body["access_token"]
-                .as_str()
-                .map(str::trim)
-                .filter(|t| !t.is_empty())
-                .ok_or("Google returned no access token")?;
-            let lifetime = body["expires_in"]
-                .as_i64()
-                .filter(|s| *s > 0)
-                .unwrap_or(3600);
-            let renewed = Renewed {
-                access: access.to_owned(),
-                expires_at: now_unix_seconds() + lifetime,
-                lifetime,
-                refresh: body["refresh_token"].as_str().map(str::to_owned),
-            };
-            renewed.apply(document);
-            Ok(renewed)
-        }
-        // invalid_grant: the login was signed out or revoked.
-        400 | 401 | 403 => Err(SIGN_IN_EXPIRED.into()),
-        _ => Err(status_error("Google token request", status, &body)),
-    }
+    let renewed = crate::antigravity_cloud::renew_token(network, &refresh, proxy).await?;
+    renewed.apply(document);
+    Ok(renewed)
 }
 
 impl Application {

@@ -269,3 +269,51 @@ pub(crate) fn agent() -> String {
     };
     format!("antigravity/{CLIENT_VERSION} {os}/{arch}")
 }
+
+/// The remote node keeps only the login fields it needs in accounts.json.
+pub(crate) async fn renew_remote(
+    auth: &Value,
+    proxy: &str,
+    network: &dyn crate::antigravity_cloud::Network,
+) -> Result<Value, String> {
+    let refresh = auth["refreshToken"]
+        .as_str()
+        .ok_or("Missing Antigravity refresh token")?;
+    let new = crate::antigravity_cloud::renew_token(network, refresh, proxy).await?;
+    let mut auth = auth.clone();
+    auth["accessToken"] = new.access.into();
+    auth["expiresAt"] = new.expires_at.into();
+    auth["expiresIn"] = new.lifetime.into();
+    if let Some(token) = new.refresh {
+        auth["refreshToken"] = token.into();
+    }
+    Ok(auth)
+}
+
+pub(super) async fn remote_usage(
+    storage: &super::ProxyStorageContext,
+    candidate: &ProxyCandidate,
+) -> Result<crate::models::UsageSnapshot, String> {
+    use crate::antigravity_cloud::{fetch_usage, Failure, Http};
+    async fn fetch(candidate: &ProxyCandidate) -> Result<crate::models::UsageSnapshot, Failure> {
+        fetch_usage(
+            &Http,
+            &candidate.access_token,
+            &candidate.proxy_url,
+            crate::utils::now_unix_seconds(),
+        )
+        .await
+    }
+    let result = match fetch(candidate).await {
+        Err(Failure::Expired) if candidate.renews => {
+            fetch(&super::refresh_proxy_candidate_auth(storage, candidate).await?).await
+        }
+        other => other,
+    };
+    let mut usage = result.map_err(|failure| match failure {
+        Failure::Expired => "Antigravity login expired".to_owned(),
+        Failure::Other(error) => error,
+    })?;
+    usage.plan_type = candidate.plan_type.clone();
+    Ok(usage)
+}

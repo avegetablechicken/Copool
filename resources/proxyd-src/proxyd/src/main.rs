@@ -1,3 +1,5 @@
+#[path = "../../src/antigravity_cloud.rs"]
+mod antigravity_cloud;
 #[path = "../../src/proxy_session.rs"]
 mod proxy_session;
 #[path = "../../src/settings.rs"]

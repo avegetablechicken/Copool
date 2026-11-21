@@ -732,8 +732,8 @@ $("remote-add").onclick = () =>
       sshPort: 22,
       sshUser: "root",
       authMode: "keyPath",
-      remoteDir: "/opt/codex-tools",
-      listenPort: 8787,
+      remoteDir: proxyPool === "antigravity" ? "/opt/copool-antigravity" : "/opt/codex-tools",
+      listenPort: proxyPool === "antigravity" ? 8789 : 8787,
     });
     remoteDrafts.set(id, saved);
     expandedRemotes.add(id);

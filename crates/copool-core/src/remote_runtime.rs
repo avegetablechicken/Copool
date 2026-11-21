@@ -10,9 +10,6 @@ use std::{io::Write, path::PathBuf, time::Duration};
 use tokio::io::AsyncWriteExt;
 
 fn validate(s: &RemoteServerConfig) -> Result<(), String> {
-    if s.pool == Pool::Antigravity {
-        return Err("Antigravity remote deployment is unavailable".into());
-    }
     if s.host.is_empty()
         || s.host.starts_with('-')
         || s.host
@@ -137,18 +134,31 @@ async fn status(server: &RemoteServerConfig, unit: &str) -> Result<Value, String
     )
 }
 impl Application {
-    /// Logins the remote daemon renewed replace the older local copies.
-    /// Takes the logins a server's daemon renewed since the last upload.
-    async fn adopt_remote_logins(&self, pool: Pool, remote: &Value) -> Result<(), String> {
-        if pool == Pool::Claude {
-            return self.claude_adopt_remote_logins(remote).await;
+    /// Merge a node's token rotations before building the next upload.
+    async fn remote_payload(
+        &self,
+        pool: Pool,
+        snapshot: Option<&Value>,
+    ) -> Result<Vec<u8>, String> {
+        match pool {
+            Pool::Antigravity => self.antigravity_remote_payload(snapshot).await,
+            Pool::Claude => {
+                if let Some(rows) = snapshot {
+                    self.claude_adopt_remote_logins(rows).await?;
+                }
+                self.claude_remote_payload()
+            }
+            Pool::Codex => {
+                let _lock = self.state.store_lock.lock().await;
+                if let Some(rows) = snapshot {
+                    let mut store = crate::store::load_store_from_path(&self.paths.store())?;
+                    if remote::adopt_newer_logins(&mut store.accounts, rows) {
+                        self.persist_accounts(&store)?;
+                    }
+                }
+                remote::accounts_payload(&self.paths.store(), snapshot)
+            }
         }
-        let _lock = self.state.store_lock.lock().await;
-        let mut store = crate::store::load_store_from_path(&self.paths.store())?;
-        if remote::adopt_newer_logins(&mut store.accounts, remote) {
-            self.persist_accounts(&store)?;
-        }
-        Ok(())
     }
     pub async fn save_remote(
         &self,
@@ -259,13 +269,13 @@ impl Application {
                 Ok(Value::Array(
                     out.split("__COPool_DISCOVERY__")
                         .filter(|s| s.contains("service_name="))
-                        .map(|found| {
+                        .filter_map(|found| {
                             let mut found = parse(found);
-                            let pool = if found["pool"] == "claude" {
-                                Pool::Claude
-                            } else {
-                                Pool::Codex
-                            };
+                            // An adopted instance must keep serving this card's pool.
+                            if found["pool"].as_str().unwrap_or("codex") != server.pool.name() {
+                                return None;
+                            }
+                            let pool = server.pool;
                             found["base_url"] = format!(
                                 "http://{}:{}{}",
                                 server.host,
@@ -273,7 +283,7 @@ impl Application {
                                 pool.base_path()
                             )
                             .into();
-                            found
+                            Some(found)
                         })
                         .collect(),
                 ))
@@ -373,20 +383,9 @@ impl Application {
                         )
                         .await?;
                         let (checksum, remote_accounts) = remote::parse_snapshot(&snapshot);
-                        if let Some(remote_accounts) = &remote_accounts {
-                            self.adopt_remote_logins(server.pool, remote_accounts)
-                                .await?;
-                        }
-                        let payload = match server.pool {
-                            Pool::Codex => remote::accounts_payload(
-                                &self.paths.store(),
-                                remote_accounts.as_ref(),
-                            )?,
-                            Pool::Claude => self.claude_remote_payload()?,
-                            Pool::Antigravity => {
-                                return Err("Antigravity remote deployment is unavailable".into())
-                            }
-                        };
+                        let payload = self
+                            .remote_payload(server.pool, remote_accounts.as_ref())
+                            .await?;
                         ssh(
                             &server,
                             &format!("cat > {}", remote::quote(&format!("{stage}/accounts.json"))),

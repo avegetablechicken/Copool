@@ -2,22 +2,11 @@
 //! Gemini models and of the third-party (Claude) models, each in a five-hour
 //! and a weekly window, the plan, and Google token renewal with Antigravity's
 //! OAuth client.
-use crate::{
-    account_network::Response,
-    models::{UsageSnapshot, UsageWindow},
-};
+#[cfg(test)]
+pub(crate) use crate::antigravity_cloud::QUOTA_SUMMARY_PATH;
+use crate::models::UsageSnapshot;
 use serde_json::{json, Value};
 
-/// Tried in turn; the daily endpoint answers first, as for Antigravity.
-const CLOUD_BASES: [&str; 2] = [
-    crate::proxy_service::antigravity::CLOUD_BASE,
-    "https://cloudcode-pa.googleapis.com",
-];
-pub(super) const QUOTA_SUMMARY_PATH: &str = "/v1internal:retrieveUserQuotaSummary";
-pub(super) const FETCH_MODELS_PATH: &str = "/v1internal:fetchAvailableModels";
-pub(super) const LOAD_CODE_ASSIST_PATH: &str = "/v1internal:loadCodeAssist";
-pub(super) const GENERATE_PATH: &str = "/v1internal:generateContent";
-const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 /// What Antigravity's sign-in asks for.
 const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform \
@@ -25,116 +14,15 @@ https://www.googleapis.com/auth/userinfo.email \
 https://www.googleapis.com/auth/userinfo.profile \
 https://www.googleapis.com/auth/cclog \
 https://www.googleapis.com/auth/experimentsandconfigs openid";
-const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
-const CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
-// An installed app's OAuth client cannot keep this value confidential; it
-// stays split so that secret scanners do not take it for a deployment secret.
-const CLIENT_SECRET_PARTS: [&str; 2] = ["GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf"];
-pub(super) use crate::proxy_service::antigravity::agent;
-
-const FIVE_HOURS: i64 = 5 * 60 * 60;
-const ONE_WEEK: i64 = 7 * 24 * 60 * 60;
-
-/// An HTTP status and its JSON body (null when it has none).
-pub(crate) type Reply = (u16, Value);
-
-/// Where the pool's requests go; tests stand in for Google.
-pub(crate) trait Network: Send + Sync {
-    /// A Cloud Code request with the access token.
-    fn cloud<'a>(
-        &'a self,
-        path: &'a str,
-        token: &'a str,
-        body: Value,
-        agent: &'a str,
-        proxy: &'a str,
-    ) -> Response<'a, Reply>;
-    /// Renews the access token with the refresh token.
-    fn renew<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Reply>;
-    /// The Google account the access token signs in.
-    fn identity<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Reply>;
-}
-
-pub(crate) struct Http;
-fn client(proxy: &str) -> Result<reqwest::Client, String> {
-    crate::proxy_session::client(
-        proxy,
-        crate::proxy_session::Options {
-            user_agent: agent(),
-            ..Default::default()
-        },
-    )
-}
-async fn reply(response: reqwest::Response) -> Reply {
-    let status = response.status().as_u16();
-    let body = response.json().await.unwrap_or(Value::Null);
-    (status, body)
-}
-impl Network for Http {
-    fn cloud<'a>(
-        &'a self,
-        path: &'a str,
-        token: &'a str,
-        body: Value,
-        agent: &'a str,
-        proxy: &'a str,
-    ) -> Response<'a, Reply> {
-        Box::pin(async move {
-            let client = client(proxy)?;
-            let mut last = Err("Antigravity request failed".to_owned());
-            for base in CLOUD_BASES {
-                let sent = client
-                    .post(format!("{base}{path}"))
-                    .bearer_auth(token)
-                    .header("Accept", "application/json")
-                    .header("User-Agent", agent)
-                    .json(&body)
-                    .send()
-                    .await;
-                match sent {
-                    Ok(response) => {
-                        let (status, body) = reply(response).await;
-                        // Only a server failure tries the other endpoint.
-                        if status < 500 && status != 404 {
-                            return Ok((status, body));
-                        }
-                        last = Ok((status, body));
-                    }
-                    Err(error) => last = Err(crate::usage::format_reqwest_error(&error)),
-                }
-            }
-            last
-        })
-    }
-    fn renew<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Reply> {
-        Box::pin(async move {
-            let secret = CLIENT_SECRET_PARTS.concat();
-            let response = client(proxy)?
-                .post(TOKEN_URL)
-                .form(&[
-                    ("client_id", CLIENT_ID),
-                    ("client_secret", secret.as_str()),
-                    ("refresh_token", refresh_token),
-                    ("grant_type", "refresh_token"),
-                ])
-                .send()
-                .await
-                .map_err(|e| crate::usage::format_reqwest_error(&e))?;
-            Ok(reply(response).await)
-        })
-    }
-    fn identity<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Reply> {
-        Box::pin(async move {
-            let response = client(proxy)?
-                .get(USERINFO_URL)
-                .bearer_auth(token)
-                .send()
-                .await
-                .map_err(|e| crate::usage::format_reqwest_error(&e))?;
-            Ok(reply(response).await)
-        })
-    }
-}
+pub(crate) use crate::antigravity_cloud::{
+    agent, empty, Http, Network, Reply, FETCH_MODELS_PATH, GENERATE_PATH, LOAD_CODE_ASSIST_PATH,
+};
+#[cfg(test)]
+use crate::antigravity_cloud::{available_models, quota_summary};
+use crate::antigravity_cloud::{
+    number, reset_at, snapshot, window, CLIENT_ID, CLIENT_SECRET_PARTS, FIVE_HOURS, ONE_WEEK,
+    TOKEN_URL,
+};
 
 /// Where the browser signs in to Google with Antigravity's client; the
 /// consent screen is asked for so that Google hands out a refresh token.
@@ -186,92 +74,6 @@ pub(crate) async fn exchange(code: &str, verifier: &str, redirect: &str) -> Resu
             .to_owned());
     }
     Ok(body)
-}
-
-/// The request bodies Antigravity sends.
-pub(super) fn empty() -> Value {
-    json!({})
-}
-
-fn number(value: &Value) -> Option<f64> {
-    value
-        .as_f64()
-        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        .filter(|value| value.is_finite())
-}
-fn reset_at(value: &Value) -> Option<i64> {
-    value
-        .as_str()
-        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-        .map(|date| date.timestamp())
-}
-/// How far an idle window's reset may fall short of a whole window from now:
-/// the request's time and the two clocks may differ by this much.
-const IDLE_MARGIN: i64 = 90;
-/// A window as the cards take it. An idle window, untouched, reports its
-/// reset a whole window from each request, rolling on; it starts with the
-/// first use, its reset then fixed. As the other pools' idle windows, it has
-/// no reset time, so that a hi may start it. The share used keeps its
-/// precision: a little use must not read as none.
-fn window(remaining: f64, reset_at: Option<i64>, seconds: i64, now: i64) -> UsageWindow {
-    let remaining = remaining.clamp(0.0, 1.0);
-    let idle = remaining >= 1.0 && reset_at.is_some_and(|at| at - now >= seconds - IDLE_MARGIN);
-    UsageWindow {
-        clock_offset_seconds: None,
-        used_percent: ((1.0 - remaining) * 1_000_000.0).round() / 10_000.0,
-        window_seconds: seconds,
-        reset_at: reset_at.filter(|_| !idle),
-    }
-}
-fn snapshot(now: i64) -> UsageSnapshot {
-    UsageSnapshot {
-        remaining_reset_count: None,
-        resets_last_confirmed_at: None,
-        reset_expiries: Vec::new(),
-        reset_grants: Vec::new(),
-        fetched_at: now,
-        plan_type: None,
-        five_hour: None,
-        one_week: None,
-        credits: None,
-        third_party_five_hour: None,
-        third_party_one_week: None,
-    }
-}
-
-/// `retrieveUserQuotaSummary`: the shared pools by bucket; none without
-/// its groups.
-pub(super) fn quota_summary(value: &Value, now: i64) -> Option<UsageSnapshot> {
-    let groups = value
-        .pointer("/response/groups")
-        .or_else(|| value.get("groups"))?
-        .as_array()?;
-    let mut usage = snapshot(now);
-    for bucket in groups
-        .iter()
-        .filter_map(|group| group.get("buckets").and_then(Value::as_array))
-        .flatten()
-    {
-        let Some(remaining) = bucket.get("remainingFraction").and_then(number) else {
-            continue;
-        };
-        let (slot, seconds) = match bucket.get("bucketId").and_then(Value::as_str) {
-            Some("gemini-5h") => (&mut usage.five_hour, FIVE_HOURS),
-            Some("gemini-weekly") => (&mut usage.one_week, ONE_WEEK),
-            Some("3p-5h") => (&mut usage.third_party_five_hour, FIVE_HOURS),
-            Some("3p-weekly") => (&mut usage.third_party_one_week, ONE_WEEK),
-            _ => continue,
-        };
-        if slot.is_none() {
-            *slot = Some(window(
-                remaining,
-                bucket.get("resetTime").and_then(reset_at),
-                seconds,
-                now,
-            ));
-        }
-    }
-    Some(usage)
 }
 
 /// A Sub2api Antigravity account's usage (`/admin/accounts/{id}/usage`): the
@@ -379,64 +181,6 @@ pub(crate) fn sub2api_usage(value: &Value, now: i64) -> Result<UsageSnapshot, St
         Err("Sub2api reports no Antigravity quota for this account".into())
     }
 }
-/// Models that hold no quota of the shared pools.
-const MODEL_BLACKLIST: [&str; 9] = [
-    "MODEL_CHAT_20706",
-    "MODEL_CHAT_23310",
-    "MODEL_GOOGLE_GEMINI_2_5_FLASH",
-    "MODEL_GOOGLE_GEMINI_2_5_FLASH_THINKING",
-    "MODEL_GOOGLE_GEMINI_2_5_FLASH_LITE",
-    "MODEL_GOOGLE_GEMINI_2_5_PRO",
-    "MODEL_PLACEHOLDER_M19",
-    "MODEL_PLACEHOLDER_M9",
-    "MODEL_PLACEHOLDER_M12",
-];
-
-/// `fetchAvailableModels`, for an account without the summary: each pool's
-/// five-hour window is its model with the least left. None without models.
-pub(super) fn available_models(value: &Value, now: i64) -> Option<UsageSnapshot> {
-    let models = value.get("models")?.as_object()?;
-    let mut usage = snapshot(now);
-    let mut found = false;
-    for (key, model) in models {
-        if model.get("isInternal").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
-        let Some(label) = ["displayName", "label"]
-            .iter()
-            .find_map(|k| model.get(*k).and_then(Value::as_str))
-            .map(str::trim)
-            .filter(|label| !label.is_empty())
-        else {
-            continue;
-        };
-        let id = model.get("model").and_then(Value::as_str).unwrap_or(key);
-        if MODEL_BLACKLIST.contains(&id) {
-            continue;
-        }
-        let quota = model.get("quotaInfo");
-        let remaining = quota
-            .and_then(|q| q.get("remainingFraction"))
-            .and_then(number)
-            .unwrap_or(0.0);
-        let reset = quota.and_then(|q| q.get("resetTime")).and_then(reset_at);
-        let slot = if label.to_ascii_lowercase().contains("gemini") {
-            &mut usage.five_hour
-        } else {
-            &mut usage.third_party_five_hour
-        };
-        let candidate = window(remaining, reset, FIVE_HOURS, now);
-        if slot
-            .as_ref()
-            .is_none_or(|w| candidate.used_percent > w.used_percent)
-        {
-            *slot = Some(candidate);
-        }
-        found = true;
-    }
-    found.then_some(usage)
-}
-
 /// The Cloud Code project of the account's messages, from `loadCodeAssist`.
 pub(super) fn project(value: &Value) -> Option<String> {
     value

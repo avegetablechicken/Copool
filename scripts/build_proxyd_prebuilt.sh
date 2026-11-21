@@ -75,9 +75,11 @@ fi
 mkdir -p "$PREBUILT_DIR" "$ARCHIVE_DIR" "$TARGET_DIR"
 
 SOURCE_STAMP="$(mktemp)"
-find "$ROOT/resources/proxyd-src" -type f \
-  \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) \
-  -print0 | xargs -0 stat -f '%m %N' | sort > "$SOURCE_STAMP"
+(
+  cd "$ROOT/resources/proxyd-src"
+  find src proxyd/src -type f -name '*.rs' -exec shasum -a 256 {} +
+  shasum -a 256 proxyd/Cargo.toml proxyd/Cargo.lock
+) | LC_ALL=C sort > "$SOURCE_STAMP"
 
 build_target() {
   target="$1"

@@ -1840,7 +1840,6 @@ for (const original of document.querySelectorAll("#pool-switch .pool-btn")) {
 /// Shows the selected pool's API proxy.
 function showProxyPool(next) {
   if (!ACCOUNT_POOLS.includes(next)) return;
-  $("remote-add").closest("section").hidden = next === "antigravity";
   document
     .querySelectorAll("#proxy-pool-switch .pool-btn")
     .forEach((button) =>

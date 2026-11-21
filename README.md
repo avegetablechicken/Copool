@@ -34,8 +34,8 @@ Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管�
 - 在 API 代理页选择 Antigravity 并启动，将页面上的地址和密钥分别作为 `GOOGLE_GEMINI_BASE_URL` 和 `GEMINI_API_KEY` 传给 CLI，再运行 `agy --settings '{"modelProvider":"gemini"}'`。默认地址为 `http://127.0.0.1:8789/antigravity`。
 - Cloudflared public tunnel management
 - Cloudflared 公网隧道管理
-- Remote Linux deployment/start/stop/logs for proxy nodes over SSH
-- 远程 Linux 代理节点 SSH 部署/启停/日志
+- Remote Linux deployment/start/stop/logs for proxy nodes over SSH. Antigravity nodes serve `agy` at `http://<host>:<port>/antigravity` using the node’s own API key.
+- 远程 Linux 代理节点 SSH 部署/启停/日志。Antigravity 的 Remote Servers 支持部署和同步订阅账号；将节点的 `http://<主机>:<端口>/antigravity` 地址和节点密钥传给 `agy`。
 - ChatGPT OAuth sign-in, plus editor restart / Codex launch / OpenCode sync on account switch
 - ChatGPT OAuth 登录，以及切换账号时的编辑器重启 / 拉起 Codex / 同步 OpenCode
 - Status bar panel, and a WidgetKit widget on macOS

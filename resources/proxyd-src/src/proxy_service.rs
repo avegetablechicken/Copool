@@ -111,6 +111,7 @@ pub(crate) struct ProxyStorageContext {
     /// Whether the candidates include the accounts of `accounts.json`, where
     /// renewals and usage are then stored.
     pub(crate) read_store: bool,
+    remote_renewal: Arc<tokio::sync::Mutex<()>>,
     /// Whether the proxy refreshes its accounts' usage itself.
     pub(crate) refresh_usage: bool,
     /// Renews a candidate's login where the pool keeps it, returning the
@@ -291,6 +292,7 @@ pub(crate) fn new_proxy_storage_context(
         pool: Pool::Codex,
         key_file: "api-proxy.key",
         read_store: true,
+        remote_renewal: Default::default(),
         refresh_usage: true,
         renew_candidate: None,
         data_dir,
@@ -2667,7 +2669,7 @@ async fn refresh_proxy_candidate_usage(
 ) {
     // The upstream the proxy forwards to is also where usage is read.
     let origin = match storage.pool {
-        Pool::Antigravity => return, // The desktop pool refreshes its own usage.
+        Pool::Antigravity => String::new(), // The remote pool uses Cloud Code.
         Pool::Codex => storage
             .upstream_base_url
             .as_deref()
@@ -2685,7 +2687,7 @@ async fn refresh_proxy_candidate_usage(
         .filter(|c| c.auth_json.get("copoolProvider").is_none())
     {
         let result = match storage.pool {
-            Pool::Antigravity => return,
+            Pool::Antigravity => antigravity::remote_usage(storage, &candidate).await,
             Pool::Codex => {
                 fetch_usage_snapshot_from(
                     &origin,
@@ -2811,9 +2813,31 @@ async fn refresh_proxy_candidate_auth(
         // The pool renews the login where it keeps it.
         Some(renew) => renew(candidate.id.clone(), candidate.access_token.clone()).await?,
         None => {
+            let _renewal = if storage.pool == Pool::Antigravity {
+                Some(storage.remote_renewal.lock().await)
+            } else {
+                None
+            };
             let refreshed = match storage.pool {
                 Pool::Antigravity => {
-                    return Err("Antigravity login renewal requires its account pool".into())
+                    // Another rejected request or a desktop sync may have supplied a new login.
+                    let current = load_proxy_candidates(storage)
+                        .await?
+                        .into_iter()
+                        .find(|c| c.id == candidate.id)
+                        .ok_or("Antigravity account removed")?;
+                    if current.auth_json != candidate.auth_json {
+                        return Ok(current);
+                    }
+                    if !current.renews {
+                        return Err(crate::models::RENEWAL_OFF.into());
+                    }
+                    antigravity::renew_remote(
+                        &current.auth_json,
+                        &current.proxy_url,
+                        &crate::antigravity_cloud::Http,
+                    )
+                    .await?
                 }
                 Pool::Codex => {
                     refresh_chatgpt_auth_tokens(&candidate.auth_json, &candidate.proxy_url).await?
@@ -2892,7 +2916,7 @@ async fn persist_refreshed_candidate_auth(
         .find(|account| account.id == account_id)
     {
         let replaces = match storage.pool {
-            Pool::Antigravity => return Err("Antigravity stores its own logins".into()),
+            Pool::Antigravity => account.auth_json == *from && account.renews(),
             Pool::Codex => {
                 crate::auth::renewal_replaces(refreshed_auth_json, from, &account.auth_json)
             }
@@ -2910,6 +2934,8 @@ async fn persist_refreshed_candidate_auth(
         account.auth_json = refreshed_auth_json.clone();
         account.updated_at = now_unix_seconds();
         account.renewed();
+    } else if storage.pool == Pool::Antigravity {
+        return Err("Antigravity account removed".into());
     }
 
     save_store_to_path(&store_path, &store)?;

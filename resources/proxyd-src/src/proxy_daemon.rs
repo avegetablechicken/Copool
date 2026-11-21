@@ -129,6 +129,7 @@ fn parse_cli_args(args: Vec<String>) -> Result<CliAction, String> {
                 pool = match value.as_str() {
                     "codex" => Pool::Codex,
                     "claude" => Pool::Claude,
+                    "antigravity" => Pool::Antigravity,
                     _ => return Err(format!("Unknown pool: {value}\n\n{}", usage_text(&program))),
                 };
                 index += 2;
@@ -187,6 +188,6 @@ async fn wait_for_shutdown_signal() -> Result<(), String> {
 
 fn usage_text(program: &str) -> String {
     format!(
-        "Usage:\n  {program} serve [--data-dir PATH] [--host HOST] [--port PORT] [--pool codex|claude] [--no-sync-current-auth]\n\nDefaults:\n  --data-dir ~/.codex-tools-proxyd\n  --host 0.0.0.0\n  --port 8787\n  --pool codex"
+        "Usage:\n  {program} serve [--data-dir PATH] [--host HOST] [--port PORT] [--pool codex|claude|antigravity] [--no-sync-current-auth]\n\nDefaults:\n  --data-dir ~/.codex-tools-proxyd\n  --host 0.0.0.0\n  --port 8787\n  --pool codex"
     )
 }

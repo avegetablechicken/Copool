@@ -1560,3 +1560,56 @@ async fn agy_proxy_forwards_to_the_imported_gateway_with_its_own_key() {
     );
     app.stop_proxy(Pool::Antigravity).await.unwrap();
 }
+
+#[tokio::test]
+async fn a_remote_node_receives_only_released_logins_and_syncs_its_renewal_once() {
+    let h = harness(true).await;
+    let now = now_unix_seconds();
+    h.app
+        .antigravity_import_json(&login_of("alice", "access-alice", now + 600).to_string())
+        .await
+        .unwrap();
+    let mut store = h.app.antigravity_load().unwrap();
+    let id = store.accounts[0].id.clone();
+    store.accounts[0].renewal = Some(Renewal::Once);
+    let mut pending = store.accounts[0].clone();
+    pending.id = "pending".into();
+    pending.first_request_pending = true;
+    store.accounts.push(pending);
+    let mut disabled = store.accounts[0].clone();
+    disabled.id = "disabled-renewal".into();
+    disabled.renewal = Some(Renewal::Never);
+    store.accounts.push(disabled);
+    h.app.antigravity_save(&store).unwrap();
+    let payload = |bytes: Vec<u8>| serde_json::from_slice::<Value>(&bytes).unwrap();
+    let mut node = payload(h.app.antigravity_remote_payload(None).await.unwrap());
+    assert_eq!(node["accounts"].as_array().unwrap().len(), 2);
+    assert!(node["accounts"][1]["authJson"]
+        .get("refreshToken")
+        .is_none());
+    let row = &mut node["accounts"][0];
+    assert_eq!(row["id"], id);
+    assert_eq!(row["authJson"]["project"], "project-1");
+    let mut renewed =
+        crate::proxy_service::antigravity::renew_remote(&row["authJson"], "", &*h.fake)
+            .await
+            .unwrap();
+    renewed["refreshToken"] = "rotated-on-node".into();
+    row["authJson"] = renewed;
+    row["renewal"] = "never".into();
+    let resynced = payload(h.app.antigravity_remote_payload(Some(&node)).await.unwrap());
+    assert_eq!(resynced["accounts"][0]["renewal"], "never");
+    assert!(resynced["accounts"][0]["authJson"]
+        .get("refreshToken")
+        .is_none());
+    let mut stored = h.app.antigravity_load().unwrap();
+    assert_eq!(
+        login::refresh_token(&stored.accounts[0].document).as_deref(),
+        Some("rotated-on-node")
+    );
+    // A delayed node snapshot cannot replace a new local sign-in.
+    stored.accounts[0].document = login_of("alice", "new-login", now + 100);
+    h.app.antigravity_save(&stored).unwrap();
+    let kept = payload(h.app.antigravity_remote_payload(Some(&node)).await.unwrap());
+    assert_eq!(kept["accounts"][0]["authJson"]["accessToken"], "new-login");
+}
