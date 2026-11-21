@@ -375,6 +375,25 @@ const remoteTitles = {
   uninstall: "proxy.remote.action.uninstall_remote",
 };
 const remoteOperations = { syncAccounts: "sync", refresh: "status" };
+/// The card's actions by what they act on: the saved card, the running
+/// service, the deployment, and the destructive removals kept apart.
+const remoteActionGroups = {
+  save: ["save"],
+  runtime: ["start", "stop", "refresh", "logs"],
+  deploy: ["discover", "deploy", "syncAccounts"],
+  danger: ["removeLocal", "uninstall"],
+};
+const remoteActionIcons = {
+  removeLocal: "trash",
+  discover: "search",
+  deploy: "upload",
+  syncAccounts: "sync",
+  refresh: "refresh",
+  start: "play",
+  stop: "stop",
+  logs: "logs",
+  uninstall: "uninstall",
+};
 /// The shown pool's remote servers.
 function shownRemotes() {
   return [...remoteDrafts].filter(
@@ -475,20 +494,33 @@ function renderRemotes() {
         }
         form.append(row);
       }
-      form.append(
+      const service = el("div", "remote-service");
+      service.append(
+        el("div", "remote-status"),
+        el("div", "remote-actions action-bar"),
+        el("div", "remote-actions action-bar"),
         el("div", "remote-feedback"),
-        el("div", "remote-actions"),
-        el("div", "remote-output"),
       );
+      const [runtime, deploy] = service.querySelectorAll(".remote-actions");
+      runtime.dataset.group = "runtime";
+      deploy.dataset.group = "deploy";
+      const save = el("div", "remote-actions save-actions");
+      save.dataset.group = "save";
+      const danger = el("div", "remote-actions danger-actions");
+      danger.dataset.group = "danger";
       const guide = el("details", "remote-action-guide");
       guide.append(
         el("summary", "", tr("proxy.remote.help.title")),
       );
-      for (const help of P.remoteHelp(proxyController.remoteButtons(id)))
-        guide.append(
-          el("p", "", `${tr(remoteTitles[help.action])}: ${tr(help.key)}`),
+      for (const help of P.remoteHelp(proxyController.remoteButtons(id))) {
+        const line = el("p");
+        line.append(
+          el("b", "", tr(remoteTitles[help.action])),
+          el("span", "", tr(help.key)),
         );
-      form.append(guide);
+        guide.append(line);
+      }
+      form.append(save, service, el("div", "remote-output"), guide, danger);
     }
     form.onsubmit = (event) => {
       event.preventDefault();
@@ -510,7 +542,7 @@ function renderRemoteStates() {
   )) {
     const id = form.dataset.serverId,
       server = remoteDrafts.get(id),
-      actions = form.querySelector(".remote-actions");
+      actions = form.querySelectorAll(".remote-actions[data-group]");
     const status = proxyController.remoteStatuses[id];
     const pill = form.querySelector(".remote-state");
     pill.classList.toggle("running", !!status?.running);
@@ -518,46 +550,54 @@ function renderRemoteStates() {
     pill.lastChild.textContent = !status
       ? "Unknown"
       : tr(status.running ? "proxy.status.running" : "proxy.status.stopped");
-    if (!actions) continue;
+    if (!actions.length) continue;
     const descriptors = proxyController.remoteButtons(id);
     const key = JSON.stringify(descriptors);
-    if (actions.dataset.renderKey !== key) {
-      actions.dataset.renderKey = key;
-      actions.replaceChildren();
-      for (const descriptor of descriptors) {
-        const control = button(
-          tr(remoteTitles[descriptor.intent]),
-          descriptor.showsProgress ? "refresh" : null,
-          descriptor.intent === "save"
-            ? "btn primary"
-            : `btn quiet ${descriptor.role === "destructive" ? "destructive" : descriptor.surfaceStyle === "prominent" ? "prominent" : ""}`,
-          async () => {
-            if (descriptor.intent === "save") {
-              await saveRemoteDraft(id);
-              return;
-            }
-            if (descriptor.intent === "removeLocal") {
-              if (await proxyController.removeRemote(id)) {
-                remoteDrafts.delete(id);
-                expandedRemotes.delete(id);
-                renderRemotes();
+    if (form.dataset.actionsKey !== key) {
+      form.dataset.actionsKey = key;
+      for (const group of actions) {
+        group.replaceChildren();
+        for (const descriptor of remoteActionGroups[group.dataset.group]
+          .map((intent) => descriptors.find((d) => d.intent === intent))
+          .filter(Boolean)) {
+          const control = button(
+            tr(remoteTitles[descriptor.intent]),
+            descriptor.showsProgress
+              ? "refresh"
+              : remoteActionIcons[descriptor.intent] || null,
+            descriptor.intent === "save"
+              ? "btn primary"
+              : group.dataset.group === "danger"
+                ? "btn plain destructive"
+                : `btn quiet${descriptor.intent === "stop" ? " destructive" : ""}`,
+            async () => {
+              if (descriptor.intent === "save") {
+                await saveRemoteDraft(id);
+                return;
               }
-              return;
-            }
-            await proxyController.remoteAction(
-              id,
-              remoteOperations[descriptor.intent] || descriptor.intent,
-              server.label,
-              descriptor.intent,
-            );
-          },
-        );
-        control.type = "button";
-        control.disabled = !descriptor.enabled;
-        control.dataset.available = String(descriptor.enabled);
-        if (descriptor.showsProgress) control.classList.add("spinning");
-        control.title = tr(P.remoteHelp([descriptor])[0].key);
-        actions.append(control);
+              if (descriptor.intent === "removeLocal") {
+                if (await proxyController.removeRemote(id)) {
+                  remoteDrafts.delete(id);
+                  expandedRemotes.delete(id);
+                  renderRemotes();
+                }
+                return;
+              }
+              await proxyController.remoteAction(
+                id,
+                remoteOperations[descriptor.intent] || descriptor.intent,
+                server.label,
+                descriptor.intent,
+              );
+            },
+          );
+          control.type = "button";
+          control.disabled = !descriptor.enabled;
+          control.dataset.available = String(descriptor.enabled);
+          if (descriptor.showsProgress) control.classList.add("spinning");
+          control.title = tr(P.remoteHelp([descriptor])[0].key);
+          group.append(control);
+        }
       }
     }
     const feedback = form.querySelector(".remote-feedback");
@@ -585,22 +625,36 @@ function renderRemoteStates() {
     if (output.dataset.renderKey === outputKey) continue;
     output.dataset.renderKey = outputKey;
     output.replaceChildren();
-    const details = el("dl", "kv remote-details");
+    const statusSlot = form.querySelector(".remote-status");
+    statusSlot.replaceChildren();
+    const details = el("div", "value-grid remote-details");
     P.remoteDetails(status).forEach((detail, index) => {
       const label = [
         tr("proxy.detail.base_url"),
         tr("proxy.detail.api_key"),
         extra("Service", "服务"),
       ][index];
-      const value = el("dd", "copy-row");
-      const field = el("input", "field");
-      field.readOnly = true;
-      field.type = index === 1 && detail.canCopy ? "password" : "text";
-      field.value = detail.value;
-      field.setAttribute("aria-label", label);
-      value.append(field);
-      if (detail.canCopy) value.append(copyButton(detail.value));
-      details.append(el("dt", "", label), value);
+      const secret = index === 1 && detail.canCopy;
+      const cell = el("span", "value-cell");
+      const value = el(
+        "span",
+        `value${index === 2 ? "" : " mono"}${secret ? " secret" : ""}`,
+      );
+      showValue(value, detail.canCopy ? detail.value : "", detail.value, secret);
+      cell.append(value);
+      if (secret) {
+        const reveal = button("", "eye", "icon-btn", () => {
+          const shown = reveal.getAttribute("aria-pressed") !== "true";
+          reveal.setAttribute("aria-pressed", String(shown));
+          showValue(value, detail.value, detail.value, !shown);
+        });
+        reveal.type = "button";
+        reveal.setAttribute("aria-pressed", "false");
+        reveal.setAttribute("aria-label", "Show API key");
+        cell.append(reveal);
+      }
+      if (detail.canCopy) cell.append(copyButton(detail.value));
+      details.append(el("span", "value-label", label), cell);
     });
     output.append(details);
     if (status) {
@@ -623,7 +677,7 @@ function renderRemoteStates() {
         );
         metrics.append(card);
       }
-      output.prepend(metrics);
+      statusSlot.append(metrics);
       if (status.lastError)
         output.append(el("p", "error", tr(status.lastError)));
     }
@@ -804,14 +858,17 @@ function renderTunnelControls() {
     root.append(
       el("p", "setting-description", tr("proxy.public.quick_note_message")),
     );
-  const actions = el("div", "provider-actions");
-  for (const [op, label] of [
-    ["start", "start_action"],
-    ["stop", "stop_action"],
-    ["status", "refresh_status"],
+  const actions = el("div", "action-bar tunnel-actions");
+  for (const [op, label, glyph] of [
+    ["start", "start_action", "play"],
+    ["stop", "stop_action", "stop"],
+    ["status", "refresh_status", "refresh"],
   ]) {
-    const control = button(tr(`proxy.public.${label}`), null, "btn quiet", () =>
-      runTunnel(op),
+    const control = button(
+      tr(`proxy.public.${label}`),
+      glyph,
+      `btn quiet${op === "stop" ? " destructive" : ""}`,
+      () => runTunnel(op),
     );
     control.dataset.tunnelAction = op;
     actions.append(control);

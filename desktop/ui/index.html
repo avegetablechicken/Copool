@@ -178,7 +178,10 @@
               </div>
               <div id="api-details" class="section-details" hidden>
                 <div class="row">
-                  <span class="row-label">Port</span>
+                  <span
+                    class="row-label"
+                    data-l10n="proxy.remote.field.proxy_port"
+                  ></span>
                   <span class="number-field"
                     ><input
                       id="proxy-port"
@@ -188,18 +191,21 @@
                       min="1"
                       max="65535"
                       placeholder="8787"
-                      aria-label="Port"
+                      data-title="proxy.remote.field.proxy_port"
                   /></span>
                   <button
                     id="proxy-start"
-                    class="btn quiet prominent"
-                    data-l10n="common.start"
-                  ></button
+                    class="icon-btn proxy-power start"
+                    data-title="proxy.action.start_api_proxy"
+                  >
+                    <span data-icon="play"></span></button
                   ><button
                     id="proxy-stop"
-                    class="btn quiet destructive"
-                    data-l10n="common.stop"
-                  ></button>
+                    class="icon-btn proxy-power stop"
+                    data-title="proxy.action.stop_api_proxy"
+                  >
+                    <span data-icon="stop"></span>
+                  </button>
                 </div>
                 <label class="row"
                   ><span
@@ -212,51 +218,65 @@
                     class="switch"
                     data-preference="autoStartProxy"
                 /></label>
-                <div class="subhead" data-l10n="proxy.detail.base_url"></div>
-                <div class="copy-row">
-                  <input id="proxy-url" class="field" readonly /><button
-                    class="icon-btn copy"
-                    data-copy="proxy-url"
-                    data-title="common.copy"
-                  >
-                    <span data-icon="copy"></span>
-                  </button>
+                <!-- Values read as text with their actions at the trailing
+                     edge, so the copy buttons share one column. -->
+                <div class="value-grid">
+                  <span
+                    class="value-label"
+                    data-l10n="proxy.detail.base_url"
+                  ></span>
+                  <span class="value-cell"
+                    ><span id="proxy-url" class="value mono"></span
+                    ><button
+                      class="icon-btn copy"
+                      data-copy="proxy-url"
+                      data-title="common.copy"
+                    >
+                      <span data-icon="copy"></span></button
+                  ></span>
+                  <span
+                    class="value-label"
+                    data-l10n="proxy.detail.api_key"
+                  ></span>
+                  <span class="value-cell"
+                    ><span id="proxy-key" class="value mono secret"></span
+                    ><button
+                      id="toggle-key"
+                      class="icon-btn"
+                      aria-label="Show API key"
+                      aria-pressed="false"
+                    >
+                      <span data-icon="eye"></span></button
+                    ><button
+                      id="proxy-key-refresh"
+                      class="icon-btn"
+                      data-title="common.refresh"
+                    >
+                      <span data-icon="refresh"></span></button
+                    ><button
+                      class="icon-btn copy"
+                      data-copy="proxy-key"
+                      data-title="common.copy"
+                    >
+                      <span data-icon="copy"></span></button
+                  ></span>
+                  <hr class="value-divider" />
+                  <span
+                    class="value-label"
+                    data-l10n="proxy.detail.active_routed_account"
+                  ></span>
+                  <span class="value-cell stacked"
+                    ><span id="proxy-active" class="value"></span
+                    ><small id="proxy-active-id" class="secondary"></small
+                  ></span>
+                  <span
+                    class="value-label"
+                    data-l10n="proxy.detail.last_error"
+                  ></span>
+                  <span class="value-cell"
+                    ><span id="proxy-error" class="value wrap"></span
+                  ></span>
                 </div>
-                <div class="subhead" data-l10n="proxy.detail.api_key"></div>
-                <div class="copy-row">
-                  <input
-                    id="proxy-key"
-                    class="field"
-                    readonly
-                    type="password"
-                    autocomplete="off"
-                  /><button
-                    id="toggle-key"
-                    class="icon-btn"
-                    aria-label="Show API key"
-                  >
-                    <span data-icon="eye"></span></button
-                  ><button
-                    class="icon-btn copy"
-                    data-copy="proxy-key"
-                    data-title="common.copy"
-                  >
-                    <span data-icon="copy"></span></button
-                  ><button
-                    id="proxy-key-refresh"
-                    class="btn quiet"
-                    data-l10n="common.refresh"
-                  ></button>
-                </div>
-                <dl class="kv">
-                  <dt data-l10n="proxy.detail.active_routed_account"></dt>
-                  <dd>
-                    <div id="proxy-active"></div>
-                    <small id="proxy-active-id" class="secondary"></small>
-                  </dd>
-                  <dt data-l10n="proxy.detail.last_error"></dt>
-                  <dd id="proxy-error"></dd>
-                </dl>
               </div>
             </section>
             <section class="block">

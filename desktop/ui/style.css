@@ -499,8 +499,8 @@ main > section.page-leaving {
 .section-details {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-top: 4px;
+  gap: 6px;
+  padding-top: 8px;
   border-top: 0.5px solid var(--separator);
   margin-top: 2px;
 }
@@ -547,12 +547,160 @@ main > section.page-leaving {
   white-space: normal;
 }
 
+/* A field's title above it, with any trailing button on the same line. */
 .subhead {
   display: flex;
+  align-items: center;
   gap: 8px;
   justify-content: space-between;
-  padding: 6px 0 1px;
-  font-weight: 600;
+  min-height: 20px;
+  color: var(--secondary);
+}
+
+/* --------------------------------------------------------------- values */
+
+/* Read-only values as text, labels in a column sized to the longest one,
+   and each value's buttons at the trailing edge. */
+.value-grid {
+  display: grid;
+  grid-template-columns: fit-content(32%) minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 12px;
+}
+
+.section-details > .value-grid {
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 0.5px solid var(--separator);
+}
+
+.value-label {
+  color: var(--secondary);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.value-cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 22px;
+}
+
+.value-cell.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 1px;
+  padding: 3px 0;
+}
+
+.value-cell.stacked > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.value-cell.stacked small {
+  font-size: 10px;
+}
+
+.value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.value.mono {
+  font: 10.5px/1.4 var(--mono);
+}
+
+.value.empty {
+  color: var(--tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.value.wrap,
+.value.secret.revealed {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.value-divider {
+  grid-column: 1 / -1;
+  height: 0;
+  margin: 4px 0;
+  border: 0;
+  border-top: 0.5px solid var(--separator);
+}
+
+.icon-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+/* The proxy's start and stop as round media keys, tinted by what they do. */
+.icon-btn.proxy-power {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+}
+
+.icon-btn.proxy-power.stop {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.icon-btn.proxy-power:hover {
+  color: var(--green);
+  filter: brightness(0.92);
+}
+
+.icon-btn.proxy-power.stop:hover {
+  color: var(--red);
+}
+
+.icon-btn.proxy-power .icon {
+  width: 11px;
+  height: 11px;
+}
+
+/* Equal buttons with a glyph and a label, widening only for long labels. */
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.action-bar .btn {
+  flex: 1 1 0;
+  min-width: max-content;
+  height: 24px;
+  gap: 5px;
+  border-radius: 6px;
+}
+
+.action-bar .btn:not(.destructive) .icon {
+  color: var(--secondary);
+}
+
+/* A borderless button, for actions kept out of the way. */
+.btn.plain {
+  background: transparent;
+  box-shadow: none;
+}
+
+.btn.plain:hover {
+  background: var(--track);
 }
 
 .placeholder {
@@ -954,6 +1102,8 @@ textarea::placeholder {
   flex: 1;
   font-variant-numeric: tabular-nums;
 }
+
+
 
 .number-field {
   display: flex;
@@ -1656,8 +1806,7 @@ button.usage-reset:hover {
 
 /* ------------------------------------------------------------ providers */
 
-.provider-form + .provider-form,
-.remote-form + .remote-form {
+.provider-form + .provider-form {
   border-top: 0.5px solid var(--separator);
 }
 
@@ -1734,14 +1883,27 @@ button.usage-reset:hover {
 
 /* ------------------------------------------------------------- remotes */
 
+/* Each server is a card of its own, as RemoteServerCardView's cardSurface. */
 .remote-form {
-  padding: 2px 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--label) 3%, transparent);
+  box-shadow: 0 0 0 0.5px var(--separator);
+}
+
+.remote-form:has(.remote-fields) {
+  padding-bottom: 10px;
 }
 
 .remote-heading {
   display: flex;
   flex: 1;
   flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
 
@@ -1764,19 +1926,20 @@ button.usage-reset:hover {
 .remote-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 8px;
-  margin-top: 4px;
+  gap: 8px;
 }
 
-.remote-fields .provider-field {
+.remote-fields .provider-field,
+.remote-identity .provider-field {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 2px;
+  gap: 3px;
   min-height: 0;
 }
 
-.remote-fields .provider-field > span:first-child {
+.remote-fields .provider-field > span:first-child,
+.remote-identity .provider-field > span:first-child {
   width: auto;
   font-size: 10px;
 }
@@ -1787,13 +1950,18 @@ button.usage-reset:hover {
 
 .remote-identity {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 4px;
+  margin-top: -4px;
 }
 
 .remote-identity .provider-field {
   flex: 1;
   min-width: 0;
+}
+
+.remote-identity > .icon-btn {
+  height: 22px;
 }
 
 /* A field's button sits inside its trailing edge, as a select's indicator. */
@@ -1815,7 +1983,7 @@ button.usage-reset:hover {
 textarea.remote-private-key {
   width: 100%;
   height: 90px;
-  margin-top: 4px;
+  margin-top: -4px;
   padding: 6px 7px;
   border: 0;
   border-radius: 5px;
@@ -1826,50 +1994,114 @@ textarea.remote-private-key {
   font: 10px/1.5 var(--mono);
 }
 
-.remote-actions {
+/* Saving belongs to the fields above it. */
+.save-actions {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
+  justify-content: flex-end;
 }
 
+.save-actions .btn {
+  min-width: 64px;
+  height: 22px;
+}
+
+/* The service: its state, then what runs it and what deploys it. */
+.remote-service {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 0.5px solid var(--separator);
+}
+
+.remote-status:empty {
+  display: none;
+}
+
+.remote-status {
+  margin-bottom: 2px;
+}
+
+/* The removals, apart at the end so they are not hit by mistake. */
+.danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 -4px -4px;
+  padding-top: 6px;
+  border-top: 0.5px solid var(--separator);
+}
+
+.danger-actions .btn {
+  height: 22px;
+  padding: 0 6px;
+}
+
+.remote-feedback:not(.message) {
+  display: none;
+}
+
+/* A tinted banner, as RemoteDeployFeedbackBanner. */
 .remote-feedback.message {
   align-items: flex-start;
+  margin: 0;
+  padding: 6px 6px 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.remote-feedback.message.bad {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
 }
 
 .remote-feedback .icon-btn {
-  margin-left: auto;
+  margin: -3px 0 -3px auto;
 }
 
 .remote-output {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 4px;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 0.5px solid var(--separator);
 }
 
 .remote-output:empty {
   display: none;
 }
 
+/* The status values as one row of tiles, as RemoteServerStatusGrid. */
 .remote-metrics {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 2px 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--label) 4%, transparent);
 }
 
 .remote-metric {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 
+.remote-metric > * {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .remote-metric > :first-child {
-  font-size: 10px;
+  font-size: 9.5px;
   color: var(--secondary);
+}
+
+.remote-metric > :last-child {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .remote-discovery {
@@ -1877,12 +2109,19 @@ textarea.remote-private-key {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  box-shadow: 0 0 0 0.5px var(--separator);
 }
 
 .remote-discovery > :first-child {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.remote-output > .subhead {
+  margin-bottom: -4px;
 }
 
 .mono {
@@ -1897,6 +2136,7 @@ textarea.remote-private-key {
 
 .remote-discovery > .kv {
   flex-basis: 100%;
+  margin: 0;
 }
 
 pre.remote-log {
@@ -1913,13 +2153,6 @@ pre.remote-log {
   user-select: text;
 }
 
-.remote-details {
-  margin: 2px 0 0;
-}
-
-.remote-details dd.copy-row input.field {
-  height: 20px;
-}
 
 #tunnel-status dd {
   display: flex;
@@ -1941,48 +2174,80 @@ pre.remote-log {
   text-align: left;
 }
 
-details.remote-logs summary {
+/* The logs and the action guide fold as disclosure rows with a chevron. */
+details.remote-logs,
+details.remote-action-guide {
+  padding-top: 8px;
+  border-top: 0.5px solid var(--separator);
+}
+
+details.remote-logs summary,
+details.remote-action-guide summary {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  min-height: 20px;
   color: var(--secondary);
   list-style: none;
+  cursor: default;
 }
 
-details.remote-logs summary::-webkit-details-marker {
-  display: none;
+details.remote-logs summary::before,
+details.remote-action-guide summary::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 2px 0 1px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
 }
 
-details.remote-logs summary:hover {
-  color: var(--label);
+details.remote-logs[open] summary::before,
+details.remote-action-guide[open] summary::before {
+  transform: translateY(-1px) rotate(45deg);
 }
 
-details.remote-logs pre.remote-log {
-  margin-top: 4px;
-}
-
-details.remote-action-guide {
-  margin-top: 6px;
-  color: var(--secondary);
-  font-size: 10px;
-}
-
-details.remote-action-guide summary {
-  color: var(--secondary);
-  list-style: none;
-}
-
+details.remote-logs summary::-webkit-details-marker,
 details.remote-action-guide summary::-webkit-details-marker {
   display: none;
 }
 
+details.remote-logs summary:hover,
 details.remote-action-guide summary:hover {
   color: var(--label);
 }
 
+details.remote-logs summary > .icon-btn {
+  margin-left: auto;
+}
+
+details.remote-logs pre.remote-log {
+  margin-top: 6px;
+}
+
+details.remote-action-guide {
+  color: var(--secondary);
+}
+
 details.remote-action-guide p {
-  margin-top: 3px;
+  display: grid;
+  grid-template-columns: 5.5em minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 10px;
   line-height: 1.45;
+}
+
+details.remote-action-guide p b {
+  color: var(--label);
+  font-weight: 500;
+}
+
+details.remote-action-guide p:first-of-type {
+  margin-top: 6px;
 }
 
 /* -------------------------------------------------------------- tunnel */
@@ -1995,7 +2260,32 @@ details.remote-action-guide p {
 #tunnel-controls {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
+}
+
+#tunnel-controls > .setting-description {
+  margin-top: -2px;
+}
+
+#tunnel-status {
+  grid-template-columns: fit-content(32%) minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 12px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 0.5px solid var(--separator);
+  font-size: 11px;
+}
+
+#tunnel-status dt,
+#tunnel-status dd {
+  min-height: 22px;
+  line-height: 1.3;
+}
+
+#tunnel-status dt {
+  display: flex;
+  align-items: center;
 }
 
 #tunnel-status {

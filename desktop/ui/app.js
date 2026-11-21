@@ -81,6 +81,13 @@ const ICONS = {
     '<rect x="2" y="3" width="18" height="6" rx="2"/><rect x="2" y="13" width="18" height="6" rx="2"/><path d="M5 6h1M5 16h1M10 6h7M10 16h7"/>',
   warning: '<path d="m11 2 10 18H1Z"/><path d="M11 8v5M11 16v1"/>',
   "reset-notice": '<circle cx="11" cy="11" r="8.5"/><path d="M11 6.5v6M11 15.5v.5"/>',
+  play: '<path d="M6.5 3.8v14.4L18 11Z" fill="currentColor"/>',
+  stop: '<rect x="4.5" y="4.5" width="13" height="13" rx="2.5" fill="currentColor"/>',
+  search: '<circle cx="9.5" cy="9.5" r="6.5"/><path d="m14.3 14.3 5.2 5.2"/>',
+  upload: '<path d="M7 8H4v12h14V8h-3M11 14V2M7.5 5.5 11 2l3.5 3.5"/>',
+  sync: '<path d="M3.8 9.5a7.5 7.5 0 0 1 13.6-3.4M17.8 2.4v4h-4M18.2 12.5a7.5 7.5 0 0 1-13.6 3.4M4.2 19.6v-4h4"/>',
+  logs: '<path d="M5 2h8l4 4v14H5Z"/><path d="M13 2v4h4M8 11h6M8 14.5h6"/>',
+  uninstall: '<path d="M3 5h16M8 5V3h6v2M5 5l1 15h10l1-15"/><path d="m8.7 9.7 4.6 4.6M13.3 9.7l-4.6 4.6"/>',
 };
 function icon(name) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1515,6 +1522,22 @@ function alignMeters(list) {
   if (label) list.style.setProperty("--usage-label-width", `${label}px`);
   if (value) list.style.setProperty("--usage-value-width", `${value}px`);
 }
+/// A secret's ends with the middle hidden, short enough for one line.
+function maskSecret(value) {
+  const text = String(value);
+  if (text.length <= 8) return "•".repeat(text.length);
+  return `${text.slice(0, 3)}••••••••${text.slice(-4)}`;
+}
+/// Shows a value as text, or its placeholder dimmed; `copyValue` keeps the
+/// real value for the copy button whatever is displayed.
+function showValue(node, value, placeholder, masked = false) {
+  node.dataset.copyValue = value || "";
+  node.classList.toggle("empty", !value);
+  node.classList.toggle("revealed", !!value && !masked);
+  node.textContent = !value ? placeholder : masked ? maskSecret(value) : value;
+  node.title = value && !masked ? value : "";
+}
+let proxyKeyRevealed = false;
 function renderProxy() {
   const proxy = proxyCache;
   if (!proxy) return;
@@ -1534,10 +1557,18 @@ function renderProxy() {
     "proxy.available_accounts_format",
     String(proxy.availableAccounts ?? 0),
   );
-  $("proxy-url").value =
-    proxy.baseUrl || tr("proxy.value.generated_after_start");
-  $("proxy-key").value = proxy.apiKey || "";
-  $("proxy-key").placeholder = tr("proxy.value.generated_after_first_start");
+  showValue(
+    $("proxy-url"),
+    proxy.baseUrl,
+    tr("proxy.value.generated_after_start"),
+  );
+  showValue(
+    $("proxy-key"),
+    proxy.apiKey,
+    tr("proxy.value.generated_after_first_start"),
+    !proxyKeyRevealed,
+  );
+  $("toggle-key").disabled = !proxy.apiKey;
   // Only real values copy, as ProxyCopyableValueCard's canCopy.
   document.querySelector('[data-copy="proxy-url"]').disabled = !proxy.baseUrl;
   document.querySelector('[data-copy="proxy-key"]').disabled = !proxy.apiKey;
@@ -2593,13 +2624,14 @@ $("proxy-port").oninput = () => {
   }, 350);
 };
 $("toggle-key").onclick = () => {
-  $("proxy-key").type =
-    $("proxy-key").type === "password" ? "text" : "password";
+  proxyKeyRevealed = !proxyKeyRevealed;
+  $("toggle-key").setAttribute("aria-pressed", String(proxyKeyRevealed));
+  renderProxy();
 };
 document.querySelectorAll(".copy").forEach(
   (button) =>
     (button.onclick = () => {
-      const value = $(button.dataset.copy).value;
+      const value = $(button.dataset.copy).dataset.copyValue;
       if (value)
         navigator.clipboard
           .writeText(value)
