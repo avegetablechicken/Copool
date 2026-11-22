@@ -24,10 +24,14 @@ def prepare(target):
     host = 'arm64' if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64' else 'x64'
     with tempfile.TemporaryDirectory(prefix='copool-vs-') as directory:
         script = Path(directory) / 'environment.cmd'
-        script.write_text(f'@echo off\ncall "{devcmd}" -arch={arch} -host_arch={host} >nul\n'
+        # VsDevCmd's messages go to stderr, kept apart from the variables
+        # read from stdout, and shown when it fails.
+        script.write_text(f'@echo off\ncall "{devcmd}" -arch={arch} -host_arch={host} 1>&2\n'
                           'if errorlevel 1 exit /b 1\nset\n')
         result = subprocess.run([os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/c', str(script)],
-                                capture_output=True, text=True, check=True)
+                                capture_output=True, text=True)
+        if result.returncode:
+            raise SystemExit(f'{devcmd} -arch={arch} -host_arch={host} failed:\n{result.stderr.strip()}')
     for line in result.stdout.splitlines():
         key, separator, value = line.partition('=')
         if key and separator:
