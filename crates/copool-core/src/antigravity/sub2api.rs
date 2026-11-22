@@ -332,10 +332,16 @@ fn rc_lines(env: &Path) -> Result<String> {
          [ -z \"${{{own}:-}}\" ] && [ -f '{env}' ] && {{ set -a; . '{env}'; set +a; }}\n"
     ))
 }
+/// What `load_env_in` appended to a startup file, for `unload_env_in`:
+/// the file's length before, none when it was absent, and the text added.
+#[derive(Debug, PartialEq)]
+struct Appended {
+    before: Option<u64>,
+    text: String,
+}
 /// Has the startup file load `.env` last, after anything else it exports,
-/// unless it already ends so. Returns its length before, none when it was
-/// absent, for `unload_env_in`; none at all when nothing changed.
-fn load_env_in(rc: &Path, env: &Path) -> Result<Option<Option<u64>>> {
+/// unless it already ends so; none when nothing changed.
+fn load_env_in(rc: &Path, env: &Path) -> Result<Option<Appended>> {
     use std::io::Write;
     let lines = rc_lines(env)?;
     let text = read_text(rc)?;
@@ -348,18 +354,28 @@ fn load_env_in(rc: &Path, env: &Path) -> Result<Option<Option<u64>>> {
         Some(t) if t.ends_with('\n') => "\n",
         Some(_) => "\n\n",
     };
+    let text = format!("{separator}{lines}");
     // Appended in place: the file keeps its mode and any link to it.
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(rc)
-        .and_then(|mut file| file.write_all(format!("{separator}{lines}").as_bytes()))
+        .and_then(|mut file| file.write_all(text.as_bytes()))
         .map_err(|e| e.to_string())?;
-    Ok(Some(before))
+    Ok(Some(Appended { before, text }))
 }
-/// Takes back what `load_env_in` appended.
-fn unload_env_in(rc: &Path, before: Option<u64>) {
-    let _ = match before {
+/// Takes back what `load_env_in` appended, while the file still ends with
+/// it as it was left: an edit made since, by the user or another program,
+/// stays whole.
+fn unload_env_in(rc: &Path, appended: &Appended) {
+    let Ok(Some(now)) = read_text(rc) else {
+        return;
+    };
+    let before = appended.before.unwrap_or(0);
+    if now.len() as u64 != before + appended.text.len() as u64 || !now.ends_with(&appended.text) {
+        return;
+    }
+    let _ = match appended.before {
         None => std::fs::remove_file(rc),
         Some(len) => std::fs::OpenOptions::new()
             .write(true)
@@ -372,12 +388,12 @@ fn unload_env_in(rc: &Path, before: Option<u64>) {
 struct Changes {
     env: PathBuf,
     env_before: Option<String>,
-    rc: Option<(PathBuf, Option<u64>)>,
+    rc: Option<(PathBuf, Appended)>,
 }
 impl Changes {
     fn undo(&self) {
-        if let Some((rc, before)) = &self.rc {
-            unload_env_in(rc, *before);
+        if let Some((rc, appended)) = &self.rc {
+            unload_env_in(rc, appended);
         }
         let _ = put_text(&self.env, self.env_before.as_deref());
     }
@@ -865,7 +881,7 @@ mod tests {
         let before = load_env_in(&rc, &env).unwrap().unwrap();
         assert_eq!(std::fs::read_to_string(&rc).unwrap(), lines);
         assert_eq!(load_env_in(&rc, &env).unwrap(), None);
-        unload_env_in(&rc, before);
+        unload_env_in(&rc, &before);
         assert!(!rc.exists());
         for (text, separator) in [("", ""), ("a=1\n", "\n"), ("a=1", "\n\n")] {
             fs_write(&rc, text);
@@ -874,8 +890,23 @@ mod tests {
                 std::fs::read_to_string(&rc).unwrap(),
                 format!("{text}{separator}{lines}")
             );
-            unload_env_in(&rc, before);
+            unload_env_in(&rc, &before);
             assert_eq!(std::fs::read_to_string(&rc).unwrap(), text);
+        }
+        // Edited since, or created by another, it is left as it is now.
+        for text in [None, Some("a=1\n")] {
+            match text {
+                Some(text) => fs_write(&rc, text),
+                None => {
+                    let _ = std::fs::remove_file(&rc);
+                }
+            }
+            let appended = load_env_in(&rc, &env).unwrap().unwrap();
+            let mut edited = std::fs::read_to_string(&rc).unwrap();
+            edited.push_str("export MINE=1\n");
+            fs_write(&rc, &edited);
+            unload_env_in(&rc, &appended);
+            assert_eq!(std::fs::read_to_string(&rc).unwrap(), edited);
         }
         // Loaded earlier but exported over since: loaded last again.
         fs_write(&rc, &format!("{lines}export GOOGLE_GEMINI_BASE_URL=x\n"));
