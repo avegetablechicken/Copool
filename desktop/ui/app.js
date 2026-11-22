@@ -759,12 +759,19 @@ function proxyDraft(proxyUrl) {
 function proxyValue(draft) {
   return draft.enabled ? draft.url : "direct://";
 }
-/// The help under a proxy: what a blank one uses, the shared account
-/// proxy when one is set; a Sub2api provider's never does.
+/// The shared account proxy a blank proxy uses, when one is set; a
+/// Sub2api provider's never does.
+function sharedProxy(owner) {
+  return owner.sourceTag === "SUB2API" ? "" : (preferences?.accountProxyUrl || "").trim();
+}
+/// The help under a proxy: what a blank one uses.
 function proxyHelp(owner) {
-  const shared =
-    owner.sourceTag !== "SUB2API" && !!(preferences?.accountProxyUrl || "").trim();
-  return tr(shared ? "accounts.proxy.shared_help" : "accounts.proxy.system_help");
+  return tr(sharedProxy(owner) ? "accounts.proxy.shared_help" : "accounts.proxy.system_help");
+}
+/// A blank proxy's placeholder: the shared account proxy it uses, else an
+/// example.
+function proxyPlaceholder(owner) {
+  return sharedProxy(owner) || "http://127.0.0.1:7890";
 }
 /// Turns a card over to its settings.
 async function editCard(key) {
@@ -966,7 +973,7 @@ function proxySection(state, owner) {
   const help = backHelp(state.proxyError || proxyHelp(owner), !!state.proxyError);
   const url = el("input", "field");
   url.dataset.backField = "proxy-url";
-  url.placeholder = "http://127.0.0.1:7890";
+  url.placeholder = proxyPlaceholder(owner);
   url.value = draft.url;
   url.disabled = !draft.enabled;
   url.spellcheck = false;

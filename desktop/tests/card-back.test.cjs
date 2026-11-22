@@ -108,16 +108,21 @@ test("a provider's group edits its provider's proxy, saved once through its firs
   assert.deepEqual(saved, [["sub2api-team-1", "direct://"]]);
 });
 
-test("a blank card proxy is described as the shared account proxy when one is set", () => {
+test("a blank card proxy is described and shown as the shared account proxy when one is set", () => {
   const { scope } = editor([]);
   scope.preferences.accountProxyUrl = " socks5://127.0.0.1:7891 ";
   assert.equal(scope.proxyHelp({}), "accounts.proxy.shared_help");
+  assert.equal(scope.proxyPlaceholder({}), "socks5://127.0.0.1:7891");
   // A Sub2api provider's cards never take the shared proxy.
-  assert.equal(scope.proxyHelp({ sourceTag: "SUB2API" }), "accounts.proxy.system_help");
+  const provider = { sourceTag: "SUB2API" };
+  assert.equal(scope.proxyHelp(provider), "accounts.proxy.system_help");
+  assert.equal(scope.proxyPlaceholder(provider), "http://127.0.0.1:7890");
   scope.preferences.accountProxyUrl = "direct://";
   assert.equal(scope.proxyHelp({}), "accounts.proxy.shared_help");
+  assert.equal(scope.proxyPlaceholder({}), "direct://");
   scope.preferences.accountProxyUrl = "";
   assert.equal(scope.proxyHelp({}), "accounts.proxy.system_help");
+  assert.equal(scope.proxyPlaceholder({}), "http://127.0.0.1:7890");
 });
 
 test("Escape turns a card back at once without saving when the page changes under it", () => {
