@@ -17,7 +17,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+};
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -548,6 +552,9 @@ pub(crate) struct State {
     vault_problem: std::sync::Mutex<Option<String>>,
     lock: tokio::sync::Mutex<()>,
     operations: tokio::sync::Mutex<()>,
+    /// Counts switches made: Claude Code's login read before one is not
+    /// followed after it.
+    switches: std::sync::atomic::AtomicU64,
 }
 impl Default for State {
     fn default() -> Self {
@@ -561,6 +568,7 @@ impl Default for State {
             vault_problem: Default::default(),
             lock: Default::default(),
             operations: Default::default(),
+            switches: Default::default(),
         }
     }
 }
@@ -1647,6 +1655,7 @@ impl Application {
     }
     /// The Claude pool, following the login Claude Code uses.
     pub(crate) async fn claude_accounts(&self) -> Result<Vec<AccountSummary>> {
+        let switches = self.claude.switches.load(Ordering::SeqCst);
         let location = self.claude_location();
         let saved = self.claude_load()?;
         // A pool without account logins never reads the Keychain.
@@ -1655,13 +1664,25 @@ impl Application {
         } else {
             read_live(&location).await.ok().flatten()
         };
+        self.claude_cards(&location, live, switches).await
+    }
+    /// The cards, following Claude Code's login as read once `switches`
+    /// switches were made: not after another, which may have replaced it.
+    async fn claude_cards(
+        &self,
+        location: &Location,
+        live: Option<Live>,
+        switches: u64,
+    ) -> Result<Vec<AccountSummary>> {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
-        if follow_live(&mut store, live.as_ref()) {
+        if self.claude.switches.load(Ordering::SeqCst) == switches
+            && follow_live(&mut store, live.as_ref())
+        {
             self.claude_save(&store)?;
         }
         // Official settings use the login; others, the provider last applied.
-        let official = settings_are_official(&location);
+        let official = settings_are_official(location);
         let provider = store.settings_provider.as_deref().filter(|_| !official);
         let mut summaries: Vec<_> = store
             .accounts
@@ -2064,6 +2085,7 @@ impl Application {
             account.in_live = account.id == id;
         }
         store.settings_provider = None;
+        self.claude.switches.fetch_add(1, Ordering::SeqCst);
         if let Err(error) = self.claude_save(&store) {
             if official.is_some() {
                 let _ = put_settings(&location, settings.as_deref());
@@ -5345,6 +5367,35 @@ mod tests {
         );
         app.switch_account(Pool::Claude, &bob.id).await.unwrap();
         assert_eq!(read_backup(), backed_up);
+    }
+
+    #[tokio::test]
+    async fn cards_read_before_a_switch_keep_the_account_switched_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        let alice = app
+            .claude_load()
+            .unwrap()
+            .accounts
+            .iter()
+            .find(|a| a.oauth["accessToken"] == "alice-access")
+            .unwrap()
+            .id
+            .clone();
+        // The cards read Bob's login, which a switch to Alice replaces
+        // before they follow it.
+        let switches = app.claude.switches.load(Ordering::SeqCst);
+        let live = read_live(&location).await.unwrap();
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
+        app.claude_cards(&location, live, switches).await.unwrap();
+        assert_eq!(
+            app.claude_load().unwrap().current_account_id.as_deref(),
+            Some(alice.as_str())
+        );
     }
 
     fn print(refresh: &str) -> String {
