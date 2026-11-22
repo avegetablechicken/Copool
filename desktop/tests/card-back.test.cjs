@@ -392,7 +392,7 @@ function greetingTimesLabel(lastError) {
     setAttribute() {},
   });
   const scope = {
-    sayingHi: new Set(),
+    sayingHi: new Map(),
     accountsController: { refreshingIds: new Set(), remoteRefreshingIds: new Set() },
     canSayHi: () => true,
     tr: (key) => key,
