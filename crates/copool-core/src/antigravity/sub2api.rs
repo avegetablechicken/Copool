@@ -321,9 +321,10 @@ fn with_block(text: Option<&str>, variable: &str, gateway: &str) -> Result<Strin
 /// user exports (`OWN_EXPORTS_ONLY`): a key assigned there from another
 /// variable is not a key the user exported under its name.
 fn rc_lines(env: &Path) -> Result<String> {
+    // Absolute: a relative one would load a `.env` wherever a shell starts.
     let env = env
         .to_str()
-        .filter(|p| !p.contains(['\'', '\n']))
+        .filter(|p| env.is_absolute() && !p.contains('\'') && !p.contains(char::is_control))
         .ok_or("Invalid .env path")?;
     let own = crate::proxy_integration::OWN_EXPORTS_ONLY;
     Ok(format!(
@@ -884,6 +885,10 @@ mod tests {
             env_path(Path::new("/h/.gemini/antigravity-cli/settings.json")),
             Path::new("/h/.gemini/.env")
         );
+        // Never a path a shell would take anywhere else, or break the line.
+        for env in [".env", "/h/it's/.env", "/h/a\rb/.env", "/h/a\nb/.env"] {
+            assert!(rc_lines(Path::new(env)).is_err(), "{env:?}");
+        }
     }
 
     /// The line loads `.env`, with an alias of another variable for agy's
