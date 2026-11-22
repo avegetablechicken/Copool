@@ -102,7 +102,7 @@ pub struct AccountSummary {
     /// renews it. None without a readable expiry.
     pub token_expires_at: Option<i64>,
     /// Whether the Claude pool renews the account's tokens, as in effect:
-    /// "never", "once" or "always". None for other accounts.
+    /// "never" or "always". None for other accounts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub renewal: Option<String>,
     /// When the background refresh next asks for the account's usage (Unix
@@ -517,21 +517,21 @@ impl Pool {
         }
     }
 }
-/// Whether Copool renews an account's tokens, in either pool. Without a
-/// choice it always does; "once" turns into "never" after a renewal.
+/// Whether Copool renews an account's tokens, in any pool. Without a
+/// choice it always does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Renewal {
+    /// An earlier build's "once", which showed as auto renewal off, reads
+    /// as never.
+    #[serde(alias = "once")]
     Never,
-    /// Once, then never.
-    Once,
     Always,
 }
 impl Renewal {
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
         match value {
-            "never" => Ok(Self::Never),
-            "once" => Ok(Self::Once),
+            "never" | "once" => Ok(Self::Never),
             "always" => Ok(Self::Always),
             _ => Err(format!("Unknown token renewal: {value}")),
         }
@@ -539,20 +539,12 @@ impl Renewal {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Never => "never",
-            Self::Once => "once",
             Self::Always => "always",
         }
     }
     /// The choice in effect: without one, always.
     pub(crate) fn of(choice: Option<Self>) -> Self {
         choice.unwrap_or(Self::Always)
-    }
-    /// After a renewal: a single one allowed is used.
-    pub(crate) fn after_renewal(self) -> Self {
-        match self {
-            Self::Once => Self::Never,
-            other => other,
-        }
     }
 }
 pub(crate) const RENEWAL_OFF: &str = "Token renewal is off for this account";
@@ -570,13 +562,6 @@ impl StoredAccount {
     }
     pub(crate) fn renews(&self) -> bool {
         self.renewal() != Renewal::Never
-    }
-    /// After a renewal: a single one allowed is used.
-    pub(crate) fn renewed(&mut self) {
-        let (before, after) = (self.renewal(), self.renewal().after_renewal());
-        if after != before {
-            self.set_renewal(after);
-        }
     }
     /// Newly imported and not yet released by a manual refresh: no request
     /// goes upstream for it until then.

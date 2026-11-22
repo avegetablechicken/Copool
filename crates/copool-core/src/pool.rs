@@ -175,8 +175,7 @@ impl Application {
         self.edit_account(pool, id, |account| account.set_proxy(value))
             .await
     }
-    /// Sets whether Copool renews an account's tokens: "never", "once" (then
-    /// never) or "always".
+    /// Sets whether Copool renews an account's tokens: "never" or "always".
     pub async fn set_renewal(&self, pool: Pool, id: &str, renewal: &str) -> Result<()> {
         let renewal = Renewal::parse(renewal)?;
         self.edit_account(pool, id, |account| account.set_renewal(renewal))

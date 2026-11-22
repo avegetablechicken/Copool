@@ -2636,10 +2636,6 @@ impl Application {
                 .cloned()
                 .collect();
             target.alternates = alternates;
-            // A single renewal allowed has been used.
-            if renewals > 0 {
-                target.renewal = target.renewal.map(Renewal::after_renewal);
-            }
             if oauth != account.oauth {
                 let previous = std::mem::replace(&mut target.oauth, oauth);
                 if !same_login(&previous, &account.oauth) {
@@ -4668,7 +4664,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_renewal_choice_holds_back_overrides_or_allows_once() {
+    async fn the_renewal_choice_holds_back_or_allows_renewal() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = file_login_app(&dir);
         sign_in(&location, "alice", 1);
@@ -4705,33 +4701,19 @@ mod tests {
             RENEWAL_OFF
         );
         assert!(refreshes(&fake).is_empty());
-        // Once: renewed once, then never again.
-        app.set_renewal(Pool::Claude, &bob, "once").await.unwrap();
         let card = |label: &str, cards: Vec<(String, Option<String>)>| {
             cards.into_iter().find(|c| c.0 == label).unwrap().1
         };
         assert_eq!(
             card("bob@example.com", renewals(&app).await).as_deref(),
-            Some("once")
-        );
-        app.refresh_usage(Pool::Claude, &bob).await.unwrap();
-        assert_eq!(refreshes(&fake), ["bob-refresh"]);
-        assert_eq!(
-            card("bob@example.com", renewals(&app).await).as_deref(),
             Some("never")
         );
-        fake.usage.lock().unwrap().push((401, Value::Null));
-        assert_eq!(
-            app.refresh_usage(Pool::Claude, &bob).await.unwrap_err(),
-            RENEWAL_OFF
-        );
-        assert_eq!(refreshes(&fake), ["bob-refresh"]);
         // Always, chosen or by default, renews the file login into its file.
         app.set_renewal(Pool::Claude, &alice, "always")
             .await
             .unwrap();
         app.refresh_usage(Pool::Claude, &alice).await.unwrap();
-        assert_eq!(refreshes(&fake), ["bob-refresh", "alice-refresh"]);
+        assert_eq!(refreshes(&fake), ["alice-refresh"]);
         assert_eq!(live_access(&location), "fresh-access");
         assert_eq!(
             card("alice@example.com", renewals(&app).await).as_deref(),
@@ -4822,11 +4804,7 @@ mod tests {
 
     #[test]
     fn renewal_choices_read_and_default_as_shown() {
-        for (text, choice) in [
-            ("never", Renewal::Never),
-            ("once", Renewal::Once),
-            ("always", Renewal::Always),
-        ] {
+        for (text, choice) in [("never", Renewal::Never), ("always", Renewal::Always)] {
             assert_eq!(Renewal::parse(text), Ok(choice));
             assert_eq!(choice.as_str(), text);
             assert_eq!(serde_json::to_value(choice).unwrap(), json!(text));
@@ -4835,12 +4813,18 @@ mod tests {
         assert_eq!(Renewal::of(None), Renewal::Always);
         assert!(Renewal::parse("Never").is_err());
         let legacy = json!({"id": "a", "label": "a", "oauth": {}, "account": {}, "addedAt": 1, "updatedAt": 1});
-        let stored: Stored = serde_json::from_value(legacy).unwrap();
+        let stored: Stored = serde_json::from_value(legacy.clone()).unwrap();
         assert_eq!(stored.renewal, None);
         assert!(serde_json::to_value(&stored)
             .unwrap()
             .get("renewal")
             .is_none());
+        // An earlier build's "once", shown as auto renewal off, is never.
+        assert_eq!(Renewal::parse("once"), Ok(Renewal::Never));
+        let mut once = legacy;
+        once["renewal"] = "once".into();
+        let stored: Stored = serde_json::from_value(once).unwrap();
+        assert_eq!(stored.renewal, Some(Renewal::Never));
     }
 
     #[tokio::test]

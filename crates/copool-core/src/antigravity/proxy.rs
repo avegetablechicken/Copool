@@ -54,9 +54,6 @@ impl Stored {
             lifetime,
             auth["refreshToken"].as_str(),
         );
-        if self.renewal == Some(Renewal::Once) && row["renewal"] == "never" {
-            self.renewal = Some(Renewal::Never);
-        }
         self.usage_error = None;
         true
     }

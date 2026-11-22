@@ -2948,7 +2948,6 @@ async fn persist_refreshed_candidate_auth(
         }
         account.auth_json = refreshed_auth_json.clone();
         account.updated_at = now_unix_seconds();
-        account.renewed();
     } else if storage.pool == Pool::Antigravity {
         return Err("Antigravity account removed".into());
     }
@@ -5321,7 +5320,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
     }
 
     #[tokio::test]
-    async fn the_renewal_choice_holds_back_or_spends_a_proxy_renewal() {
+    async fn the_renewal_choice_holds_back_and_outlasts_a_proxy_renewal() {
         let dir = tempfile::tempdir().unwrap();
         let storage = new_proxy_storage_context(
             dir.path().to_path_buf(),
@@ -5338,7 +5337,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
                 .as_deref(),
             Some(crate::models::RENEWAL_OFF)
         );
-        // A renewal made through the proxy spends a single one allowed.
+        // A renewal made through the proxy leaves the choice as it was; an
+        // earlier build's "once" reads as never.
         let account = |id: &str, renewal: Option<&str>| {
             let mut value = json!({"id":id,"label":id,"accountId":"team","authJson":{"tokens":{"access_token":id,"id_token":"test","account_id":"team"}},"addedAt":1,"updatedAt":1});
             if let Some(renewal) = renewal {
@@ -5369,7 +5369,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         assert_eq!(
             renewals,
             [
-                ("never", Some(json!("never"))),
+                ("never", Some(json!("once"))),
                 ("always", Some(json!("always"))),
                 ("always", None),
             ]
@@ -5405,24 +5405,23 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             let store = serde_json::from_value(json!({"accounts": [account(access, renewal)]}));
             save_store_to_path(&path, &store.unwrap()).unwrap();
         };
-        save("old", "once");
+        save("old", "always");
         let refused = super::load_proxy_candidates(&storage)
             .await
             .unwrap()
             .remove(0);
-        // Another refused request renewed the login and spent the single
-        // renewal allowed: this one takes that login, unrenewed.
-        save("new", "never");
+        // Another refused request renewed the login meanwhile: this one
+        // takes that login, unrenewed.
+        save("new", "always");
         let retried = refresh_proxy_candidate_auth(&storage, &refused)
             .await
             .unwrap();
         assert_eq!(retried.access_token, "new");
-        // Refused again by a request that chose it before the renewal was
-        // spent, the login now kept is not renewed.
-        let mut chosen_before = retried.clone();
-        chosen_before.renews = true;
+        // Refused by a request that chose it before renewal was turned off,
+        // the login is not renewed.
+        save("new", "never");
         assert_eq!(
-            refresh_proxy_candidate_auth(&storage, &chosen_before)
+            refresh_proxy_candidate_auth(&storage, &retried)
                 .await
                 .err()
                 .as_deref(),

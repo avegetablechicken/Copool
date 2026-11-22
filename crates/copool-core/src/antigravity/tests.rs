@@ -456,33 +456,6 @@ async fn expired_or_refused_tokens_are_renewed_as_the_renewal_allows() {
     assert_eq!(bob.renewal.as_deref(), Some("never"));
     assert!(bob.usage_error.is_none());
 
-    // "Once" turns into "never" after a renewal.
-    h.app
-        .set_renewal(Pool::Antigravity, &alice.id, "once")
-        .await
-        .unwrap();
-    {
-        let _lock = h.app.antigravity.lock.lock().await;
-        let mut store = h.app.antigravity_load().unwrap();
-        let account = store
-            .accounts
-            .iter_mut()
-            .find(|a| a.id == alice.id)
-            .unwrap();
-        account.document = login_of("alice", "expired-alice", later());
-        h.app.antigravity_save(&store).unwrap();
-    }
-    h.app
-        .refresh_usage(Pool::Antigravity, &alice.id)
-        .await
-        .unwrap();
-    let alice = cards(&h.app)
-        .await
-        .into_iter()
-        .find(|c| c.id == alice.id)
-        .unwrap();
-    assert_eq!(alice.renewal.as_deref(), Some("never"));
-
     // A revoked login says the sign-in expired.
     h.fake.revoked.lock().unwrap().push("refresh-alice".into());
     {
@@ -518,7 +491,7 @@ async fn quota_permission_errors_reach_the_card_without_consuming_a_renewal() {
     h.app.import_current(Pool::Antigravity).await.unwrap();
     let card = cards(&h.app).await.remove(0);
     h.app
-        .set_renewal(Pool::Antigravity, &card.id, "once")
+        .set_renewal(Pool::Antigravity, &card.id, "always")
         .await
         .unwrap();
     let body = json!({"error": {
@@ -545,7 +518,7 @@ async fn quota_permission_errors_reach_the_card_without_consuming_a_renewal() {
         assert_eq!(h.fake.renewals(), 0);
         let updated = cards(&h.app).await.remove(0);
         assert_eq!(updated.usage_error.as_deref(), Some(error.as_str()));
-        assert_eq!(updated.renewal.as_deref(), Some("once"));
+        assert_eq!(updated.renewal.as_deref(), Some("always"));
         assert!(updated.usage.is_some());
     }
 }
@@ -1767,7 +1740,7 @@ async fn agy_proxy_forwards_to_the_imported_gateway_with_its_own_key() {
 }
 
 #[tokio::test]
-async fn a_remote_node_receives_only_released_logins_and_syncs_its_renewal_once() {
+async fn a_remote_node_receives_only_released_logins_and_syncs_its_renewal() {
     let h = harness(true).await;
     let now = now_unix_seconds();
     h.app
@@ -1776,7 +1749,6 @@ async fn a_remote_node_receives_only_released_logins_and_syncs_its_renewal_once(
         .unwrap();
     let mut store = h.app.antigravity_load().unwrap();
     let id = store.accounts[0].id.clone();
-    store.accounts[0].renewal = Some(Renewal::Once);
     let mut pending = store.accounts[0].clone();
     pending.id = "pending".into();
     pending.first_request_pending = true;
@@ -1801,12 +1773,12 @@ async fn a_remote_node_receives_only_released_logins_and_syncs_its_renewal_once(
             .unwrap();
     renewed["refreshToken"] = "rotated-on-node".into();
     row["authJson"] = renewed;
-    row["renewal"] = "never".into();
+    // The node's renewal comes back, and goes up again with its token.
     let resynced = payload(h.app.antigravity_remote_payload(Some(&node)).await.unwrap());
-    assert_eq!(resynced["accounts"][0]["renewal"], "never");
-    assert!(resynced["accounts"][0]["authJson"]
-        .get("refreshToken")
-        .is_none());
+    assert_eq!(
+        resynced["accounts"][0]["authJson"]["refreshToken"],
+        "rotated-on-node"
+    );
     let mut stored = h.app.antigravity_load().unwrap();
     assert_eq!(
         login::refresh_token(&stored.accounts[0].document).as_deref(),

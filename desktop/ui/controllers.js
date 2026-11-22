@@ -509,7 +509,7 @@
       await this.load();
       this.onMutation();
     }
-    /// "never", "once" or "always".
+    /// "never" or "always".
     async setRenewal(id, renewal) {
       await this.invoke("set_renewal", { id, renewal });
       await this.load();

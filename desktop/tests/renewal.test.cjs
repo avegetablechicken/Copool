@@ -43,7 +43,7 @@ for (const target of ["claude", "codex"]) {
     const { model, calls } = fixture(target);
     let mutations = 0;
     model.onMutation = () => mutations++;
-    for (const choice of ["never", "once", "always"]) {
+    for (const choice of ["never", "always"]) {
       const before = calls.length;
       await model.setRenewal("a", choice);
       const sent = calls.slice(before);
@@ -51,7 +51,7 @@ for (const target of ["claude", "codex"]) {
       assert(sent.slice(1).some(([name]) => name === "accounts"), "the cards reload");
       assert.equal(model.accounts[0].renewal, choice);
     }
-    assert.equal(mutations, 3);
+    assert.equal(mutations, 2);
     assert(onlyTo(calls, target));
   });
 }

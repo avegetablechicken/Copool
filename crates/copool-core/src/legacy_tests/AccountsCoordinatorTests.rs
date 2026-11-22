@@ -1069,7 +1069,7 @@ async fn testRefreshUsageKeepsAuthSwitchedOutsideCopool() {
     assert_eq!(current["tokens"]["access_token"], "refreshed-test-only");
 }
 #[tokio::test]
-async fn testTokenRenewalChoiceHoldsBackOrAllowsOneRenewal() {
+async fn testTokenRenewalChoiceHoldsBackOrAllowsRenewal() {
     let (_dir, app, network) = super::network_fixture::fixture();
     let mut a = stored("a", "a", "account-1");
     a["authJson"]["tokens"]["access_token"] = super::jwt(json!({"exp":1})).into();
@@ -1111,22 +1111,17 @@ async fn testTokenRenewalChoiceHoldsBackOrAllowsOneRenewal() {
             .as_deref(),
         Some("never")
     );
-    // Once: renewed, then never.
-    app.set_renewal(Pool::Codex, "a", "once").await.unwrap();
+    // Always: renewed.
+    app.set_renewal(Pool::Codex, "a", "always").await.unwrap();
     app.refresh_usage(Pool::Codex, "a").await.unwrap();
     assert_eq!(calls(), ["refresh", "usage"]);
     assert_eq!(
         saved().auth_json["tokens"]["access_token"],
         "refreshed-test-only"
     );
-    assert_eq!(saved().extra["renewal"], "never");
-    assert_eq!(
-        app.accounts(Pool::Codex).await.unwrap()[0]
-            .renewal
-            .as_deref(),
-        Some("never")
-    );
-    // Refused as expired by usage, it is not renewed again.
+    assert_eq!(saved().extra["renewal"], "always");
+    // Turned off, a login usage refuses as expired is not renewed.
+    app.set_renewal(Pool::Codex, "a", "never").await.unwrap();
     *network.usage_error.lock().unwrap() = Some("Provided authentication token is expired".into());
     let _ = app.refresh_usage(Pool::Codex, "a").await;
     assert_eq!(calls(), ["refresh", "usage", "usage"]);
@@ -1134,11 +1129,7 @@ async fn testTokenRenewalChoiceHoldsBackOrAllowsOneRenewal() {
         saved().usage_error.as_deref(),
         Some(crate::models::RENEWAL_OFF)
     );
-    // Always renews again; unknown choices and accounts are refused.
-    app.set_renewal(Pool::Codex, "a", "always").await.unwrap();
-    let _ = app.refresh_usage(Pool::Codex, "a").await;
-    assert_eq!(calls()[3..], ["usage", "refresh", "usage"]);
-    assert_eq!(saved().extra["renewal"], "always");
+    // Unknown choices and accounts are refused.
     assert!(app
         .set_renewal(Pool::Codex, "a", "sometimes")
         .await

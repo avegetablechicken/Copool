@@ -894,9 +894,6 @@ impl Application {
         {
             stored.document = document;
         }
-        if renewed {
-            stored.renewal = Some(Renewal::of(stored.renewal).after_renewal());
-        }
         if let Some(body) = identity {
             let email = body["email"].as_str().map(str::to_owned);
             stored.google_id = body["id"]

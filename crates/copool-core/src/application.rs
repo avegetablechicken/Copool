@@ -1106,9 +1106,6 @@ impl Application {
             target
                 .extra
                 .insert("usageStateUpdatedAt".into(), target.updated_at.into());
-            if renewed {
-                target.renewed();
-            }
             match &result {
                 Ok((auth, value)) => {
                     // A renewal alone leaves the usage as it was.
