@@ -241,9 +241,12 @@ pub(super) fn gateway_models(body: &Value) -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
-/// Gives the models the gateway and the variable, recording what each had;
-/// a model already recorded, by an earlier provider, keeps its record. A
-/// model whose table names another endpoint of the user's own is left alone.
+/// Gives the models the gateway and the variable, recording what each had.
+/// What an earlier provider's switch recorded is handed over: a model it
+/// still routes and this provider serves keeps its record of what it had
+/// before; one this provider does not serve goes back; one the user has
+/// taken off that gateway since is theirs. A model whose table names
+/// another endpoint of the user's own is left alone.
 fn apply(
     doc: &mut DocumentMut,
     record: &mut ConfigRecord,
@@ -251,6 +254,20 @@ fn apply(
     gateway: &str,
     variable: &str,
 ) -> Result<()> {
+    let earlier = std::mem::take(&mut record.models);
+    let (kept, back): (Vec<_>, Vec<_>) = earlier
+        .into_iter()
+        .filter(|m| on_gateway(doc, &record.gateway, &m.id))
+        .partition(|m| models.contains(&m.id));
+    restore(
+        doc,
+        &ConfigRecord {
+            gateway: record.gateway.clone(),
+            created: false,
+            models: back,
+        },
+    );
+    record.models = kept;
     let table = models_table(doc)?;
     for id in models {
         let recorded = record.models.iter().any(|m| &m.id == id);
@@ -282,12 +299,18 @@ fn apply(
 }
 /// Puts back what the switch replaced: a model's earlier `base_url` and
 /// `env_key`, and no table where there was none (with what the user added
-/// to it since kept).
+/// to it since kept). A model the user has taken off the gateway since is
+/// theirs.
 fn restore(doc: &mut DocumentMut, record: &ConfigRecord) {
+    let ours: Vec<&ModelRecord> = record
+        .models
+        .iter()
+        .filter(|m| on_gateway(doc, &record.gateway, &m.id))
+        .collect();
     let Some(table) = doc.get_mut("model").and_then(Item::as_table_mut) else {
         return;
     };
-    for entry in &record.models {
+    for entry in ours {
         let Some(model) = table.get_mut(&entry.id).and_then(Item::as_table_mut) else {
             continue;
         };
@@ -301,16 +324,21 @@ fn restore(doc: &mut DocumentMut, record: &ConfigRecord) {
         doc.remove("model");
     }
 }
+/// Whether the model's `base_url` is the gateway.
+fn on_gateway(doc: &DocumentMut, gateway: &str, id: &str) -> bool {
+    doc.get("model")
+        .and_then(|t| t.get(id))
+        .and_then(|t| t.get("base_url"))
+        .and_then(Item::as_str)
+        == Some(gateway)
+}
 /// Whether Grok Build still uses the recorded gateway: some recorded model
 /// has it as `base_url`.
 fn uses_gateway(doc: &DocumentMut, record: &ConfigRecord) -> bool {
-    record.models.iter().any(|m| {
-        doc.get("model")
-            .and_then(|t| t.get(&m.id))
-            .and_then(|t| t.get("base_url"))
-            .and_then(Item::as_str)
-            == Some(record.gateway.as_str())
-    })
+    record
+        .models
+        .iter()
+        .any(|m| on_gateway(doc, &record.gateway, &m.id))
 }
 /// Whether Grok Build uses a provider's gateway, as its `config.toml` says.
 pub(super) fn provider_mode(path: &Path, store: &Store) -> bool {
@@ -705,7 +733,8 @@ mod tests {
         store.config_provider = Some("p".into());
         assert!(provider_mode(&path, &store));
 
-        // Another provider keeps the record of the login's configuration.
+        // Another provider keeps the record of the login's configuration;
+        // a model it does not serve goes back as it was.
         apply(
             &mut doc,
             &mut record,
@@ -714,7 +743,21 @@ mod tests {
             "OTHER",
         )
         .unwrap();
-        assert_eq!(record.models.len(), 3);
+        assert_eq!(record.models.len(), 2);
+        let other: DocumentMut = doc.to_string().parse().unwrap();
+        assert!(other["model"]["grok-4.6"].get("base_url").is_none());
+        assert_eq!(
+            other["model"]["grok-4.6"]["env_key"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(2)
+        );
+        for id in ["grok-4.7", "grok-4.5"] {
+            assert_eq!(
+                other["model"][id]["base_url"].as_str(),
+                Some("https://other.example.com/v1")
+            );
+        }
         put_text(&path, Some(&doc.to_string())).unwrap();
         store.config_record = Some(record);
         assert!(provider_mode(&path, &store));
@@ -726,6 +769,48 @@ mod tests {
         // A failed account switch takes Grok Build back to the gateway.
         restore_left(&path, &mut store, left);
         assert!(provider_mode(&path, &store));
+    }
+
+    #[test]
+    fn a_model_the_user_took_off_the_gateway_stays_theirs() {
+        let mut doc = parse(Some("[model.\"grok-4.7\"]\ntemperature = 0.3\n")).unwrap();
+        let mut record = ConfigRecord::default();
+        let relay = "https://relay.example.com/v1";
+        apply(
+            &mut doc,
+            &mut record,
+            &models(&["grok-4.7", "grok-4.6"]),
+            relay,
+            "K",
+        )
+        .unwrap();
+        // The user sends both models elsewhere themselves.
+        let mine = "http://localhost:11434/v1";
+        for id in ["grok-4.7", "grok-4.6"] {
+            doc["model"][id]["base_url"] = toml_edit::value(mine);
+        }
+        assert!(!uses_gateway(&doc, &record));
+        // Another provider's switch leaves them alone, and has nothing to
+        // route.
+        apply(
+            &mut doc,
+            &mut record,
+            &models(&["grok-4.7", "grok-4.6"]),
+            "https://other.example.com/v1",
+            "OTHER",
+        )
+        .unwrap();
+        assert!(record.models.is_empty());
+        assert!(!uses_gateway(&doc, &record));
+        // Nor does leaving put back what the first switch replaced.
+        let mut doc = parse(Some("[model.\"grok-4.7\"]\ntemperature = 0.3\n")).unwrap();
+        let mut record = ConfigRecord::default();
+        apply(&mut doc, &mut record, &models(&["grok-4.7"]), relay, "K").unwrap();
+        assert_eq!(record.models.len(), 1);
+        doc["model"]["grok-4.7"]["base_url"] = toml_edit::value("http://localhost:8080/v1");
+        let mine = doc.to_string();
+        restore(&mut doc, &record);
+        assert_eq!(doc.to_string(), mine);
     }
 
     #[test]
