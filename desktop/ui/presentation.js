@@ -327,43 +327,26 @@
       clockOffsetSeconds: window?.clockOffsetSeconds ?? null,
     };
   }
-  /// A plan's color, by tier so that providers' comparable plans match:
-  /// the entry subscription (Codex Plus, Claude Pro, Google AI Pro,
-  /// SuperGrok) is pink, the one near $100 (Codex Pro 5x, Claude Max,
-  /// formerly Max 5x; Google AI Ultra 5x, SuperGrok Plus) orange, and the
-  /// top one (Codex Pro 20x and 50x, Claude Ultra, formerly Max 20x; Google
-  /// AI Ultra 20x, SuperGrok Heavy) purple. A plan not told apart from its
-  /// $100 variant counts as it.
-  function planAccent(plan, pool = "codex", now = Date.now()) {
+  /// A plan's color, by tier so that providers' comparable plans match: the
+  /// entry subscription (Codex Plus, Claude Pro, Google AI Pro, SuperGrok) is
+  /// pink; those of $100 to $300, which their labels tell apart by multiplier
+  /// (Codex Pro 5x and 20x, Claude Max and Ultra, Google AI Ultra 5x and 20x,
+  /// SuperGrok Plus and Heavy), orange; and Codex's $500 Pro 50x purple.
+  function planAccent(plan, pool = "codex") {
     if (pool === "grok") {
       // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
       // Subscription's names, which may replace SuperGrok's.
       const name = plan.replace(/ /g, "");
       if (["SUPERGROKLITE", "SUPERGROK", "PLUS", "PREMIUM"].includes(name)) return "pink";
-      if (["SUPERGROKPLUS", "SUPER"].includes(name)) return "orange";
-      if (["SUPERGROKHEAVY", "ULTRA"].includes(name)) return "purple";
+      if (["SUPERGROKPLUS", "SUPERGROKHEAVY", "SUPER", "ULTRA"].includes(name)) return "orange";
       if (!["FREE", "BUSINESS", "ENTERPRISE"].includes(plan)) return "teal";
     }
-    if (pool === "codex") {
-      if (plan === "PRO 5X") return "orange";
-      // The $200 Pro, also before the $100 one came, and the $500 one.
-      if (["PRO", "PRO 20X", "PRO 50X"].includes(plan)) return "purple";
-    }
-    if (pool === "antigravity") {
-      if (plan === "ULTRA 5X") return "orange";
-      if (plan === "ULTRA 20X") return "purple";
-      // An Ultra not told apart counts as the $100 one, once there was one.
-      if (plan === "ULTRA") return now >= GOOGLE_ULTRA_LITE ? "orange" : "purple";
-    }
-    if (plan === "PRO") return "pink";
-    // Claude's Ultra is its top plan; an Ultra not told apart from a $100
-    // one counts as it.
-    if (plan === "ULTRA") return pool === "claude" ? "purple" : "orange";
-    // Claude's Max is 5x unless it names more.
-    const max = /^MAX(?: (\d+)X)?$/.exec(plan);
-    if (max) return Number(max[1] || 5) >= 20 ? "purple" : "orange";
+    const pro = /^PRO(?: (\d+)X)?$/.exec(plan);
+    if (pool === "codex" && pro) return Number(pro[1] || 0) >= 50 ? "purple" : "orange";
+    if (/^(?:MAX|ULTRA)(?: \d+X)?$/.test(plan)) return "orange";
     return (
       {
+        PRO: "pink",
         PLUS: "pink",
         FREE: "gray",
         BUSINESS: "indigo",
@@ -385,7 +368,7 @@
       credits = account.usage?.credits;
     return {
       plan,
-      accent: planAccent(plan, pool, now),
+      accent: planAccent(plan, pool),
       workspaceTag: workspaceTag(account),
       name:
         collapsed && name.includes("@")

@@ -109,7 +109,7 @@ fn claudeCardsFollowTheAppsPlanAndWorkspaceTags() {
     let current = s.current_card.unwrap();
     // Max 20x by its name at the time, before Claude renamed it Ultra.
     assert_eq!(current.plan_label, "MAX 20X");
-    assert_eq!(current.plan_accent, "purple");
+    assert_eq!(current.plan_accent, "orange");
     assert_eq!(current.workspace_label, None);
     let rows: std::collections::HashMap<_, _> = s.rows.iter().map(|r| (r.id.as_str(), r)).collect();
     assert_eq!(rows["team"].plan_label, "TEAM");
@@ -132,14 +132,14 @@ fn claudesMaxPlansAreNamedAsTheyWereAtTheTime() {
     };
     let named = |name: &str, accent: &str| (name.to_owned(), accent.to_owned());
     // Claude Code reports both by their old names, also since the rename.
-    assert_eq!(label("max 20x", before), named("MAX 20X", "purple"));
+    assert_eq!(label("max 20x", before), named("MAX 20X", "orange"));
     assert_eq!(label("max 5x", before), named("MAX 5X", "orange"));
-    assert_eq!(label("max 20x", after), named("ULTRA", "purple"));
+    assert_eq!(label("max 20x", after), named("ULTRA", "orange"));
     assert_eq!(label("max 5x", after), named("MAX", "orange"));
     assert_eq!(label("max", before), named("MAX", "orange"));
     assert_eq!(label("max", after), named("MAX", "orange"));
-    assert_eq!(label("ultra", before), named("MAX 20X", "purple"));
-    assert_eq!(label("claude ultra", after), named("ULTRA", "purple"));
+    assert_eq!(label("ultra", before), named("MAX 20X", "orange"));
+    assert_eq!(label("claude ultra", after), named("ULTRA", "orange"));
     assert_eq!(label("pro", after), named("PRO", "pink"));
 }
 #[test]
@@ -158,9 +158,9 @@ fn codexAndGooglePlansAreNamedAsTheyWereAtTheTime() {
     let before_pro = 1_772_323_200; // 2026-03-01
     assert_eq!(
         label(Pool::Codex, "pro", before_pro),
-        named("PRO", "purple")
+        named("PRO", "orange")
     );
-    assert_eq!(label(Pool::Codex, "pro", now), named("PRO 20X", "purple"));
+    assert_eq!(label(Pool::Codex, "pro", now), named("PRO 20X", "orange"));
     assert_eq!(
         label(Pool::Codex, "prolite", now),
         named("PRO 5X", "orange")
@@ -173,15 +173,15 @@ fn codexAndGooglePlansAreNamedAsTheyWereAtTheTime() {
     let before_ultra = 1_777_593_600; // 2026-05-01
     assert_eq!(
         label(Pool::Antigravity, "ultra 20x", before_ultra),
-        named("ULTRA", "purple")
+        named("ULTRA", "orange")
     );
     assert_eq!(
         label(Pool::Antigravity, "ultra", before_ultra),
-        named("ULTRA", "purple")
+        named("ULTRA", "orange")
     );
     assert_eq!(
         label(Pool::Antigravity, "ultra 20x", now),
-        named("ULTRA 20X", "purple")
+        named("ULTRA 20X", "orange")
     );
     assert_eq!(
         label(Pool::Antigravity, "ultra 5x", now),

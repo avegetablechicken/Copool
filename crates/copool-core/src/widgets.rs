@@ -258,58 +258,40 @@ fn claude_plan(raw: Option<String>, now: i64) -> String {
         "TEAM".into()
     }
 }
+/// The multiplier of a plan named `base` or "`base` <n>X", 0 for the plain one.
+fn multiplier(plan: &str, base: &str) -> Option<u32> {
+    match plan.strip_prefix(base)? {
+        "" => Some(0),
+        rest => rest.strip_prefix(' ')?.strip_suffix('X')?.parse().ok(),
+    }
+}
 /// A plan's color, by tier so that providers' comparable plans match, as
 /// the app's `planAccent`: the entry subscription (Codex Plus, Claude Pro,
-/// Google AI Pro, SuperGrok) is pink, the one near $100 (Codex Pro 5x, Claude
-/// Max, formerly Max 5x; Google AI Ultra 5x, SuperGrok Plus) orange, and the
-/// top one (Codex Pro 20x and 50x, Claude Ultra, formerly Max 20x; Google AI
-/// Ultra 20x, SuperGrok Heavy) purple. A plan not told apart from its $100
-/// variant counts as it.
-pub fn plan_accent(pool: Pool, plan: &str, now: i64) -> &'static str {
-    match (pool, plan) {
-        (Pool::Codex, "PRO 5X") => return "orange",
-        // The $200 Pro, also before the $100 one came, and the $500 one.
-        (Pool::Codex, "PRO" | "PRO 20X" | "PRO 50X") => return "purple",
-        (Pool::Antigravity, "ULTRA 5X") => return "orange",
-        (Pool::Antigravity, "ULTRA 20X") => return "purple",
-        // An Ultra not told apart counts as the $100 one, once there was one.
-        (Pool::Antigravity, "ULTRA") => {
-            return if now >= GOOGLE_ULTRA_LITE {
-                "orange"
-            } else {
-                "purple"
-            }
-        }
-        _ => {}
-    }
+/// Google AI Pro, SuperGrok) is pink; those of $100 to $300, which their
+/// labels tell apart by multiplier (Codex Pro 5x and 20x, Claude Max and
+/// Ultra, Google AI Ultra 5x and 20x, SuperGrok Plus and Heavy), orange; and
+/// Codex's $500 Pro 50x purple.
+pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
     if pool == Pool::Grok {
         // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
         // Subscription's names, which may replace SuperGrok's.
         match plan.replace(' ', "").as_str() {
             "SUPERGROKLITE" | "SUPERGROK" | "PLUS" | "PREMIUM" => return "pink",
-            "SUPERGROKPLUS" | "SUPER" => return "orange",
-            "SUPERGROKHEAVY" | "ULTRA" => return "purple",
+            "SUPERGROKPLUS" | "SUPERGROKHEAVY" | "SUPER" | "ULTRA" => return "orange",
             "FREE" | "BUSINESS" | "ENTERPRISE" => {}
             _ => return "teal",
         }
     }
-    // Claude's Max is 5x unless it names more.
-    if let Some(rest) = plan.strip_prefix("MAX") {
-        let times = match rest.strip_prefix(' ').and_then(|r| r.strip_suffix('X')) {
-            Some(n) => n.parse::<u32>().ok(),
-            None => rest.is_empty().then_some(5),
-        };
-        if let Some(times) = times {
-            return if times >= 20 { "purple" } else { "orange" };
+    if pool == Pool::Codex {
+        if let Some(times) = multiplier(plan, "PRO") {
+            return if times >= 50 { "purple" } else { "orange" };
         }
     }
+    if multiplier(plan, "MAX").is_some() || multiplier(plan, "ULTRA").is_some() {
+        return "orange";
+    }
     match plan {
-        "PRO" => "pink",
-        // Claude's Ultra is its top plan; an Ultra not told apart from a
-        // $100 one counts as it.
-        "ULTRA" if pool == Pool::Claude => "purple",
-        "ULTRA" => "orange",
-        "PLUS" => "pink",
+        "PRO" | "PLUS" => "pink",
         "FREE" => "gray",
         "BUSINESS" | "ENTERPRISE" => "indigo",
         _ => "teal",
@@ -370,7 +352,7 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>, now: i64) -> 
     CardSnapshot {
         id: account.id.clone(),
         pool_label: None,
-        plan_accent: plan_accent(pool, &plan, now).into(),
+        plan_accent: plan_accent(pool, &plan).into(),
         plan_label: plan,
         workspace_label: workspace,
         account_label: label,

@@ -54,8 +54,8 @@ test("Claude's Max plans are named as they were at the time", () => {
   // The rename leaves the colors as they were.
   const accent = (planType, now) =>
     P.card({ planType, usage: null }, false, "used", String, "claude", now).accent;
-  assert.equal(accent("max 20x", before), "purple");
-  assert.equal(accent("max 20x", after), "purple");
+  assert.equal(accent("max 20x", before), "orange");
+  assert.equal(accent("max 20x", after), "orange");
   assert.equal(accent("max 5x", before), "orange");
   assert.equal(accent("max 5x", after), "orange");
 });
@@ -69,15 +69,15 @@ test("Codex's and Google's plans are named as they were at the time", () => {
   // OpenAI's $100 Pro came on 2026-04-09.
   const beforePro = Date.UTC(2026, 2, 1);
   const now = Date.UTC(2026, 10, 23);
-  assert.deepEqual(named("pro", "codex", beforePro), ["PRO", "purple"]);
-  assert.deepEqual(named("pro", "codex", now), ["PRO 20X", "purple"]);
+  assert.deepEqual(named("pro", "codex", beforePro), ["PRO", "orange"]);
+  assert.deepEqual(named("pro", "codex", now), ["PRO 20X", "orange"]);
   assert.deepEqual(named("prolite", "codex", now), ["PRO 5X", "orange"]);
   assert.deepEqual(named("promax", "codex", now), ["PRO 50X", "purple"]);
   // Google's $100 Ultra came on 2026-05-19.
   const beforeUltra = Date.UTC(2026, 4, 1);
-  assert.deepEqual(named("ultra 20x", "antigravity", beforeUltra), ["ULTRA", "purple"]);
-  assert.deepEqual(named("ultra", "antigravity", beforeUltra), ["ULTRA", "purple"]);
-  assert.deepEqual(named("ultra 20x", "antigravity", now), ["ULTRA 20X", "purple"]);
+  assert.deepEqual(named("ultra 20x", "antigravity", beforeUltra), ["ULTRA", "orange"]);
+  assert.deepEqual(named("ultra", "antigravity", beforeUltra), ["ULTRA", "orange"]);
+  assert.deepEqual(named("ultra 20x", "antigravity", now), ["ULTRA 20X", "orange"]);
   assert.deepEqual(named("ultra 5x", "antigravity", now), ["ULTRA 5X", "orange"]);
   assert.deepEqual(named("ultra lite", "antigravity", now), ["ULTRA 5X", "orange"]);
   assert.deepEqual(named("ultra", "antigravity", now), ["ULTRA", "orange"]);
@@ -94,26 +94,25 @@ test("Comparable plans share a color across providers", () => {
   assert.equal(accent("pro", "antigravity"), "pink");
   assert.equal(accent("SuperGrok Lite", "grok"), "pink");
   assert.equal(accent("SuperGrok", "grok"), "pink");
-  // The one near $100.
+  // Those of $100 to $300, told apart by their multiplier.
+  assert.equal(accent("prolite", "codex"), "orange");
+  assert.equal(accent("pro", "codex"), "orange");
   assert.equal(accent("max 5x", "claude"), "orange");
   assert.equal(accent("max", "claude"), "orange");
-  assert.equal(accent("SuperGrok Plus", "grok"), "orange");
-  assert.equal(accent("prolite", "codex"), "orange");
+  assert.equal(accent("max 20x", "claude"), "orange");
   assert.equal(accent("ultra 5x", "antigravity"), "orange");
-  // An Ultra not told apart from the $100 one counts as it.
+  assert.equal(accent("ultra 20x", "antigravity"), "orange");
   assert.equal(accent("ultra", "antigravity"), "orange");
-  // The top subscription.
-  assert.equal(accent("pro", "codex"), "purple");
+  assert.equal(accent("SuperGrok Plus", "grok"), "orange");
+  assert.equal(accent("SuperGrok Heavy", "grok"), "orange");
+  assert.equal(accent("SUPER GROK HEAVY", "grok"), "orange");
+  // Codex's $500 Pro alone.
   assert.equal(accent("promax", "codex"), "purple");
-  assert.equal(accent("ultra 20x", "antigravity"), "purple");
-  assert.equal(accent("max 20x", "claude"), "purple");
-  assert.equal(accent("SuperGrok Heavy", "grok"), "purple");
-  assert.equal(accent("SUPER GROK HEAVY", "grok"), "purple");
   assert.equal(accent("free", "claude"), "gray");
   assert.equal(accent("Free", "grok"), "gray");
   assert.equal(accent("Something New", "grok"), "teal");
   // Without a pool, Codex's colors.
-  assert.equal(P.card({ planType: "pro", usage: null }).accent, "purple");
+  assert.equal(P.card({ planType: "pro", usage: null }).accent, "orange");
 });
 test("Claude Max plans keep their multiplier", () => {
   assert.equal(P.normalizedPlan("max 20x"), "MAX 20X");
@@ -159,10 +158,10 @@ legacy(
   "AccountCardPresentationTests",
   "testCurrentAccountPaletteUsesOwnAccentForSelectionHighlight",
   () => {
-    // Before the $100 Pro came, Pro was the $200 plan, of the top tier.
+    // Plain PRO, as before the $100 Pro came.
     const before = Date.UTC(2026, 2, 1);
     const c = P.card({ ...a, planType: "pro", usage: null }, false, "used", String, "codex", before);
-    assert.equal(c.accent, "purple");
+    assert.equal(c.accent, "orange");
     assert.equal(c.selectionAccent, "PRO");
   },
 );
