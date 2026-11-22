@@ -131,6 +131,7 @@
 "accounts.card.switch_to_this" = "Naar dit account schakelen";
 "accounts.window.five_hour" = "5u";
 "accounts.window.one_week" = "1 week";
+"accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Gebruikt %@";
 "accounts.window.remaining_format" = "Resterend %@";
 "accounts.window.reset_at_format" = "Reset op: %@";

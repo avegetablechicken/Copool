@@ -142,6 +142,7 @@
 "accounts.card.status.deactivated" = "DEACTIVATED";
 "accounts.window.five_hour" = "5h";
 "accounts.window.one_week" = "1 week";
+"accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Used %@";
 "accounts.window.remaining_format" = "Remaining %@";
 "accounts.window.reset_at_format" = "Reset at: %@";

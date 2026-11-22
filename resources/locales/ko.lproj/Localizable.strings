@@ -131,6 +131,7 @@
 "accounts.card.switch_to_this" = "이 계정으로 전환";
 "accounts.window.five_hour" = "5h";
 "accounts.window.one_week" = "1주";
+"accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "사용 %@";
 "accounts.window.remaining_format" = "남음 %@";
 "accounts.window.reset_at_format" = "재설정 시각: %@";

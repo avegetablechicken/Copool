@@ -435,3 +435,24 @@ test("menu bar keyboard navigation moves on with plain left and right", () => {
     assert.equal(P.menuBarStep("ArrowRight", { ...navigating, ...change }), null);
   }
 });
+
+test("card presentation formats Claude Fable usage window when reported", () => {
+  const account = {
+    email: "alice@example.com",
+    planType: "max 20x",
+    usage: {
+      fiveHour: { usedPercent: 10, windowSeconds: 18000, resetAt: 1_800_010_000 },
+      oneWeek: { usedPercent: 25, windowSeconds: 604800, resetAt: 1_800_500_000 },
+      fableOneWeek: { usedPercent: 42, windowSeconds: 604800, resetAt: 1_800_600_000, clockOffsetSeconds: 12 },
+    },
+  };
+  const used = P.card(account, false, "used", (epoch) => `at:${epoch}`);
+  assert.equal(used.fableOneWeek.available, true);
+  assert.equal(used.fableOneWeek.primaryPercent, 42);
+  assert.equal(used.fableOneWeek.reset, "at:1800600000");
+  assert.equal(used.fableOneWeek.clockOffsetSeconds, 12);
+  const remaining = P.card(account, false, "remaining", (epoch) => `at:${epoch}`);
+  assert.equal(remaining.fableOneWeek.primaryPercent, 58);
+  const absent = P.card({ ...account, usage: { fiveHour: account.usage.fiveHour } }, false, "used", String);
+  assert.equal(absent.fableOneWeek.available, false);
+});

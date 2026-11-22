@@ -281,6 +281,8 @@
             : credits.balance,
       fiveHour: windowPresentation(account.usage?.fiveHour, mode, formatDate),
       oneWeek: windowPresentation(account.usage?.oneWeek, mode, formatDate),
+      // Claude's weekly Fable window, shown only on accounts that report it.
+      fableOneWeek: windowPresentation(account.usage?.fableOneWeek, mode, formatDate),
       // Antigravity's third-party (Claude) pool.
       thirdPartyFiveHour: windowPresentation(account.usage?.thirdPartyFiveHour, mode, formatDate),
       thirdPartyOneWeek: windowPresentation(account.usage?.thirdPartyOneWeek, mode, formatDate),

@@ -2379,9 +2379,13 @@ impl Application {
                 match status {
                     200..=299 => {
                         let mut usage = usage_snapshot(&body, plan(&oauth), now_unix_seconds())?;
-                        for window in [&mut usage.five_hour, &mut usage.one_week]
-                            .into_iter()
-                            .flatten()
+                        for window in [
+                            &mut usage.five_hour,
+                            &mut usage.one_week,
+                            &mut usage.fable_one_week,
+                        ]
+                        .into_iter()
+                        .flatten()
                         {
                             window.clock_offset_seconds = clock_offset;
                         }
@@ -2720,6 +2724,121 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
+    fn fable_usage_reads_weekly_scoped_limits_and_overage_included_windows() {
+        let now = 1_800_000_000;
+        let reset = "2026-11-28T03:00:00Z";
+        let reset_ts = reset_at(&json!(reset));
+
+        // 1. Top-level seven_day_overage_included (official OAuth & Sub2api).
+        let overage = usage_snapshot(
+            &json!({
+                "five_hour": {"utilization": 12.5, "resets_at": reset},
+                "seven_day": {"utilization": 45.0, "resets_at": reset},
+                "seven_day_overage_included": {"utilization": 56.0, "resets_at": reset}
+            }),
+            None,
+            now,
+        )
+        .unwrap();
+        let fable = overage.fable_one_week.as_ref().unwrap();
+        assert_eq!(fable.used_percent, 56.0);
+        assert_eq!(fable.window_seconds, 7 * 24 * 60 * 60);
+        assert_eq!(fable.reset_at, reset_ts);
+
+        // 2. Unused Fable quota (0%, resets_at: null) still reports the window.
+        let unused = usage_snapshot(
+            &json!({
+                "five_hour": {"utilization": 0.0, "resets_at": null},
+                "seven_day": {"utilization": 0.0, "resets_at": null},
+                "seven_day_overage_included": {"utilization": 0.0, "resets_at": null}
+            }),
+            None,
+            now,
+        )
+        .unwrap();
+        let fable = unused.fable_one_week.as_ref().unwrap();
+        assert_eq!(fable.used_percent, 0.0);
+        assert_eq!(fable.reset_at, None);
+
+        // 3. Authoritative limits[] weekly_scoped Fable wins over top-level,
+        // even when is_active is false; non-Fable weekly_scoped entries are ignored.
+        let scoped = usage_snapshot(
+            &json!({
+                "seven_day_overage_included": {"utilization": 1.0, "resets_at": null},
+                "limits": [
+                    {
+                        "kind": "weekly_scoped",
+                        "group": "weekly",
+                        "percent": 80,
+                        "resets_at": reset,
+                        "scope": {"model": {"id": "claude-sonnet-5", "display_name": "Sonnet"}},
+                        "is_active": true
+                    },
+                    {
+                        "kind": "weekly_scoped",
+                        "group": "weekly",
+                        "percent": 27.5,
+                        "resets_at": reset,
+                        "scope": {"model": {"id": null, "display_name": "Fable 5.2"}},
+                        "is_active": false
+                    }
+                ]
+            }),
+            None,
+            now,
+        )
+        .unwrap();
+        let fable = scoped.fable_one_week.as_ref().unwrap();
+        assert_eq!(fable.used_percent, 27.5);
+        assert_eq!(fable.reset_at, reset_ts);
+
+        // 4. seven_day_fable fallback.
+        let alias = usage_snapshot(
+            &json!({"seven_day_fable": {"utilization": 33.0, "resets_at": reset}}),
+            None,
+            now,
+        )
+        .unwrap();
+        assert_eq!(alias.fable_one_week.as_ref().unwrap().used_percent, 33.0);
+
+        // 5. Accounts without Fable quota leave fable_one_week absent (and omitted in JSON).
+        for body in [
+            json!({"five_hour": {"utilization": 5.0}, "seven_day": {"utilization": 10.0}}),
+            json!({"seven_day_overage_included": null, "seven_day_fable": null, "limits": []}),
+            json!({"limits": [{"kind": "weekly_scoped", "percent": 50,
+                "scope": {"model": {"display_name": "Opus"}}}]}),
+        ] {
+            let usage = usage_snapshot(&body, None, now).unwrap();
+            assert!(usage.fable_one_week.is_none());
+            let serialized = serde_json::to_value(&usage).unwrap();
+            assert!(serialized.get("fableOneWeek").is_none());
+        }
+
+        // 6. Sub2api usage preserves Fable when reported and omits it otherwise.
+        let sub2api_with = sub2api_usage(
+            &json!({
+                "five_hour": {"utilization": 0, "resets_at": null, "remaining_seconds": 0},
+                "seven_day": {"utilization": 20, "resets_at": reset},
+                "seven_day_overage_included": {"utilization": 15, "resets_at": reset},
+                "subscription_tier": "MAX"
+            }),
+            now,
+        )
+        .unwrap();
+        assert!(sub2api_with.five_hour.is_none());
+        assert_eq!(
+            sub2api_with.fable_one_week.as_ref().unwrap().used_percent,
+            15.0
+        );
+        let sub2api_without = sub2api_usage(
+            &json!({"seven_day": {"utilization": 20, "resets_at": reset}}),
+            now,
+        )
+        .unwrap();
+        assert!(sub2api_without.fable_one_week.is_none());
+    }
+
+    #[test]
     fn live_reset_shape_uses_refund_flag_even_when_both_types_say_full() {
         // Read-only OAuth usage response, 2026-11-11. IDs and labels omitted.
         let body = json!({"cedar_ember": {"eligible": true, "grants": [
@@ -2982,6 +3101,14 @@ mod tests {
         app.claude_import_current().await.unwrap();
         let id = app.accounts(Pool::Claude).await.unwrap()[0].id.clone();
         for offset in [Some(6 * 3600), Some(-6 * 3600), None] {
+            fake.usage.lock().unwrap().push((
+                200,
+                json!({
+                    "five_hour": {"utilization": 5.0, "resets_at": "2099-01-01T00:00:00Z"},
+                    "seven_day": {"utilization": 15.0, "resets_at": "2099-01-01T00:00:00Z"},
+                    "seven_day_overage_included": {"utilization": 25.0, "resets_at": "2099-01-01T00:00:00Z"}
+                }),
+            ));
             *fake.usage_clock_offset.lock().unwrap() = offset;
             app.refresh_usage(Pool::Claude, &id).await.unwrap();
             let stored = app.claude_load().unwrap();
@@ -2992,6 +3119,10 @@ mod tests {
             );
             assert_eq!(
                 usage.one_week.as_ref().unwrap().clock_offset_seconds,
+                offset
+            );
+            assert_eq!(
+                usage.fable_one_week.as_ref().unwrap().clock_offset_seconds,
                 offset
             );
             assert_eq!(

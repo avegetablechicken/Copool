@@ -143,6 +143,11 @@ pub struct UsageSnapshot {
     pub third_party_five_hour: Option<UsageWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub third_party_one_week: Option<UsageWindow>,
+    /// Claude's weekly Fable window (`weekly_scoped` Fable /
+    /// `seven_day_overage_included`); absent on accounts without Fable quota
+    /// and in other pools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fable_one_week: Option<UsageWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

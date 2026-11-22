@@ -131,6 +131,7 @@
 "accounts.card.switch_to_this" = "このアカウントへ切替";
 "accounts.window.five_hour" = "5h";
 "accounts.window.one_week" = "1 週間";
+"accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "使用 %@";
 "accounts.window.remaining_format" = "残り %@";
 "accounts.window.reset_at_format" = "リセット時刻: %@";

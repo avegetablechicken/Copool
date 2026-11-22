@@ -1082,7 +1082,8 @@ function accountCard(account, grouped = false) {
   );
   return card;
 }
-/// A card's usage rows: five hours and the week. An Antigravity card's are
+/// A card's usage rows: five hours and the week. Claude cards that report
+/// Fable quota add its weekly row beneath them. An Antigravity card's are
 /// Gemini's; its third-party (Claude) pool, once reported, follows
 /// in an inset of its own, as a Sub2api provider's accounts. The weekly
 /// rows of a Sub2api too old to report them say so when clicked.
@@ -1093,6 +1094,9 @@ function usageWindows(view) {
     weeklyNotice(usageWindow(oneWeek, week, "one-week"), view.outdatedSub2api),
   ];
   const shown = rows(view.fiveHour, view.oneWeek);
+  if (pool === "claude" && view.fableOneWeek.available) {
+    shown.push(usageWindow(view.fableOneWeek, tr("accounts.window.fable"), "fable"));
+  }
   if (
     pool === "antigravity" &&
     (view.thirdPartyFiveHour.available || view.thirdPartyOneWeek.available)
@@ -1196,7 +1200,11 @@ function renderAccounts(accounts) {
       accounts.map((account) => {
         const view = P.card(account, false, "used", String);
         return [
-          view.fiveHour, view.oneWeek, view.thirdPartyFiveHour, view.thirdPartyOneWeek,
+          view.fiveHour,
+          view.oneWeek,
+          view.fableOneWeek,
+          view.thirdPartyFiveHour,
+          view.thirdPartyOneWeek,
         ].map((w) =>
           resetLabel(w, "countdown"),
         );

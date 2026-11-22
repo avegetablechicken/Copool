@@ -290,6 +290,7 @@ fn stored_windows_of_other_durations_are_not_shown() {
             credits: None,
             third_party_five_hour: None,
             third_party_one_week: None,
+            fable_one_week: None,
         }
         .with_matching_windows()
     };
@@ -337,6 +338,7 @@ fn a_missing_five_hour_window_counts_as_no_five_hour_limit() {
         credits: None,
         third_party_five_hour: None,
         third_party_one_week: None,
+        fable_one_week: None,
     };
     assert_eq!(usage(Some(60.), Some(20.)).five_hour_remaining(), Some(40.));
     assert_eq!(usage(None, Some(20.)).five_hour_remaining(), Some(100.));

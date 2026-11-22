@@ -142,6 +142,7 @@
 "accounts.card.status.deactivated" = "已停用";
 "accounts.window.five_hour" = "5h";
 "accounts.window.one_week" = "1 周";
+"accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "已用 %@";
 "accounts.window.remaining_format" = "剩余 %@";
 "accounts.window.reset_at_format" = "重置时间：%@";

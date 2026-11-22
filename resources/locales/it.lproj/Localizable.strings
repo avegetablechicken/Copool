@@ -131,6 +131,7 @@
 "accounts.card.switch_to_this" = "Passa a questo account";
 "accounts.window.five_hour" = "5h";
 "accounts.window.one_week" = "1 settimana";
+"accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Usato %@";
 "accounts.window.remaining_format" = "Residuo %@";
 "accounts.window.reset_at_format" = "Reset alle: %@";

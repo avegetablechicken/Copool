@@ -169,7 +169,11 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
     });
     const context = vm.createContext({
       pool, el,
-      tr: (key) => ({ "accounts.window.five_hour": "5h", "accounts.window.one_week": "1 week" })[key],
+      tr: (key) => ({
+        "accounts.window.five_hour": "5h",
+        "accounts.window.one_week": "1 week",
+        "accounts.window.fable": "Fable",
+      })[key],
       usageWindow: (view, title, tone) => [title, tone, view.available],
       // The weekly rows carry the outdated Sub2api version they warn about.
       weeklyNotice: (row, version) => (version ? [...row, version] : row),
@@ -195,6 +199,14 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
   assert.deepEqual(rows("antigravity", gemini), own);
   // Codex and Claude have no third-party pool.
   assert.deepEqual(rows("claude", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), own);
+  // Claude shows a Fable row only when the account reports Fable usage.
+  assert.deepEqual(rows("claude", { ...gemini, fableOneWeek: window(35, 604800) }), [
+    ...own,
+    ["Fable", "fable", true],
+  ]);
+  assert.deepEqual(rows("claude", { ...gemini, fableOneWeek: null }), own);
+  assert.deepEqual(rows("codex", { ...gemini, fableOneWeek: window(35, 604800) }), own);
+  assert.deepEqual(rows("antigravity", { ...gemini, fableOneWeek: window(35, 604800) }), own);
   assert.deepEqual(rows("antigravity", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), [
     ...own,
     { "account-member": ["Claude", ["5h", "five-hour", true], ["1 week", "one-week", false]] },

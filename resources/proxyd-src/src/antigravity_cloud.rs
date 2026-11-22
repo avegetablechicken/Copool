@@ -177,6 +177,7 @@ pub(crate) fn snapshot(now: i64) -> UsageSnapshot {
         credits: None,
         third_party_five_hour: None,
         third_party_one_week: None,
+        fable_one_week: None,
     }
 }
 

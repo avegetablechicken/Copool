@@ -173,6 +173,54 @@ pub(crate) fn reset_at(value: &Value) -> Option<i64> {
     })
 }
 
+const FIVE_HOUR_SECONDS: i64 = 5 * 60 * 60;
+const ONE_WEEK_SECONDS: i64 = 7 * 24 * 60 * 60;
+
+/// Extracts a weekly Fable window from the OAuth usage payload:
+/// 1. Authoritative `limits[]` `weekly_scoped` entry whose model scope names
+///    Fable (`is_active: false` still represents real usage when Fable is not
+///    the currently binding limit).
+/// 2. Top-level `seven_day_overage_included` (Anthropic OAuth & Sub2api).
+/// 3. Top-level `seven_day_fable` alias.
+fn fable_one_week(body: &Value) -> Option<UsageWindow> {
+    if let Some(limits) = body["limits"].as_array() {
+        for entry in limits {
+            if !entry.is_object() || entry["kind"].as_str() != Some("weekly_scoped") {
+                continue;
+            }
+            let model = &entry["scope"]["model"];
+            let is_fable = [text(&model["display_name"]), text(&model["id"])]
+                .into_iter()
+                .flatten()
+                .any(|name| name.to_ascii_lowercase().contains("fable"));
+            if !is_fable {
+                continue;
+            }
+            return Some(UsageWindow {
+                clock_offset_seconds: None,
+                used_percent: number(&entry["percent"])
+                    .or_else(|| number(&entry["utilization"]))
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 100.0),
+                window_seconds: ONE_WEEK_SECONDS,
+                reset_at: reset_at(&entry["resets_at"]),
+            });
+        }
+    }
+    ["seven_day_overage_included", "seven_day_fable"]
+        .into_iter()
+        .find_map(|key| {
+            body.get(key)
+                .filter(|w| w.is_object())
+                .map(|w| UsageWindow {
+                    clock_offset_seconds: None,
+                    used_percent: number(&w["utilization"]).unwrap_or(0.0).clamp(0.0, 100.0),
+                    window_seconds: ONE_WEEK_SECONDS,
+                    reset_at: reset_at(&w["resets_at"]),
+                })
+        })
+}
+
 /// The five-hour and seven-day windows of the OAuth usage response.
 pub(crate) fn usage_snapshot(
     body: &Value,
@@ -203,11 +251,12 @@ pub(crate) fn usage_snapshot(
         reset_grants,
         fetched_at: now,
         plan_type: plan,
-        five_hour: window("five_hour", 5 * 60 * 60),
-        one_week: window("seven_day", 7 * 24 * 60 * 60),
+        five_hour: window("five_hour", FIVE_HOUR_SECONDS),
+        one_week: window("seven_day", ONE_WEEK_SECONDS),
         credits: None,
         third_party_five_hour: None,
         third_party_one_week: None,
+        fable_one_week: fable_one_week(body),
     })
 }
 
@@ -384,9 +433,13 @@ pub(crate) async fn fetch_usage(api: &str, oauth: &Value, proxy: &str) -> Result
     match status {
         200..=299 => {
             let mut usage = usage_snapshot(&body, plan(oauth), now_unix_seconds())?;
-            for window in [&mut usage.five_hour, &mut usage.one_week]
-                .into_iter()
-                .flatten()
+            for window in [
+                &mut usage.five_hour,
+                &mut usage.one_week,
+                &mut usage.fable_one_week,
+            ]
+            .into_iter()
+            .flatten()
             {
                 window.clock_offset_seconds = clock_offset;
             }

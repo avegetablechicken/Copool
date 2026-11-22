@@ -131,6 +131,7 @@
 "accounts.card.switch_to_this" = "切換到此帳號";
 "accounts.window.five_hour" = "5h";
 "accounts.window.one_week" = "1 週";
+"accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "已用 %@";
 "accounts.window.remaining_format" = "剩餘 %@";
 "accounts.window.reset_at_format" = "重置時間：%@";
