@@ -317,15 +317,18 @@ fn with_block(text: Option<&str>, variable: &str, gateway: &str) -> Result<Strin
 }
 
 /// The lines a shell's startup file loads Gemini's `.env` with, exporting
-/// what it sets; zsh and bash both read them.
+/// what it sets; zsh and bash both read them. Not when Copool asks what the
+/// user exports (`OWN_EXPORTS_ONLY`): a key assigned there from another
+/// variable is not a key the user exported under its name.
 fn rc_lines(env: &Path) -> Result<String> {
     let env = env
         .to_str()
         .filter(|p| !p.contains(['\'', '\n']))
         .ok_or("Invalid .env path")?;
+    let own = crate::proxy_integration::OWN_EXPORTS_ONLY;
     Ok(format!(
         "# Copool: agy's Sub2api key and gateway, from Gemini's .env.\n\
-         [ -f '{env}' ] && {{ set -a; . '{env}'; set +a; }}\n"
+         [ -z \"${{{own}:-}}\" ] && [ -f '{env}' ] && {{ set -a; . '{env}'; set +a; }}\n"
     ))
 }
 /// Has the startup file load `.env` last, after anything else it exports,
@@ -881,6 +884,36 @@ mod tests {
             env_path(Path::new("/h/.gemini/antigravity-cli/settings.json")),
             Path::new("/h/.gemini/.env")
         );
+    }
+
+    /// The line loads `.env`, with an alias of another variable for agy's
+    /// key, in a shell started for the user, but not in one asked what the
+    /// user exports.
+    #[cfg(unix)]
+    #[test]
+    fn the_startup_line_loads_env_except_when_asked_for_the_users_own_exports() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join(".env");
+        fs_write(&env, &with_block(None, "RELAY_A", "https://a").unwrap());
+        let run = |own_only: bool| {
+            let mut shell = std::process::Command::new("/bin/sh");
+            shell
+                .arg("-c")
+                .arg(format!(
+                    "{}printf %s \"$GEMINI_API_KEY\"",
+                    rc_lines(&env).unwrap()
+                ))
+                .env("RELAY_A", "key-a")
+                .env_remove("GEMINI_API_KEY");
+            if own_only {
+                shell.env(crate::proxy_integration::OWN_EXPORTS_ONLY, "1");
+            } else {
+                shell.env_remove(crate::proxy_integration::OWN_EXPORTS_ONLY);
+            }
+            String::from_utf8(shell.output().unwrap().stdout).unwrap()
+        };
+        assert_eq!(run(false), "key-a");
+        assert_eq!(run(true), "");
     }
 
     fn fs_write(path: &Path, text: &str) {

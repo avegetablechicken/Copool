@@ -35,6 +35,10 @@ pub(crate) enum Shell {
     /// tools started from a terminal are often exported.
     Interactive,
 }
+/// Set while a shell is asked what the user exports: the startup file
+/// line Copool adds to load agy's `.env` then loads nothing, so that a key
+/// it assigns there for one provider is not taken for the user's own.
+pub(crate) const OWN_EXPORTS_ONLY: &str = "COPOOL_OWN_EXPORTS_ONLY";
 /// An environment variable as this process has it, else as the user's shell
 /// exports it, asked at most every 30 seconds per variable.
 pub(crate) fn environment_key(name: &str, shell: Shell) -> Option<String> {
@@ -53,7 +57,7 @@ pub(crate) fn new_shell_keys(names: &[&str], shell: Shell) -> Vec<Option<String>
     if names.iter().all(|name| is_variable(name)) {
         let program = std::env::var("SHELL").unwrap_or("/bin/sh".into());
         let (flags, timeout) = shell_flags(shell);
-        return login_shell_keys(&program, flags, names, timeout);
+        return login_shell_keys(&program, flags, names, timeout, false);
     }
     #[cfg(not(unix))]
     let _ = shell;
@@ -95,7 +99,7 @@ fn shell_key(name: &str, shell: Shell) -> Option<String> {
                 return value.clone();
             }
         }
-        let value = login_shell_keys(&program, flags, &[name], timeout).remove(0);
+        let value = login_shell_keys(&program, flags, &[name], timeout, true).remove(0);
         cache.insert(key, (std::time::Instant::now(), value.clone()));
         return value;
     }
@@ -122,15 +126,17 @@ fn codex_dotenv(paths: &Paths, name: &str) -> Option<String> {
     })
 }
 /// Each of `names` as one shell exports them; none for each when it fails.
-/// The names are variable names, which `is_variable` checked.
+/// The names are variable names, which `is_variable` checked. With
+/// `own_only`, without what Copool's line loads from agy's `.env`.
 #[cfg(unix)]
 fn login_shell_keys(
     shell: &str,
     flags: &str,
     names: &[&str],
     timeout: std::time::Duration,
+    own_only: bool,
 ) -> Vec<Option<String>> {
-    let output = login_shell_output(shell, flags, names, timeout);
+    let output = login_shell_output(shell, flags, names, timeout, own_only);
     (0..names.len())
         .map(|i| {
             let value = output
@@ -150,6 +156,7 @@ fn login_shell_output(
     flags: &str,
     names: &[&str],
     timeout: std::time::Duration,
+    own_only: bool,
 ) -> Option<String> {
     use std::io::Read;
     let output = tempfile::NamedTempFile::new().ok()?;
@@ -160,7 +167,13 @@ fn login_shell_output(
         .map(|(i, name)| format!("printf '__COPOOL_ENV{i}__%s__COPOOL_END__' \"${name}\""))
         .collect::<Vec<_>>()
         .join("; ");
-    let mut child = std::process::Command::new(shell)
+    let mut child = std::process::Command::new(shell);
+    if own_only {
+        child.env(OWN_EXPORTS_ONLY, "1");
+    } else {
+        child.env_remove(OWN_EXPORTS_ONLY);
+    }
+    let mut child = child
         .args([flags, &command])
         .stdin(std::process::Stdio::null())
         .stdout(output.reopen().ok()?)
@@ -356,6 +369,26 @@ pub(crate) fn sync_refreshed_auth(
 mod refresh_tests {
     use super::*;
     use crate::Pool;
+
+    /// A shell asked what the user exports is told so, for the line that
+    /// loads agy's `.env` to load nothing; one asked what a shell opened now
+    /// exports is not, even when this process was.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_shell_asked_for_the_users_own_exports_leaves_out_agys_env() {
+        let ask = |own_only| {
+            login_shell_keys(
+                "/bin/sh",
+                "-c",
+                &[OWN_EXPORTS_ONLY],
+                std::time::Duration::from_secs(5),
+                own_only,
+            )
+            .remove(0)
+        };
+        assert_eq!(ask(true).as_deref(), Some("1"));
+        assert_eq!(ask(false), None);
+    }
     #[test]
     fn provider_keys_are_read_from_the_codex_dotenv() {
         let dir = tempfile::tempdir().unwrap();
