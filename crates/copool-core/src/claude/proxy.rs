@@ -139,13 +139,31 @@ impl Application {
             .iter()
             .filter(|p| !p.imported_account_ids.is_empty())
         {
-            let Ok(source) =
-                settings_source::load(&location, &provider.name, &provider.settings_path)
-            else {
-                continue;
-            };
-            let Some(key) = text(&source.document["env"][source.auth_key]) else {
-                continue;
+            // An address's key is the one its variable holds in the user's
+            // environment, sent as a bearer token.
+            let (base_url, key, header) = if provider.mode == "address" {
+                let Some(key) = self
+                    .claude_exported(super::sub2api::key_variable(provider))
+                    .filter(|key| !key.trim().is_empty())
+                else {
+                    continue;
+                };
+                (provider.base_url.clone(), key, "authorization")
+            } else {
+                let Ok(source) =
+                    settings_source::load(&location, &provider.name, &provider.settings_path)
+                else {
+                    continue;
+                };
+                let Some(key) = text(&source.document["env"][source.auth_key]) else {
+                    continue;
+                };
+                let header = if source.auth_key == "ANTHROPIC_API_KEY" {
+                    "x-api-key"
+                } else {
+                    "authorization"
+                };
+                (source.base_url, key, header)
             };
             // A provider none of whose cards Sub2api still serves is no route,
             // as in the Antigravity proxy.
@@ -171,9 +189,9 @@ impl Application {
                     "accountId": route,
                     "authJson": {"copoolProvider": {
                         "id": provider.id,
-                        "baseUrl": super::sub2api::gateway(&source.base_url),
+                        "baseUrl": super::sub2api::gateway(&base_url),
                         "apiKey": key,
-                        "authHeader": if source.auth_key == "ANTHROPIC_API_KEY" { "x-api-key" } else { "authorization" },
+                        "authHeader": header,
                         "allowInsecureTLS": provider.allow_insecure_tls,
                         "preferred": applied == Some(provider.id.as_str()),
                     }},

@@ -555,7 +555,11 @@ pub(crate) struct State {
     /// Counts switches made: Claude Code's login read before one is not
     /// followed after it.
     switches: std::sync::atomic::AtomicU64,
+    /// Where a provider given by its Sub2api URL finds the key its variable
+    /// holds: with `now`, as a shell opened now exports it.
+    environment: std::sync::RwLock<Environment>,
 }
+type Environment = Arc<dyn Fn(&str, bool) -> Option<String> + Send + Sync>;
 impl Default for State {
     fn default() -> Self {
         Self {
@@ -569,6 +573,21 @@ impl Default for State {
             lock: Default::default(),
             operations: Default::default(),
             switches: Default::default(),
+            #[cfg(not(test))]
+            environment: std::sync::RwLock::new(Arc::new(|name: &str, now: bool| {
+                use crate::proxy_integration::{environment_key, new_shell_keys, Shell};
+                if now {
+                    new_shell_keys(&[name], Shell::Interactive)
+                        .into_iter()
+                        .next()
+                        .flatten()
+                } else {
+                    environment_key(name, Shell::Interactive)
+                }
+            })),
+            // Tests never ask the user's shell.
+            #[cfg(test)]
+            environment: std::sync::RwLock::new(Arc::new(|_: &str, _: bool| None)),
         }
     }
 }
@@ -1615,6 +1634,29 @@ impl Application {
     fn set_claude_vault(&self, vault: Arc<dyn Vault>) {
         *self.claude.vault.write().unwrap() = Some(vault);
         *self.claude.secrets.lock().unwrap() = None;
+    }
+    #[cfg(test)]
+    fn set_claude_environment(&self, environment: Environment) {
+        *self.claude.environment.write().unwrap() = environment;
+    }
+    /// A variable's value in Claude Code's environment, asked off the
+    /// runtime: the shell may take seconds.
+    fn claude_exported_now(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> {
+        let environment = self.claude.environment.read().unwrap().clone();
+        let name = name.to_owned();
+        async move {
+            tokio::task::spawn_blocking(move || environment(&name, true))
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
+    /// A variable's value as the user's shell exports it, cached.
+    fn claude_exported(&self, name: &str) -> Option<String> {
+        let environment = self.claude.environment.read().unwrap().clone();
+        environment(name, false)
     }
     #[cfg(test)]
     pub(crate) fn set_claude_network(&self, network: Arc<dyn Network>) {
