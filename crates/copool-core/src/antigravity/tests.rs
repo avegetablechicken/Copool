@@ -1139,11 +1139,11 @@ async fn sub2api_server(
             } else if uri.starts_with("/api/v1/admin/accounts?") {
                 json!({"items": [
                     {"id": 7, "name": "relay-alias", "platform": "antigravity", "type": "oauth", "status": "active",
-                     "extra": {"email": " "}, "credentials": {"email": "pro@gmail.com"}},
+                     "extra": {"email": " "}, "credentials": {"email": "pro@gmail.com", "plan_type": "g1-pro-tier"}},
                     {"id": 8, "name": "cli@gmail.com", "platform": "gemini", "type": "oauth", "status": "active"}
                 ], "pages": 1})
             } else {
-                json!({"subscription_tier": "PRO", "antigravity_quota_groups": [
+                json!({"antigravity_quota_groups": [
                     {"key": "gemini", "windows": [
                         {"window": "5h", "utilization": 25, "resets_at": "2099-01-01T00:00:00Z"},
                         {"window": "weekly", "utilization": 10, "resets_at": "2099-01-05T00:00:00Z"}]},
@@ -1349,6 +1349,7 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     assert_eq!(card.label, "pro@gmail.com");
     assert_eq!(card.plan_type.as_deref(), Some("pro"));
     let usage = card.usage.as_ref().unwrap();
+    assert_eq!(usage.plan_type, card.plan_type);
     assert_eq!(usage.five_hour.as_ref().unwrap().used_percent, 25.0);
     assert_eq!(usage.one_week.as_ref().unwrap().used_percent, 10.0);
     assert_eq!(
@@ -1538,14 +1539,14 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
 fn sub2apis_antigravity_usage_is_its_quota_groups_else_each_models() {
     let now = 1_000;
     let groups = sub2api_usage(
-        &json!({"subscription_tier": "ULTRA", "antigravity_quota_groups": [
+        &json!({"subscription_tier": "ULTRA", "subscription_tier_raw": "g1-ultra-lite-tier", "antigravity_quota_groups": [
             {"key": "gemini", "windows": [{"window": "5h", "utilization": 12.5, "resets_at": "2099-01-01T00:00:00Z"}]},
             {"key": "other", "windows": [{"window": "5h", "utilization": 99}]}
         ]}),
         now,
     )
     .unwrap();
-    assert_eq!(groups.plan_type.as_deref(), Some("ultra"));
+    assert_eq!(groups.plan_type.as_deref(), Some("ultra lite"));
     assert_eq!(groups.five_hour.as_ref().unwrap().used_percent, 12.5);
     assert!(groups.third_party_five_hour.is_none() && groups.one_week.is_none());
     // Each model's, pooled by the one with the least left.

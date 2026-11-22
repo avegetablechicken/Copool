@@ -61,7 +61,7 @@
         : clean(account);
     const p = (raw || "team").toUpperCase().replace(/\s+/g, " ");
     // Grok's plans are shown as named ("SUPERGROK HEAVY"), as its widget.
-    if (pool === "grok") return p;
+    if (pool === "grok" || (pool === "antigravity" && account?.sourceTag === "SUB2API")) return p;
     // Claude's Max plans keep their usage multiplier ("MAX 20X").
     if (/^MAX( \d+X)?$/.test(p)) return p;
     return ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE", "ULTRA"].includes(p)

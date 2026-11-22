@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-23（Grok 和 Antigravity 的 Sub2api 订阅等级）：从普通管理接口的账号列表和用量响应读取套餐。Antigravity 优先采用 Google 原始等级，缺少用量等级时读取 `credentials.plan_type`。Grok 优先读取用量返回的等级，并可从账号订阅字段和快照补充。实测 0.1.177 的 Antigravity 账号返回 Pro，Grok 账号刷新账单后仍未返回套餐，卡片留空。0.2.24 已用模拟响应验证。
+
 2026-11-23（Grok 套餐标签）：Grok 卡片的套餐标签改为显示 `/settings` 返回的套餐名大写（如 `SUPERGROK`、`SUPERGROK HEAVY`），与小组件一致；此前前端不认识这些名称，显示为 `TEAM`。配色按档位：SuperGrok（及 Lite）为入门档粉色，SuperGrok Heavy（及 $100 的 SuperGrok Plus）为最高档橙色，Free 为灰色，未知套餐为青色。The X Subscription 的套餐名（Plus、Premium、Super、Ultra）也已按价位映射，但仅见于一处第三方资料，未用真实账号核对 Grok Build 实际返回的名称。折叠行的套餐列宽 52px，`SUPERGROK` 等较长名称会以省略号截断。前端与 Rust 小组件测试通过，未在界面上实机查看。
 
 2026-11-23（套餐标签按档位配色）：账号卡片和 macOS 小组件的套餐标签改为按档位配色，各账号池的同档套餐颜色相同。免费档为灰色；入门档为粉色（Codex Plus、Claude Pro、Antigravity Pro）；最高档为橙色（Codex Pro、Claude Max 5x/20x、Antigravity Ultra）；Business/Enterprise 为靛蓝；Team 及未知套餐为青色。此前 Claude Pro 与 Max 都显示橙色，难以区分；Antigravity Ultra 显示青色。小组件快照新增 `planAccent` 字段，缺少该字段的旧快照使用青色。前端测试和 Rust 小组件测试通过；WidgetKit 扩展已单独编译通过，尚未在桌面上查看。

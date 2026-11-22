@@ -723,13 +723,14 @@ async fn sub2api_server(
                 assert!(uri.contains("platform=grok"), "{uri}");
                 json!({"items": [
                     {"id": 7, "name": "alias@example.com", "platform": "grok", "type": "oauth", "status": "active",
-                     "extra": {"email": " super@example.com "}, "credentials": {"email": "other@example.com"}},
+                     "extra": {"email": " super@example.com "}, "credentials": {"email": "other@example.com",
+                     "subscription_tier": "supergrok_heavy"}},
                     {"id": 8, "name": "lapsed@example.com", "platform": "grok", "type": "oauth", "status": "active"},
                     {"id": 9, "name": "key", "platform": "grok", "type": "apikey", "status": "active"},
                     {"id": 10, "name": "codex@example.com", "platform": "openai", "type": "oauth", "status": "active"}
                 ], "pages": 1})
             } else if uri == "/api/v1/admin/accounts/8/usage" {
-                json!({"needs_reauth": true, "error_code": "unauthenticated",
+                json!({"needs_reauth": true, "error_code": "unauthenticated", "subscription_tier": "x_premium_plus",
                        "grok_billing": {"status_code": 401}})
             } else {
                 assert_eq!(uri, "/api/v1/admin/accounts/7/usage");
@@ -791,6 +792,7 @@ async fn sub2api_grok_cards_show_the_weekly_usage_of_old_and_new_releases() {
             lapsed.usage_error.as_deref(),
             Some("The account must sign in to Sub2api again")
         );
+        assert_eq!(lapsed.plan_type.as_deref(), Some("x premium plus"));
         let card = cards
             .iter()
             .find(|c| c.email.as_deref() == Some("super@example.com"))
@@ -799,6 +801,8 @@ async fn sub2api_grok_cards_show_the_weekly_usage_of_old_and_new_releases() {
         assert_eq!(card.label, "super@example.com");
         if release == "0.1.150" {
             assert!(usage.one_week.is_none(), "{release}");
+            assert_eq!(usage.plan_type.as_deref(), Some("supergrok heavy"));
+            assert_eq!(card.plan_type, usage.plan_type);
             assert!(card.usage_error.is_none(), "{release}");
             assert_eq!(card.outdated_sub2api_version.as_deref(), Some("0.1.150"));
             continue;

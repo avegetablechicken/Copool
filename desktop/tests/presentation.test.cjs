@@ -31,6 +31,10 @@ test("Grok's plans are shown as named", () => {
   // Elsewhere an unknown plan is still Team.
   assert.equal(P.card({ planType: "SuperGrok", usage: null }).plan, "TEAM");
 });
+test("Antigravity Sub2api cards keep explicit tiers outside the Codex plan list", () => {
+  const card = { sourceTag: "SUB2API", planType: "standard" };
+  assert.equal(P.card(card, false, "used", String, "antigravity").plan, "STANDARD");
+});
 test("Comparable plans share a color across providers", () => {
   const accent = (planType, pool) =>
     P.card({ planType, usage: null }, false, "used", String, pool).accent;

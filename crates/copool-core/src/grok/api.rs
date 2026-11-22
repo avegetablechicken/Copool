@@ -264,7 +264,7 @@ pub(crate) fn sub2api_usage(value: &Value, now: i64) -> Result<UsageSnapshot, St
             .and_then(number)
             .map(|used| (used, end))
     });
-    let plan = text(&value["subscription_tier"]).or_else(|| text(&billing["plan"]));
+    let plan = crate::sub2api::reported_plan(crate::Pool::Grok, value);
     let mut usage = match window {
         Some((used, reset)) => snapshot(used, start, reset, monthly, now),
         None => {

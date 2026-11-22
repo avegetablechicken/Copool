@@ -100,6 +100,53 @@ fn listed_email(item: &Value) -> Option<String> {
     .find(|email| email.contains('@'))
     .map(str::to_owned)
 }
+
+fn subscription_tier(pool: Pool, field: &Value) -> Option<String> {
+    let raw = field.as_str()?.trim();
+    let lower = raw.to_ascii_lowercase();
+    if matches!(lower.as_str(), "" | "unknown" | "abnormal") {
+        return None;
+    }
+    match pool {
+        Pool::Antigravity => {
+            let id = lower.strip_suffix("-tier").unwrap_or(&lower);
+            Some(id.strip_prefix("g1-").unwrap_or(id).replace('-', " "))
+        }
+        Pool::Grok => Some(raw.replace('_', " ")),
+        Pool::Claude | Pool::Codex => None,
+    }
+}
+
+/// The explicit subscription reported by Sub2api, independent of whether
+/// its usage windows can be read. Codex uses its own quota response.
+pub(crate) fn reported_plan(pool: Pool, usage: &Value) -> Option<String> {
+    // Google's raw paid/current tier can distinguish variants that Sub2api
+    // groups under PRO or ULTRA.
+    if pool == Pool::Antigravity {
+        return subscription_tier(pool, &usage["subscription_tier_raw"])
+            .or_else(|| subscription_tier(pool, &usage["subscription_tier"]));
+    }
+    subscription_tier(pool, &usage["subscription_tier"])
+        .or_else(|| subscription_tier(pool, &usage["subscription_tier_raw"]))
+        .or_else(|| match pool {
+            Pool::Grok => subscription_tier(pool, &usage["grok_billing"]["plan"]),
+            _ => None,
+        })
+}
+
+fn listed_plan(pool: Pool, item: &Value) -> Option<String> {
+    match pool {
+        Pool::Antigravity => subscription_tier(pool, &item["credentials"]["plan_type"]),
+        Pool::Grok => [
+            &item["credentials"]["subscription_tier"],
+            &item["extra"]["grok_usage_snapshot"]["subscription_tier"],
+            &item["extra"]["grok_billing_snapshot"]["plan"],
+        ]
+        .into_iter()
+        .find_map(|field| subscription_tier(pool, field)),
+        Pool::Claude | Pool::Codex => None,
+    }
+}
 /// The upstream platform whose OAuth accounts a pool shows. Sub2api keeps
 /// Antigravity's apart from Gemini CLI's (`gemini`); its `/antigravity`
 /// gateway serves only these.
@@ -504,7 +551,7 @@ impl Connection {
                         account_id: None,
                         account_type: "oauth".into(),
                         status: if status.is_empty() { "unknown" } else { status }.into(),
-                        plan_type: None,
+                        plan_type: listed_plan(pool, &item),
                         usage: None,
                         usage_error: Some(
                             item["error_message"]
@@ -527,7 +574,7 @@ impl Connection {
                 account_id: None,
                 account_type: "oauth".into(),
                 status: "active".into(),
-                plan_type: None,
+                plan_type: listed_plan(pool, &item),
                 usage: None,
                 usage_error: item["error_message"].as_str().map(str::to_owned),
                 provider_id: Some(self.configuration.provider_id.clone()),
@@ -561,12 +608,16 @@ impl Connection {
                         _ => crate::antigravity::sub2api_usage(&value, now),
                     };
                     match usage {
-                        Ok(usage) => {
+                        Ok(mut usage) => {
+                            usage.plan_type = usage.plan_type.or(account.plan_type);
                             account.plan_type = usage.plan_type.clone();
                             account.usage = Some(usage);
                             account.usage_error = None;
                         }
-                        Err(e) => account.usage_error = Some(e),
+                        Err(e) => {
+                            account.plan_type = reported_plan(pool, &value).or(account.plan_type);
+                            account.usage_error = Some(e);
+                        }
                     }
                 }
                 Ok(value) => {
@@ -595,8 +646,11 @@ impl Connection {
                 if let Some(last) = self.cached_account(id) {
                     account.email = account.email.or(last.email);
                     account.account_id = account.account_id.or(last.account_id);
-                    account.plan_type = account.plan_type.or(last.plan_type);
                     account.usage = last.usage;
+                    if let (Some(plan), Some(usage)) = (&account.plan_type, &mut account.usage) {
+                        usage.plan_type = Some(plan.clone());
+                    }
+                    account.plan_type = account.plan_type.or(last.plan_type);
                 }
             }
             accounts.push(account);

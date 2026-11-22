@@ -96,11 +96,7 @@ pub(crate) fn sub2api_usage(value: &Value, now: i64) -> Result<UsageSnapshot, St
         return Err("The account must sign in to Sub2api again".into());
     }
     let mut usage = snapshot(now);
-    usage.plan_type = value
-        .get("subscription_tier")
-        .and_then(Value::as_str)
-        .map(|tier| tier.trim().to_ascii_lowercase())
-        .filter(|tier| !tier.is_empty() && tier != "unknown");
+    usage.plan_type = crate::sub2api::reported_plan(crate::Pool::Antigravity, value);
     let left = |entry: &Value| {
         entry
             .get("utilization")
