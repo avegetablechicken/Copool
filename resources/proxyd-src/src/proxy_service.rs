@@ -2350,7 +2350,9 @@ fn is_valid_codex_version(value: &str) -> bool {
 async fn load_proxy_candidates(
     storage: &ProxyStorageContext,
 ) -> Result<Vec<ProxyCandidate>, String> {
-    let _guard = storage.store_lock.lock().await;
+    // The store's lock is held to read the accounts and the selection, not
+    // while providers' keys are looked up, which can take seconds.
+    let guard = storage.store_lock.lock().await;
     let store = if storage.read_store {
         load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?
     } else {
@@ -2384,6 +2386,7 @@ async fn load_proxy_candidates(
     } else {
         None
     };
+    drop(guard);
     let mut accounts = store.accounts;
     if let Some(load) = &storage.provider_candidates {
         // Provider credentials can require a shell or keyring lookup.
@@ -4412,6 +4415,24 @@ mod tests {
         super::stop_api_proxy_with_runtime(&storage, &slot)
             .await
             .unwrap();
+    }
+
+    /// Providers' keys, which may take a shell seconds to give, are looked
+    /// up without the store's lock.
+    #[tokio::test]
+    async fn provider_keys_are_looked_up_without_the_stores_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let mut storage =
+            new_proxy_storage_context(dir.path().to_path_buf(), store_lock.clone(), false);
+        let free = Arc::new(std::sync::Mutex::new(None));
+        let (lock, seen) = (store_lock.clone(), free.clone());
+        storage.provider_candidates = Some(Arc::new(move || {
+            *seen.lock().unwrap() = Some(lock.try_lock().is_ok());
+            Ok(Vec::new())
+        }));
+        super::load_proxy_candidates(&storage).await.unwrap();
+        assert_eq!(*free.lock().unwrap(), Some(true));
     }
 
     /// A gateway's key in x-api-key, which a redirect to another host
