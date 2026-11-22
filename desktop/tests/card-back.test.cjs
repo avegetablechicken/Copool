@@ -255,8 +255,8 @@ test("refresh intervals offer the one set and speed up to a fifth, no sooner tha
 });
 
 const refreshSection = between("/// The pool's background refresh, which all", "/// Removal, confirmed by a second click.");
-/// A pool's refresh section on its card in use: each row's label, field and
-/// help, and the refresh each control saves.
+/// A pool's refresh section on its card in use: each row's label, field,
+/// line under it and tooltip, and the refresh each control saves.
 function refreshRows(pool, refresh) {
   const saved = [];
   const scope = {
@@ -271,7 +271,7 @@ function refreshRows(pool, refresh) {
     tr: (key, ...args) => [key, ...args].join(" "),
     el: () => ({ dataset: {}, append() {} }),
     backSection: () => ({ group: { rows: [], append(...rows) { this.rows.push(...rows); } } }),
-    backRow: (label, control, help) => ({ label, control, help }),
+    backRow: (label, control, note, tip) => ({ label, control, note, tip }),
     backSwitch: (field, on, label, onchange) => ({ dataset: { backField: field }, on, onchange }),
     queuePreferenceSave: async (patch) => saved.push(patch),
     notice: () => {},
@@ -291,12 +291,67 @@ test("only Claude's refresh offers the slow-down after HTTP 429, on by default",
   const backoff = field("refresh-backoff");
   assert.equal(backoff.label, "accounts.refresh.backoff");
   assert.equal(backoff.control.on, true);
-  assert.equal(backoff.help, "accounts.refresh.backoff_help");
-  // Turned off, it saves with the pool's other settings, and its help hides.
+  // What it does shows on its name, on or off, as does the speed-up's.
+  assert.deepEqual([backoff.note, backoff.tip], [null, "accounts.refresh.backoff_help"]);
+  assert.deepEqual(
+    [field("refresh-adaptive").note, field("refresh-adaptive").tip],
+    [null, "accounts.refresh.adaptive_help_format 60s"],
+  );
+  // Turned off, it saves with the pool's other settings.
   backoff.control.onchange(false);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(JSON.parse(JSON.stringify(saved)), [
     { refresh: { claude: { ...refresh, backoff: false } } },
   ]);
-  assert.equal(refreshRows("claude", { ...refresh, backoff: false }).field("refresh-backoff").help, null);
+  assert.equal(
+    refreshRows("claude", { ...refresh, backoff: false }).field("refresh-backoff").tip,
+    "accounts.refresh.backoff_help",
+  );
+});
+
+const greetingSectionSource = between("/// Saying hi now, automatically, and at which times.", "/// The times with a new one, in order;");
+/// The label of a card's greeting times, as its back draws it.
+function greetingTimesLabel(lastError) {
+  const node = (tag, className = "", text = "") => ({
+    tag,
+    className,
+    text,
+    title: "",
+    dataset: {},
+    children: [],
+    append(...nodes) {
+      this.children.push(...nodes);
+    },
+    setAttribute() {},
+  });
+  const scope = {
+    sayingHi: new Set(),
+    accountsController: { refreshingIds: new Set(), remoteRefreshingIds: new Set() },
+    canSayHi: () => true,
+    tr: (key) => key,
+    el: node,
+    button: () => node("button"),
+    backSection: () => ({ group: node("div", "back-group") }),
+    backButton: () => node("button"),
+    backRow: () => node("label", "back-row"),
+    backSwitch: () => node("input", "switch"),
+  };
+  vm.createContext(scope);
+  vm.runInContext(greetingSectionSource, scope);
+  const state = { adding: null, schedule: { auto: false, times: ["08:00"], lastError } };
+  const section = scope.greetingSection({ id: "a" }, state);
+  const daily = section.group.children.find((n) => n.className === "back-row back-stack");
+  return daily.children.find((n) => n.className === "back-label");
+}
+
+test("what the greeting times do shows on their name, a failed greeting under it", () => {
+  const label = greetingTimesLabel(null);
+  assert.equal(label.title, "accounts.say_hi.times_help");
+  assert.deepEqual(label.children, []);
+  const failed = greetingTimesLabel("Greeting failed");
+  assert.equal(failed.title, "accounts.say_hi.times_help");
+  assert.deepEqual(
+    failed.children.map((n) => [n.className, n.text]),
+    [["back-note error", "Greeting failed"]],
+  );
 });

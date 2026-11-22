@@ -931,11 +931,12 @@ function backSection(title, ...aside) {
   section.group = group;
   return section;
 }
-/// A row of a section's group: a label, maybe a line under it, and its
-/// control.
-function backRow(label, control, note = null) {
+/// A row of a section's group: a label, maybe a line under it or a tooltip
+/// on it, and its control.
+function backRow(label, control, note = null, tip = null) {
   const row = el("label", "back-row");
   const text = el("span", "back-label", label);
+  if (tip) text.title = tip;
   if (note) text.append(el("span", "back-note", note));
   row.append(text, control);
   return row;
@@ -1049,14 +1050,10 @@ function greetingSection(account, state) {
     ),
   );
   const daily = el("div", "back-row back-stack");
+  // What the times do shows on their name; a failed greeting under it.
   const dailyLabel = el("span", "back-label", tr("accounts.say_hi.times"));
-  dailyLabel.append(
-    el(
-      "span",
-      `back-note${schedule.lastError ? " error" : ""}`,
-      schedule.lastError || tr("accounts.say_hi.times_help"),
-    ),
-  );
+  dailyLabel.title = tr("accounts.say_hi.times_help");
+  if (schedule.lastError) dailyLabel.append(el("span", "back-note error", schedule.lastError));
   const times = el("div", "back-times");
   for (const time of schedule.times) {
     const chip = el("span", "back-time", time);
@@ -1190,9 +1187,8 @@ function refreshSection(current) {
       backSwitch("refresh-adaptive", refresh.adaptive, tr("accounts.refresh.adaptive"), (adaptive) =>
         save({ adaptive }),
       ),
-      refresh.adaptive
-        ? tr("accounts.refresh.adaptive_help_format", interval(P.fastRefreshSeconds(refresh.seconds)))
-        : null,
+      null,
+      tr("accounts.refresh.adaptive_help_format", interval(P.fastRefreshSeconds(refresh.seconds))),
     ),
   );
   // Only Claude's accounts pause after HTTP 429 for now.
@@ -1203,7 +1199,8 @@ function refreshSection(current) {
         backSwitch("refresh-backoff", refresh.backoff, tr("accounts.refresh.backoff"), (backoff) =>
           save({ backoff }),
         ),
-        refresh.backoff ? tr("accounts.refresh.backoff_help") : null,
+        null,
+        tr("accounts.refresh.backoff_help"),
       ),
     );
   return section;
