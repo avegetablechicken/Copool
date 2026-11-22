@@ -1231,8 +1231,19 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     let shell = Arc::new(Mutex::new("broken"));
     let (exports, mode) = (profile.clone(), shell.clone());
     let (env_file, rc_file) = (env.clone(), rc.clone());
+    // The provider's address, edited while the shell is asked.
+    let moved = Arc::new(Mutex::new(None::<String>));
+    let (edit, store_file) = (
+        moved.clone(),
+        h.app.paths.data_dir.join("antigravity-accounts.json"),
+    );
     h.app
         .set_antigravity_environment(Arc::new(move |names: &[&str], _now: bool| {
+            if let Some(url) = edit.lock().unwrap().as_deref() {
+                let mut store = read_json(&store_file);
+                store["providers"][0]["baseURL"] = url.into();
+                fs::write(&store_file, store.to_string()).unwrap();
+            }
             let mut vars = exports.lock().unwrap().clone();
             let mode = *mode.lock().unwrap();
             let loads = mode != "not"
@@ -1501,6 +1512,24 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
         h.app.say_hi(Pool::Antigravity, &card.id).await.unwrap_err(),
         NOT_AVAILABLE
     );
+
+    // A provider edited during its switch leaves agy as it was.
+    *moved.lock().unwrap() = Some("https://moved.invalid".into());
+    assert_eq!(
+        h.app
+            .switch_account(Pool::Antigravity, &card.id)
+            .await
+            .unwrap_err(),
+        "The Antigravity provider changed during the switch; switch again"
+    );
+    assert_eq!(read_json(&settings), json!({"modelProvider": "gemini"}));
+    assert_eq!(fs::read_to_string(&env).unwrap(), env_original);
+    assert!(h
+        .app
+        .antigravity_load()
+        .unwrap()
+        .settings_provider
+        .is_none());
 }
 
 #[test]

@@ -640,7 +640,7 @@ impl Application {
         let changes = self
             .antigravity_put_env(&path, variable, &gateway(&provider)?)
             .await?;
-        let applied = self.antigravity_apply_gemini(&path, member.key).await;
+        let applied = self.antigravity_apply_gemini(&path, &provider).await;
         if applied.is_err() {
             changes.undo();
         }
@@ -651,9 +651,18 @@ impl Application {
         })
     }
     /// `"modelProvider": "gemini"` in agy's settings, for the provider.
-    async fn antigravity_apply_gemini(&self, path: &Path, provider: String) -> Result<()> {
+    async fn antigravity_apply_gemini(&self, path: &Path, provider: &Provider) -> Result<()> {
         let _lock = self.antigravity.lock.lock().await;
         let mut store = self.antigravity_load()?;
+        // The `.env` was written outside the lock, for the provider as it was.
+        let now = store
+            .providers
+            .iter()
+            .find(|p| p.id == provider.id)
+            .ok_or("Account not found")?;
+        if (gateway(now)?, key_variable(now)) != (gateway(provider)?, key_variable(provider)) {
+            return Err("The Antigravity provider changed during the switch; switch again".into());
+        }
         let text = read_text(path)?;
         let mut settings = parse_settings(text.as_deref())?;
         // Between providers, the record of the login's settings stays.
@@ -664,7 +673,7 @@ impl Application {
         }
         settings.insert(MODEL_PROVIDER.into(), GEMINI.into());
         put_text(path, Some(&render_settings(&settings, text.as_deref())?))?;
-        store.settings_provider = Some(provider);
+        store.settings_provider = Some(provider.id.clone());
         if let Err(error) = self.antigravity_save(&store) {
             let _ = put_text(path, text.as_deref());
             return Err(error);
