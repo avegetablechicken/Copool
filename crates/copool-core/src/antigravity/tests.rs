@@ -12,11 +12,20 @@ pub(crate) struct Live {
     refused: std::sync::atomic::AtomicBool,
     /// Writes take this long, as while the user is asked to allow them.
     write_delay_ms: std::sync::atomic::AtomicU64,
+    /// Reads answer this late with what was there when asked, as a slow
+    /// `security` does.
+    read_delay_ms: std::sync::atomic::AtomicU64,
 }
 impl LiveStore for Live {
     fn read(&self, _: KeychainAccess) -> Response<'_, Option<Vec<u8>>> {
         let bytes = self.bytes.lock().unwrap().clone();
-        Box::pin(async move { Ok(bytes) })
+        let delay = self
+            .read_delay_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            Ok(bytes)
+        })
     }
     fn write(&self, bytes: Vec<u8>, _: KeychainAccess) -> Response<'_, ()> {
         if self.refused.load(std::sync::atomic::Ordering::Relaxed) {
@@ -521,6 +530,44 @@ async fn quota_permission_errors_reach_the_card_without_consuming_a_renewal() {
         assert_eq!(updated.renewal.as_deref(), Some("always"));
         assert!(updated.usage.is_some());
     }
+}
+
+#[tokio::test]
+async fn cards_read_before_a_switch_keep_the_account_switched_to() {
+    let h = harness(true).await;
+    for user in ["alice", "bob"] {
+        h.app
+            .import_json(
+                Pool::Antigravity,
+                &json!({"document": login_of(user, &format!("access-{user}"), later()), "wrapped": true})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+    }
+    h.live.sign_in(&login_of("alice", "access-alice", later()));
+    let accounts = cards(&h.app).await;
+    let bob = accounts
+        .iter()
+        .find(|a| a.email.as_deref() == Some("bob@gmail.com"))
+        .unwrap()
+        .id
+        .clone();
+    // The cards read Alice's login, which a switch to Bob replaces before
+    // the read answers.
+    h.live
+        .read_delay_ms
+        .store(300, std::sync::atomic::Ordering::Relaxed);
+    let (_, switched) = tokio::join!(cards(&h.app), async {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        h.live
+            .read_delay_ms
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        h.app.switch_account(Pool::Antigravity, &bob).await
+    });
+    switched.unwrap();
+    let store = h.app.antigravity_load().unwrap();
+    assert_eq!(store.current_account_id.as_deref(), Some(bob.as_str()));
 }
 
 #[tokio::test]

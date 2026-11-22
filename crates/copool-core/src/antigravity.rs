@@ -13,7 +13,11 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+};
 
 mod api;
 mod login;
@@ -67,6 +71,9 @@ pub(crate) struct State {
     lock: tokio::sync::Mutex<()>,
     /// Serializes imports, switches and refreshes.
     operations: tokio::sync::Mutex<()>,
+    /// Counts switches made: Antigravity's login read before one is not
+    /// followed after it.
+    switches: std::sync::atomic::AtomicU64,
 }
 impl Default for State {
     fn default() -> Self {
@@ -105,6 +112,7 @@ impl Default for State {
             shell_rc: Default::default(),
             lock: Default::default(),
             operations: Default::default(),
+            switches: Default::default(),
         }
     }
 }
@@ -427,6 +435,7 @@ impl Application {
     }
     /// The pool, following the login Antigravity uses.
     pub(crate) async fn antigravity_accounts(&self) -> Result<Vec<AccountSummary>> {
+        let switches = self.antigravity.switches.load(Ordering::SeqCst);
         let saved = self.antigravity_load()?;
         // A pool without logins never reads the Keychain.
         let live = if saved.accounts.is_empty() {
@@ -439,7 +448,10 @@ impl Application {
         };
         let _lock = self.antigravity.lock.lock().await;
         let mut store = self.antigravity_load()?;
-        if follow_live(&mut store, live.as_ref()) {
+        // A switch made since may have replaced the login read.
+        if self.antigravity.switches.load(Ordering::SeqCst) == switches
+            && follow_live(&mut store, live.as_ref())
+        {
             self.antigravity_save(&store)?;
         }
         // On the Gemini API agy uses the provider last applied; else its login.
@@ -663,6 +675,7 @@ impl Application {
             .iter()
             .any(|a| a.id == target.id)
             .then_some(target.id);
+        self.antigravity.switches.fetch_add(1, Ordering::SeqCst);
         self.antigravity_save(&store)?;
         Ok(SwitchExecution::default())
     }
