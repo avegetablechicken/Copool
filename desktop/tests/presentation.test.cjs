@@ -24,6 +24,13 @@ legacy(
     assert.equal(P.normalizedPlan(null), "TEAM");
   },
 );
+test("Grok's plans are shown as named", () => {
+  const plan = (planType) => P.card({ planType, usage: null }, false, "used", String, "grok").plan;
+  assert.equal(plan("SuperGrok"), "SUPERGROK");
+  assert.equal(plan(" SuperGrok  Heavy "), "SUPERGROK HEAVY");
+  // Elsewhere an unknown plan is still Team.
+  assert.equal(P.card({ planType: "SuperGrok", usage: null }).plan, "TEAM");
+});
 test("Comparable plans share a color across providers", () => {
   const accent = (planType, pool) =>
     P.card({ planType, usage: null }, false, "used", String, pool).accent;
@@ -37,6 +44,10 @@ test("Comparable plans share a color across providers", () => {
   assert.equal(accent("max 20x", "claude"), "orange");
   assert.equal(accent("ultra", "antigravity"), "orange");
   assert.equal(accent("free", "claude"), "gray");
+  assert.equal(accent("SuperGrok", "grok"), "pink");
+  assert.equal(accent("SuperGrok Heavy", "grok"), "orange");
+  assert.equal(accent("Free", "grok"), "gray");
+  assert.equal(accent("Something New", "grok"), "teal");
   // Without a pool, Codex's colors.
   assert.equal(P.card({ planType: "pro", usage: null }).accent, "orange");
 });

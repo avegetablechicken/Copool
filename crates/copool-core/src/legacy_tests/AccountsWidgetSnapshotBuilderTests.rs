@@ -219,6 +219,7 @@ fn grokHasItsOwnWidgetAndJoinsEveryPoolsWidget() {
     let current = own.current_card.unwrap();
     assert_eq!(current.pool_label, None);
     assert_eq!(current.plan_label, "SUPERGROK");
+    assert_eq!(current.plan_accent, "pink");
     assert_eq!(current.account_label, "grok");
     assert!(!current.five_hour.available);
     assert_eq!(current.one_week.used_text, "7%");

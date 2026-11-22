@@ -146,7 +146,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
         case .codex: ["teal", "orange", "teal", "pink"]
         case .claude: ["orange", "pink", "teal", "orange"]
         case .antigravity: ["pink", "orange", "pink", "gray"]
-        case .grok: ["teal", "teal", "teal", "gray"]
+        case .grok: ["pink", "pink", "orange", "gray"]
         case .all: ["teal", "orange", "orange", "pink"]
         }
     }

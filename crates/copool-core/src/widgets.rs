@@ -221,9 +221,18 @@ fn claude_plan(raw: Option<String>) -> String {
 }
 /// A plan's color, by tier so that providers' comparable plans match, as
 /// the app's `planAccent`: the entry subscription (Codex Plus, Claude Pro,
-/// Google AI Pro) and the top one (Codex Pro, Claude Max, Google AI Ultra)
-/// share their colors.
+/// Google AI Pro, SuperGrok) and the top one (Codex Pro, Claude Max, Google
+/// AI Ultra, SuperGrok Heavy) share their colors.
 pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
+    if pool == Pool::Grok {
+        // Also The X Subscription's names, which may replace SuperGrok's.
+        match plan {
+            "SUPERGROK LITE" | "SUPERGROK" | "PLUS" | "PREMIUM" => return "pink",
+            "SUPERGROK PLUS" | "SUPERGROK HEAVY" | "SUPER" | "ULTRA" => return "orange",
+            "FREE" | "BUSINESS" | "ENTERPRISE" => {}
+            _ => return "teal",
+        }
+    }
     match plan {
         "PRO" if pool != Pool::Codex => "pink",
         "ULTRA" => "orange",
@@ -268,7 +277,8 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
         // As the app's plan tag: none until the plan is known. The windows
         // are Gemini's, as the app's collapsed rows show them.
         Pool::Antigravity | Pool::Grok => (
-            raw.unwrap_or_default(),
+            raw.map(|plan| plan.split_whitespace().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default(),
             None,
             account.email.as_deref().unwrap_or(&account.label),
         ),

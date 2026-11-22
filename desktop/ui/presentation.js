@@ -54,12 +54,14 @@
     }
     return "en";
   }
-  function normalizedPlan(account) {
+  function normalizedPlan(account, pool = "codex") {
     const raw =
       typeof account === "object" && account !== null
         ? clean(account.usage?.planType) || clean(account.planType)
         : clean(account);
-    const p = (raw || "team").toUpperCase();
+    const p = (raw || "team").toUpperCase().replace(/\s+/g, " ");
+    // Grok's plans are shown as named ("SUPERGROK HEAVY"), as its widget.
+    if (pool === "grok") return p;
     // Claude's Max plans keep their usage multiplier ("MAX 20X").
     if (/^MAX( \d+X)?$/.test(p)) return p;
     return ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE", "ULTRA"].includes(p)
@@ -293,9 +295,16 @@
     };
   }
   /// A plan's color, by tier so that providers' comparable plans match:
-  /// the entry subscription (Codex Plus, Claude Pro, Google AI Pro) and the
-  /// top one (Codex Pro, Claude Max, Google AI Ultra) share their colors.
+  /// the entry subscription (Codex Plus, Claude Pro, Google AI Pro,
+  /// SuperGrok) and the top one (Codex Pro, Claude Max, Google AI Ultra,
+  /// SuperGrok Heavy) share their colors.
   function planAccent(plan, pool = "codex") {
+    if (pool === "grok") {
+      // Also The X Subscription's names, which may replace SuperGrok's.
+      if (["SUPERGROK LITE", "SUPERGROK", "PLUS", "PREMIUM"].includes(plan)) return "pink";
+      if (["SUPERGROK PLUS", "SUPERGROK HEAVY", "SUPER", "ULTRA"].includes(plan)) return "orange";
+      if (!["FREE", "BUSINESS", "ENTERPRISE"].includes(plan)) return "teal";
+    }
     if (plan === "PRO" && pool !== "codex") return "pink";
     if (plan === "ULTRA" || plan.startsWith("MAX")) return "orange";
     return (
@@ -309,7 +318,7 @@
     );
   }
   function card(account, collapsed = false, mode = "used", formatDate, pool = "codex") {
-    const plan = normalizedPlan(account),
+    const plan = normalizedPlan(account, pool),
       name =
         clean(account.email) || clean(account.accountId) || clean(account.label) || "",
       credits = account.usage?.credits;
