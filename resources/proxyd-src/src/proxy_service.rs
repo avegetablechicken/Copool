@@ -2266,11 +2266,12 @@ fn candidate_client(
     context: &ProxyContext,
     candidate: &ProxyCandidate,
 ) -> Result<reqwest::Client, String> {
-    let insecure = candidate
-        .auth_json
-        .get("copoolProvider")
-        .is_some_and(|p| p["allowInsecureTLS"] == true);
-    let follow_redirects = context.storage.pool != Pool::Antigravity;
+    let provider = candidate.auth_json.get("copoolProvider");
+    let insecure = provider.is_some_and(|p| p["allowInsecureTLS"] == true);
+    // A redirect to another host drops Authorization but would carry a key
+    // sent in x-api-key (or Antigravity's x-goog-api-key) there.
+    let follow_redirects = context.storage.pool != Pool::Antigravity
+        && provider.is_none_or(|p| p["authHeader"] != "x-api-key");
     if candidate.proxy_url.trim().is_empty() && !insecure && follow_redirects {
         return Ok(context.client.clone());
     }
@@ -4408,6 +4409,81 @@ mod tests {
                 .cloned(),
             Some(("/gateway/v1/messages".into(), String::new()))
         );
+        super::stop_api_proxy_with_runtime(&storage, &slot)
+            .await
+            .unwrap();
+    }
+
+    /// A gateway's key in x-api-key, which a redirect to another host
+    /// would carry along, never follows a redirect.
+    #[tokio::test]
+    async fn a_claude_gateway_key_in_x_api_key_is_not_sent_where_it_redirects() {
+        use axum::{extract::Request, routing::any, Router};
+        let elsewhere = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = elsewhere.clone();
+        let other = Router::new().fallback(any(move |request: Request| {
+            let seen = seen.clone();
+            async move {
+                let key = request.headers().get("x-api-key");
+                seen.lock().unwrap().push(
+                    key.and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned(),
+                );
+                "{}"
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other_base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, other).await.unwrap() });
+        let gateway = Router::new().fallback(any(move |request: Request| {
+            let location = format!("{other_base}{}", request.uri().path());
+            async move {
+                (
+                    axum::http::StatusCode::TEMPORARY_REDIRECT,
+                    [("location", location)],
+                )
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, gateway).await.unwrap() });
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut storage = super::new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        storage.pool = crate::models::Pool::Claude;
+        storage.upstream_base_url = Some(base.clone());
+        let provider: super::StoredAccount = serde_json::from_value(json!({
+            "id": "claude-sub2api-provider:p", "label": "Team", "accountId": "route",
+            "addedAt": 1, "updatedAt": 1,
+            "authJson": {"copoolProvider": {"id": "p", "baseUrl": base, "apiKey": "sk-team",
+                "authHeader": "x-api-key", "preferred": true}}
+        }))
+        .unwrap();
+        storage.provider_candidates = Some(Arc::new(move || Ok(vec![provider.clone()])));
+        storage.prefer_local_selection = true;
+        let slot = tokio::sync::Mutex::new(None);
+        let status = super::start_api_proxy_with_runtime(&storage, &slot, Some(0), "127.0.0.1")
+            .await
+            .unwrap();
+        // As Claude Code, which follows no redirect either.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let response = client
+            .post(format!("{}/v1/messages", status.base_url.unwrap()))
+            .header("x-api-key", status.api_key.unwrap())
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_redirection());
+        assert!(elsewhere.lock().unwrap().is_empty());
         super::stop_api_proxy_with_runtime(&storage, &slot)
             .await
             .unwrap();
