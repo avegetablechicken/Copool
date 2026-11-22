@@ -4,7 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(path.join(__dirname, "../ui/app.js"), "utf8");
+// Windows checkouts may end lines with CRLF.
+const source = fs
+  .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
+  .replace(/\r\n/g, "\n");
 test("Sub2api cards group by the provider in their id, even before the provider list knows them", () => {
   const { Providers } = require("../ui/controllers.js");
   const providerControllers = {
@@ -22,8 +25,10 @@ test("Sub2api cards group by the provider in their id, even before the provider 
   ];
   const scope = { pool: "claude", providerControllers };
   vm.createContext(scope);
-  vm.runInContext(source.slice(source.indexOf("function providerKey("),
-    source.indexOf("/// Removes an account, or all of a Sub2api provider's cards")), scope);
+  const start = source.indexOf("function providerKey(");
+  const end = source.indexOf("/// Removes an account, or all of a Sub2api provider's cards", start);
+  assert(start >= 0 && end > start, "providerKey found");
+  vm.runInContext(source.slice(start, end), scope);
   const card = (id) => ({ id, sourceTag: "SUB2API" });
   assert.equal(scope.providerKey(card("claude-sub2api-srv-2")), "srv");
   assert.equal(scope.providerTitle(card("claude-sub2api-srv-2")), "myServer");
