@@ -129,8 +129,8 @@
 "accounts.card.unlimited" = "Unbegrenzt";
 "accounts.card.switching" = "Wechsel läuft...";
 "accounts.card.switch_to_this" = "Zu diesem Konto wechseln";
-"accounts.window.five_hour" = "5h";
-"accounts.window.one_week" = "1 Woche";
+"accounts.window.five_hour" = "Sitzung";
+"accounts.window.one_week" = "Wöchentlich";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Verbraucht %@";
 "accounts.window.remaining_format" = "Verbleibend %@";

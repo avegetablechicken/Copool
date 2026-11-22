@@ -140,8 +140,8 @@
 "accounts.pending.error.title" = "无法发现工作区";
 "accounts.pending.error.hint" = "请先刷新或重新导入这个账号的认证，再重试。";
 "accounts.card.status.deactivated" = "已停用";
-"accounts.window.five_hour" = "5h";
-"accounts.window.one_week" = "1 周";
+"accounts.window.five_hour" = "会话";
+"accounts.window.one_week" = "每周";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "已用 %@";
 "accounts.window.remaining_format" = "剩余 %@";

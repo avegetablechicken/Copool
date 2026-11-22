@@ -129,8 +129,8 @@
 "accounts.card.unlimited" = "Ilimitado";
 "accounts.card.switching" = "Cambiando...";
 "accounts.card.switch_to_this" = "Cambiar a esta cuenta";
-"accounts.window.five_hour" = "5h";
-"accounts.window.one_week" = "1 semana";
+"accounts.window.five_hour" = "Sesión";
+"accounts.window.one_week" = "Semanal";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Usado %@";
 "accounts.window.remaining_format" = "Restante %@";

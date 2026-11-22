@@ -129,8 +129,8 @@
 "accounts.card.unlimited" = "Onbeperkt";
 "accounts.card.switching" = "Wisselen...";
 "accounts.card.switch_to_this" = "Naar dit account schakelen";
-"accounts.window.five_hour" = "5u";
-"accounts.window.one_week" = "1 week";
+"accounts.window.five_hour" = "Sessie";
+"accounts.window.one_week" = "Wekelijks";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Gebruikt %@";
 "accounts.window.remaining_format" = "Resterend %@";

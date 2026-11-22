@@ -89,3 +89,17 @@ test("Positional localized messages preserve literal percent signs in account la
     "first · second · 100%",
   );
 });
+
+test("Usage window labels use localized Session / Weekly and Fable across locales", () => {
+  assert.equal(english["accounts.window.five_hour"], "Session");
+  assert.equal(english["accounts.window.one_week"], "Weekly");
+  for (const locale of locales) {
+    const map = strings(locale);
+    assert.ok(map["accounts.window.five_hour"], `${locale} five_hour`);
+    assert.ok(map["accounts.window.one_week"], `${locale} one_week`);
+    assert.equal(map["accounts.window.fable"], "Fable", locale);
+    if (locale !== "en") {
+      assert.notEqual(map["accounts.window.one_week"], "Weekly", locale);
+    }
+  }
+});

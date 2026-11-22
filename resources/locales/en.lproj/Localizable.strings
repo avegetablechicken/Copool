@@ -140,8 +140,8 @@
 "accounts.pending.error.title" = "Workspace discovery unavailable";
 "accounts.pending.error.hint" = "Refresh or re-import this account auth, then try again.";
 "accounts.card.status.deactivated" = "DEACTIVATED";
-"accounts.window.five_hour" = "5h";
-"accounts.window.one_week" = "1 week";
+"accounts.window.five_hour" = "Session";
+"accounts.window.one_week" = "Weekly";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Used %@";
 "accounts.window.remaining_format" = "Remaining %@";

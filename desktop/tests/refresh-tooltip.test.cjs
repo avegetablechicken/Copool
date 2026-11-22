@@ -170,8 +170,8 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
     const context = vm.createContext({
       pool, el,
       tr: (key) => ({
-        "accounts.window.five_hour": "5h",
-        "accounts.window.one_week": "1 week",
+        "accounts.window.five_hour": "Session",
+        "accounts.window.one_week": "Weekly",
         "accounts.window.fable": "Fable",
       })[key],
       usageWindow: (view, title, tone) => [title, tone, view.available],
@@ -192,8 +192,8 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
   const window = (usedPercent, windowSeconds) => ({ usedPercent, windowSeconds, resetAt: null });
   const gemini = { fiveHour: window(20, 18000), oneWeek: window(5, 604800) };
   const own = [
-    ["5h", "five-hour", true],
-    ["1 week", "one-week", true],
+    ["Session", "five-hour", true],
+    ["Weekly", "one-week", true],
   ];
   assert.deepEqual(rows("codex", gemini), own);
   assert.deepEqual(rows("antigravity", gemini), own);
@@ -209,7 +209,7 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
   assert.deepEqual(rows("antigravity", { ...gemini, fableOneWeek: window(35, 604800) }), own);
   assert.deepEqual(rows("antigravity", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), [
     ...own,
-    { "account-member": ["Claude", ["5h", "five-hour", true], ["1 week", "one-week", false]] },
+    { "account-member": ["Claude", ["Session", "five-hour", true], ["Weekly", "one-week", false]] },
   ]);
   // A Google AI Pro account: Gemini's five hours, and the third-party pool.
   assert.deepEqual(
@@ -219,15 +219,15 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
       thirdPartyOneWeek: window(0, 604800),
     }),
     [
-      ["5h", "five-hour", true],
-      ["1 week", "one-week", false],
-      { "account-member": ["Claude", ["5h", "five-hour", true], ["1 week", "one-week", true]] },
+      ["Session", "five-hour", true],
+      ["Weekly", "one-week", false],
+      { "account-member": ["Claude", ["Session", "five-hour", true], ["Weekly", "one-week", true]] },
     ],
   );
   // A card without usage keeps both rows, without data, and no inset.
   assert.deepEqual(rows("antigravity", null), [
-    ["5h", "five-hour", false],
-    ["1 week", "one-week", false],
+    ["Session", "five-hour", false],
+    ["Weekly", "one-week", false],
   ]);
   // A Sub2api too old for weekly usage: every weekly row says so.
   assert.deepEqual(
@@ -237,9 +237,9 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
       { outdatedSub2apiVersion: " 0.1.177 " },
     ),
     [
-      ["5h", "five-hour", true],
-      ["1 week", "one-week", false, "0.1.177"],
-      { "account-member": ["Claude", ["5h", "five-hour", true], ["1 week", "one-week", false, "0.1.177"]] },
+      ["Session", "five-hour", true],
+      ["Weekly", "one-week", false, "0.1.177"],
+      { "account-member": ["Claude", ["Session", "five-hour", true], ["Weekly", "one-week", false, "0.1.177"]] },
     ],
   );
 });
