@@ -99,12 +99,16 @@ for (const target of ["claude", "codex"]) {
 }
 
 test("the card footer no longer shows the token expiry; the card's back does", () => {
-  const start = source.indexOf("function accountCard(");
-  assert(start >= 0, "accountCard found");
-  const card = source.slice(start);
-  assert(!card.slice(0, card.indexOf("\nfunction ")).includes("tokenLabel("));
-  const section = source.slice(source.indexOf("function renewalSection("));
-  assert.match(section.slice(0, section.indexOf("\n}\n")), /P\.tokenExpiry\(account\.tokenExpiresAt/);
+  /// A function's source, from its start to `end`, both found.
+  const slice = (name, end) => {
+    const start = source.indexOf(`function ${name}(`);
+    assert(start >= 0, `${name} found`);
+    const stop = source.indexOf(end, start);
+    assert(stop > start, `${name}'s end found`);
+    return source.slice(start, stop);
+  };
+  assert(!slice("accountCard", "\nfunction ").includes("tokenLabel("));
+  assert.match(slice("renewalSection", "\n}\n"), /P\.tokenExpiry\(account\.tokenExpiresAt/);
 });
 
 
