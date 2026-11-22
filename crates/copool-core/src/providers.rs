@@ -339,14 +339,10 @@ impl Application {
         let fetched = async {
             let connection = self.member_connection(pool, &member)?;
             let now = now_unix_seconds();
-            if sync {
-                Ok(sub2api::Refresh {
-                    accounts: connection.fetch_accounts(pool, None, now).await?,
-                    errors: vec![],
-                })
-            } else {
-                connection.refresh_accounts(pool, ids, now).await
-            }
+            // A sync lists every account. A failure leaves the cards as they
+            // are now, with its error.
+            let asked = if sync { None } else { ids };
+            connection.fetch_accounts(pool, asked, now).await
         }
         .await;
         let fetched = match fetched {
@@ -361,15 +357,8 @@ impl Application {
                 return Err(error);
             }
         };
-        let complete = fetched.errors.is_empty();
-        let count = self
-            .apply_provider_refresh(pool, &member.key, fetched.accounts, ids, complete, sync)
-            .await?;
-        if complete {
-            Ok(count)
-        } else {
-            Err(fetched.errors.join("\n"))
-        }
+        self.apply_provider_refresh(pool, &member.key, fetched, ids, sync)
+            .await
     }
     /// Stores a refresh's accounts in the provider as it is now: a removal
     /// or a proxy set while the request ran stands.
@@ -379,11 +368,10 @@ impl Application {
         key: &str,
         fetched: Vec<Account>,
         ids: Option<&[i64]>,
-        complete: bool,
         sync: bool,
     ) -> Result<usize> {
         Ok(self
-            .edit_member(pool, key, |m| m.adopt(pool, fetched, ids, complete, sync))
+            .edit_member(pool, key, |m| m.adopt(pool, fetched, ids, sync))
             .await?
             .unwrap_or(0))
     }

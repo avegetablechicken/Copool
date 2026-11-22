@@ -154,16 +154,15 @@ impl Member {
             .collect()
     }
     /// Takes a refresh's accounts: a sync's are the provider's accounts from
-    /// then on. A refresh adds those it discovers; when it answered for all
-    /// it asked about (`ids`, every one without), an account it no longer
-    /// lists leaves the Codex pool, and in the Claude pool says so instead
-    /// of its last error.
+    /// then on. A refresh of every card adds those it discovers; an account
+    /// it asked about (`ids`, every one without) and no longer lists leaves
+    /// the Codex pool, and in the Claude pool says so instead of its last
+    /// error.
     pub(crate) fn adopt(
         &mut self,
         pool: Pool,
         fetched: Vec<Account>,
         ids: Option<&[i64]>,
-        complete: bool,
         sync: bool,
     ) -> usize {
         if sync {
@@ -176,9 +175,7 @@ impl Member {
             return 0;
         }
         let missing = |a: &Account| {
-            complete
-                && ids.is_none_or(|ids| ids.contains(&a.id))
-                && !fetched.iter().any(|f| f.id == a.id)
+            ids.is_none_or(|ids| ids.contains(&a.id)) && !fetched.iter().any(|f| f.id == a.id)
         };
         match pool {
             Pool::Codex => {
@@ -201,6 +198,11 @@ impl Member {
         }
         for account in fetched {
             if !self.imported.contains(&account.id) {
+                // Refreshing some cards adds none: one removed while the
+                // request ran stays removed.
+                if ids.is_some() {
+                    continue;
+                }
                 self.imported.push(account.id);
             }
             match self.cached.iter_mut().find(|a| a.id == account.id) {
@@ -247,10 +249,6 @@ pub struct Connection {
     pub configuration: Provider,
     pub definition: Definition,
     pub admin_base: String,
-}
-pub struct Refresh {
-    pub accounts: Vec<Account>,
-    pub errors: Vec<String>,
 }
 /// The admin API root (`…/api/v1`) of a Sub2api base or admin URL.
 pub fn admin_base(raw: &str) -> Result<String, String> {
@@ -347,40 +345,6 @@ impl Connection {
             .into_iter()
             .filter(|a| ids.is_none_or(|ids| ids.contains(&a.id)))
             .collect())
-    }
-    /// Logs in and lists the provider's accounts once, with their usage.
-    pub async fn refresh_accounts(
-        &self,
-        pool: Pool,
-        ids: Option<&[i64]>,
-        now: i64,
-    ) -> Result<Refresh, String> {
-        let mut accounts = std::collections::BTreeMap::new();
-        let mut errors = vec![];
-        match self.fetch_accounts_via(pool, ids, now).await {
-            Ok(fetched) => {
-                for account in fetched {
-                    if ids.is_none_or(|ids| ids.contains(&account.id)) {
-                        accounts.insert(account.id, account);
-                    }
-                }
-            }
-            Err(error) => {
-                for raw in &self.configuration.cached_accounts {
-                    if let Ok(mut account) = serde_json::from_value::<Account>(raw.clone()) {
-                        if ids.is_none_or(|ids| ids.contains(&account.id)) {
-                            account.usage_error = Some(error.clone());
-                            accounts.insert(account.id, account);
-                        }
-                    }
-                }
-                errors.push(error);
-            }
-        }
-        Ok(Refresh {
-            accounts: accounts.into_values().collect(),
-            errors,
-        })
     }
     async fn admin_token(&self, client: &reqwest::Client) -> Result<String, String> {
         let login=payload(client.post(format!("{}/auth/login",self.admin_base)).json(&json!({"email":self.configuration.username,"password":self.configuration.password})).send().await.map_err(|e|usage::format_reqwest_error(&e))?).await?;
@@ -672,7 +636,41 @@ fn lacks_antigravity_weekly(version: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::lacks_antigravity_weekly;
+    use super::{lacks_antigravity_weekly, Account, Member};
+    use crate::Pool;
+
+    fn account(id: i64, used: f64) -> Account {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": format!("account{id}"), "accountType": "oauth",
+            "status": "active", "providerID": "p",
+            "usage": {"fetchedAt": 0, "fiveHour": {"usedPercent": used, "windowSeconds": 18000}},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn refreshing_one_card_does_not_restore_a_card_removed_meanwhile() {
+        for pool in [Pool::Codex, Pool::Claude, Pool::Antigravity] {
+            // Card 42 was removed while its refresh ran; 43 remains.
+            let mut member = Member {
+                key: "p".into(),
+                name: "p".into(),
+                proxy_url: String::new(),
+                imported: vec![43],
+                cached: vec![account(43, 10.)],
+            };
+            member.adopt(pool, vec![account(42, 20.)], Some(&[42]), false);
+            assert_eq!(member.imported, [43], "{pool:?}");
+            assert_eq!(
+                member.cached.iter().map(|a| a.id).collect::<Vec<_>>(),
+                [43],
+                "{pool:?}"
+            );
+            // A refresh of every card still adds the accounts it discovers.
+            member.adopt(pool, vec![account(43, 30.), account(44, 0.)], None, false);
+            assert_eq!(member.imported, [43, 44], "{pool:?}");
+        }
+    }
 
     #[test]
     fn antigravity_weekly_usage_needs_sub2api_0_2_20() {

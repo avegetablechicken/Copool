@@ -392,7 +392,7 @@ async fn testCacheRefreshCannotOverwriteNewAccountProxy() {
     app.save_account_proxy(Pool::Codex, "sub2api-p-42", "socks5://127.0.0.1:1080")
         .await
         .unwrap();
-    app.apply_provider_refresh(Pool::Codex, "p", vec![stale], None, true, false)
+    app.apply_provider_refresh(Pool::Codex, "p", vec![stale], None, false)
         .await
         .unwrap();
     assert_eq!(
@@ -786,7 +786,7 @@ async fn deleted_sub2api_provider_stays_removed_until_explicit_sync() {
     assert!(app.accounts(Pool::Codex).await.unwrap().is_empty());
     // A response from a refresh started before removal cannot resurrect it either.
     let stale = serde_json::from_value(cached(42, "my", 20.)).unwrap();
-    app.apply_provider_refresh(Pool::Codex, "my", vec![stale], None, true, false)
+    app.apply_provider_refresh(Pool::Codex, "my", vec![stale], None, false)
         .await
         .unwrap();
     assert!(app.accounts(Pool::Codex).await.unwrap().is_empty());
