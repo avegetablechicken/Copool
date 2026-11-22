@@ -40,7 +40,9 @@ async fn redirected_usage_connection_failure_is_reported_and_keeps_previous_usag
         .await
         .unwrap_err();
     assert!(error.contains(&server.base), "{error}");
-    assert!(error.to_lowercase().contains("refused"), "{error}");
+    // The connection's failure, in the HTTP client's words: the system's
+    // own ("Connection refused") are in the system's language on Windows.
+    assert!(error.contains("tcp connect error"), "{error}");
     let cards = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(cards[0].usage_error.as_deref(), Some(error.as_str()));
     assert_eq!(cards[0].usage.as_ref().unwrap().fetched_at, 1);
