@@ -36,8 +36,13 @@ def prepare(target):
         key, separator, value = line.partition('=')
         if key and separator:
             os.environ[key] = value
-    os.environ['PATH'] = str(Path.home() / '.cargo/bin') + os.pathsep + os.environ['PATH']
+    cargo_home = Path(os.environ.get('CARGO_HOME') or Path.home() / '.cargo')
+    os.environ['PATH'] = str(cargo_home / 'bin') + os.pathsep + os.environ['PATH']
     os.environ['RUSTUP_TOOLCHAIN'] = f'stable-{target}'
-    if subprocess.run(['rustc', '--version']).returncode:
+    try:
+        missing = subprocess.run(['rustc', '--version']).returncode != 0
+    except FileNotFoundError:
+        missing = True
+    if missing:
         raise SystemExit(f'Install Rust with: rustup toolchain install stable-{target} --profile minimal --force-non-host')
     return target
