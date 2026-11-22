@@ -2134,8 +2134,8 @@ impl Application {
     }
     /// Renews pool credentials and syncs an unchanged live login without
     /// showing authorization UI; external rotations take precedence over
-    /// the response. A new import asks without the shared account proxy.
-    /// With `renew_now`, only the tokens are renewed, even when unexpired or
+    /// the response. Requests go through the account's proxy, else the
+    /// shared account proxy. With `renew_now`, only the tokens are renewed, even when unexpired or
     /// renewal is off; usage is not asked for, nor shown as refreshing, and
     /// whether the renewal was kept is reported.
     pub(crate) async fn claude_refresh_usage_scoped(
