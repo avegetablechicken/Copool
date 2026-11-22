@@ -34,8 +34,9 @@ def tauri_cli():
     if subprocess.run(['cargo', 'tauri', '--version'], cwd=ROOT, capture_output=True).returncode == 0:
         return ['cargo', 'tauri']
     if shutil.which('npx'):
-        if os.name == 'nt':
-            npx_cli = Path(shutil.which('node')).parent / 'node_modules/npm/bin/npx-cli.js'
+        node = shutil.which('node')
+        if os.name == 'nt' and node:
+            npx_cli = Path(node).parent / 'node_modules/npm/bin/npx-cli.js'
             if npx_cli.exists():
                 return ['node', str(npx_cli), '--yes', '@tauri-apps/cli@^2']
         return [shutil.which('npx'), '--yes', '@tauri-apps/cli@^2']
@@ -114,7 +115,12 @@ def main():
 
     if os.name == 'nt':
         config = {'build': {'beforeBundleCommand': None}, 'bundle': {'active': True}}
-        command = [*tauri_cli(), 'build', '--bundles', 'nsis', '--ci', '--config', json.dumps(config)]
+        # As a file: npx.cmd passes its arguments through cmd.exe, which
+        # mangles JSON's quotes.
+        config_path = ROOT / 'target' / 'tauri-windows-config.json'
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config), encoding='utf-8')
+        command = [*tauri_cli(), 'build', '--bundles', 'nsis', '--ci', '--config', str(config_path)]
         if args.debug:
             command.append('--debug')
         command += ['--target', args.target]
