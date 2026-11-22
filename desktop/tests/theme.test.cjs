@@ -47,8 +47,14 @@ for (const [format, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
     assert.match(css, /html\.frosted:where\(\[data-theme="dark"\]\)\s*\{/);
     const mediaBlocks = [...css.matchAll(/@media \(prefers-color-scheme: dark\)\s*\{([\s\S]*?)\n\}/g)];
     assert.equal(mediaBlocks.length, 6);
+    // Every selector in them, not just one: the light theme overrides each.
     for (const [, body] of mediaBlocks) {
-      assert.match(body, /:not\(\[data-theme="light"\]\)/);
+      const selectors = [...body.matchAll(/([^{}]+)\{/g)].flatMap(([, list]) =>
+        list.split(",").map((selector) => selector.trim()),
+      );
+      assert(selectors.length > 0);
+      for (const selector of selectors)
+        assert.match(selector, /:not\(\[data-theme="light"\]\)/, selector);
     }
   });
 
