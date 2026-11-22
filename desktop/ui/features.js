@@ -1018,7 +1018,10 @@ function renderPendingWorkspaces() {
   root.append(block);
 }
 async function saveTunnelConfiguration() {
+  // A save still waiting for another pool is made; this pool's is this one.
+  if (pendingTunnelSave?.controller !== proxyController) await savePendingTunnel();
   clearTimeout(tunnelSaveTimer);
+  pendingTunnelSave = null;
   await action(
     () => proxyController.updateTunnel(tunnelConfiguration),
     null,
@@ -1026,10 +1029,22 @@ async function saveTunnelConfiguration() {
   );
 }
 let tunnelSaveTimer;
-/// Swift's scheduleProxyConfigurationSync: a 350 ms debounce.
-function scheduleTunnelSave() {
+/// The save waiting, as the pool it was scheduled for.
+let pendingTunnelSave = null;
+function savePendingTunnel() {
   clearTimeout(tunnelSaveTimer);
-  tunnelSaveTimer = setTimeout(saveTunnelConfiguration, 350);
+  const pending = pendingTunnelSave;
+  pendingTunnelSave = null;
+  if (!pending) return Promise.resolve();
+  return action(() => pending.controller.updateTunnel(pending.config), null, false);
+}
+/// Swift's scheduleProxyConfigurationSync: a 350 ms debounce, saving the
+/// pool shown now even if another is shown by then.
+function scheduleTunnelSave() {
+  if (pendingTunnelSave && pendingTunnelSave.controller !== proxyController) savePendingTunnel();
+  clearTimeout(tunnelSaveTimer);
+  pendingTunnelSave = { controller: proxyController, config: tunnelConfiguration };
+  tunnelSaveTimer = setTimeout(savePendingTunnel, 350);
 }
 
 async function refreshFeatureState() {
