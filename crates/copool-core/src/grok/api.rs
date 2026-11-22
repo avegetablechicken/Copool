@@ -154,10 +154,13 @@ pub(crate) fn status_error(what: &str, status: u16, body: &Value) -> String {
         .to_owned()
 }
 
+/// A number, or one given as text; never NaN or infinite, which `"NaN"`
+/// and `"inf"` parse to and the store cannot keep.
 fn number(value: &Value) -> Option<f64> {
     value
         .as_f64()
         .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        .filter(|number: &f64| number.is_finite())
 }
 fn time(value: &Value) -> Option<i64> {
     value

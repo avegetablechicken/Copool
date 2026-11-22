@@ -570,6 +570,17 @@ fn usage_and_plan_are_read_as_grok_build_reports_them() {
     let week = bare.one_week.unwrap();
     assert_eq!((week.used_percent, week.reset_at), (100.0, None));
     assert!(api::usage(&json!({"config": {}}), now).is_none());
+    // Text that parses to no finite number is no usage.
+    for text in ["NaN", "inf", "-infinity"] {
+        let body = json!({"config": {"creditUsagePercent": text}});
+        assert!(api::usage(&body, now).is_none(), "{text}");
+        let sub2api = json!({"seven_day": {"utilization": text}});
+        let usage = api::sub2api_usage(&sub2api, now).unwrap();
+        assert!(
+            usage.one_week.is_none() && usage.one_month.is_none(),
+            "{text}"
+        );
+    }
     assert_eq!(
         api::plan(&json!({"settings": {"subscription_tier_display": " Free "}})).as_deref(),
         Some("Free")
