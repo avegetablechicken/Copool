@@ -41,9 +41,9 @@
 "settings.sub2api.default_provider" = "目前預設 Provider";
 "settings.sub2api.provider_id" = "名稱";
 "settings.sub2api.provider_id_placeholder" = "需與 Codex 設定中的 Provider 名稱一致";
-"settings.sub2api.admin_base_url" = "管理員 API 位址";
-"settings.sub2api.admin_base_url_placeholder" = "https://主機:6060/api/v1";
-"settings.sub2api.username" = "使用者名稱或電子郵件";
+"settings.sub2api.admin_base_url" = "站台";
+"settings.sub2api.admin_base_url_placeholder" = "https://sub2api.example";
+"settings.sub2api.username" = "管理員";
 "settings.sub2api.username_placeholder" = "Sub2api 管理員帳號";
 "settings.sub2api.password" = "密碼";
 "settings.sub2api.password_placeholder" = "管理員密碼";
@@ -475,7 +475,7 @@
 "accounts.proxy.unsupported" = "此網路服務不支援帳號代理。";
 
 
-"settings.sub2api.admin_base_url_help" = "選填，用於 Sub2api 登入、帳號和額度查詢；留空則從 Codex Provider 位址推導。模型請求仍使用 Codex 中的位址。請填寫基礎位址，例如 https://主機:6060/api/v1。";
+"settings.sub2api.admin_base_url_help" = "選填，用於 Sub2api 登入、帳號和額度查詢；留空則從 Codex Provider 位址推導。模型請求仍使用 Codex 中的位址。請填寫基礎位址，例如 https://sub2api.example。";
 
 "settings.sub2api.password_keep" = "留空保留原密碼";
 
@@ -491,14 +491,14 @@
 "settings.sub2api.claude_settings" = "設定";
 "settings.sub2api.claude_settings_placeholder" = "名稱或路徑，如 myServer 或 ~/.claude/profiles/myServer.json";
 "settings.sub2api.choose_settings_file" = "選擇設定檔";
-"settings.sub2api.claude_base_url" = "Sub2api 位址";
-"settings.sub2api.claude_base_url_placeholder" = "https://主機:6060";
+"settings.sub2api.claude_base_url" = "API 位址";
+"settings.sub2api.claude_base_url_placeholder" = "https://api.example";
 "settings.sub2api.claude_api_key" = "API Key";
 "settings.sub2api.claude_api_key_placeholder" = "Sub2api 的 API Key（sk-…）";
 "settings.sub2api.claude_api_key_keep" = "留空保留已儲存的 Key";
 "settings.sub2api.claude_mode" = "設定方式";
 "settings.sub2api.claude_mode_settings" = "設定檔";
-"settings.sub2api.claude_mode_address" = "Sub2api 位址";
+"settings.sub2api.claude_mode_address" = "API 位址";
 "settings.sub2api.claude_name" = "名稱";
 "settings.sub2api.claude_name_placeholder" = "此 Sub2api 提供者的名稱";
 "settings.sub2api.claude_api_key_variable" = "API Key 變數";
@@ -573,8 +573,8 @@
 "error.antigravity.say_hi_window_not_started" = "Antigravity 已接受招呼，但 5 小時計時沒有開始";
 "settings.sub2api.antigravity_name" = "名稱";
 "settings.sub2api.antigravity_name_placeholder" = "此 Sub2api 提供者的名稱";
-"settings.sub2api.antigravity_base_url" = "Sub2api 位址";
-"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.antigravity_base_url" = "API 位址";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
 "settings.sub2api.antigravity_api_key_variable" = "API Key 變數";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy 已改用 Sub2api %@，在新終端機中啟動 agy 後生效";
@@ -590,8 +590,8 @@
 "error.grok.sign_in_expired" = "Grok 登入已過期。請執行 grok login 重新登入，然後匯入該登入。";
 "settings.sub2api.grok_name" = "名稱";
 "settings.sub2api.grok_name_placeholder" = "此 Sub2api 提供者的名稱";
-"settings.sub2api.grok_base_url" = "Sub2api 位址";
-"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_base_url" = "API 位址";
+"settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "API Key 變數";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build 已改用 Sub2api %@，在新終端機中啟動 grok 後生效";

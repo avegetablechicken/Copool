@@ -41,9 +41,9 @@
 "settings.sub2api.default_provider" = "Huidige standaardprovider";
 "settings.sub2api.provider_id" = "Naam";
 "settings.sub2api.provider_id_placeholder" = "Moet overeenkomen met de Provider-naam in de Codex-config";
-"settings.sub2api.admin_base_url" = "Beheer-API-URL";
-"settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
-"settings.sub2api.username" = "Gebruikersnaam of e-mail";
+"settings.sub2api.admin_base_url" = "Website";
+"settings.sub2api.admin_base_url_placeholder" = "https://sub2api.example";
+"settings.sub2api.username" = "Beheerder";
 "settings.sub2api.username_placeholder" = "Sub2api-beheerdersaccount";
 "settings.sub2api.password" = "Wachtwoord";
 "settings.sub2api.password_placeholder" = "Beheerderswachtwoord";
@@ -475,7 +475,7 @@
 "accounts.proxy.unsupported" = "Deze netwerkdienst ondersteunt geen accountproxy.";
 
 
-"settings.sub2api.admin_base_url_help" = "Optioneel voor Sub2api-aanmelding, accounts en quota. Leeg laten om af te leiden uit Codex. Modelverzoeken blijven de Codex-URL gebruiken. Voorbeeld: https://host:6060/api/v1.";
+"settings.sub2api.admin_base_url_help" = "Optioneel voor Sub2api-aanmelding, accounts en quota. Leeg laten om af te leiden uit Codex. Modelverzoeken blijven de Codex-URL gebruiken. Voorbeeld: https://sub2api.example.";
 
 "settings.sub2api.password_keep" = "Laat leeg om het opgeslagen wachtwoord te behouden";
 
@@ -491,14 +491,14 @@
 "settings.sub2api.claude_settings" = "Instellingen";
 "settings.sub2api.claude_settings_placeholder" = "Naam of pad, bijv. myServer of ~/.claude/profiles/myServer.json";
 "settings.sub2api.choose_settings_file" = "Instellingenbestand kiezen";
-"settings.sub2api.claude_base_url" = "Sub2api-URL";
-"settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.claude_base_url" = "API-URL";
+"settings.sub2api.claude_base_url_placeholder" = "https://api.example";
 "settings.sub2api.claude_api_key" = "API-sleutel";
 "settings.sub2api.claude_api_key_placeholder" = "Een Sub2api-API-sleutel (sk-…)";
 "settings.sub2api.claude_api_key_keep" = "Leeg laten om de opgeslagen sleutel te behouden";
 "settings.sub2api.claude_mode" = "Configureren met";
 "settings.sub2api.claude_mode_settings" = "Instellingenbestand";
-"settings.sub2api.claude_mode_address" = "Sub2api-URL";
+"settings.sub2api.claude_mode_address" = "API-URL";
 "settings.sub2api.claude_name" = "Naam";
 "settings.sub2api.claude_name_placeholder" = "Een naam voor deze Sub2api-provider";
 "settings.sub2api.claude_api_key_variable" = "API-sleutelvariabele";
@@ -573,8 +573,8 @@
 "error.antigravity.say_hi_window_not_started" = "Antigravity heeft het hallo aangenomen, maar het 5-uursvenster is niet gestart";
 "settings.sub2api.antigravity_name" = "Naam";
 "settings.sub2api.antigravity_name_placeholder" = "Een naam voor deze Sub2api-provider";
-"settings.sub2api.antigravity_base_url" = "Sub2api-URL";
-"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.antigravity_base_url" = "API-URL";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
 "settings.sub2api.antigravity_api_key_variable" = "API-sleutelvariabele";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy gebruikt nu Sub2api %@; start agy in een nieuwe terminal om het te gebruiken";
@@ -590,8 +590,8 @@
 "error.grok.sign_in_expired" = "De Grok-aanmelding is verlopen. Meld je opnieuw aan met grok login en importeer de aanmelding.";
 "settings.sub2api.grok_name" = "Naam";
 "settings.sub2api.grok_name_placeholder" = "Een naam voor deze Sub2api-provider";
-"settings.sub2api.grok_base_url" = "Sub2api-URL";
-"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_base_url" = "API-URL";
+"settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "API-sleutelvariabele";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build gebruikt nu Sub2api %@; start grok in een nieuwe terminal om het te gebruiken";

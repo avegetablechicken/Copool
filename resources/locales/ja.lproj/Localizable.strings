@@ -41,9 +41,9 @@
 "settings.sub2api.default_provider" = "現在のデフォルトプロバイダー";
 "settings.sub2api.provider_id" = "名前";
 "settings.sub2api.provider_id_placeholder" = "Codex 設定の Provider 名と一致させてください";
-"settings.sub2api.admin_base_url" = "管理 API URL";
-"settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
-"settings.sub2api.username" = "ユーザー名またはメール";
+"settings.sub2api.admin_base_url" = "サイト";
+"settings.sub2api.admin_base_url_placeholder" = "https://sub2api.example";
+"settings.sub2api.username" = "管理者";
 "settings.sub2api.username_placeholder" = "Sub2api 管理者アカウント";
 "settings.sub2api.password" = "パスワード";
 "settings.sub2api.password_placeholder" = "管理者パスワード";
@@ -493,7 +493,7 @@
 "accounts.proxy.unsupported" = "このネットワークサービスはアカウント別のプロキシに対応していません。";
 
 
-"settings.sub2api.admin_base_url_help" = "任意。Sub2api のログイン、アカウント、使用量の照会に使用します。空欄の場合は Codex の URL から導出します。モデルへのリクエストは引き続き Codex の URL を使用します。例：https://host:6060/api/v1。";
+"settings.sub2api.admin_base_url_help" = "任意。Sub2api のログイン、アカウント、使用量の照会に使用します。空欄の場合は Codex の URL から導出します。モデルへのリクエストは引き続き Codex の URL を使用します。例：https://sub2api.example。";
 
 "settings.sub2api.password_keep" = "空欄の場合は保存済みのパスワードを使用";
 
@@ -509,14 +509,14 @@
 "settings.sub2api.claude_settings" = "設定";
 "settings.sub2api.claude_settings_placeholder" = "名前またはパス（例: myServer、~/.claude/profiles/myServer.json）";
 "settings.sub2api.choose_settings_file" = "設定ファイルを選択";
-"settings.sub2api.claude_base_url" = "Sub2api の URL";
-"settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.claude_base_url" = "API URL";
+"settings.sub2api.claude_base_url_placeholder" = "https://api.example";
 "settings.sub2api.claude_api_key" = "API キー";
 "settings.sub2api.claude_api_key_placeholder" = "Sub2api の API キー（sk-…）";
 "settings.sub2api.claude_api_key_keep" = "空欄のままにすると保存済みのキーを保持します";
 "settings.sub2api.claude_mode" = "設定方法";
 "settings.sub2api.claude_mode_settings" = "設定ファイル";
-"settings.sub2api.claude_mode_address" = "Sub2api の URL";
+"settings.sub2api.claude_mode_address" = "API URL";
 "settings.sub2api.claude_name" = "名前";
 "settings.sub2api.claude_name_placeholder" = "この Sub2api プロバイダの名前";
 "settings.sub2api.claude_api_key_variable" = "API キーの変数";
@@ -593,8 +593,8 @@
 "error.antigravity.say_hi_window_not_started" = "Antigravity はあいさつを受け付けましたが、5 時間枠は開始されていません";
 "settings.sub2api.antigravity_name" = "名前";
 "settings.sub2api.antigravity_name_placeholder" = "この Sub2api プロバイダの名前";
-"settings.sub2api.antigravity_base_url" = "Sub2api の URL";
-"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.antigravity_base_url" = "API URL";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
 "settings.sub2api.antigravity_api_key_variable" = "API キーの変数";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy は Sub2api %@ を使うようになりました。新しいターミナルで agy を起動すると反映されます";
@@ -610,8 +610,8 @@
 "error.grok.sign_in_expired" = "Grok のサインインが期限切れです。grok login で再度サインインしてから、ログインを読み込んでください。";
 "settings.sub2api.grok_name" = "名前";
 "settings.sub2api.grok_name_placeholder" = "この Sub2api プロバイダの名前";
-"settings.sub2api.grok_base_url" = "Sub2api の URL";
-"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_base_url" = "API URL";
+"settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "API キーの変数";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build は Sub2api %@ を使うようになりました。新しいターミナルで grok を起動すると反映されます";

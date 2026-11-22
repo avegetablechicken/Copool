@@ -41,9 +41,9 @@
 "settings.sub2api.default_provider" = "Current default provider";
 "settings.sub2api.provider_id" = "Name";
 "settings.sub2api.provider_id_placeholder" = "Match the Provider name in Codex config";
-"settings.sub2api.admin_base_url" = "Admin API URL";
-"settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
-"settings.sub2api.username" = "Username or email";
+"settings.sub2api.admin_base_url" = "Site";
+"settings.sub2api.admin_base_url_placeholder" = "https://sub2api.example";
+"settings.sub2api.username" = "Admin";
 "settings.sub2api.username_placeholder" = "Sub2api administrator account";
 "settings.sub2api.password" = "Password";
 "settings.sub2api.password_placeholder" = "Administrator password";
@@ -503,7 +503,7 @@
 "accounts.proxy.unsupported" = "This network service does not support an account proxy.";
 
 
-"settings.sub2api.admin_base_url_help" = "Optional. Used for Sub2api login, account and quota queries. Leave blank to derive from the Codex Provider URL. Model requests still use the Codex URL. Enter a base URL, such as https://host:6060/api/v1.";
+"settings.sub2api.admin_base_url_help" = "Optional. Used for Sub2api login, account and quota queries. Leave blank to derive from the Codex Provider URL. Model requests still use the Codex URL. Enter a base URL, such as https://sub2api.example.";
 
 "settings.sub2api.password_keep" = "Leave blank to keep the saved password";
 
@@ -519,14 +519,14 @@
 "settings.sub2api.claude_settings" = "Settings";
 "settings.sub2api.claude_settings_placeholder" = "Name or path, e.g. myServer or ~/.claude/profiles/myServer.json";
 "settings.sub2api.choose_settings_file" = "Choose settings file";
-"settings.sub2api.claude_base_url" = "Sub2api URL";
-"settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.claude_base_url" = "API URL";
+"settings.sub2api.claude_base_url_placeholder" = "https://api.example";
 "settings.sub2api.claude_api_key" = "API key";
 "settings.sub2api.claude_api_key_placeholder" = "A Sub2api API key (sk-…)";
 "settings.sub2api.claude_api_key_keep" = "Leave blank to keep the saved key";
 "settings.sub2api.claude_mode" = "Configure with";
 "settings.sub2api.claude_mode_settings" = "Settings file";
-"settings.sub2api.claude_mode_address" = "Sub2api URL";
+"settings.sub2api.claude_mode_address" = "API URL";
 "settings.sub2api.claude_name" = "Name";
 "settings.sub2api.claude_name_placeholder" = "A name for this Sub2api provider";
 "settings.sub2api.claude_api_key_variable" = "API Key Variable";
@@ -603,8 +603,8 @@
 "error.antigravity.say_hi_window_not_started" = "Antigravity accepted the hi, but the 5-hour window has not started";
 "settings.sub2api.antigravity_name" = "Name";
 "settings.sub2api.antigravity_name_placeholder" = "A name for this Sub2api provider";
-"settings.sub2api.antigravity_base_url" = "Sub2api URL";
-"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.antigravity_base_url" = "API URL";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
 "settings.sub2api.antigravity_api_key_variable" = "API Key Variable";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy now uses Sub2api %@; start agy in a new terminal to use it";
@@ -620,8 +620,8 @@
 "error.grok.sign_in_expired" = "Grok sign-in expired. Sign in again with grok login, then import the login.";
 "settings.sub2api.grok_name" = "Name";
 "settings.sub2api.grok_name_placeholder" = "A name for this Sub2api provider";
-"settings.sub2api.grok_base_url" = "Sub2api URL";
-"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_base_url" = "API URL";
+"settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "API Key Variable";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build now uses Sub2api %@; start grok in a new terminal to use it";

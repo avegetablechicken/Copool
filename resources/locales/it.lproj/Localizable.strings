@@ -41,9 +41,9 @@
 "settings.sub2api.default_provider" = "Provider predefinito attuale";
 "settings.sub2api.provider_id" = "Nome";
 "settings.sub2api.provider_id_placeholder" = "Deve corrispondere al nome Provider nella config Codex";
-"settings.sub2api.admin_base_url" = "URL API amministratore";
-"settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
-"settings.sub2api.username" = "Nome utente o email";
+"settings.sub2api.admin_base_url" = "Sito";
+"settings.sub2api.admin_base_url_placeholder" = "https://sub2api.example";
+"settings.sub2api.username" = "Amministratore";
 "settings.sub2api.username_placeholder" = "Account amministratore Sub2api";
 "settings.sub2api.password" = "Password";
 "settings.sub2api.password_placeholder" = "Password amministratore";
@@ -475,7 +475,7 @@
 "accounts.proxy.unsupported" = "Questo servizio di rete non supporta un proxy per account.";
 
 
-"settings.sub2api.admin_base_url_help" = "Facoltativo per accesso Sub2api, account e quote. Se vuoto, viene ricavato da Codex. Le richieste al modello usano ancora l’URL Codex. Esempio: https://host:6060/api/v1.";
+"settings.sub2api.admin_base_url_help" = "Facoltativo per accesso Sub2api, account e quote. Se vuoto, viene ricavato da Codex. Le richieste al modello usano ancora l’URL Codex. Esempio: https://sub2api.example.";
 
 "settings.sub2api.password_keep" = "Lascia vuoto per mantenere la password salvata";
 
@@ -491,14 +491,14 @@
 "settings.sub2api.claude_settings" = "Impostazioni";
 "settings.sub2api.claude_settings_placeholder" = "Nome o percorso, ad es. myServer o ~/.claude/profiles/myServer.json";
 "settings.sub2api.choose_settings_file" = "Scegli il file di impostazioni";
-"settings.sub2api.claude_base_url" = "URL di Sub2api";
-"settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.claude_base_url" = "URL API";
+"settings.sub2api.claude_base_url_placeholder" = "https://api.example";
 "settings.sub2api.claude_api_key" = "Chiave API";
 "settings.sub2api.claude_api_key_placeholder" = "Una chiave API di Sub2api (sk-…)";
 "settings.sub2api.claude_api_key_keep" = "Lascia vuoto per mantenere la chiave salvata";
 "settings.sub2api.claude_mode" = "Configura con";
 "settings.sub2api.claude_mode_settings" = "File di impostazioni";
-"settings.sub2api.claude_mode_address" = "URL di Sub2api";
+"settings.sub2api.claude_mode_address" = "URL API";
 "settings.sub2api.claude_name" = "Nome";
 "settings.sub2api.claude_name_placeholder" = "Un nome per questo provider Sub2api";
 "settings.sub2api.claude_api_key_variable" = "Variabile della chiave API";
@@ -573,8 +573,8 @@
 "error.antigravity.say_hi_window_not_started" = "Antigravity ha accettato il saluto, ma la finestra di 5 ore non è iniziata";
 "settings.sub2api.antigravity_name" = "Nome";
 "settings.sub2api.antigravity_name_placeholder" = "Un nome per questo provider Sub2api";
-"settings.sub2api.antigravity_base_url" = "URL Sub2api";
-"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.antigravity_base_url" = "URL API";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
 "settings.sub2api.antigravity_api_key_variable" = "Variabile della chiave API";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy ora usa Sub2api %@; avvia agy in un nuovo terminale per usarlo";
@@ -590,8 +590,8 @@
 "error.grok.sign_in_expired" = "L’accesso a Grok è scaduto. Accedi di nuovo con grok login, poi importa l’accesso.";
 "settings.sub2api.grok_name" = "Nome";
 "settings.sub2api.grok_name_placeholder" = "Un nome per questo provider Sub2api";
-"settings.sub2api.grok_base_url" = "URL Sub2api";
-"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_base_url" = "URL API";
+"settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "Variabile della chiave API";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build ora usa Sub2api %@; avvia grok in un nuovo terminale per usarlo";

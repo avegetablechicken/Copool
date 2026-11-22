@@ -41,9 +41,9 @@
 "settings.sub2api.default_provider" = "현재 기본 제공자";
 "settings.sub2api.provider_id" = "이름";
 "settings.sub2api.provider_id_placeholder" = "Codex 설정의 Provider 이름과 일치해야 합니다";
-"settings.sub2api.admin_base_url" = "관리자 API URL";
-"settings.sub2api.admin_base_url_placeholder" = "https://host:6060/api/v1";
-"settings.sub2api.username" = "사용자 이름 또는 이메일";
+"settings.sub2api.admin_base_url" = "사이트";
+"settings.sub2api.admin_base_url_placeholder" = "https://sub2api.example";
+"settings.sub2api.username" = "관리자";
 "settings.sub2api.username_placeholder" = "Sub2api 관리자 계정";
 "settings.sub2api.password" = "비밀번호";
 "settings.sub2api.password_placeholder" = "관리자 비밀번호";
@@ -493,7 +493,7 @@
 "accounts.proxy.unsupported" = "이 네트워크 서비스는 계정 프록시를 지원하지 않습니다.";
 
 
-"settings.sub2api.admin_base_url_help" = "선택 사항. Sub2api 로그인, 계정 및 할당량 조회에 사용합니다. 비워 두면 Codex URL에서 추론합니다. 모델 요청은 계속 Codex URL을 사용합니다. 예: https://host:6060/api/v1.";
+"settings.sub2api.admin_base_url_help" = "선택 사항. Sub2api 로그인, 계정 및 할당량 조회에 사용합니다. 비워 두면 Codex URL에서 추론합니다. 모델 요청은 계속 Codex URL을 사용합니다. 예: https://sub2api.example.";
 
 "settings.sub2api.password_keep" = "비워 두면 저장된 비밀번호 유지";
 
@@ -509,14 +509,14 @@
 "settings.sub2api.claude_settings" = "설정";
 "settings.sub2api.claude_settings_placeholder" = "이름 또는 경로(예: myServer, ~/.claude/profiles/myServer.json)";
 "settings.sub2api.choose_settings_file" = "설정 파일 선택";
-"settings.sub2api.claude_base_url" = "Sub2api 주소";
-"settings.sub2api.claude_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.claude_base_url" = "API URL";
+"settings.sub2api.claude_base_url_placeholder" = "https://api.example";
 "settings.sub2api.claude_api_key" = "API 키";
 "settings.sub2api.claude_api_key_placeholder" = "Sub2api API 키(sk-…)";
 "settings.sub2api.claude_api_key_keep" = "비워 두면 저장된 키를 유지합니다";
 "settings.sub2api.claude_mode" = "설정 방법";
 "settings.sub2api.claude_mode_settings" = "설정 파일";
-"settings.sub2api.claude_mode_address" = "Sub2api 주소";
+"settings.sub2api.claude_mode_address" = "API URL";
 "settings.sub2api.claude_name" = "이름";
 "settings.sub2api.claude_name_placeholder" = "이 Sub2api 공급자의 이름";
 "settings.sub2api.claude_api_key_variable" = "API 키 변수";
@@ -593,8 +593,8 @@
 "error.antigravity.say_hi_window_not_started" = "Antigravity가 인사를 받았지만 5시간 창이 시작되지 않았습니다";
 "settings.sub2api.antigravity_name" = "이름";
 "settings.sub2api.antigravity_name_placeholder" = "이 Sub2api 공급자의 이름";
-"settings.sub2api.antigravity_base_url" = "Sub2api URL";
-"settings.sub2api.antigravity_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.antigravity_base_url" = "API URL";
+"settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
 "settings.sub2api.antigravity_api_key_variable" = "API 키 변수";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy가 이제 Sub2api %@을(를) 사용합니다. 새 터미널에서 agy를 시작하면 적용됩니다";
@@ -610,8 +610,8 @@
 "error.grok.sign_in_expired" = "Grok 로그인이 만료되었습니다. grok login으로 다시 로그인한 후 로그인을 가져오세요.";
 "settings.sub2api.grok_name" = "이름";
 "settings.sub2api.grok_name_placeholder" = "이 Sub2api 공급자의 이름";
-"settings.sub2api.grok_base_url" = "Sub2api URL";
-"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_base_url" = "API URL";
+"settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "API 키 변수";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build가 이제 Sub2api %@을(를) 사용합니다. 새 터미널에서 grok를 시작하면 적용됩니다";
