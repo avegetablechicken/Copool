@@ -530,6 +530,8 @@
 "accounts.refresh.multiple_format" = "%1$@ (×%2$@)";
 "accounts.refresh.adaptive" = "Accélération adaptative";
 "accounts.refresh.adaptive_help_format" = "Tant que l’utilisation change, le compte utilisé s’actualise avec un intervalle de %@, jusqu’à deux tours sans changement.";
+"accounts.refresh.backoff" = "Ralentir en cas de limitation";
+"accounts.refresh.backoff_help" = "Après un HTTP 429, les requêtes du compte s’interrompent 5 minutes, deux fois plus à chaque 429 consécutif jusqu’à une heure, ou autant que le serveur le demande, jusqu’à 6 heures.";
 "accounts.renewal.expires_format" = "Expire dans %@";
 "accounts.renewal.expired" = "Expiré";
 

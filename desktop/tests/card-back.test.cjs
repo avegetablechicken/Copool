@@ -253,3 +253,50 @@ test("refresh intervals offer the one set and speed up to a fifth, no sooner tha
   assert.equal(P.formatInterval(3600, "en"), "1 hour");
   assert.equal(P.formatInterval(300, "zh-Hans"), "5分钟");
 });
+
+const refreshSection = between("/// The pool's background refresh, which all", "/// Removal, confirmed by a second click.");
+/// A pool's refresh section on its card in use: each row's label, field and
+/// help, and the refresh each control saves.
+function refreshRows(pool, refresh) {
+  const saved = [];
+  const scope = {
+    pool,
+    locale: "en",
+    preferences: { refresh: { [pool]: refresh } },
+    P: {
+      refreshChoices: () => ({ seconds: [refresh.seconds], fullEvery: [1] }),
+      formatInterval: (seconds) => `${seconds}s`,
+      fastRefreshSeconds: (seconds) => seconds / 5,
+    },
+    tr: (key, ...args) => [key, ...args].join(" "),
+    el: () => ({ dataset: {}, append() {} }),
+    backSection: () => ({ group: { rows: [], append(...rows) { this.rows.push(...rows); } } }),
+    backRow: (label, control, help) => ({ label, control, help }),
+    backSwitch: (field, on, label, onchange) => ({ dataset: { backField: field }, on, onchange }),
+    queuePreferenceSave: async (patch) => saved.push(patch),
+    notice: () => {},
+    renderEditing: () => {},
+  };
+  vm.createContext(scope);
+  vm.runInContext(refreshSection, scope);
+  const rows = scope.refreshSection(true).group.rows;
+  return { rows, saved, field: (name) => rows.find((r) => r.control.dataset.backField === name) };
+}
+
+test("only Claude's refresh offers the slow-down after HTTP 429, on by default", async () => {
+  const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
+  for (const pool of ["codex", "antigravity"])
+    assert.equal(refreshRows(pool, refresh).field("refresh-backoff"), undefined, pool);
+  const { field, saved } = refreshRows("claude", refresh);
+  const backoff = field("refresh-backoff");
+  assert.equal(backoff.label, "accounts.refresh.backoff");
+  assert.equal(backoff.control.on, true);
+  assert.equal(backoff.help, "accounts.refresh.backoff_help");
+  // Turned off, it saves with the pool's other settings, and its help hides.
+  backoff.control.onchange(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(saved)), [
+    { refresh: { claude: { ...refresh, backoff: false } } },
+  ]);
+  assert.equal(refreshRows("claude", { ...refresh, backoff: false }).field("refresh-backoff").help, null);
+});

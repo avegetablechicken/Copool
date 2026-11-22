@@ -206,11 +206,11 @@ impl Preferences {
                 .get("accountOrder")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default(),
+            // Never keeps Copool from starting: see `from_saved`.
             refresh: settings
                 .extra
                 .get("refresh")
-                .map(|v| serde_json::from_value(v.clone()).map_err(|_| "Invalid refresh interval"))
-                .transpose()?
+                .map(crate::refresh_policy::RefreshPreferences::from_saved)
                 .unwrap_or_default(),
         };
         validate_preferences(&p)?;

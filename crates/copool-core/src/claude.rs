@@ -1496,6 +1496,13 @@ impl Application {
             None => VAULT_LOCKED.into(),
         }
     }
+    /// Until when an account's requests pause after HTTP 429; turning the
+    /// pool's slow-down off lifts a pause under way.
+    fn claude_pause(&self, account: &Stored) -> Option<i64> {
+        account
+            .usage_retry_at
+            .filter(|_| self.pool_refresh(Pool::Claude).backoff)
+    }
     /// Lets a user action ask for the vault's Keychain item when background
     /// work could not read it, as after a build changed Copool's signature.
     pub(crate) async fn claude_authorize(&self) -> Result<()> {
@@ -1666,6 +1673,7 @@ impl Application {
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.schedule(Pool::Claude) {
+            let backoff = self.pool_refresh(Pool::Claude).backoff;
             for card in &mut summaries {
                 // Every round asks for the card in use, full rounds for all,
                 // subject to freshness and rate limit pauses for official
@@ -1676,7 +1684,12 @@ impl Application {
                     Some(account) if account.first_request_pending => None,
                     Some(account) => {
                         let due = account.updated_at + schedule.interval;
-                        let not_before = due.max(account.usage_retry_at.unwrap_or_default());
+                        let not_before = due.max(
+                            account
+                                .usage_retry_at
+                                .filter(|_| backoff)
+                                .unwrap_or_default(),
+                        );
                         Some(schedule.next_refresh_at(every, not_before))
                     }
                 };
@@ -2131,7 +2144,8 @@ impl Application {
             if let Some(target) = saved.accounts.iter().find(|a| {
                 a.id == id
                     && (forced
-                        || a.usage_retry_at
+                        || self
+                            .claude_pause(a)
                             .is_none_or(|until| until <= now_unix_seconds()))
             }) {
                 self.identify_live_rotation(&location, &mut live, target)
@@ -2165,8 +2179,8 @@ impl Application {
             (!forced && Renewal::of(account.renewal) == Renewal::Never).then_some(RENEWAL_OFF);
         // A usage pause does not hold back a renewal alone.
         if !forced
-            && account
-                .usage_retry_at
+            && self
+                .claude_pause(&account)
                 .is_some_and(|until| until > now_unix_seconds())
         {
             return Err(account.usage_error.clone().unwrap_or_else(|| {
@@ -2530,7 +2544,11 @@ impl Application {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         // Each HTTP 429 in a row pauses longer; any other answer starts over.
+        // Without the slow-down, none pauses or counts.
+        let backoff = self.pool_refresh(Pool::Claude).backoff;
+        let rate_limited = rate_limited && backoff;
         let rate_limits = match (rate_limited, &result) {
+            (false, _) if !backoff => 0,
             (true, _) => store
                 .accounts
                 .iter()
@@ -3417,6 +3435,7 @@ mod tests {
             seconds: 120,
             full_every: 3,
             adaptive: false,
+            backoff: true,
         };
         app.save_preferences(preferences).await.unwrap();
         assert_eq!(app.round_interval(Pool::Claude).as_secs(), 120);
@@ -3612,6 +3631,38 @@ mod tests {
         let stored = app.claude_load().unwrap();
         assert!(stored.accounts[0].usage_retry_at.is_none());
         assert!(stored.accounts[0].usage_error.is_none());
+        assert!(fake.usage.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn without_the_slow_down_rate_limits_pause_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        // A pause under way lifts once the slow-down is turned off.
+        queue_usage_rate_limit(&fake, json!({"error":{"message":"Rate limited"}}));
+        app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
+        assert!(app.claude_load().unwrap().accounts[0]
+            .usage_retry_at
+            .is_some());
+        let mut preferences = app.preferences().unwrap();
+        preferences.refresh.claude.backoff = false;
+        app.save_preferences(preferences).await.unwrap();
+        // A 429 now pauses nothing, nor counts toward the next pause.
+        queue_usage_rate_limit(&fake, json!({"error":{"message":"Rate limited"}}));
+        assert_eq!(
+            app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
+            "Claude usage request failed: HTTP 429 Rate limited"
+        );
+        let stored = app.claude_load().unwrap().accounts[0].clone();
+        assert_eq!((stored.usage_retry_at, stored.rate_limits), (None, 0));
+        fake.usage
+            .lock()
+            .unwrap()
+            .push((200, json!({"five_hour":{"utilization":42}})));
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert!(fake.usage.lock().unwrap().is_empty());
     }
 

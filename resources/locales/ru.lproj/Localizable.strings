@@ -530,6 +530,8 @@
 "accounts.refresh.multiple_format" = "%1$@ (×%2$@)";
 "accounts.refresh.adaptive" = "Адаптивное ускорение";
 "accounts.refresh.adaptive_help_format" = "Пока использование меняется, используемый аккаунт обновляется каждые %@, пока два раунда подряд не пройдут без изменений.";
+"accounts.refresh.backoff" = "Замедление при ограничении";
+"accounts.refresh.backoff_help" = "После HTTP 429 запросы аккаунта приостанавливаются на 5 минут, с каждым следующим 429 подряд вдвое дольше, до часа, или на столько, сколько просит сервер, до 6 часов.";
 "accounts.renewal.expires_format" = "Истекает через %@";
 "accounts.renewal.expired" = "Истёк";
 

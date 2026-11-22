@@ -530,6 +530,8 @@
 "accounts.refresh.multiple_format" = "%1$@（×%2$@）";
 "accounts.refresh.adaptive" = "自適應加速";
 "accounts.refresh.adaptive_help_format" = "用量變化時目前帳號暫時改為每%@重新整理，連續兩輪無變化後恢復。";
+"accounts.refresh.backoff" = "限流時減速";
+"accounts.refresh.backoff_help" = "遇到 HTTP 429 時該帳號暫停請求 5 分鐘，連續遇到則逐次加倍，最長 1 小時；伺服器要求更久時照辦，最長 6 小時。";
 "accounts.renewal.expires_format" = "%@後過期";
 "accounts.renewal.expired" = "已過期";
 

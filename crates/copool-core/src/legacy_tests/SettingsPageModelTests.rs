@@ -831,3 +831,23 @@ async fn cards(app: &Application) -> Vec<String> {
     ids.sort();
     ids
 }
+#[test]
+fn testRefreshPreferencesAnEarlierBuildSavedStillOpen() {
+    let (_dir, app, secrets) = fixture();
+    let mut settings = serde_json::to_value(app.configuration().unwrap()).unwrap();
+    settings["refresh"] = json!({"claude": {"seconds": 600, "fullEvery": 2, "adaptive": false}});
+    std::fs::write(
+        app.paths.data_dir.join("settings.json"),
+        serde_json::to_vec(&settings).unwrap(),
+    )
+    .unwrap();
+    let paths = app.paths.clone();
+    drop(app);
+    let reloaded = Application::open_with_secrets(paths, secrets).unwrap();
+    let refresh = reloaded.preferences().unwrap().refresh;
+    assert_eq!(
+        (refresh.claude.seconds, refresh.claude.full_every),
+        (600, 2)
+    );
+    assert!(!refresh.claude.adaptive && refresh.claude.backoff);
+}

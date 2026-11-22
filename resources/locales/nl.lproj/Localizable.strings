@@ -530,6 +530,8 @@
 "accounts.refresh.multiple_format" = "%1$@ (×%2$@)";
 "accounts.refresh.adaptive" = "Adaptief versnellen";
 "accounts.refresh.adaptive_help_format" = "Zolang het verbruik verandert, wordt het account in gebruik elke %@ vernieuwd, tot er twee rondes zonder verandering zijn.";
+"accounts.refresh.backoff" = "Vertragen bij snelheidslimiet";
+"accounts.refresh.backoff_help" = "Na HTTP 429 pauzeren de verzoeken van het account 5 minuten, bij elke volgende 429 op rij dubbel zo lang tot een uur, of zo lang als de server vraagt, tot 6 uur.";
 "accounts.renewal.expires_format" = "Verloopt over %@";
 "accounts.renewal.expired" = "Verlopen";
 

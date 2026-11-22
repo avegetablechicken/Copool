@@ -13,13 +13,16 @@ pub(crate) const MIN_ROUND_SECONDS: u64 = 10;
 
 /// One pool's background refresh, shared by all its cards: the card in use
 /// every `seconds`, the whole pool every `full_every` rounds, and, when
-/// `adaptive`, sooner rounds while its usage changes.
+/// `adaptive`, sooner rounds while its usage changes. With `backoff`, an
+/// account answered with HTTP 429 pauses its requests for a while; only
+/// Claude's accounts do so for now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PoolRefresh {
     pub seconds: u64,
     pub full_every: u64,
     pub adaptive: bool,
+    pub backoff: bool,
 }
 impl PoolRefresh {
     pub(crate) fn interval(self) -> Duration {
@@ -45,23 +48,26 @@ pub struct RefreshPreferences {
 impl Default for RefreshPreferences {
     /// Codex: its card in use every 10 seconds, the whole pool every minute.
     /// Claude and Antigravity: the whole pool every five minutes, Claude's
-    /// every minute while its usage changes.
+    /// every minute while its usage changes. Each slows down on HTTP 429.
     fn default() -> Self {
         Self {
             codex: PoolRefresh {
                 seconds: 10,
                 full_every: 6,
                 adaptive: false,
+                backoff: true,
             },
             claude: PoolRefresh {
                 seconds: 300,
                 full_every: 1,
                 adaptive: true,
+                backoff: true,
             },
             antigravity: PoolRefresh {
                 seconds: 300,
                 full_every: 1,
                 adaptive: false,
+                backoff: true,
             },
         }
     }
@@ -78,6 +84,37 @@ impl RefreshPreferences {
         [self.codex, self.claude, self.antigravity]
             .into_iter()
             .try_for_each(PoolRefresh::validate)
+    }
+    /// The saved preferences, never failing: a pool's missing settings take
+    /// its defaults and ones this build does not know are ignored; a pool
+    /// whose settings cannot be read falls back to its defaults.
+    pub(crate) fn from_saved(saved: &Value) -> Self {
+        let defaults = Self::default();
+        let read = |name: &str, default: PoolRefresh| {
+            let Some(saved) = saved.get(name) else {
+                return default;
+            };
+            let mut value = serde_json::to_value(default).unwrap_or_default();
+            if let (Some(fields), Some(saved)) = (value.as_object_mut(), saved.as_object()) {
+                for (key, field) in fields.iter_mut() {
+                    if let Some(saved) = saved.get(key) {
+                        *field = saved.clone();
+                    }
+                }
+            }
+            serde_json::from_value::<PoolRefresh>(value)
+                .ok()
+                .filter(|refresh| refresh.validate().is_ok())
+                .unwrap_or_else(|| {
+                    log::warn!("Unreadable {name} refresh preference; using its defaults");
+                    default
+                })
+        };
+        Self {
+            codex: read("codex", defaults.codex),
+            claude: read("claude", defaults.claude),
+            antigravity: read("antigravity", defaults.antigravity),
+        }
     }
 }
 
@@ -318,5 +355,40 @@ mod tests {
         assert!(refresh.validate().is_ok());
         refresh.codex.full_every = 13;
         assert!(refresh.validate().is_err());
+    }
+
+    #[test]
+    fn saved_refresh_preferences_take_defaults_for_what_they_lack_or_cannot_read() {
+        let defaults = RefreshPreferences::default();
+        // Saved before the slow-down: kept, with the slow-down on.
+        let saved = serde_json::json!({
+            "codex": {"seconds": 30, "fullEvery": 2, "adaptive": true},
+            "claude": {"seconds": 600, "fullEvery": 1, "adaptive": false},
+        });
+        let read = RefreshPreferences::from_saved(&saved);
+        assert_eq!(
+            read.codex,
+            PoolRefresh {
+                seconds: 30,
+                full_every: 2,
+                adaptive: true,
+                backoff: true
+            }
+        );
+        assert_eq!((read.claude.seconds, read.claude.adaptive), (600, false));
+        assert!(read.claude.backoff);
+        assert_eq!(read.antigravity, defaults.antigravity);
+        // A setting this build does not know is ignored; a pool it cannot
+        // read, or out of bounds, takes its defaults alone.
+        let saved = serde_json::json!({
+            "codex": {"seconds": 30, "later": 1},
+            "claude": {"seconds": "soon"},
+            "antigravity": {"seconds": 5},
+        });
+        let read = RefreshPreferences::from_saved(&saved);
+        assert_eq!(read.codex.seconds, 30);
+        assert_eq!(read.claude, defaults.claude);
+        assert_eq!(read.antigravity, defaults.antigravity);
+        assert_eq!(RefreshPreferences::from_saved(&"none".into()), defaults);
     }
 }

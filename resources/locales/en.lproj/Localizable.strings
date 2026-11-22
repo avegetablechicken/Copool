@@ -560,6 +560,8 @@
 "accounts.refresh.multiple_format" = "%1$@ (×%2$@)";
 "accounts.refresh.adaptive" = "Adaptive speed-up";
 "accounts.refresh.adaptive_help_format" = "While usage changes, the account in use refreshes every %@, until two rounds pass unchanged.";
+"accounts.refresh.backoff" = "Slow down when rate-limited";
+"accounts.refresh.backoff_help" = "After HTTP 429, the account's requests pause for 5 minutes, doubling with each 429 in a row up to an hour, or as long as the server asks, up to 6 hours.";
 "accounts.renewal.expires_format" = "Expires in %@";
 "accounts.renewal.expired" = "Expired";
 

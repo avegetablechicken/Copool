@@ -1194,6 +1194,17 @@ function refreshSection(current) {
         : null,
     ),
   );
+  // Only Claude's accounts pause after HTTP 429 for now.
+  if (pool === "claude")
+    section.group.append(
+      backRow(
+        tr("accounts.refresh.backoff"),
+        backSwitch("refresh-backoff", refresh.backoff, tr("accounts.refresh.backoff"), (backoff) =>
+          save({ backoff }),
+        ),
+        refresh.backoff ? tr("accounts.refresh.backoff_help") : null,
+      ),
+    );
   return section;
 }
 /// Removal, confirmed by a second click.
