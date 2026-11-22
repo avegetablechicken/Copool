@@ -292,21 +292,30 @@
       clockOffsetSeconds: window?.clockOffsetSeconds ?? null,
     };
   }
-  function card(account, collapsed = false, mode = "used", formatDate) {
+  /// A plan's color, by tier so that providers' comparable plans match:
+  /// the entry subscription (Codex Plus, Claude Pro, Google AI Pro) and the
+  /// top one (Codex Pro, Claude Max, Google AI Ultra) share their colors.
+  function planAccent(plan, pool = "codex") {
+    if (plan === "PRO" && pool !== "codex") return "pink";
+    if (plan === "ULTRA" || plan.startsWith("MAX")) return "orange";
+    return (
+      {
+        PRO: "orange",
+        PLUS: "pink",
+        FREE: "gray",
+        BUSINESS: "indigo",
+        ENTERPRISE: "indigo",
+      }[plan] || "teal"
+    );
+  }
+  function card(account, collapsed = false, mode = "used", formatDate, pool = "codex") {
     const plan = normalizedPlan(account),
       name =
         clean(account.email) || clean(account.accountId) || clean(account.label) || "",
       credits = account.usage?.credits;
     return {
       plan,
-      accent:
-        {
-          PRO: "orange",
-          PLUS: "pink",
-          FREE: "gray",
-          BUSINESS: "indigo",
-          ENTERPRISE: "indigo",
-        }[plan] || "teal",
+      accent: planAccent(plan, pool),
       workspaceTag: workspaceTag(account),
       name:
         collapsed && name.includes("@")
@@ -779,6 +788,7 @@
     resolveTheme,
     preferredLocale,
     normalizedPlan,
+    planAccent,
     workspaceTag,
     displayPercent,
     roundDisplayPercent,

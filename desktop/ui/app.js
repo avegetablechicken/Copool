@@ -1516,8 +1516,12 @@ function accountCard(account, grouped = false) {
     if (target) return cardBack(target);
   }
   const full = account.email || account.accountId || account.label;
-  const view = P.card(account, collapsed, usageMode(), (epoch) =>
-    P.formatReset(epoch, locale),
+  const view = P.card(
+    account,
+    collapsed,
+    usageMode(),
+    (epoch) => P.formatReset(epoch, locale),
+    pool,
   );
   if (collapsed) {
     const interaction = P.collapsedInteraction({
@@ -1532,7 +1536,7 @@ function accountCard(account, grouped = false) {
     );
     row.classList.toggle("can-reveal", !grouped && interaction.canReveal);
     row.classList.toggle("revealed", !grouped && interaction.visible);
-    row.dataset.plan = view.plan;
+    row.dataset.accent = view.accent;
     const name = el("span", "account-row-name", view.name);
     name.title = full;
     const secondCompactLabel =
@@ -1556,7 +1560,7 @@ function accountCard(account, grouped = false) {
       ? "account-member"
       : `block account${account.isCurrent ? " current" : ""}`,
   );
-  card.dataset.plan = view.plan;
+  card.dataset.accent = view.accent;
   card.dataset.cardId = account.id;
   card.dataset.flipKey = account.id;
   const head = el("div", "block-head");

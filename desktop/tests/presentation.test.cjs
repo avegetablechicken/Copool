@@ -24,6 +24,22 @@ legacy(
     assert.equal(P.normalizedPlan(null), "TEAM");
   },
 );
+test("Comparable plans share a color across providers", () => {
+  const accent = (planType, pool) =>
+    P.card({ planType, usage: null }, false, "used", String, pool).accent;
+  // The entry subscription.
+  assert.equal(accent("plus", "codex"), "pink");
+  assert.equal(accent("pro", "claude"), "pink");
+  assert.equal(accent("pro", "antigravity"), "pink");
+  // The top subscription.
+  assert.equal(accent("pro", "codex"), "orange");
+  assert.equal(accent("max 5x", "claude"), "orange");
+  assert.equal(accent("max 20x", "claude"), "orange");
+  assert.equal(accent("ultra", "antigravity"), "orange");
+  assert.equal(accent("free", "claude"), "gray");
+  // Without a pool, Codex's colors.
+  assert.equal(P.card({ planType: "pro", usage: null }).accent, "orange");
+});
 test("Claude Max plans keep their multiplier", () => {
   assert.equal(P.normalizedPlan("max 20x"), "MAX 20X");
   assert.equal(P.normalizedPlan({ planType: "max" }), "MAX");

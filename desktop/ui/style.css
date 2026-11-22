@@ -1773,29 +1773,25 @@ html.linux.composited:where([data-theme="dark"]) .tooltip {
   text-overflow: ellipsis;
 }
 
-[data-plan="PRO"] .tag.plan {
-  --tag: var(--orange);
-}
-
-[data-plan="PLUS"] .tag.plan {
-  --tag: var(--pink);
-}
-
 /* Keeps a collapsed row's columns when a Claude plan is not yet known. */
 .tag.plan.placeholder {
   visibility: hidden;
 }
 
-[data-plan^="MAX"] .tag.plan {
-  --tag: #d97757;
+/* A plan's tier color (presentation.js planAccent). */
+[data-accent="orange"] .tag.plan {
+  --tag: var(--orange);
 }
 
-[data-plan="FREE"] .tag.plan {
+[data-accent="pink"] .tag.plan {
+  --tag: var(--pink);
+}
+
+[data-accent="gray"] .tag.plan {
   --tag: var(--gray);
 }
 
-[data-plan="BUSINESS"] .tag.plan,
-[data-plan="ENTERPRISE"] .tag.plan {
+[data-accent="indigo"] .tag.plan {
   --tag: var(--indigo);
 }
 
