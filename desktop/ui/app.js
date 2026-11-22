@@ -5,7 +5,6 @@ const invoke = (command, args = {}) =>
 const P = window.CopoolPresentation;
 let collapsed = false;
 let selectedPage = "accounts";
-let editingAccount = null;
 let switchingId = null;
 // A card is being dragged: the list waits to render until it is dropped.
 let reorderingAccounts = false;
@@ -64,6 +63,8 @@ const ICONS = {
   "say-hi-received": '<path d="M3 4h16v11H9l-4 4v-4H3Z"/><path d="m7.5 9.5 2.5 2.5 4.5-4.5"/>',
   renewal:
     '<path d="M18.6 12.5A7.7 7.7 0 1 1 16.3 5.4M17 2.4v3.8h-3.8"/><path d="M11 7.2V11l2.6 1.8"/>',
+  "renewal-done": '<circle cx="11" cy="11" r="8.5"/><path d="m7.3 11.2 2.5 2.5 4.9-5"/>',
+  info: '<circle cx="11" cy="11" r="8.5"/><path d="M11 10v5.5M11 6.6v.4"/>',
   "chevron-up": '<path d="m5 14 6-6 6 6"/>',
   "chevron-down": '<path d="m5 8 6 6 6-6"/>',
   trash: '<path d="M3 5h16M8 5V3h6v2M5 5l1 15h10l1-15M9 8v9M13 8v9"/>',
@@ -512,119 +513,80 @@ function accountProxy(account) {
     proxy ||= (preferences?.accountProxyUrl || "").trim();
   return proxy;
 }
-function accountUsesExplicitProxy(account) {
-  const proxy = accountProxy(account);
-  return !!proxy && proxy !== "direct://";
-}
-function proxyLabel(proxy) {
-  if (!proxy) return tr("accounts.proxy.system");
-  return proxy === "direct://" ? tr("accounts.proxy.none") : proxy;
-}
-/// Proxy and removal, in the card's top row as in the SwiftUI card. A
-/// Sub2api provider's group has its provider's proxy and removes all its
-/// cards at once; its accounts have neither of their own.
-function accountManagement(account, group = null, title = null) {
-  const actions = el("span", "block-aside");
-  const cards = group ? group.accounts : [account];
-  const name = group ? title : account.label;
-  const proxyButton = button("", "network", "icon-btn card-proxy", () =>
-    group ? openProviderProxy(group, title) : openAccountProxy(account),
+/// Removes an account, or all of a Sub2api provider's cards at once.
+async function removeCards(cards, sub2api) {
+  await action(
+    () => accountsController.removeAccounts(cards.map((a) => a.id)),
+    tr(sub2api ? "accounts.notice.sub2api_removed" : "accounts.notice.account_deleted"),
   );
-  proxyButton.classList.toggle("proxy-muted", !accountUsesExplicitProxy(account));
-  proxyButton.title = proxyLabel(accountProxy(account));
-  proxyButton.setAttribute(
-    "aria-label",
-    `${tr("accounts.proxy.title")} ${group ? title : account.email || account.label}`,
-  );
-  const remove = button("", "trash", "icon-btn destructive", async () => {
-    if (
-      await confirmAction(
-        tr("common.remove"),
-        extra(
-          `Remove ${name} from the account pool?`,
-          `从账号池移除 ${name}？`,
-        ),
-        tr("common.remove"),
-        true,
-      )
+}
+/// Asks before removing, as from a card's menu.
+async function confirmRemoval(cards, name, sub2api) {
+  if (
+    await confirmAction(
+      tr("common.remove"),
+      tr("accounts.card.remove_confirm_format", name),
+      tr("common.remove"),
+      true,
     )
-      await action(
-        () => accountsController.removeAccounts(cards.map((a) => a.id)),
-        tr(
-          account.sourceTag === "SUB2API"
-            ? "accounts.notice.sub2api_removed"
-            : "accounts.notice.account_deleted",
-        ),
-      );
-  });
-  remove.title = tr("common.remove");
-  remove.setAttribute("aria-label", `${tr("common.remove")} ${name}`);
-  // An account's token renewal; a provider renews its own accounts.
-  if (account.renewal && !group) actions.append(renewalButton(account));
-  actions.append(proxyButton, remove);
-  return actions;
+  )
+    await removeCards(cards, sub2api);
 }
-/// Renews the account's tokens at once; its renewal button shows the
-/// renewal under way, then a notice tells how it went, as saying hi does.
+/// Cards whose token was just renewed, shown so on their refresh button
+/// for a moment.
+const renewedIds = new Set();
+const RENEWED_SHOWN_MS = 2200;
+/// Renews the account's tokens at once; its refresh button shows the
+/// renewal under way, then done, and a notice tells how it went, as saying
+/// hi does.
 async function renewNow(account) {
   const controller = accountsController;
   try {
-    if (await controller.renewNow(account.id))
+    if (await controller.renewNow(account.id)) {
+      renewedIds.add(account.id);
+      setTimeout(() => {
+        renewedIds.delete(account.id);
+        renderAccounts(accountsCache);
+      }, RENEWED_SHOWN_MS);
+      renderAccounts(accountsCache);
       notice(tr("accounts.notice.token_renewed"));
+    }
   } catch (error) {
     notice(error, true);
   }
 }
-/// A Claude or Codex account's token renewal; shown, as the proxy button,
-/// only on the focused card, and throughout a renewal under way.
-function renewalButton(account) {
-  const renewing = accountsController.renewingIds.has(account.id);
-  const trigger = button(
-    "",
-    "renewal",
-    `icon-btn card-renewal${renewing ? " renewing" : ""}`,
-    () => {
-      if (openMenu?.trigger === trigger) {
-        closeMenu(true);
-        return;
-      }
-      showMenu(trigger, [
-        {
-          label: tr("accounts.renewal.now"),
-          disabled:
-            accountsController.refreshingIds.has(account.id) ||
-            accountsController.remoteRefreshingIds.has(account.id) ||
-            accountsController.sayingHiIds.has(account.id),
-          run: () => renewNow(account),
-        },
-        // Auto renew toggles between renewing as needed and never.
-        {
-          label: tr("accounts.renewal.auto"),
-          checked: account.renewal === "always",
-          run: () =>
-            action(() =>
-              accountsController.setRenewal(
-                account.id,
-                account.renewal === "always" ? "never" : "always",
-              ),
-            ),
-        },
-      ]);
-    },
-  );
-  // Its tooltip tells how long the access token has left; a token problem
-  // shows as the card's usage error, as in the SwiftUI card.
-  trigger.title = renewing
-    ? tr("accounts.renewal.renewing")
-    : tokenLabel(account) || tr("accounts.renewal.title");
-  trigger.setAttribute(
-    "aria-label",
-    `${tr("accounts.renewal.title")} ${account.email || account.label}: ${trigger.title}`,
-  );
-  trigger.setAttribute("aria-haspopup", "menu");
-  trigger.setAttribute("aria-expanded", "false");
-  trigger.disabled = renewing;
-  return trigger;
+/// A hi or renewal under way, or just done, which takes the place of the
+/// card's refresh button: its glyph, tooltip and whether it is done.
+function cardTask(account) {
+  const phase = sayingHi.get(account.id);
+  if (phase) {
+    const prefix = {
+      codex: "accounts.card.codex_say_hi",
+      antigravity: "accounts.card.antigravity_say_hi",
+    }[pool] || "accounts.card.say_hi";
+    return { glyph: `say-hi-${phase}`, title: tr(`${prefix}.${phase}`), done: phase === "received" };
+  }
+  if (accountsController.renewingIds.has(account.id))
+    return { glyph: "renewal", title: tr("accounts.renewal.renewing"), done: false };
+  if (renewedIds.has(account.id))
+    return { glyph: "renewal-done", title: tr("accounts.notice.token_renewed"), done: true };
+  return null;
+}
+function taskIndicator(task, full) {
+  const node = el("span", `icon-btn card-task ${task.done ? "done" : "running"}`);
+  node.append(icon(task.glyph));
+  node.title = task.title;
+  node.setAttribute("role", "status");
+  node.setAttribute("aria-label", `${task.title} ${full}`);
+  return node;
+}
+/// Turns the card over to edit it, at its top right, shown on the focused
+/// card as a widget's.
+function editButton(key, name) {
+  const control = button("", "info", "icon-btn card-edit", () => editCard(key));
+  control.title = tr("accounts.card.edit");
+  control.setAttribute("aria-label", `${control.title} ${name}`);
+  return control;
 }
 /// Usage warning, refresh and switch, at the card's bottom right as in the
 /// SwiftUI card, clear of long account names. A provider's group carries
@@ -662,20 +624,26 @@ function accountControls(account, full, view, grouped = false) {
     actions.append(signInAgain);
     return actions;
   }
-  // Start an idle subscription window with a small model request.
-  if (!collapsed && (sayingHi.has(account.id) || supportsSayHi(account)))
-    actions.append(sayHiButton(account, full));
-  if (grouped) return actions;
-  const refresh = button("", "refresh", "icon-btn card-refresh", () =>
-    refreshUsage(account.id),
-  );
-  refresh.setAttribute("aria-label", `${tr("common.refresh_usage")} ${full}`);
-  refreshTooltip(refresh, tr("common.refresh_usage"), () => account.nextRefreshAt);
-  refresh.classList.toggle("spinning", refreshing);
-  refresh.disabled =
-    accountsController.sayingHiIds.has(account.id) ||
-    accountsController.renewingIds.has(account.id);
-  actions.append(refresh);
+  // A hi or renewal shows in the refresh button's place while it lasts; a
+  // provider's account, refreshed with its provider, shows it alone.
+  const task = cardTask(account);
+  if (grouped) {
+    if (task) actions.append(taskIndicator(task, full));
+    return actions;
+  }
+  if (task) actions.append(taskIndicator(task, full));
+  else {
+    const refresh = button("", "refresh", "icon-btn card-refresh", () =>
+      refreshUsage(account.id),
+    );
+    refresh.setAttribute("aria-label", `${tr("common.refresh_usage")} ${full}`);
+    refreshTooltip(refresh, tr("common.refresh_usage"), () => account.nextRefreshAt);
+    refresh.classList.toggle("spinning", refreshing);
+    refresh.disabled =
+      accountsController.sayingHiIds.has(account.id) ||
+      accountsController.renewingIds.has(account.id);
+    actions.append(refresh);
+  }
   if (!account.isCurrent) {
     const control = button("", "switch", "icon-btn card-switch", () =>
       switchAccount(account),
@@ -753,105 +721,564 @@ async function sayHi(account) {
     sayingHi.delete(account.id);
   }
 }
-/// Says hi with the account; shown, as the proxy button, only on the
-/// focused card.
-function sayHiButton(account, full) {
-  const phase = sayingHi.get(account.id);
-  const control = button(
-    "",
-    phase ? `say-hi-${phase}` : "say-hi",
-    `icon-btn card-say-hi${phase ? ` ${phase}` : ""}`,
-    () => showSayHiMenu(control, account).catch((error) => notice(error, true)),
-  );
-  control.setAttribute("aria-haspopup", "menu");
-  control.setAttribute("aria-expanded", "false");
-  const prefix = {
-    codex: "accounts.card.codex_say_hi",
-    antigravity: "accounts.card.antigravity_say_hi",
-  }[pool] || "accounts.card.say_hi";
-  control.title = tr(`${prefix}.${phase || "help"}`);
-  control.setAttribute(
-    "aria-label",
-    `${phase ? control.title : tr("accounts.card.say_hi")} ${full}`,
-  );
-  control.disabled =
-    !!phase ||
-    accountsController.refreshingIds.has(account.id) ||
-    accountsController.remoteRefreshingIds.has(account.id);
-  return control;
+/// The card turned over to edit it, as a widget's: an account's id, or
+/// `sub2api:<provider>` for a provider's group; one at a time. Its draft
+/// proxy, greeting schedule once read, a time being added and a removal
+/// awaiting confirmation stay over renders.
+let editing = null;
+// Each half of a turn: edge-on at its middle, where the sides swap.
+const FLIP_HALF_MS = 210;
+// A render of a turn, whose card's accounts neither leave nor arrive.
+let turnRender = false;
+/// What a flip key names among the shown cards: an account, maybe one of a
+/// Sub2api provider's, or a provider's group.
+function flipTarget(key) {
+  const accounts = P.visibleAccounts(accountsCache);
+  if (key.startsWith("sub2api:")) {
+    const provider = key.slice("sub2api:".length);
+    const members = accounts.filter((a) => providerKey(a) === provider);
+    return members.length ? { group: { key: provider, accounts: members } } : null;
+  }
+  const account = accounts.find((a) => a.id === key);
+  return account ? { account, grouped: providerKey(account) !== null } : null;
 }
-async function showSayHiMenu(trigger, account) {
-  if (openMenu?.trigger === trigger) {
-    closeMenu(true);
+/// A provider's account has only its greetings to edit.
+function hasBack(target) {
+  return !!target && (!!target.group || !target.grouped || supportsSayHi(target.account));
+}
+/// The proxy edited: the account's own, or its provider's for a group.
+function proxyOwner(target) {
+  return target.group ? target.group.accounts[0] : target.account;
+}
+function proxyDraft(proxyUrl) {
+  const direct = proxyUrl === "direct://";
+  return { enabled: !direct, url: direct ? "" : proxyUrl || "" };
+}
+/// The proxy saved for a draft: none as "direct://"; blank inherits.
+function proxyValue(draft) {
+  return draft.enabled ? draft.url : "direct://";
+}
+/// The help under a proxy: what a blank one uses, the shared account
+/// proxy when one is set; a Sub2api provider's never does.
+function proxyHelp(owner) {
+  const shared =
+    owner.sourceTag !== "SUB2API" && !!(preferences?.accountProxyUrl || "").trim();
+  return tr(shared ? "accounts.proxy.shared_help" : "accounts.proxy.system_help");
+}
+/// Turns a card over to its settings.
+async function editCard(key) {
+  if (collapsed || editing?.key === key) return;
+  const target = flipTarget(key);
+  if (!hasBack(target)) return;
+  const state = {
+    key,
+    pool,
+    proxy: target.grouped ? null : proxyDraft(proxyOwner(target).proxyUrl),
+    proxyError: null,
+    schedule: null,
+    adding: null,
+    confirmRemove: false,
+  };
+  const schedule =
+    target.account && supportsSayHi(target.account)
+      ? invoke("greeting_schedule", { pool, id: target.account.id }).catch((error) => {
+          notice(error, true);
+          return null;
+        })
+      : null;
+  if (editing) cancelEditing();
+  await turnCard(key, 1, async () => {
+    state.schedule = await schedule;
+    if (pool === state.pool && !collapsed) editing = state;
+  });
+}
+/// Saves the card's proxy, then turns it back; an invalid proxy keeps it
+/// open with the error.
+async function finishEditing() {
+  const state = editing;
+  if (!state || state.saving) return;
+  if (state.proxy && !(await saveProxyDraft(state))) return;
+  await turnCard(state.key, -1, () => {
+    if (editing === state) editing = null;
+  });
+}
+/// Turns the card back without saving its proxy; at once, when the page
+/// changes under it.
+function cancelEditing(animated = true) {
+  const state = editing;
+  if (!state) return;
+  if (!animated) {
+    editing = null;
+    renderedAccountsState = undefined;
+    renderAccounts(accountsCache);
     return;
   }
-  const targetPool = pool;
-  const args = { pool: targetPool, id: account.id };
-  const schedule = await invoke("greeting_schedule", args);
-  if (pool !== targetPool || !trigger.isConnected) return;
-  const save = async (auto, times) => {
-    await invoke("set_greeting_schedule", { ...args, auto, times });
-    schedule.auto = auto;
-    schedule.times = times;
+  turnCard(state.key, -1, () => {
+    if (editing === state) editing = null;
+  });
+}
+async function saveProxyDraft(state) {
+  const target = flipTarget(state.key);
+  if (!target) return true;
+  const owner = proxyOwner(target);
+  const value = proxyValue(state.proxy);
+  if (value.trim() === (owner.proxyUrl || "").trim()) return true;
+  state.saving = true;
+  try {
+    await accountsController.saveProxy(owner.id, value);
+    return true;
+  } catch (error) {
+    state.proxyError = tr(String(error?.message ?? error));
+    renderEditing();
+    return false;
+  } finally {
+    state.saving = false;
+  }
+}
+/// Renders the card being edited again, as its settings change.
+function renderEditing() {
+  renderedAccountsState = undefined;
+  renderAccounts(accountsCache);
+}
+/// Turns the card of `key` edge-on, makes `change`, renders, and turns the
+/// card's other side in, growing it as the cards below slide down.
+async function turnCard(key, direction, change) {
+  const list = $("accounts");
+  const find = () =>
+    [...list.querySelectorAll("[data-flip-key]")].find((n) => n.dataset.flipKey === key);
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const node = find();
+  const before = node?.closest("[data-reorder-id]")?.offsetHeight;
+  if (node && !still) {
+    await node
+      .animate(
+        [
+          { transform: "perspective(900px) rotateY(0deg)" },
+          { transform: `perspective(900px) rotateY(${90 * direction}deg) scale(0.96)` },
+        ],
+        { duration: FLIP_HALF_MS, easing: "cubic-bezier(0.55, 0, 0.9, 0.55)" },
+      )
+      .finished.catch(() => {});
+    node.style.visibility = "hidden";
+  }
+  await change();
+  turnRender = true;
+  try {
+    renderEditing();
+  } finally {
+    turnRender = false;
+  }
+  const next = find();
+  if (!next || still) return;
+  next.animate(
+    [
+      { transform: `perspective(900px) rotateY(${-90 * direction}deg) scale(0.96)` },
+      { transform: "none" },
+    ],
+    { duration: FLIP_HALF_MS, easing: "cubic-bezier(0.1, 0.45, 0.45, 1)" },
+  );
+  const holder = next.closest("[data-reorder-id]");
+  const after = holder?.offsetHeight;
+  if (before && after > before)
+    window.CopoolReorder.springAnimate(holder, [
+      { clipPath: `inset(0 0 ${after - before}px 0 round 8px)` },
+      { clipPath: "inset(0 0 0 0 round 8px)" },
+    ]);
+}
+/// A card's settings side: its proxy, token renewal, greetings, the pool's
+/// refresh and its removal; a provider's group has the provider's proxy;
+/// a provider's account its greetings alone.
+function cardBack(target) {
+  const state = editing;
+  const { account, group, grouped } = target;
+  const cards = group ? group.accounts : [account];
+  const current = cards.some((a) => a.isCurrent);
+  const name = group
+    ? providerTitle(group.accounts[0])
+    : account.email || account.accountId || account.label;
+  const node = el(
+    grouped ? "div" : "section",
+    grouped ? "account-member account-back" : `block account account-back${current ? " current" : ""}`,
+  );
+  node.dataset.flipKey = state.key;
+  if (account) node.dataset.cardId = account.id;
+  const head = el("div", "back-head");
+  const title = el("span", "block-title", name);
+  title.title = name;
+  const done = el("button", "btn primary back-done", tr("accounts.card.done"));
+  done.type = "button";
+  done.disabled = !!state.saving;
+  done.onclick = () => finishEditing();
+  head.append(title, done);
+  node.append(head);
+  if (state.proxy) node.append(proxySection(state, proxyOwner(target)));
+  if (account && !grouped && account.renewal) node.append(renewalSection(account));
+  if (account && supportsSayHi(account) && state.schedule)
+    node.append(greetingSection(account, state));
+  if (!grouped) node.append(refreshSection(current));
+  if (!grouped) node.append(removalSection(state, cards, !!group));
+  return node;
+}
+/// A section of a card's back, as a grouped form's: its caption, with any
+/// detail and action, over an inset group of rows, then any footnote.
+function backSection(title, ...aside) {
+  const section = el("div", "back-section");
+  const caption = el("div", "back-caption");
+  caption.append(el("span", "back-caption-title", title), ...aside);
+  const group = el("div", "back-group");
+  section.append(caption, group);
+  section.group = group;
+  return section;
+}
+/// A row of a section's group: a label, maybe a line under it, and its
+/// control.
+function backRow(label, control, note = null) {
+  const row = el("label", "back-row");
+  const text = el("span", "back-label", label);
+  if (note) text.append(el("span", "back-note", note));
+  row.append(text, control);
+  return row;
+}
+function backSwitch(field, checked, label, onchange) {
+  const input = el("input", "switch");
+  input.type = "checkbox";
+  input.checked = checked;
+  input.dataset.backField = field;
+  input.setAttribute("aria-label", label);
+  input.onchange = () => onchange(input.checked);
+  return input;
+}
+function backButton(label, run, disabled = false) {
+  const control = el("button", "btn quiet prominent", label);
+  control.type = "button";
+  control.disabled = disabled;
+  control.onclick = run;
+  return control;
+}
+function backHelp(text, error = false) {
+  return el("p", `back-help${error ? " error" : ""}`, text);
+}
+/// The proxy, saved with Done or Return.
+function proxySection(state, owner) {
+  const draft = state.proxy;
+  const help = backHelp(state.proxyError || proxyHelp(owner), !!state.proxyError);
+  const url = el("input", "field");
+  url.dataset.backField = "proxy-url";
+  url.placeholder = "http://127.0.0.1:7890";
+  url.value = draft.url;
+  url.disabled = !draft.enabled;
+  url.spellcheck = false;
+  url.setAttribute("aria-label", tr("accounts.proxy.title"));
+  url.oninput = () => {
+    draft.url = url.value;
   };
-  const run = (action) => () => action().catch((error) => notice(error, true));
-  const editTime = (previous = "") => {
-    const dialog = $("say-hi-time-dialog");
-    const input = $("say-hi-time");
-    const error = $("say-hi-time-error");
-    const remove = $("say-hi-time-remove");
-    const submit = $("say-hi-time-save");
-    // Populate both segments; a native time placeholder is not a valid value.
-    input.value = previous || "12:30";
-    error.textContent = schedule.lastError || "";
-    error.hidden = !schedule.lastError;
-    const removalTarget = () => previous || (schedule.times.includes(input.value) ? input.value : "");
-    const updateRemove = () => { remove.hidden = !removalTarget(); };
-    input.oninput = updateRemove;
-    input.onchange = updateRemove;
-    updateRemove();
-    $("say-hi-time-name").textContent = account.email || account.label;
-    const commit = async (times) => {
-      submit.disabled = remove.disabled = true;
-      try {
-        await save(schedule.auto, times);
-        dialog.close();
-      } catch (reason) {
-        error.textContent = String(reason);
-        error.hidden = false;
-      } finally {
-        submit.disabled = remove.disabled = false;
+  url.onkeydown = (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    finishEditing();
+  };
+  const enabled = backSwitch("proxy-enabled", draft.enabled, tr("accounts.proxy.enabled"), (on) => {
+    draft.enabled = on;
+    url.disabled = !on;
+  });
+  const section = backSection(tr("accounts.proxy.title"));
+  const field = el("div", "back-row back-field");
+  field.append(url);
+  section.group.append(backRow(tr("accounts.proxy.enabled"), enabled), field);
+  section.append(help);
+  return section;
+}
+/// The token's time left, renewing it now, and renewing it as needed.
+function renewalSection(account) {
+  const busy =
+    accountsController.refreshingIds.has(account.id) ||
+    accountsController.remoteRefreshingIds.has(account.id) ||
+    accountsController.sayingHiIds.has(account.id) ||
+    accountsController.renewingIds.has(account.id);
+  // Under its "Token renewal" title, the time left alone.
+  const expiry = P.tokenExpiry(account.tokenExpiresAt, Date.now() / 1000, locale);
+  const left = el(
+    "span",
+    "back-detail",
+    !expiry
+      ? ""
+      : expiry.expired
+        ? tr("accounts.renewal.expired")
+        : tr("accounts.renewal.expires_format", expiry.remaining),
+  );
+  const section = backSection(
+    tr("accounts.renewal.title"),
+    left,
+    backButton(tr("accounts.renewal.now"), () => renewNow(account), busy),
+  );
+  section.group.append(
+    backRow(
+      tr("accounts.renewal.auto"),
+      backSwitch("renewal-auto", account.renewal === "always", tr("accounts.renewal.auto"), (on) =>
+        action(() => accountsController.setRenewal(account.id, on ? "always" : "never")),
+      ),
+    ),
+  );
+  return section;
+}
+/// Saying hi now, automatically, and at which times.
+function greetingSection(account, state) {
+  const schedule = state.schedule;
+  const busy =
+    sayingHi.has(account.id) ||
+    accountsController.refreshingIds.has(account.id) ||
+    accountsController.remoteRefreshingIds.has(account.id);
+  const section = backSection(
+    tr("accounts.say_hi.title"),
+    backButton(
+      tr("accounts.say_hi.now"),
+      () => sayHi(account).then(refreshView).catch((error) => notice(error, true)),
+      busy || !canSayHi(account),
+    ),
+  );
+  // Greeting when the 5h window is idle and at set times are separate:
+  // each greets on its own.
+  section.group.append(
+    backRow(
+      tr("accounts.say_hi.auto"),
+      backSwitch("greeting-auto", schedule.auto, tr("accounts.say_hi.auto"), (on) =>
+        saveGreeting(account.id, state, on, schedule.times),
+      ),
+      tr("accounts.say_hi.auto_help"),
+    ),
+  );
+  const daily = el("div", "back-row back-stack");
+  const dailyLabel = el("span", "back-label", tr("accounts.say_hi.times"));
+  dailyLabel.append(
+    el(
+      "span",
+      `back-note${schedule.lastError ? " error" : ""}`,
+      schedule.lastError || tr("accounts.say_hi.times_help"),
+    ),
+  );
+  const times = el("div", "back-times");
+  for (const time of schedule.times) {
+    const chip = el("span", "back-time", time);
+    const remove = button("", "close", "back-time-remove", () =>
+      saveGreeting(account.id, state, schedule.auto, withoutGreetingTime(schedule.times, time)),
+    );
+    remove.title = tr("accounts.say_hi.remove");
+    remove.setAttribute("aria-label", `${tr("accounts.say_hi.remove")} ${time}`);
+    chip.append(remove);
+    times.append(chip);
+  }
+  if (state.adding !== null) {
+    const chip = el("span", "back-time adding");
+    const input = el("input");
+    input.type = "time";
+    input.required = true;
+    input.value = state.adding;
+    input.dataset.backField = "greeting-time";
+    input.setAttribute("aria-label", tr("accounts.say_hi.add"));
+    const commit = () => {
+      if (!input.isConnected || state.adding === null) return;
+      state.adding = null;
+      const times = withGreetingTime(schedule.times, input.value);
+      if (times) saveGreeting(account.id, state, schedule.auto, times);
+      else renderEditing();
+    };
+    input.oninput = () => {
+      state.adding = input.value;
+    };
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        state.adding = null;
+        renderEditing();
       }
     };
-    $("say-hi-time-form").onsubmit = (event) => {
-      event.preventDefault();
-      if (submit.disabled || !input.reportValidity()) return;
-      commit([...new Set([...schedule.times.filter((t) => t !== previous), input.value])].sort());
+    input.onblur = commit;
+    chip.append(input);
+    times.append(chip);
+  } else {
+    const add = el("button", "back-time add", `+ ${tr("accounts.say_hi.add")}`);
+    add.type = "button";
+    add.onclick = () => {
+      state.adding = "12:30";
+      renderEditing();
+      $("accounts").querySelector('[data-back-field="greeting-time"]')?.focus();
     };
-    remove.onclick = () => {
-      const target = removalTarget();
-      if (!target || remove.disabled) return;
-      commit(schedule.times.filter((t) => t !== target));
-    };
-    $("say-hi-time-cancel").onclick = () => dialog.close();
-    dialog.showModal();
-    input.focus();
+    times.append(add);
+  }
+  daily.append(dailyLabel, times);
+  section.group.append(daily);
+  return section;
+}
+/// The times with a new one, in order; null for no time or one already set.
+function withGreetingTime(times, time) {
+  if (!/^\d{2}:\d{2}$/.test(time) || times.includes(time)) return null;
+  return [...times, time].sort();
+}
+function withoutGreetingTime(times, time) {
+  return times.filter((t) => t !== time);
+}
+/// Saves a greeting schedule, then shows it on the card being edited.
+async function saveGreeting(id, state, auto, times) {
+  try {
+    await invoke("set_greeting_schedule", { pool: state.pool, id, auto, times });
+    state.schedule = { ...state.schedule, auto, times };
+  } catch (error) {
+    notice(error, true);
+  }
+  if (editing === state) renderEditing();
+}
+/// The pool's background refresh, which all its cards share: the card in
+/// use's interval only on its own card.
+function refreshSection(current) {
+  const refresh = preferences.refresh[pool];
+  const save = (patch) =>
+    queuePreferenceSave({
+      refresh: { ...preferences.refresh, [pool]: { ...refresh, ...patch } },
+    })
+      .catch((error) => notice(error, true))
+      .finally(renderEditing);
+  // Its rows name what each interval is for; all the pool's cards share them.
+  const section = backSection(tr("accounts.refresh.title"));
+  const choices = P.refreshChoices(pool, refresh.seconds);
+  const select = (field, options, value, onchange) => {
+    const node = el("select");
+    node.dataset.backField = field;
+    for (const [optionValue, label] of options) {
+      const option = el("option", "", label);
+      option.value = String(optionValue);
+      option.selected = optionValue === value;
+      node.append(option);
+    }
+    node.onchange = () => onchange(Number(node.value));
+    return node;
   };
-  showMenu(trigger, [
-    { label: tr("accounts.say_hi.now"), disabled: !canSayHi(account), run: run(async () => {
-      await sayHi(account);
-      await refreshView();
-    }) },
-    { label: tr("accounts.say_hi.auto"), checked: schedule.auto, run: run(() => save(!schedule.auto, schedule.times)) },
-    { label: tr("accounts.say_hi.schedule"), children: [
-      ...schedule.times.map((time) => ({
-        label: time,
-        run: () => editTime(time),
-        remove: () => save(schedule.auto, schedule.times.filter((t) => t !== time)),
-      })),
-      { label: `${tr("accounts.say_hi.add")}…`, run: () => editTime() },
-    ] },
-  ]);
+  const interval = (seconds) => P.formatInterval(seconds, locale);
+  if (current)
+    section.group.append(
+      backRow(
+        tr("accounts.refresh.current"),
+        select(
+          "refresh-seconds",
+          choices.seconds.map((seconds) => [seconds, interval(seconds)]),
+          refresh.seconds,
+          (seconds) => save({ seconds }),
+        ),
+      ),
+    );
+  section.group.append(
+    backRow(
+      tr("accounts.refresh.all"),
+      select(
+        "refresh-full-every",
+        choices.fullEvery.map((n) => [
+          n,
+          n === 1
+            ? tr("accounts.refresh.every_round_format", interval(refresh.seconds))
+            : tr("accounts.refresh.multiple_format", interval(refresh.seconds * n), n),
+        ]),
+        refresh.fullEvery,
+        (fullEvery) => save({ fullEvery }),
+      ),
+    ),
+    backRow(
+      tr("accounts.refresh.adaptive"),
+      backSwitch("refresh-adaptive", refresh.adaptive, tr("accounts.refresh.adaptive"), (adaptive) =>
+        save({ adaptive }),
+      ),
+      refresh.adaptive
+        ? tr("accounts.refresh.adaptive_help_format", interval(P.fastRefreshSeconds(refresh.seconds)))
+        : null,
+    ),
+  );
+  return section;
+}
+/// Removal, confirmed by a second click.
+function removalSection(state, cards, provider) {
+  const row = el("div", "back-section back-removal");
+  const remove = el(
+    "button",
+    `back-group back-remove${state.confirmRemove ? " confirm" : ""}`,
+    tr(state.confirmRemove ? "accounts.card.remove_confirm" : "common.remove"),
+  );
+  remove.type = "button";
+  remove.dataset.backField = "remove";
+  remove.onclick = () => {
+    if (!state.confirmRemove) {
+      state.confirmRemove = true;
+      renderEditing();
+      setTimeout(() => {
+        if (editing !== state || !state.confirmRemove) return;
+        state.confirmRemove = false;
+        renderEditing();
+      }, 3000);
+      return;
+    }
+    if (editing === state) editing = null;
+    removeCards(cards, provider || cards[0].sourceTag === "SUB2API");
+  };
+  row.append(remove);
+  return row;
+}
+/// A card's menu, at the pointer: editing it, then what its buttons do and
+/// what it has no button for, and its removal.
+function cardMenu(target) {
+  const { account, group, grouped } = target;
+  const items = [];
+  if (!collapsed && hasBack(target))
+    items.push({ label: tr("accounts.card.edit"), run: () => editCard(group ? `sub2api:${group.key}` : account.id) });
+  if (account && grouped) {
+    if (supportsSayHi(account))
+      items.push({
+        label: tr("accounts.say_hi.now"),
+        disabled: !canSayHi(account) || sayingHi.has(account.id),
+        run: () => sayHi(account).then(refreshView).catch((error) => notice(error, true)),
+      });
+    return items;
+  }
+  if (items.length) items.push({ separator: true });
+  const cards = group ? group.accounts : [account];
+  const busy = cards.some(
+    (a) =>
+      accountsController.refreshingIds.has(a.id) ||
+      accountsController.remoteRefreshingIds.has(a.id) ||
+      accountsController.sayingHiIds.has(a.id) ||
+      accountsController.renewingIds.has(a.id),
+  );
+  items.push({
+    label: tr("common.refresh_usage"),
+    disabled: busy,
+    run: () => (group ? refreshProvider(group) : refreshUsage(account.id)),
+  });
+  if (account && supportsSayHi(account))
+    items.push({
+      label: tr("accounts.say_hi.now"),
+      disabled: busy || !canSayHi(account) || sayingHi.has(account.id),
+      run: () => sayHi(account).then(refreshView).catch((error) => notice(error, true)),
+    });
+  if (account?.renewal)
+    items.push({ label: tr("accounts.renewal.now"), disabled: busy, run: () => renewNow(account) });
+  if (!cards.some((a) => a.isCurrent)) {
+    const target = group ? switchTarget(group) : account;
+    items.push({
+      label: tr("accounts.card.switch_to_this"),
+      disabled: target.available === false || switchingId !== null,
+      run: () => switchAccount(target),
+    });
+  }
+  const name = group ? providerTitle(group.accounts[0]) : account.email || account.label;
+  items.push(
+    { separator: true },
+    {
+      label: tr("common.remove"),
+      destructive: true,
+      run: () => confirmRemoval(cards, name, !!group || account.sourceTag === "SUB2API"),
+    },
+  );
+  return items;
 }
 /// The plan tag. Codex treats an unknown plan as Team; Claude shows none
 /// until its plan is known.
@@ -1014,6 +1441,10 @@ function accountBalanceText(usage, credits, inventory = P.resetInventory(usage),
 }
 
 function accountCard(account, grouped = false) {
+  if (!collapsed && editing?.key === account.id) {
+    const target = flipTarget(account.id);
+    if (target) return cardBack(target);
+  }
   const full = account.email || account.accountId || account.label;
   const view = P.card(account, collapsed, usageMode(), (epoch) =>
     P.formatReset(epoch, locale),
@@ -1046,6 +1477,7 @@ function accountCard(account, grouped = false) {
     );
     if (!grouped) row.dataset.reorderHandle = "";
     row.dataset.cardId = account.id;
+    row.dataset.flipKey = account.id;
     return row;
   }
   const card = el(
@@ -1056,6 +1488,7 @@ function accountCard(account, grouped = false) {
   );
   card.dataset.plan = view.plan;
   card.dataset.cardId = account.id;
+  card.dataset.flipKey = account.id;
   const head = el("div", "block-head");
   // The CURRENT tag alone marks the active account, as in the SwiftUI card.
   const name = el("div", "account-name");
@@ -1063,7 +1496,7 @@ function accountCard(account, grouped = false) {
   title.title = full;
   name.append(title);
   const tags = accountTags(account, view, grouped);
-  head.append(tags, ...(grouped ? [] : [accountManagement(account)]));
+  head.append(tags);
   // A card is dragged by its tags and name, as OpenQuota by its header.
   if (!grouped) head.dataset.reorderHandle = name.dataset.reorderHandle = "";
   // A negative reset count is unavailable, as in AccountCardPresentation.
@@ -1082,6 +1515,7 @@ function accountCard(account, grouped = false) {
     ...usageWindows(view),
     footer,
   );
+  if (hasBack({ account, grouped })) card.append(editButton(account.id, full));
   return card;
 }
 /// A card's usage rows: five hours and the week. Codex Free cards that report
@@ -1140,13 +1574,15 @@ function weeklyNotice(row, version) {
 }
 /// A Sub2api provider's cards close together in one card, which shows once
 /// whether the provider is in use, with its controls where a single
-/// account's card has them: proxy and removal at the top right, refresh and
-/// switch at the bottom right.
+/// account's card has them: editing at the top right, refresh and switch at
+/// the bottom right.
 function providerGroup(group) {
   const title = providerTitle(group.accounts[0]);
   const source = el("span", "tag muted", P.clean(group.accounts[0].sourceTag) || "SUB2API");
   // A provider's cards are current together.
   const current = group.accounts.some((a) => a.isCurrent);
+  const flipKey = `sub2api:${group.key}`;
+  if (!collapsed && editing?.key === flipKey) return cardBack({ group });
   const members = group.accounts.map((account) => accountCard(account, true));
   if (collapsed) {
     // No head row: the first account's row carries the provider's dot and
@@ -1167,6 +1603,7 @@ function providerGroup(group) {
     first.lastElementChild.replaceWith(providerControls(group, title, current));
     const wrapper = el("div", "account-row-group");
     wrapper.dataset.reorderHandle = "";
+    wrapper.dataset.flipKey = flipKey;
     wrapper.append(...members);
     return wrapper;
   }
@@ -1179,8 +1616,8 @@ function providerGroup(group) {
   name.title = title;
   head.append(name, source);
   if (current) head.append(el("span", "tag good", tr("accounts.card.current")));
-  head.append(accountManagement(group.accounts[0], group, title));
   head.dataset.reorderHandle = "";
+  block.dataset.flipKey = flipKey;
   const list = el("div", "account-group-members");
   list.append(...members);
   const footer = el("div", "account-footer");
@@ -1188,7 +1625,7 @@ function providerGroup(group) {
     el("span", "account-footer-text"),
     providerControls(group, title, current),
   );
-  block.append(head, list, footer);
+  block.append(head, list, footer, editButton(flipKey, title));
   return block;
 }
 /// A card's key in the saved order: a Sub2api provider's cards share one.
@@ -1234,6 +1671,7 @@ function renderAccounts(accounts) {
     [...accountsController.sayingHiIds],
     [...sayingHi],
     [...accountsController.renewingIds],
+    [...renewedIds],
     switchingId,
     accountsController.adding,
     accountsController.authorizing,
@@ -1243,6 +1681,13 @@ function renderAccounts(accounts) {
   renderedAccountsState = structuredClone(renderState);
   accounts = P.visibleAccounts(accounts);
   const list = $("accounts");
+  // The card being edited keeps the field being typed in.
+  const focused = list.contains(document.activeElement)
+    ? document.activeElement.dataset.backField
+    : undefined;
+  const selection = focused && document.activeElement.selectionStart != null
+    ? [document.activeElement.selectionStart, document.activeElement.selectionEnd]
+    : null;
   list.className = collapsed ? "account-list compact block flush" : "account-list";
   // Switching between full and collapsed, the cards' parts are measured too.
   const before = captureLayout(
@@ -1288,6 +1733,11 @@ function renderAccounts(accounts) {
     list.append(node);
   }
   alignMeters(list);
+  if (focused) {
+    const field = list.querySelector(`[data-back-field="${focused}"]`);
+    field?.focus({ preventScroll: true });
+    if (field && selection) field.setSelectionRange?.(...selection);
+  }
   const current = entries.find(entryIsCurrent);
   animateLayout(list, before, current ? entryKey(current) : null);
 }
@@ -1356,9 +1806,11 @@ function animateLayout(list, before, current) {
       old.rect,
       (activated && key === current) || old.node.classList.contains("reorder-raised"),
     );
-    // An account joining a provider's group arrives inside it.
-    for (const member of node.querySelectorAll("[data-card-id]"))
-      if (!before.cards.has(member.dataset.cardId)) appear(member);
+    // An account joining a provider's group arrives inside it; a group
+    // turned over shows its accounts again without them arriving.
+    if (!turnRender)
+      for (const member of node.querySelectorAll("[data-card-id]"))
+        if (!before.cards.has(member.dataset.cardId)) appear(member);
   }
   const gone = [...before.entries]
     .filter(([key]) => !kept.has(key))
@@ -1870,6 +2322,8 @@ function showAccountsPool(next) {
   const direction = ACCOUNT_POOLS.indexOf(next) > ACCOUNT_POOLS.indexOf(pool) ? -1 : 1;
   const animate = selectedPage === "accounts";
   if (animate) slidePoolOut(direction);
+  // Another pool's cards are shown; none of them is being edited.
+  editing = null;
   pool = next;
   fullRefreshAt = null;
   localStorage.setItem("copool.pool", pool);
@@ -1928,7 +2382,23 @@ function showProxyPool(next) {
     .then(() => proxyController.loadRemoteStatuses())
     .catch((error) => notice(error, true));
 }
+// A card's menu opens where it is right-clicked.
+$("accounts").addEventListener("contextmenu", (event) => {
+  if (event.target.closest(".account-back, input, select, textarea")) return;
+  // A provider's account without a menu of its own has its provider's.
+  let node = event.target.closest("[data-flip-key]");
+  let target = node && flipTarget(node.dataset.flipKey);
+  if (target?.grouped && !cardMenu(target).length) {
+    node = node.parentElement.closest("[data-flip-key]");
+    target = node && flipTarget(node.dataset.flipKey);
+  }
+  if (!target) return;
+  event.preventDefault();
+  showMenu(node, cardMenu(target), { x: event.clientX, y: event.clientY });
+});
 $("collapse-all").onclick = () => {
+  // Collapsed cards have no settings side.
+  editing = null;
   collapsed = !collapsed;
   renderAccounts(accountsCache);
   syncButtons();
@@ -1968,9 +2438,10 @@ function closeSubmenu(restoreFocus = false) {
 function closeMenu(restoreFocus = false) {
   closeSubmenu();
   if (!openMenu) return;
-  const { menu, trigger } = openMenu;
+  const { menu, trigger, at } = openMenu;
   openMenu = null;
   menu.remove();
+  if (at) return;
   trigger.setAttribute("aria-expanded", "false");
   if (restoreFocus) trigger.focus();
 }
@@ -2040,7 +2511,9 @@ function showResetPopover(trigger, lines, wrapping = false) {
   menu.focus();
 }
 
-function showMenu(trigger, items) {
+/// Shows a menu below `trigger`, or at the point `at` for a context menu.
+/// Items may be separators, and the destructive one is red.
+function showMenu(trigger, items, at = null) {
   closeMenu();
   const menu = el("div", "select-menu action-menu");
   const submenus = [];
@@ -2052,7 +2525,13 @@ function showMenu(trigger, items) {
   const choices = items.some((item) => item.selected || item.checked);
   menu.classList.toggle("choices", choices);
   for (const item of items) {
-    const option = el("button", "", item.label);
+    if (item.separator) {
+      const line = el("div", "menu-separator");
+      line.setAttribute("role", "separator");
+      menu.append(line);
+      continue;
+    }
+    const option = el("button", item.destructive ? "destructive" : "", item.label);
     if (item.icon) option.prepend(item.icon);
     option.type = "button";
     option.disabled = !!item.disabled;
@@ -2186,7 +2665,7 @@ function showMenu(trigger, items) {
   });
   document.body.append(menu);
   // Below the trigger, or above it when the panel is too short; kept inside.
-  const bounds = trigger.getBoundingClientRect();
+  const bounds = at ? new DOMRect(at.x, at.y, 0, 0) : trigger.getBoundingClientRect();
   const panel = document.querySelector(".panel").getBoundingClientRect();
   // Freeze the intrinsic width before assigning left: positioning must not
   // change the measured width (especially for cards along the right edge).
@@ -2214,8 +2693,8 @@ function showMenu(trigger, items) {
   menu.style.left = `${Math.max(8, left)}px`;
   menu.style.top = `${top}px`;
   menu.style.maxHeight = `${panel.bottom - top - 8}px`;
-  trigger.setAttribute("aria-expanded", "true");
-  openMenu = { menu, trigger };
+  if (!at) trigger.setAttribute("aria-expanded", "true");
+  openMenu = { menu, trigger, at };
   (
     menu.querySelector("[aria-checked=true]") || menu.querySelector("button:not(:disabled)")
   )?.focus();
@@ -2225,7 +2704,7 @@ document.addEventListener("pointerdown", (event) => {
     openMenu &&
     !openMenu.menu.contains(event.target) &&
     !openSubmenu?.menu.contains(event.target) &&
-    !openMenu.trigger.contains(event.target)
+    (openMenu.at || !openMenu.trigger.contains(event.target))
   )
     closeMenu();
 });
@@ -2422,8 +2901,10 @@ document.addEventListener("keydown", (event) => {
       ? event.metaKey && !event.ctrlKey && !event.altKey && event.key === "["
       : event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft");
   if (event.key === "Escape") {
-    // Back from a subpage first; on the accounts page, dismiss like a menu.
+    // Back from a subpage first; on the accounts page, turn an edited card
+    // back without saving, else dismiss like a menu.
     if (selectedPage !== "accounts") showPage("accounts");
+    else if (editing) cancelEditing();
     else invoke("hide_panel").catch(() => {});
   } else if (back) {
     event.preventDefault();
@@ -2449,56 +2930,6 @@ document.addEventListener("keydown", (event) => {
     $(TOOLBAR_SHORTCUTS[event.key]).click();
   }
 });
-function openAccountProxy(account) {
-  editingAccount = account;
-  $("edit-name").textContent =
-    account.email || account.accountId || account.label;
-  const direct = account.proxyUrl === "direct://";
-  $("edit-proxy-enabled").checked = !direct;
-  $("edit-proxy").disabled = direct;
-  $("edit-proxy").value = direct ? "" : account.proxyUrl || "";
-  // Left blank, a card takes the shared account proxy (see `accountProxy`);
-  // a Sub2api provider's does not.
-  const shared =
-    account.sourceTag === "SUB2API" ? "" : (preferences?.accountProxyUrl || "").trim();
-  $("edit-proxy-help").textContent = shared
-    ? tr("accounts.proxy.shared_help_format", proxyLabel(shared))
-    : tr("settings.sub2api.proxy_help");
-  $("edit-error").hidden = true;
-  $("edit-dialog").showModal();
-  $(direct ? "edit-proxy-enabled" : "edit-proxy").focus();
-}
-/// The provider's proxy, saved through any of its cards.
-function openProviderProxy(group, title) {
-  const { id, proxyUrl } = group.accounts[0];
-  openAccountProxy({ id, label: title, sourceTag: "SUB2API", proxyUrl });
-}
-$("edit-proxy-enabled").onchange = () => {
-  $("edit-proxy").disabled = !$("edit-proxy-enabled").checked;
-};
-$("edit-cancel").onclick = () => $("edit-dialog").close();
-$("edit-form").onsubmit = (event) => {
-  event.preventDefault();
-  // Only this dialog waits for its save.
-  const save = event.submitter || $("edit-form").querySelector("[type=submit]");
-  if (save?.disabled) return;
-  if (save) save.disabled = true;
-  action(async () => {
-    try {
-      const value = $("edit-proxy-enabled").checked
-        ? $("edit-proxy").value
-        : "direct://";
-      await accountsController.saveProxy(editingAccount.id, value);
-      $("edit-dialog").close();
-    } catch (error) {
-      $("edit-error").textContent = String(error);
-      $("edit-error").hidden = false;
-      throw error;
-    } finally {
-      if (save) save.disabled = false;
-    }
-  });
-};
 /// Refreshes one account, or all without an id. As in the Swift app this
 /// takes no panel-wide lock: each card updates and becomes operable again as
 /// its own refresh lands ("copool-changed"), while the others stay usable.

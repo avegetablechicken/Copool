@@ -30,6 +30,8 @@ pub fn load() -> Result<NativeIcons, String> {
         ("say-hi", "bubble.left"),
         ("say-hi-sent", "ellipsis.bubble"),
         ("say-hi-received", "checkmark.bubble"),
+        ("renewal-done", "checkmark.circle"),
+        ("info", "info.circle"),
         ("chevron-up", "chevron.up"),
         ("chevron-down", "chevron.down"),
         ("chevron-left", "chevron.left"),

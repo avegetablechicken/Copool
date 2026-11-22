@@ -536,60 +536,6 @@
         <button id="login-cancel" class="btn" data-l10n="common.cancel"></button>
       </div>
     </dialog>
-    <dialog id="edit-dialog">
-      <form id="edit-form">
-        <div class="proxy-dialog-header">
-          <h2 data-l10n="accounts.proxy.title"></h2>
-          <input
-            id="edit-proxy-enabled"
-            type="checkbox"
-            class="switch"
-            data-title="accounts.proxy.enabled"
-            checked
-          />
-        </div>
-        <p id="edit-name" class="secondary"></p>
-        <input
-          id="edit-proxy"
-          class="field"
-          placeholder="http://127.0.0.1:7890"
-          aria-label="Proxy URL"
-        />
-        <p
-          id="edit-proxy-help"
-          class="setting-description"
-          data-l10n="settings.sub2api.proxy_help"
-        ></p>
-        <p id="edit-error" class="error" hidden></p>
-        <div class="dialog-actions">
-          <button
-            type="button"
-            id="edit-cancel"
-            class="btn"
-            data-l10n="common.cancel"
-          ></button
-          ><button
-            type="submit"
-            class="btn primary"
-            data-l10n="common.save"
-          ></button>
-        </div>
-      </form>
-    </dialog>
-    <dialog id="say-hi-time-dialog">
-      <form id="say-hi-time-form">
-        <h2 data-l10n="accounts.say_hi.custom"></h2>
-        <p id="say-hi-time-name" class="secondary"></p>
-        <input id="say-hi-time" type="time" class="field" required data-title="accounts.say_hi.custom" aria-labelledby="say-hi-time-label" />
-        <p id="say-hi-time-label" class="setting-description" data-l10n="accounts.say_hi.help"></p>
-        <p id="say-hi-time-error" class="error" hidden></p>
-        <div class="dialog-actions">
-          <button type="button" id="say-hi-time-remove" class="btn danger" data-l10n="common.remove"></button>
-          <button type="button" id="say-hi-time-cancel" class="btn" data-l10n="common.cancel"></button>
-          <button type="submit" id="say-hi-time-save" class="btn primary" data-l10n="common.save"></button>
-        </div>
-      </form>
-    </dialog>
     <dialog id="confirm-dialog">
       <form method="dialog">
         <h2 id="confirm-title"></h2>

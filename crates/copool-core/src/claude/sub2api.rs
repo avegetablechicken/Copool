@@ -1155,6 +1155,7 @@ mod tests {
                 at: 1_000,
                 tick: 2,
                 interval: 300,
+                full_every: 1,
             },
         );
         let accounts = app.accounts(Pool::Claude).await.unwrap();

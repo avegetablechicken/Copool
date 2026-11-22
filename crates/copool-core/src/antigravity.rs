@@ -453,12 +453,13 @@ impl Application {
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.schedule(Pool::Antigravity) {
             for card in &mut summaries {
-                // A provider's cards refresh every round, as Claude's.
+                // Every round asks for the card in use, full rounds for all.
+                let every = card.is_current;
                 card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
-                    None => Some(schedule.next_refresh_at(true, 0)),
+                    None => Some(schedule.next_refresh_at(every, 0)),
                     Some(a) if a.first_request_pending => None,
                     Some(a) => {
-                        Some(schedule.next_refresh_at(true, a.updated_at + schedule.interval))
+                        Some(schedule.next_refresh_at(every, a.updated_at + schedule.interval))
                     }
                 };
             }

@@ -22,18 +22,6 @@ type Result<T> = std::result::Result<T, String>;
 const IMPORT_LIMIT: u64 = 16 * 1024 * 1024;
 
 pub use crate::models::Pool;
-impl Pool {
-    /// Every background round refreshes the whole Claude and Antigravity
-    /// pool; the Codex pool's rounds refresh the card in use, and the whole
-    /// pool every few.
-    fn full_rounds_only(self) -> bool {
-        self != Self::Codex
-    }
-    /// The Claude pool's rounds come sooner while its usage changes.
-    fn adaptive_rounds(self) -> bool {
-        self == Self::Claude
-    }
-}
 
 /// A login's hi: said, or refused as expired with this error.
 pub(crate) enum Hello {
@@ -425,16 +413,16 @@ impl Application {
             Err(errors.join("\n"))
         }
     }
-    /// A background round's refresh. Codex: the card in use and the
-    /// provider in use, the whole pool every few rounds. Claude and
-    /// Antigravity: every
-    /// account not asked within the interval (by a manual refresh, say), and
-    /// every provider, active or not.
+    /// A background round's refresh: the card in use and the provider in
+    /// use, the whole pool and every provider on its full rounds. Claude and
+    /// Antigravity ask for no account asked within the interval (by a manual
+    /// refresh, say).
     pub async fn refresh_recurring(&self, pool: Pool, tick: u64) -> Result<()> {
         let accounts = self.accounts(pool).await?;
+        let full_every = self.pool_refresh(pool).full_every;
         match pool {
             Pool::Codex => {
-                let ids = refresh_policy::recurring_ids(tick, &accounts);
+                let ids = refresh_policy::recurring_ids(tick, full_every, &accounts);
                 let current = crate::codex_config::resolve_path(&self.codex_config_path()).id;
                 let providers = ids.is_some().then(|| vec![current]);
                 self.refresh_pool(pool, ids.as_deref(), providers.as_deref())
@@ -443,12 +431,27 @@ impl Application {
             Pool::Claude | Pool::Antigravity => {
                 let now = now_unix_seconds();
                 let interval = self.round_interval(pool).as_secs() as i64;
+                let full = refresh_policy::is_full_round(tick, full_every);
                 let ids: Vec<String> = accounts
                     .iter()
-                    .filter(|a| !sub2api::is_card(pool, &a.id) && now - a.updated_at >= interval)
+                    .filter(|a| {
+                        (full || a.is_current)
+                            && !sub2api::is_card(pool, &a.id)
+                            && now - a.updated_at >= interval
+                    })
                     .map(|a| a.id.clone())
                     .collect();
-                self.refresh_pool(pool, Some(&ids), None).await
+                // Between full rounds, only a provider in use.
+                let providers: Option<Vec<String>> = (!full).then(|| {
+                    accounts
+                        .iter()
+                        .filter(|a| a.is_current)
+                        .filter_map(|a| sub2api::card_provider(pool, &a.id))
+                        .map(str::to_owned)
+                        .collect()
+                });
+                self.refresh_pool(pool, Some(&ids), providers.as_deref())
+                    .await
             }
         }
     }
@@ -486,15 +489,48 @@ impl Application {
             tick = tick.wrapping_add(1);
         }
     }
+    /// The pool's background refresh, as set for all its cards.
+    pub(crate) fn pool_refresh(&self, pool: Pool) -> refresh_policy::PoolRefresh {
+        self.preferences()
+            .map(|p| p.refresh)
+            .unwrap_or_default()
+            .pool(pool)
+    }
+    /// The interval of the pool's rounds: as set, or sooner for now while
+    /// an adaptive pool's usage changes.
     pub(crate) fn round_interval(&self, pool: Pool) -> Duration {
-        match pool {
-            Pool::Codex => refresh_policy::CODEX_REFRESH_INTERVAL,
-            Pool::Claude => self
-                .schedule(pool)
-                .map(|s| Duration::from_secs(s.interval as u64))
-                .unwrap_or(refresh_policy::CLAUDE_REFRESH_INTERVAL),
-            Pool::Antigravity => refresh_policy::ANTIGRAVITY_REFRESH_INTERVAL,
+        let refresh = self.pool_refresh(pool);
+        self.schedule(pool)
+            .filter(|_| refresh.adaptive)
+            .map(|s| Duration::from_secs(s.interval as u64))
+            .unwrap_or(refresh.interval())
+    }
+    /// Applies a pool's new refresh to its next round, which waits the new
+    /// interval from now.
+    pub(crate) fn reschedule(&self, pool: Pool, refresh: refresh_policy::PoolRefresh) {
+        let rounds = self.rounds(pool);
+        *rounds.unchanged.lock().unwrap() = 0;
+        let now = now_unix_seconds();
+        let waiting = {
+            let mut schedule = rounds.schedule.lock().unwrap();
+            match schedule.as_mut() {
+                Some(next) => {
+                    next.interval = refresh.seconds as i64;
+                    next.full_every = refresh.full_every;
+                    // A round under way schedules the next itself.
+                    let waiting = next.at > now;
+                    if waiting {
+                        next.at = now + next.interval;
+                    }
+                    waiting
+                }
+                None => false,
+            }
+        };
+        if waiting {
+            rounds.deferred.notify_one();
         }
+        self.publish();
     }
     /// Refreshing the whole pool stands in for a background round: its next
     /// round waits a whole interval from now. A round under way is left to
@@ -515,29 +551,39 @@ impl Application {
         }
     }
     pub(crate) async fn background_round(&self, tick: u64, pool: Pool) -> Duration {
+        let refresh = self.pool_refresh(pool);
         let interval = self.round_interval(pool);
         let set_schedule = |at, tick, interval: Duration| {
             *self.rounds(pool).schedule.lock().unwrap() = Some(Schedule {
                 at,
                 tick,
                 interval: interval.as_secs() as i64,
+                full_every: refresh.full_every,
             });
         };
         set_schedule(now_unix_seconds(), tick, interval);
-        let usage = || refresh_policy::usage_values(&self.claude_usage_cards().unwrap_or_default());
-        let before = pool.adaptive_rounds().then(usage);
+        let before = if refresh.adaptive {
+            Some(self.usage_values(pool).await)
+        } else {
+            None
+        };
         // Access to the Claude pool is asked for once, before its first round.
         if pool == Pool::Claude && tick == 0 {
             let _ = self.claude_authorize_at_startup().await;
         }
         let _ = self.refresh_recurring(pool, tick).await;
         let interval = match before {
-            Some(before) => refresh_policy::refresh_interval_for(
-                interval,
-                refresh_policy::usage_changed(&before, &usage()),
-                &mut self.rounds(pool).unchanged.lock().unwrap(),
-            ),
-            None => interval,
+            Some(before) => {
+                let changed =
+                    refresh_policy::usage_changed(&before, &self.usage_values(pool).await);
+                refresh_policy::refresh_interval_for(
+                    refresh.interval(),
+                    interval,
+                    changed,
+                    &mut self.rounds(pool).unchanged.lock().unwrap(),
+                )
+            }
+            None => refresh.interval(),
         };
         set_schedule(
             now_unix_seconds() + interval.as_secs() as i64,
@@ -546,6 +592,16 @@ impl Application {
         );
         self.publish();
         interval
+    }
+    /// Each card's usage, to tell whether a round changed it. Claude's
+    /// cards are read without the login Claude Code uses, which is in the
+    /// Keychain.
+    async fn usage_values(&self, pool: Pool) -> std::collections::BTreeMap<String, Value> {
+        let cards = match pool {
+            Pool::Claude => self.claude_usage_cards(),
+            _ => self.accounts(pool).await,
+        };
+        refresh_policy::usage_values(&cards.unwrap_or_default())
     }
     /// The pool's next background round; none before the first starts.
     pub(crate) fn schedule(&self, pool: Pool) -> Option<Schedule> {
@@ -559,7 +615,6 @@ impl Application {
     /// (Unix seconds), should the interval stay as it is; none before the
     /// first round.
     pub fn next_full_refresh_at(&self, pool: Pool) -> Option<i64> {
-        self.schedule(pool)
-            .map(|s| s.next_refresh_at(pool.full_rounds_only(), 0))
+        self.schedule(pool).map(|s| s.next_refresh_at(false, 0))
     }
 }

@@ -454,8 +454,8 @@
 "settings.sub2api.proxy_help" = "支援 HTTP、HTTPS 或 SOCKS5；留空使用系統網路設定。";
 "error.sub2api.proxy_invalid" = "請輸入有效的 HTTP、HTTPS 或 SOCKS5 代理位址和連接埠（不含使用者名稱或密碼）。";
 
-"accounts.proxy.title" = "帳號代理";
-"accounts.renewal.title" = "權杖續期";
+"accounts.proxy.title" = "代理";
+"accounts.renewal.title" = "續期";
 "accounts.card.say_hi" = "Greet";
 "accounts.card.say_hi.help" = "向 Claude 打個招呼，立即開始 5 小時計時";
 "accounts.card.say_hi.sent" = "已傳送招呼，等待 Claude 回覆";
@@ -469,8 +469,6 @@
 "accounts.refresh.next_format" = "%@後自動重新整理";
 "accounts.refresh.next_due" = "即將自動重新整理";
 "accounts.proxy.unsupported" = "此網路服務不支援帳號代理。";
-"accounts.proxy.system" = "系統代理";
-"accounts.proxy.none" = "無代理";
 
 
 "settings.sub2api.admin_base_url_help" = "選填，用於 Sub2api 登入、帳號和額度查詢；留空則從 Codex Provider 位址推導。模型請求仍使用 Codex 中的位址。請填寫基礎位址，例如 https://主機:6060/api/v1。";
@@ -503,7 +501,8 @@
 "accounts.card.awaiting_first_request.help" = "Copool 尚未為此帳號向上游發出請求。如需代理請先設定，再重新整理此卡片。";
 
 "settings.account_proxy" = "帳號統一代理";
-"accounts.proxy.shared_help_format" = "支援 HTTP、HTTPS 或 SOCKS5；留空使用帳號統一代理（%@）。";
+"accounts.proxy.shared_help" = "留空使用帳號統一代理。";
+"accounts.proxy.system_help" = "留空使用系統網路設定。";
 
 "accounts.proxy.enabled" = "啟用代理";
 
@@ -512,13 +511,27 @@
 "accounts.card.codex_say_hi.received" = "已收到 Codex 回覆，等待 5 小時計時顯示";
 "error.codex.say_hi_window_not_started" = "Codex 已接受招呼，但 5 小時計時沒有開始";
 
-"accounts.say_hi.custom" = "自選時間";
 "accounts.say_hi.add" = "新增時間";
 "accounts.say_hi.remove" = "刪除";
-"accounts.say_hi.help" = "每天依本地時間執行。Auto 在 5h 視窗結束後自動打招呼。需保持 Copool 執行；錯過的時間不會補發。";
 "accounts.say_hi.now" = "立即打招呼";
 "accounts.say_hi.auto" = "自動打招呼";
-"accounts.say_hi.schedule" = "在指定時間打招呼…";
+"accounts.say_hi.auto_help" = "5h 視窗結束後自動打招呼。";
+"accounts.say_hi.times" = "每天定時打招呼";
+"accounts.say_hi.times_help" = "依本地時間執行；需保持 Copool 執行，錯過的時間不會補發。";
+"accounts.card.edit" = "編輯卡片…";
+"accounts.card.done" = "完成";
+"accounts.card.remove_confirm" = "再按一次以移除";
+"accounts.card.remove_confirm_format" = "要從帳號池移除 %@ 嗎？";
+"accounts.say_hi.title" = "打招呼";
+"accounts.refresh.title" = "重新整理";
+"accounts.refresh.current" = "目前帳號";
+"accounts.refresh.all" = "全部帳號";
+"accounts.refresh.every_round_format" = "%@（每輪）";
+"accounts.refresh.multiple_format" = "%1$@（×%2$@）";
+"accounts.refresh.adaptive" = "自適應加速";
+"accounts.refresh.adaptive_help_format" = "用量變化時目前帳號暫時改為每%@重新整理，連續兩輪無變化後恢復。";
+"accounts.renewal.expires_format" = "%@後過期";
+"accounts.renewal.expired" = "已過期";
 
 "accounts.card.reset_full" = "Full reset";
 "accounts.card.reset_fable" = "Fable reset";

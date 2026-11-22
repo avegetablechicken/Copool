@@ -54,8 +54,10 @@ fn testAccountsUsageRefreshPlanningUsesActiveThenFullRecurringTicks() {
         account("acct-current", 0., 0., true),
         account("acct-idle", 0., 0., false),
     ];
-    assert_eq!(recurring_ids(1, &a), Some(vec!["acct-current".into()]));
-    assert_eq!(recurring_ids(6, &a), None);
+    assert_eq!(recurring_ids(1, 6, &a), Some(vec!["acct-current".into()]));
+    assert_eq!(recurring_ids(6, 6, &a), None);
+    // Every round refreshes the whole pool when set so.
+    assert_eq!(recurring_ids(1, 1, &a), None);
 }
 #[tokio::test]
 async fn testSwitchAccountWritesCurrentAccountIDToStore() {
@@ -1213,34 +1215,34 @@ async fn testRenewNowRenewsWithoutAskingUsageUnlessTheAccountFailed() {
 fn testBackgroundRefreshIntervalAdaptsAsOpenQuota() {
     use std::time::Duration;
     let (five, one) = (Duration::from_secs(300), Duration::from_secs(60));
-    assert_eq!(
-        (CLAUDE_REFRESH_INTERVAL, FAST_REFRESH_INTERVAL),
-        (five, one)
-    );
+    assert_eq!(fast_interval(five), one);
     let mut unchanged = 0;
     // Without a change the interval stays at five minutes.
     for _ in 0..3 {
-        assert_eq!(refresh_interval_for(five, false, &mut unchanged), five);
+        assert_eq!(
+            refresh_interval_for(five, five, false, &mut unchanged),
+            five
+        );
         assert_eq!(unchanged, 0);
     }
     // A change speeds it up, from either interval.
-    assert_eq!(refresh_interval_for(five, true, &mut unchanged), one);
-    assert_eq!(refresh_interval_for(one, true, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(five, five, true, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(five, one, true, &mut unchanged), one);
     // Two unchanged one-minute rounds slow it down again...
-    assert_eq!(refresh_interval_for(one, false, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), one);
     assert_eq!(unchanged, 1);
-    assert_eq!(refresh_interval_for(one, false, &mut unchanged), five);
+    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), five);
     assert_eq!(unchanged, 0);
     // ...counted anew after each change.
-    assert_eq!(refresh_interval_for(five, true, &mut unchanged), one);
-    assert_eq!(refresh_interval_for(one, false, &mut unchanged), one);
-    assert_eq!(refresh_interval_for(one, true, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(five, five, true, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(five, one, true, &mut unchanged), one);
     assert_eq!(unchanged, 0);
-    assert_eq!(refresh_interval_for(one, false, &mut unchanged), one);
-    assert_eq!(refresh_interval_for(one, false, &mut unchanged), five);
+    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), one);
+    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), five);
     // An interval other than one minute (a fresh start) counts as five.
     assert_eq!(
-        refresh_interval_for(Duration::from_secs(10), false, &mut unchanged),
+        refresh_interval_for(five, Duration::from_secs(10), false, &mut unchanged),
         five
     );
 }

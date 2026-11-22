@@ -185,6 +185,40 @@
       }).format(parts),
     };
   }
+  /// A refresh interval, localized: in hours, minutes or seconds, whichever
+  /// it is a whole number of.
+  function formatInterval(seconds, locale = "en") {
+    const [unit, amount] =
+      seconds % 3600 === 0
+        ? ["hour", seconds / 3600]
+        : seconds % 60 === 0
+          ? ["minute", seconds / 60]
+          : ["second", seconds];
+    return new Intl.NumberFormat(resolveLocale(locale), {
+      style: "unit",
+      unit,
+      unitDisplay: "long",
+    }).format(amount);
+  }
+  // The intervals a pool's card in use may refresh at, and the rounds to
+  // one that refreshes the whole pool; the core takes 10 s to an hour.
+  const REFRESH_SECONDS = {
+    codex: [10, 30, 60, 300, 600],
+    claude: [60, 120, 300, 600, 900, 1800, 3600],
+    antigravity: [60, 120, 300, 600, 900, 1800, 3600],
+  };
+  const FULL_EVERY = [1, 2, 3, 6, 12];
+  /// A pool's refresh choices, the interval set among them.
+  function refreshChoices(pool, seconds) {
+    const choices = new Set(REFRESH_SECONDS[pool] || REFRESH_SECONDS.claude);
+    if (Number.isFinite(seconds)) choices.add(seconds);
+    return { seconds: [...choices].sort((a, b) => a - b), fullEvery: FULL_EVERY };
+  }
+  /// The interval a changing usage brings, as the core's fast_interval: a
+  /// fifth, no sooner than every 30 seconds, never slower than set.
+  function fastRefreshSeconds(seconds) {
+    return Math.min(seconds, Math.max(seconds / 5, 30));
+  }
   // OpenQuota's projectPace + QuotaMetric color rules, using Unix seconds.
   // Always judge consumption, independently of the displayed used/remaining mode.
   function usagePace(window, now = Date.now() / 1000) {
@@ -737,6 +771,9 @@
     formatReset,
     tokenExpiry,
     refreshCountdown,
+    formatInterval,
+    refreshChoices,
+    fastRefreshSeconds,
     resetCountdown,
     card,
     actions,

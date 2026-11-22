@@ -1667,15 +1667,17 @@ impl Application {
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.schedule(Pool::Claude) {
             for card in &mut summaries {
-                // Every round asks for all cards, subject to freshness and
-                // rate limit pauses for official accounts.
+                // Every round asks for the card in use, full rounds for all,
+                // subject to freshness and rate limit pauses for official
+                // accounts.
+                let every = card.is_current;
                 card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
-                    None => Some(schedule.next_refresh_at(true, 0)),
+                    None => Some(schedule.next_refresh_at(every, 0)),
                     Some(account) if account.first_request_pending => None,
                     Some(account) => {
                         let due = account.updated_at + schedule.interval;
                         let not_before = due.max(account.usage_retry_at.unwrap_or_default());
-                        Some(schedule.next_refresh_at(true, not_before))
+                        Some(schedule.next_refresh_at(every, not_before))
                     }
                 };
             }
@@ -3171,7 +3173,7 @@ mod tests {
         assert_eq!(fake.prepaid_requests.lock().unwrap().len(), 2);
     }
 
-    const REFRESH_SECONDS: i64 = crate::refresh_policy::CLAUDE_REFRESH_INTERVAL.as_secs() as i64;
+    const REFRESH_SECONDS: i64 = 300;
     fn queue_usage_rate_limit(fake: &Fake, body: Value) {
         fake.usage
             .lock()
@@ -3403,6 +3405,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rounds_between_full_ones_ask_only_for_the_account_in_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let mut preferences = app.preferences().unwrap();
+        preferences.refresh.claude = crate::PoolRefresh {
+            seconds: 120,
+            full_every: 3,
+            adaptive: false,
+        };
+        app.save_preferences(preferences).await.unwrap();
+        assert_eq!(app.round_interval(Pool::Claude).as_secs(), 120);
+        // Alice is in use: rounds 1 and 2 ask for her alone...
+        for tick in [1, 2] {
+            age(&app, 120);
+            app.refresh_recurring(Pool::Claude, tick).await.unwrap();
+        }
+        assert_eq!(usages(&fake)[2..], ["alice-access", "alice-access"]);
+        // ...and round 3 for everyone.
+        age(&app, 120);
+        app.refresh_recurring(Pool::Claude, 3).await.unwrap();
+        let mut full = usages(&fake)[4..].to_vec();
+        full.sort();
+        assert_eq!(full, ["alice-access", "bob-access"]);
+        // Bob's card shows the next full round.
+        app.background_round(4, Pool::Claude).await;
+        let schedule = app.schedule(Pool::Claude).unwrap();
+        assert_eq!((schedule.tick, schedule.full_every), (5, 3));
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
+        let bob = accounts.iter().find(|a| !a.is_current).unwrap();
+        assert_eq!(bob.next_refresh_at, Some(schedule.at + 120));
+    }
+
+    #[tokio::test]
+    async fn a_new_refresh_interval_applies_to_the_round_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        app.background_round(1, Pool::Claude).await;
+        assert_eq!(
+            app.round_interval(Pool::Claude).as_secs(),
+            REFRESH_SECONDS as u64
+        );
+        let mut preferences = app.preferences().unwrap();
+        preferences.refresh.claude.seconds = 600;
+        preferences.refresh.claude.full_every = 2;
+        app.save_preferences(preferences.clone()).await.unwrap();
+        let now = now_unix_seconds();
+        let schedule = app.schedule(Pool::Claude).unwrap();
+        assert_eq!(
+            (schedule.interval, schedule.full_every, schedule.tick),
+            (600, 2, 2)
+        );
+        assert!((now + 599..=now + 600).contains(&schedule.at));
+        assert_eq!(app.round_interval(Pool::Claude).as_secs(), 600);
+        // Saved and read back; other pools keep theirs.
+        let saved = app.preferences().unwrap().refresh;
+        assert_eq!(saved.claude.seconds, 600);
+        assert_eq!(saved.codex, crate::RefreshPreferences::default().codex);
+        assert_eq!(app.schedule(Pool::Codex), None);
+        // Out of range, it is refused.
+        preferences.refresh.claude.seconds = 1;
+        assert!(app.save_preferences(preferences).await.is_err());
+    }
+
+    #[tokio::test]
     async fn refreshing_the_pool_puts_the_next_round_off_by_an_interval() {
         use crate::refresh_policy::Schedule;
         let dir = tempfile::tempdir().unwrap();
@@ -3417,6 +3489,7 @@ mod tests {
             at,
             tick: 2,
             interval: REFRESH_SECONDS,
+            full_every: 1,
         };
         app.set_schedule(Pool::Claude, round(now + REFRESH_SECONDS - 60));
         app.refresh_all(Pool::Claude).await.unwrap();
@@ -3437,6 +3510,7 @@ mod tests {
             at: now + 5,
             tick: 3,
             interval: 10,
+            full_every: 6,
         };
         app.set_schedule(Pool::Codex, codex);
         app.defer_background_round(Pool::Codex);

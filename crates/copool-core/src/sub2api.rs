@@ -112,6 +112,11 @@ fn card_prefix(pool: Pool) -> &'static str {
 pub(crate) fn is_card(pool: Pool, id: &str) -> bool {
     id.starts_with(card_prefix(pool))
 }
+/// The provider of a Sub2api card of the pool, as its id names it.
+pub(crate) fn card_provider(pool: Pool, id: &str) -> Option<&str> {
+    let (provider, account) = id.strip_prefix(card_prefix(pool))?.rsplit_once('-')?;
+    account.parse::<i64>().ok().map(|_| provider)
+}
 /// Where the keyring keeps a provider's administrator password.
 pub(crate) fn password_secret(pool: Pool, id: &str) -> String {
     match pool {

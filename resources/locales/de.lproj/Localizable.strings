@@ -454,8 +454,8 @@
 "settings.sub2api.proxy_help" = "HTTP, HTTPS oder SOCKS5. Leer lassen, um die Systemeinstellungen zu verwenden.";
 "error.sub2api.proxy_invalid" = "Gib eine gültige HTTP-, HTTPS- oder SOCKS5-Proxy-URL mit Port ein (ohne Benutzername oder Passwort).";
 
-"accounts.proxy.title" = "Konto-Proxy";
-"accounts.renewal.title" = "Token-Erneuerung";
+"accounts.proxy.title" = "Proxy";
+"accounts.renewal.title" = "Erneuerung";
 "accounts.card.say_hi" = "Hallo sagen";
 "accounts.card.say_hi.help" = "Claude Hallo sagen, um das 5-Stunden-Fenster jetzt zu starten";
 "accounts.card.say_hi.sent" = "Hallo gesendet; warte auf Claudes Antwort";
@@ -469,8 +469,6 @@
 "accounts.refresh.next_format" = "Nächste automatische Aktualisierung in %@";
 "accounts.refresh.next_due" = "Automatische Aktualisierung steht an";
 "accounts.proxy.unsupported" = "Dieser Netzwerkdienst unterstützt keinen Konto-Proxy.";
-"accounts.proxy.system" = "System-Proxy";
-"accounts.proxy.none" = "Kein Proxy";
 
 
 "settings.sub2api.admin_base_url_help" = "Optional für Sub2api-Anmeldung, Konten und Kontingente. Leer lassen, um die URL aus Codex abzuleiten. Modellanfragen verwenden weiterhin die Codex-URL. Beispiel: https://host:6060/api/v1.";
@@ -503,7 +501,8 @@
 "accounts.card.awaiting_first_request.help" = "Copool hat für dieses Konto noch keinen Upstream kontaktiert. Lege bei Bedarf seinen Proxy fest und aktualisiere dann diese Karte.";
 
 "settings.account_proxy" = "Gemeinsamer Kontoproxy";
-"accounts.proxy.shared_help_format" = "HTTP, HTTPS oder SOCKS5. Leer lassen, um den gemeinsamen Kontoproxy (%@) zu verwenden.";
+"accounts.proxy.shared_help" = "Leer lassen, um den gemeinsamen Kontoproxy zu verwenden.";
+"accounts.proxy.system_help" = "Leer lassen, um die Systemeinstellungen zu verwenden.";
 
 "accounts.proxy.enabled" = "Proxy aktivieren";
 
@@ -512,13 +511,27 @@
 "accounts.card.codex_say_hi.received" = "Codex hat geantwortet; warte, bis das 5-Stunden-Fenster erscheint";
 "error.codex.say_hi_window_not_started" = "Codex hat das Hallo angenommen, aber das 5-Stunden-Fenster hat nicht begonnen";
 
-"accounts.say_hi.custom" = "Custom times";
 "accounts.say_hi.add" = "Add time";
 "accounts.say_hi.remove" = "Remove";
-"accounts.say_hi.help" = "Daily, local time. Auto starts an idle 5h window. Copool must be running; missed times are skipped.";
 "accounts.say_hi.now" = "Jetzt Hallo sagen";
 "accounts.say_hi.auto" = "Automatisch Hallo sagen";
-"accounts.say_hi.schedule" = "Hallo sagen um…";
+"accounts.say_hi.auto_help" = "Sagt Hallo, sobald das 5-h-Fenster frei ist.";
+"accounts.say_hi.times" = "Täglich Hallo sagen um";
+"accounts.say_hi.times_help" = "Ortszeit. Copool muss laufen; verpasste Zeiten werden übersprungen.";
+"accounts.card.edit" = "Karte bearbeiten…";
+"accounts.card.done" = "Fertig";
+"accounts.card.remove_confirm" = "Zum Entfernen erneut klicken";
+"accounts.card.remove_confirm_format" = "%@ aus dem Kontopool entfernen?";
+"accounts.say_hi.title" = "Begrüßung";
+"accounts.refresh.title" = "Aktualisierung";
+"accounts.refresh.current" = "Verwendetes Konto";
+"accounts.refresh.all" = "Alle Konten";
+"accounts.refresh.every_round_format" = "%@ (jede Runde)";
+"accounts.refresh.multiple_format" = "%1$@ (×%2$@)";
+"accounts.refresh.adaptive" = "Adaptive Beschleunigung";
+"accounts.refresh.adaptive_help_format" = "Solange sich die Nutzung ändert, wird das verwendete Konto alle %@ aktualisiert, bis zwei Runden ohne Änderung vergehen.";
+"accounts.renewal.expires_format" = "Läuft in %@ ab";
+"accounts.renewal.expired" = "Abgelaufen";
 
 "accounts.card.reset_full" = "Vollständiger Reset";
 "accounts.card.reset_fable" = "Fable-Reset";

@@ -56,18 +56,18 @@ for (const target of ["claude", "codex"]) {
   });
 }
 
-test("the renewal menu offers renew now, then auto renew as a toggle", () => {
-  const start = source.indexOf("function renewalButton(");
-  assert(start >= 0, "renewalButton found");
+test("a card's back offers renew now, then auto renew as a switch", () => {
+  const start = source.indexOf("function renewalSection(");
+  assert(start >= 0, "renewalSection found");
   const end = source.indexOf("\n}\n", start);
-  assert(end > start, "renewalButton end found");
+  assert(end > start, "renewalSection end found");
   const body = source.slice(start, end);
   const now = body.indexOf('tr("accounts.renewal.now")');
   const auto = body.indexOf('tr("accounts.renewal.auto")');
   assert(now >= 0 && auto > now, "renew now comes first, then auto renew");
-  assert.match(body, /run: \(\) => renewNow\(account\)/);
-  assert.match(body, /checked: account\.renewal === "always",/);
-  assert.match(body, /account\.renewal === "always" \? "never" : "always"/);
+  assert.match(body, /\(\) => renewNow\(account\)/);
+  assert.match(body, /account\.renewal === "always"/);
+  assert.match(body, /on \? "always" : "never"/);
   assert(!source.includes("RENEWALS"));
   const locales = fs.readFileSync(path.join(__dirname, "../ui/locales.js"), "utf8");
   for (const key of [
@@ -98,11 +98,13 @@ for (const target of ["claude", "codex"]) {
   });
 }
 
-test("the card footer no longer shows the token expiry; the renewal button does", () => {
-  const card = source.slice(source.indexOf("function accountCard("));
+test("the card footer no longer shows the token expiry; the card's back does", () => {
+  const start = source.indexOf("function accountCard(");
+  assert(start >= 0, "accountCard found");
+  const card = source.slice(start);
   assert(!card.slice(0, card.indexOf("\nfunction ")).includes("tokenLabel("));
-  const button = source.slice(source.indexOf("function renewalButton("));
-  assert.match(button.slice(0, button.indexOf("\n}\n")), /trigger\.title = renewing\n\s+\? tr\("accounts\.renewal\.renewing"\)\n\s+: tokenLabel\(account\) \|\| tr\("accounts\.renewal\.title"\);/);
+  const section = source.slice(source.indexOf("function renewalSection("));
+  assert.match(section.slice(0, section.indexOf("\n}\n")), /P\.tokenExpiry\(account\.tokenExpiresAt/);
 });
 
 
@@ -154,12 +156,14 @@ test("say hi now requires an idle window while scheduling stays available", () =
   assert.equal(idle(both(quiet, started)), true, "Gemini's window idle");
   assert.equal(idle(both(started, started)), false);
   assert.equal(idle(both(started, undefined)), false, "no Claude pool reported");
-  assert.match(source, /if \(!collapsed && \(sayingHi\.has\(account\.id\) \|\| supportsSayHi\(account\)\)\)\n\s+actions\.append\(sayHiButton/);
+  // A hi under way takes the refresh button's place.
+  assert.match(source, /const task = cardTask\(account\);/);
 });
 
 test("both pools refresh immediately after a reply, then only until the window shows", async () => {
   const start = source.indexOf("const SAY_HI_LOOKS =");
-  const end = source.indexOf("/// Says hi with the account; shown");
+  const end = source.indexOf("/// The card turned over to edit it");
+  assert(start >= 0 && end > start, "sayHi found");
   // [refreshes before the window shows, or the second another refresh shows it]
   const idleStart = source.indexOf("function fiveHourIdle(");
   const idleEnd = source.indexOf("\n}\n", idleStart);

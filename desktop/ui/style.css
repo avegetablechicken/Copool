@@ -866,58 +866,51 @@ main > section.page-leaving {
   color: var(--label);
 }
 
-/* Keep the slot and keyboard access while hiding the idle proxy control. */
-.account .card-proxy,
-.account .card-renewal {
+/* A card's edit button sits at its top right, as a widget's info button,
+   shown on the focused card; it takes no room from the tags. */
+.account,
+.account-member {
+  position: relative;
+}
+
+.icon-btn.card-edit {
+  position: absolute;
+  top: 7px;
+  right: 9px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+.account-member > .icon-btn.card-edit {
+  top: 3px;
+  right: 5px;
+}
+
+.account:hover > .card-edit,
+.account-member:hover > .card-edit,
+.card-edit:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* A provider's group shows its own button, not its accounts', over them. */
+.account-group:has(.account-member:hover) > .card-edit {
   opacity: 0;
   pointer-events: none;
 }
 
-.account:hover .card-proxy,
-.account:focus-within .card-proxy,
-.account:hover .card-renewal,
-.account:focus-within .card-renewal,
-.card-renewal[aria-expanded="true"] {
-  opacity: 1;
-  pointer-events: auto;
+.account > .block-head,
+.account-member:has(> .card-edit) > :first-child {
+  padding-right: 18px;
 }
 
-/* Say hi shows on the focused card; in a Sub2api provider, on its account. */
-.account .card-say-hi {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.account:not(.account-group):hover .card-say-hi,
-.account:not(.account-group):focus-within .card-say-hi,
-.account-member:hover .card-say-hi,
-.account-member:focus-within .card-say-hi {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* A renewal under way shows on its card until it is done. */
-.account .card-renewal.renewing {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.card-renewal.renewing .icon {
+/* A hi or renewal in the refresh button's place: under way, then done. */
+.card-task.running .icon {
   animation: pulse 1200ms ease-in-out infinite;
 }
 
-/* A hi on its way, then answered, shows on its card until the 5h window does. */
-.account .card-say-hi.sent,
-.account .card-say-hi.received {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.card-say-hi.sent .icon {
-  animation: pulse 1200ms ease-in-out infinite;
-}
-
-.card-say-hi.received {
+.card-task.done {
   color: var(--green);
 }
 
@@ -927,13 +920,235 @@ main > section.page-leaving {
   }
 }
 
-.icon-btn.card-proxy.proxy-muted {
+/* A card's settings side, as a grouped form: captioned sections, each an
+   inset group of rows with hairlines between them, spaced apart. */
+.account-back {
+  gap: 10px;
+  padding-bottom: 10px;
+}
+
+.account-member.account-back {
+  padding: 6px 8px 8px;
+}
+
+.back-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+
+.back-head .block-title {
+  flex: 1;
+}
+
+.btn.back-done {
+  flex: none;
+  padding: 0 10px;
+  font-weight: 600;
+}
+
+.back-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.back-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  padding: 0 2px;
+}
+
+.back-caption-title {
+  flex: none;
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.back-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.back-caption > .btn {
+  flex: none;
+  margin-left: auto;
+  height: 18px;
+  font-size: 10.5px;
+}
+
+.back-group {
+  display: flex;
+  flex-direction: column;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--label) 5%, transparent);
+}
+
+.back-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 9px;
+}
+
+.back-row + .back-row {
+  box-shadow: inset 0 0.5px 0 var(--separator);
+}
+
+.back-label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.back-note {
+  color: var(--secondary);
+  font-size: 10px;
+}
+
+.back-note.error {
+  color: var(--text-red);
+}
+
+.back-row > .switch,
+.back-row > select,
+.back-row > .btn {
+  flex: none;
+}
+
+.back-field {
+  padding-top: 2px;
+  padding-bottom: 7px;
+}
+
+.back-row + .back-field {
+  box-shadow: none;
+}
+
+.back-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding-bottom: 7px;
+}
+
+/* A choice is its value against its arrows, as a pop-up button in a
+   grouped form: no fill, wide as its widest option, until hovered. */
+.account-back select {
+  max-width: 170px;
+  background-color: transparent;
+  text-align: right;
+  text-align-last: right;
+  transition: background-color 120ms ease;
+}
+
+.account-back select:hover,
+.account-back select:focus-visible {
+  background-color: var(--track);
+}
+
+.account-back input.field {
+  background: var(--control);
+  box-shadow: 0 0 0 0.5px var(--control-border);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.back-help {
+  margin: 0;
+  padding: 0 2px;
+  color: var(--secondary);
+  font-size: 10px;
+}
+
+.back-help.error {
+  color: var(--text-red);
+}
+
+.back-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.back-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+  padding: 0 3px 0 7px;
+  border-radius: 9px;
+  background: var(--control);
+  box-shadow: 0 0 0 0.5px var(--control-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.back-time.add {
+  padding: 0 8px;
+  color: var(--accent);
+}
+
+.back-time.adding {
+  padding: 0 6px;
+}
+
+.back-time input[type="time"] {
+  border: 0;
+  background: transparent;
+  color: var(--label);
+  font: inherit;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.back-time-remove {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
   color: var(--secondary);
 }
 
-/* Dim the glyph itself, including native SF Symbol masks, even on hover. */
-.card-proxy.proxy-muted .icon {
-  opacity: 0.35;
+.back-time-remove .icon {
+  width: 8px;
+  height: 8px;
+}
+
+.back-time-remove:hover {
+  background: color-mix(in srgb, var(--label) 12%, transparent);
+  color: var(--label);
+}
+
+/* Removal: a group of its own, red, filled once it asks to confirm. */
+.back-remove {
+  justify-content: center;
+  align-items: center;
+  min-height: 28px;
+  color: var(--text-red);
+}
+
+.back-remove:hover {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.back-remove.confirm {
+  background: var(--red);
+  color: #fff;
+  font-weight: 600;
 }
 
 .icon-btn[aria-expanded="true"]:not(#collapse-all) {
@@ -1317,6 +1532,21 @@ html.linux.composited .tooltip {
 .action-menu.inactive-menu button:focus {
   background: none;
   color: inherit;
+}
+
+.action-menu .menu-separator {
+  margin: 4px 8px;
+  border-top: 0.5px solid var(--separator);
+}
+
+.action-menu button.destructive {
+  color: var(--text-red);
+}
+
+.select-menu button.destructive:hover,
+.select-menu button.destructive:focus {
+  background: var(--red);
+  color: #fff;
 }
 
 .action-menu {
@@ -2372,17 +2602,6 @@ dialog form {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.proxy-dialog-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.proxy-dialog-header .switch {
-  flex-shrink: 0;
 }
 
 dialog h2 {

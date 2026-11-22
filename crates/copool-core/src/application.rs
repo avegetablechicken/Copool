@@ -79,6 +79,8 @@ pub struct Preferences {
     pub account_proxy_url: String,
     /// The order the account page's cards were dragged into, per pool.
     pub account_order: AccountOrder,
+    /// Each pool's background refresh, shared by all its cards.
+    pub refresh: crate::refresh_policy::RefreshPreferences,
 }
 /// Card keys in display order: an account's id, or `sub2api:<provider>` for
 /// all of a Sub2api provider's cards. Cards not listed follow, ranked.
@@ -110,6 +112,7 @@ impl Default for Preferences {
             request_new_accounts: false,
             account_proxy_url: String::new(),
             account_order: AccountOrder::default(),
+            refresh: Default::default(),
         }
     }
 }
@@ -202,6 +205,12 @@ impl Preferences {
                 .extra
                 .get("accountOrder")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+            refresh: settings
+                .extra
+                .get("refresh")
+                .map(|v| serde_json::from_value(v.clone()).map_err(|_| "Invalid refresh interval"))
+                .transpose()?
                 .unwrap_or_default(),
         };
         validate_preferences(&p)?;
@@ -520,6 +529,10 @@ impl Application {
             "accountOrder".into(),
             serde_json::to_value(&p.account_order).unwrap_or_default(),
         );
+        s.extra.insert(
+            "refresh".into(),
+            serde_json::to_value(p.refresh).unwrap_or_default(),
+        );
         s.extra
             .insert("rustPreferencesMigrated".into(), true.into());
     }
@@ -527,8 +540,18 @@ impl Application {
         validate_preferences(&value)?;
         let _op = self.operations.lock().await;
         let mut settings = self.configuration()?;
+        let before = Preferences::from_settings(settings.clone())
+            .map(|p| p.refresh)
+            .ok();
         Self::project_preferences(&mut settings, &value);
-        self.persist_configuration(&settings)
+        self.persist_configuration(&settings)?;
+        // A pool's new refresh applies from now on, not after its next round.
+        for pool in [Pool::Codex, Pool::Claude, Pool::Antigravity] {
+            if before.is_none_or(|b| b.pool(pool) != value.refresh.pool(pool)) {
+                self.reschedule(pool, value.refresh.pool(pool));
+            }
+        }
+        Ok(())
     }
     /// An explicit account proxy wins over the shared account default.
     pub(crate) fn account_proxy(&self, account_proxy: &str) -> Result<String> {
@@ -1271,7 +1294,7 @@ fn validate_preferences(p: &Preferences) -> Result<()> {
     if p.proxy_port == 0 || p.claude_proxy_port == 0 || p.antigravity_proxy_port == 0 {
         return Err("Proxy port must be 1–65535".into());
     }
-    Ok(())
+    p.refresh.validate()
 }
 fn validate_proxy(value: &str) -> Result<()> {
     crate::utils::validate_account_proxy(value).map(|_| ())
@@ -1612,6 +1635,7 @@ mod tests {
                 at: 1_000,
                 tick: 2,
                 interval: 300,
+                full_every: 6,
             },
         );
         let accounts = app.accounts(Pool::Codex).await.unwrap();

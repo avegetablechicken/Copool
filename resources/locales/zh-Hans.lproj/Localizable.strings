@@ -482,8 +482,8 @@
 "settings.sub2api.proxy_help" = "支持 HTTP、HTTPS 或 SOCKS5；留空使用系统网络设置。";
 "error.sub2api.proxy_invalid" = "请输入有效的 HTTP、HTTPS 或 SOCKS5 代理地址和端口（不含用户名或密码）。";
 
-"accounts.proxy.title" = "账号代理";
-"accounts.renewal.title" = "令牌续期";
+"accounts.proxy.title" = "代理";
+"accounts.renewal.title" = "续期";
 "accounts.card.say_hi" = "Greet";
 "accounts.card.say_hi.help" = "向 Claude 打个招呼，立即开始 5 小时计时";
 "accounts.card.say_hi.sent" = "已发送招呼，等待 Claude 回复";
@@ -497,8 +497,6 @@
 "accounts.refresh.next_format" = "%@后自动刷新";
 "accounts.refresh.next_due" = "即将自动刷新";
 "accounts.proxy.unsupported" = "此网络服务不支持账号代理。";
-"accounts.proxy.system" = "系统代理";
-"accounts.proxy.none" = "无代理";
 
 
 "settings.sub2api.admin_base_url_help" = "可选，用于 Sub2api 登录、账号和额度查询；留空则从 Codex Provider 地址推导。模型请求仍使用 Codex 中的地址。请填写基础地址，例如 https://主机:6060/api/v1。";
@@ -533,7 +531,8 @@
 "error.claude.credentials_json_invalid" = "Claude 凭据 JSON 无效，需要包含有效 accessToken 的 claudeAiOauth 对象。";
 
 "settings.account_proxy" = "账号统一代理";
-"accounts.proxy.shared_help_format" = "支持 HTTP、HTTPS 或 SOCKS5；留空使用账号统一代理（%@）。";
+"accounts.proxy.shared_help" = "留空使用账号统一代理。";
+"accounts.proxy.system_help" = "留空使用系统网络设置。";
 
 "accounts.proxy.enabled" = "启用代理";
 
@@ -542,13 +541,27 @@
 "accounts.card.codex_say_hi.received" = "已收到 Codex 回复，等待 5 小时计时显示";
 "error.codex.say_hi_window_not_started" = "Codex 已接受招呼，但 5 小时计时没有开始";
 
-"accounts.say_hi.custom" = "自选时间";
 "accounts.say_hi.add" = "添加时间";
 "accounts.say_hi.remove" = "删除";
-"accounts.say_hi.help" = "每天按本地时间执行。Auto 在 5h 窗口结束后自动打招呼。需保持 Copool 运行；错过的时间不会补发。";
 "accounts.say_hi.now" = "立即打招呼";
 "accounts.say_hi.auto" = "自动打招呼";
-"accounts.say_hi.schedule" = "在指定时间打招呼…";
+"accounts.say_hi.auto_help" = "5h 窗口结束后自动打招呼。";
+"accounts.say_hi.times" = "每天定时打招呼";
+"accounts.say_hi.times_help" = "按本地时间执行；需保持 Copool 运行，错过的时间不会补发。";
+"accounts.card.edit" = "编辑卡片…";
+"accounts.card.done" = "完成";
+"accounts.card.remove_confirm" = "再次点击以移除";
+"accounts.card.remove_confirm_format" = "从账号池移除 %@？";
+"accounts.say_hi.title" = "打招呼";
+"accounts.refresh.title" = "刷新";
+"accounts.refresh.current" = "当前账号";
+"accounts.refresh.all" = "全部账号";
+"accounts.refresh.every_round_format" = "%@（每轮）";
+"accounts.refresh.multiple_format" = "%1$@（×%2$@）";
+"accounts.refresh.adaptive" = "自适应加速";
+"accounts.refresh.adaptive_help_format" = "用量变化时当前账号临时改为每%@刷新，连续两轮无变化后恢复。";
+"accounts.renewal.expires_format" = "%@后过期";
+"accounts.renewal.expired" = "已过期";
 
 "accounts.card.reset_full" = "Full reset";
 "accounts.card.reset_fable" = "Fable reset";

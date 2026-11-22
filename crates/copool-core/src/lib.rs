@@ -32,6 +32,7 @@ mod ranking;
 mod system_proxy;
 
 mod refresh_policy;
+pub use refresh_policy::{PoolRefresh, RefreshPreferences};
 
 #[path = "../../../resources/proxyd-src/src/endpoint.rs"]
 mod endpoint;

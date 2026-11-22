@@ -533,6 +533,7 @@ async fn recurringRefreshReachesEveryProviderOnlyOnFullRounds() {
             at: 1_000,
             tick: 2,
             interval: 300,
+            full_every: 6,
         },
     );
     let accounts = app.accounts(Pool::Codex).await.unwrap();
