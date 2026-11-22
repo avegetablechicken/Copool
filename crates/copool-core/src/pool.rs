@@ -109,10 +109,28 @@ impl Application {
     }
     /// Imports an exported login file.
     pub async fn import_file(&self, pool: Pool, path: &std::path::Path) -> Result<usize> {
-        if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > IMPORT_LIMIT {
-            return Err("File exceeds 16 MiB".into());
-        }
-        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let path = path.to_owned();
+        // Off the runtime, and no more than the limit, whatever the file
+        // grows to meanwhile; a pipe or device is no login file.
+        let content = tokio::task::spawn_blocking(move || -> Result<String> {
+            use std::io::Read;
+            if !std::fs::metadata(&path)
+                .map_err(|e| e.to_string())?
+                .is_file()
+            {
+                return Err("Not a file".into());
+            }
+            let mut content = String::new();
+            std::fs::File::open(&path)
+                .and_then(|file| file.take(IMPORT_LIMIT + 1).read_to_string(&mut content))
+                .map_err(|e| e.to_string())?;
+            if content.len() as u64 > IMPORT_LIMIT {
+                return Err("File exceeds 16 MiB".into());
+            }
+            Ok(content)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
         self.import_json(pool, &content).await
     }
     /// Stores a browser sign-in's login without switching to it.

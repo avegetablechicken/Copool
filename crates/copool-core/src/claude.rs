@@ -5211,6 +5211,18 @@ mod tests {
             .claude_import_json(&" ".repeat(16 * 1024 * 1024 + 1))
             .await
             .is_err());
+        // A file over the limit, or no file, is not read.
+        let file = dir.path().join("big.json");
+        fs::write(&file, " ".repeat(16 * 1024 * 1024 + 1)).unwrap();
+        assert_eq!(
+            app.import_file(Pool::Claude, &file).await.unwrap_err(),
+            "File exceeds 16 MiB"
+        );
+        assert_eq!(
+            app.import_file(Pool::Claude, dir.path()).await.unwrap_err(),
+            "Not a file"
+        );
+        assert_eq!(fs::read(app.claude_store_path()).unwrap(), saved);
     }
 
     #[tokio::test]
