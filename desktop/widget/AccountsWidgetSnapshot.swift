@@ -14,6 +14,7 @@ enum AccountsWidgetVariant: Sendable {
     case codex
     case claude
     case antigravity
+    case grok
     /// Every pool.
     case all
 
@@ -22,6 +23,7 @@ enum AccountsWidgetVariant: Sendable {
         case .codex: "CopoolCodexAccountsWidget"
         case .claude: "CopoolClaudeAccountsWidget"
         case .antigravity: "CopoolAntigravityAccountsWidget"
+        case .grok: "CopoolGrokAccountsWidget"
         case .all: "CopoolAccountsWidget"
         }
     }
@@ -31,6 +33,7 @@ enum AccountsWidgetVariant: Sendable {
         case .codex: "codex-accounts-widget-snapshot.json"
         case .claude: "claude-accounts-widget-snapshot.json"
         case .antigravity: "antigravity-accounts-widget-snapshot.json"
+        case .grok: "grok-accounts-widget-snapshot.json"
         case .all: "accounts-widget-snapshot.json"
         }
     }

@@ -24,16 +24,24 @@ pub enum Widget {
     Codex,
     Claude,
     Antigravity,
+    Grok,
     /// Every pool.
     All,
 }
 impl Widget {
-    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Antigravity, Self::All];
+    pub const ALL: [Self; 5] = [
+        Self::Codex,
+        Self::Claude,
+        Self::Antigravity,
+        Self::Grok,
+        Self::All,
+    ];
     pub fn kind(self) -> &'static str {
         match self {
             Self::Codex => "CopoolCodexAccountsWidget",
             Self::Claude => "CopoolClaudeAccountsWidget",
             Self::Antigravity => "CopoolAntigravityAccountsWidget",
+            Self::Grok => "CopoolGrokAccountsWidget",
             Self::All => "CopoolAccountsWidget",
         }
     }
@@ -43,6 +51,7 @@ impl Widget {
             Self::Codex => "codex-accounts-widget-snapshot.json",
             Self::Claude => "claude-accounts-widget-snapshot.json",
             Self::Antigravity => "antigravity-accounts-widget-snapshot.json",
+            Self::Grok => "grok-accounts-widget-snapshot.json",
             Self::All => "accounts-widget-snapshot.json",
         }
     }
@@ -52,6 +61,7 @@ impl Widget {
             Self::Codex => &[Pool::Codex],
             Self::Claude => &[Pool::Claude],
             Self::Antigravity => &[Pool::Antigravity],
+            Self::Grok => &[Pool::Grok],
             Self::All => &Pool::ALL,
         }
     }

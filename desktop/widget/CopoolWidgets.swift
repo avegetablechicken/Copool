@@ -8,6 +8,7 @@ struct CopoolWidgets: WidgetBundle {
         CopoolCodexAccountsWidget()
         CopoolClaudeAccountsWidget()
         CopoolAntigravityAccountsWidget()
+        CopoolGrokAccountsWidget()
     }
 }
 
@@ -67,6 +68,20 @@ struct CopoolAntigravityAccountsWidget: Widget {
     }
 }
 
+struct CopoolGrokAccountsWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(
+            kind: AccountsWidgetVariant.grok.kind,
+            provider: AccountsWidgetTimelineProvider(variant: .grok)
+        ) { entry in
+            AccountsWidgetEntryView(entry: entry)
+        }
+        .configurationDisplayName("Copool Grok Accounts")
+        .description("See the current Grok account and remaining weekly quota at a glance.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
 struct AccountsWidgetEntry: TimelineEntry {
     let date: Date
     let snapshot: AccountsWidgetSnapshot
@@ -120,8 +135,22 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
         case .codex: ["TEAM", "PRO", "TEAM", "PLUS"]
         case .claude: ["MAX 20X", "PRO", "TEAM", "MAX 5X"]
         case .antigravity: ["PRO", "ULTRA", "PRO", "FREE"]
+        case .grok: ["SUPERGROK", "SUPERGROK", "SUPERGROK HEAVY", "FREE"]
         case .all: ["TEAM", "MAX 20X", "MAX 20X", "PLUS"]
         }
+    }
+
+    /// A sample card's five-hour window; xAI reports none for Grok.
+    private func sampleFiveHour(_ window: AccountsWidgetWindowSnapshot) -> AccountsWidgetWindowSnapshot {
+        guard variant == .grok else { return window }
+        return AccountsWidgetWindowSnapshot(
+            title: window.title,
+            available: false,
+            progressFraction: 0,
+            usedText: "--",
+            remainingText: "--",
+            resetText: "--"
+        )
     }
 
     private var sampleSnapshot: AccountsWidgetSnapshot {
@@ -134,14 +163,14 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 planLabel: samplePlans[0],
                 workspaceLabel: variant == .codex || variant == .all ? "workspace" : nil,
                 accountLabel: "current_account",
-                fiveHour: AccountsWidgetWindowSnapshot(
+                fiveHour: sampleFiveHour(AccountsWidgetWindowSnapshot(
                     title: "5h",
                     available: true,
                     progressFraction: 0.42,
                     usedText: "42%",
                     remainingText: "58%",
                     resetText: "26/3/21 01:23:45"
-                ),
+                )),
                 oneWeek: AccountsWidgetWindowSnapshot(
                     title: "1w",
                     available: true,
@@ -157,14 +186,14 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 planLabel: samplePlans[1],
                 workspaceLabel: nil,
                 accountLabel: "next_account",
-                fiveHour: AccountsWidgetWindowSnapshot(
+                fiveHour: sampleFiveHour(AccountsWidgetWindowSnapshot(
                     title: "5h",
                     available: true,
                     progressFraction: 0.55,
                     usedText: "55%",
                     remainingText: "45%",
                     resetText: "26/3/21 03:11:22"
-                ),
+                )),
                 oneWeek: AccountsWidgetWindowSnapshot(
                     title: "1w",
                     available: true,
@@ -181,14 +210,14 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     planLabel: samplePlans[2],
                     workspaceLabel: variant == .codex || variant == .claude ? "abcdefg" : nil,
                     accountLabel: "account_name",
-                    fiveHour: AccountsWidgetWindowSnapshot(
+                    fiveHour: sampleFiveHour(AccountsWidgetWindowSnapshot(
                         title: "5h",
                         available: true,
                         progressFraction: 0.50,
                         usedText: "50%",
                         remainingText: "50%",
                         resetText: "26/3/21 01:23:45"
-                    ),
+                    )),
                     oneWeek: AccountsWidgetWindowSnapshot(
                         title: "1w",
                         available: true,
@@ -204,14 +233,14 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     planLabel: samplePlans[3],
                     workspaceLabel: nil,
                     accountLabel: "plus_account",
-                    fiveHour: AccountsWidgetWindowSnapshot(
+                    fiveHour: sampleFiveHour(AccountsWidgetWindowSnapshot(
                         title: "5h",
                         available: true,
                         progressFraction: 0.18,
                         usedText: "18%",
                         remainingText: "82%",
                         resetText: "26/3/21 08:54:12"
-                    ),
+                    )),
                     oneWeek: AccountsWidgetWindowSnapshot(
                         title: "1w",
                         available: true,

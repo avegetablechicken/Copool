@@ -205,6 +205,51 @@ fn everyPoolsWidgetLeadsWithAntigravitysCurrentAccountAfterTheOthers() {
     );
 }
 #[test]
+fn grokHasItsOwnWidgetAndJoinsEveryPoolsWidget() {
+    // xAI reports a weekly allowance only.
+    let mut grok = [
+        account("grok-current", true, "grok@example.com", 0., 7.),
+        account("grok-spare", false, "spare@example.com", 0., 40.),
+    ];
+    for account in &mut grok {
+        account.usage.as_mut().unwrap().five_hour = None;
+    }
+    grok[0].plan_type = Some("SuperGrok".into());
+    let own = Widget::Grok.build(&[(Pool::Grok, &grok)], "used", Some(0), 100);
+    let current = own.current_card.unwrap();
+    assert_eq!(current.pool_label, None);
+    assert_eq!(current.plan_label, "SUPERGROK");
+    assert_eq!(current.account_label, "grok");
+    assert!(!current.five_hour.available);
+    assert_eq!(current.one_week.used_text, "7%");
+    assert_eq!(own.secondary_card.unwrap().id, "grok-spare");
+    assert_eq!(Widget::Grok.kind(), "CopoolGrokAccountsWidget");
+    assert_eq!(
+        Widget::Grok.filename(),
+        "grok-accounts-widget-snapshot.json"
+    );
+    assert_eq!(Widget::Grok.pools(), &[Pool::Grok]);
+    assert!(Widget::ALL.contains(&Widget::Grok));
+
+    let codex = [account(
+        "codex-current",
+        true,
+        "codex@example.com",
+        10.,
+        10.,
+    )];
+    let all = Widget::All.build(
+        &[(Pool::Codex, &codex), (Pool::Grok, &grok)],
+        "used",
+        Some(0),
+        100,
+    );
+    assert_eq!(all.current_card.unwrap().id, "codex-current");
+    let grok_current = all.secondary_card.unwrap();
+    assert_eq!(grok_current.id, "grok-current");
+    assert_eq!(grok_current.pool_label.as_deref(), Some("GROK"));
+}
+#[test]
 fn bothPoolsWidgetShowsTheOtherPoolWhenOneIsEmpty() {
     let claude = [account("claude", true, "claude@example.com", 10., 20.)];
     let s = Widget::All.build(&[(Pool::Claude, &claude)], "used", Some(0), 100);
