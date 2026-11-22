@@ -376,7 +376,8 @@ fn read_owner(path: &Path) -> Option<Owner> {
     };
     Some(Owner {
         pid: value["pid"].as_i64()?,
-        proc_start: text("procStart", 64)?,
+        // An empty start time proves nothing, as Claude Code reads it.
+        proc_start: text("procStart", 64)?.filter(|start| !start.trim().is_empty()),
         pid_domain: text("pidDomain", 512)??,
         pid_space: text("pidSpace", 512)??,
         lock_birth: positive("lockBirthtimeMs")??,
@@ -896,6 +897,11 @@ mod tests {
                     Box::new(|record| {
                         record.as_object_mut().unwrap().remove("procStart");
                     }),
+                ),
+                (
+                    "alive with an empty start time",
+                    parent,
+                    Box::new(|record| record["procStart"] = "".into()),
                 ),
                 (
                     "another host",
