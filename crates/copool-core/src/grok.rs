@@ -389,8 +389,10 @@ impl Application {
     }
     /// The pool, following the login Grok Build uses.
     pub(crate) async fn grok_accounts(&self) -> Result<Vec<AccountSummary>> {
-        let live = self.grok_read_live().ok().flatten();
         let _lock = self.grok.lock.lock().await;
+        // Read under the lock a switch writes the sign-in under, which a
+        // sign-in read before it would undo.
+        let live = self.grok_read_live().ok().flatten();
         let mut store = self.grok_load()?;
         if follow_live(&mut store, live.as_ref()) {
             self.grok_save(&store)?;

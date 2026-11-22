@@ -279,6 +279,35 @@ async fn an_imported_login_waits_then_shows_its_weekly_usage_and_plan() {
 }
 
 #[tokio::test]
+async fn cards_read_while_a_switch_writes_keep_the_account_switched_to() {
+    let h = harness(true).await;
+    let alice = sign_in_of("alice", "access-alice", later());
+    let bob = sign_in_of("bob", "access-bob", later());
+    h.app
+        .import_json(Pool::Grok, &json!([alice, bob]).to_string())
+        .await
+        .unwrap();
+    h.sign_in(&alice);
+    let bob_id = card_of(&cards(&h.app).await, "bob").id;
+    // The cards are asked for while a switch to Bob holds the store to
+    // write his sign-in.
+    let lock = h.app.grok.lock.lock().await;
+    let switch = async {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        h.sign_in(&bob);
+        let mut store = h.app.grok_load().unwrap();
+        store.current_account_id = Some(bob_id.clone());
+        h.app.grok_save(&store).unwrap();
+        drop(lock);
+    };
+    tokio::join!(cards(&h.app), switch);
+    assert_eq!(
+        h.app.grok_load().unwrap().current_account_id.as_deref(),
+        Some(bob_id.as_str())
+    );
+}
+
+#[tokio::test]
 async fn switching_writes_the_sign_in_keeps_other_issuers_and_backs_up_a_stranger() {
     let h = harness(true).await;
     let alice = sign_in_of("alice", "access-alice", later());
