@@ -933,6 +933,10 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
             switched["model"][model]["env_key"].as_str(),
             Some("GROK_SUB2API_API_KEY")
         );
+        assert_eq!(
+            switched["model"][model]["api_backend"].as_str(),
+            Some("responses")
+        );
     }
     assert!(switched["model"].get("grok-imagine-image").is_none());
     assert_eq!(

@@ -5,8 +5,8 @@
 //! names without a key of its own, so its `[endpoints] models_base_url`
 //! would hand the xAI login to Sub2api. A switch instead gives each model
 //! Grok Build may use, in its `config.toml`, the gateway as `base_url` and
-//! the provider's variable as `env_key`: Grok Build then sends that
-//! variable's value there and nothing when it is unset, and its login stays
+//! the provider's variable as `env_key`, and `responses` as `api_backend`.
+//! Grok Build sends that variable's value there when set, and its login stays
 //! in `auth.json` for an account's switch to return to. The models are
 //! those of Grok Build's catalog (`models_cache.json`), those `[models]`
 //! names for its roles, and the Grok text models the gateway lists; a model
@@ -128,8 +128,8 @@ pub(super) struct ConfigRecord {
     created: bool,
     models: Vec<ModelRecord>,
 }
-/// A model the switch gave the gateway: its table's `base_url` and
-/// `env_key` before, as TOML values, and whether the table was new.
+/// A model the switch gave the gateway: the TOML values the switch
+/// replaced and whether the table was new.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 struct ModelRecord {
@@ -139,6 +139,15 @@ struct ModelRecord {
     base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     env_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<BackendOverride>,
+}
+
+/// Old switches did not manage the backend. Once managed, remember
+/// whether an explicit backend existed before switching.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+struct BackendOverride {
+    previous: Option<String>,
 }
 
 fn read_text(path: &Path) -> Result<Option<String>> {
@@ -271,26 +280,33 @@ fn apply(
     record.models = kept;
     let table = models_table(doc)?;
     for id in models {
-        let recorded = record.models.iter().any(|m| &m.id == id);
+        let recorded = record.models.iter_mut().find(|m| &m.id == id);
         let entry = table.entry(id);
         let created = matches!(entry, toml_edit::Entry::Vacant(_));
         let model = entry
             .or_insert_with(|| Item::Table(Table::new()))
             .as_table_mut()
             .ok_or(CONFIG_INVALID)?;
-        if !recorded && model.contains_key("base_url") {
-            continue;
-        }
-        if !recorded {
+        let backend = || BackendOverride {
+            previous: value_text(model.get("api_backend")),
+        };
+        if let Some(recorded) = recorded {
+            recorded.backend.get_or_insert_with(backend);
+        } else {
+            if model.contains_key("base_url") {
+                continue;
+            }
             record.models.push(ModelRecord {
                 id: id.clone(),
                 created,
                 base_url: value_text(model.get("base_url")),
                 env_key: value_text(model.get("env_key")),
+                backend: Some(backend()),
             });
         }
         model.insert("base_url", toml_edit::value(gateway));
         model.insert("env_key", toml_edit::value(variable));
+        model.insert("api_backend", toml_edit::value("responses"));
     }
     if table.is_empty() {
         doc.remove("model");
@@ -317,6 +333,11 @@ fn restore(doc: &mut DocumentMut, record: &ConfigRecord) {
         };
         put_value(model, "base_url", entry.base_url.as_deref());
         put_value(model, "env_key", entry.env_key.as_deref());
+        if let Some(backend) = &entry.backend {
+            if model.get("api_backend").and_then(Item::as_str) == Some("responses") {
+                put_value(model, "api_backend", backend.previous.as_deref());
+            }
+        }
         if entry.created && model.is_empty() {
             table.remove(&entry.id);
         }
@@ -698,7 +719,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let before = "# the user's\n[features]\ntelemetry = false\n\n\
-            [model.\"grok-4.6\"]\ntemperature = 0.5\nenv_key = [\"A\", \"B\"]\n\n\
+            [model.\"grok-4.6\"]\ntemperature = 0.5\nenv_key = [\"A\", \"B\"]\napi_backend = \"messages\"\n\n\
             [model.mine]\nmodel = \"local\"\nbase_url = \"http://localhost:11434/v1\"\n";
         put_text(&path, Some(before)).unwrap();
         let mut store = Store::default();
@@ -753,6 +774,10 @@ mod tests {
         let other: DocumentMut = doc.to_string().parse().unwrap();
         assert!(other["model"]["grok-4.6"].get("base_url").is_none());
         assert_eq!(
+            other["model"]["grok-4.6"]["api_backend"].as_str(),
+            Some("messages")
+        );
+        assert_eq!(
             other["model"]["grok-4.6"]["env_key"]
                 .as_array()
                 .map(|a| a.len()),
@@ -775,6 +800,41 @@ mod tests {
         // A failed account switch takes Grok Build back to the gateway.
         restore_left(&path, &mut store, left);
         assert!(provider_mode(&path, &store));
+    }
+
+    #[test]
+    fn a_switch_upgrades_legacy_model_records_only_when_it_sets_the_backend() {
+        let relay = "https://relay.example/v1";
+        let old: ConfigRecord = serde_json::from_value(serde_json::json!({
+            "gateway": relay, "models": [{"id": "grok-test", "created": false}]
+        }))
+        .unwrap();
+        for prior in [None, Some("chat_completions"), Some("responses")] {
+            let mut doc = parse(Some("[model.grok-test]\n")).unwrap();
+            let model = &mut doc["model"]["grok-test"];
+            model["base_url"] = toml_edit::value(relay);
+            model["env_key"] = toml_edit::value("K");
+            if let Some(prior) = prior {
+                model["api_backend"] = toml_edit::value(prior);
+            }
+            let mut expected = doc.clone();
+            restore(&mut expected, &old);
+            assert_eq!(
+                expected["model"]["grok-test"]
+                    .get("api_backend")
+                    .and_then(Item::as_str),
+                prior
+            );
+
+            let mut record = old.clone();
+            apply(&mut doc, &mut record, &models(&["grok-test"]), relay, "K").unwrap();
+            assert_eq!(
+                doc["model"]["grok-test"]["api_backend"].as_str(),
+                Some("responses")
+            );
+            restore(&mut doc, &record);
+            assert_eq!(doc.to_string(), expected.to_string());
+        }
     }
 
     #[test]
