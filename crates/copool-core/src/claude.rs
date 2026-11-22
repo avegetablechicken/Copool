@@ -2129,9 +2129,20 @@ impl Application {
     pub(crate) async fn claude_refresh_usage_scoped(
         &self,
         id: &str,
-        mut renew_now: Option<&mut bool>,
+        renew_now: Option<&mut bool>,
     ) -> Result<()> {
-        let forced = renew_now.is_some();
+        self.claude_refresh_login(id, renew_now, None).await
+    }
+    /// As `claude_refresh_usage_scoped`; with `rejected`, the access token
+    /// an upstream refused, renews only while the account still holds it
+    /// and its renewal allows, so concurrent refusals renew it once.
+    async fn claude_refresh_login(
+        &self,
+        id: &str,
+        mut renew_now: Option<&mut bool>,
+        rejected: Option<&str>,
+    ) -> Result<()> {
+        let forced = renew_now.is_some() || rejected.is_some();
         let _activity = (!forced).then(|| self.begin_refresh(id));
         // Serialize renewal with imports/switches and other pool refreshes.
         let _op = self.claude.operations.lock().await;
@@ -2172,6 +2183,15 @@ impl Application {
         }
         if !holds_tokens(&account) {
             return Err(self.claude_locked());
+        }
+        // Renewed since the token was refused, here or by Claude Code.
+        if let Some(rejected) = rejected {
+            if text(&account.oauth["accessToken"]).as_deref() != Some(rejected) {
+                return Ok(());
+            }
+            if Renewal::of(account.renewal) == Renewal::Never {
+                return Err(RENEWAL_OFF.into());
+            }
         }
         // Renewal off: an expired account is reported, never renewed, and
         // nothing is written back to Claude Code.
@@ -7462,6 +7482,21 @@ mod tests {
             .find(|a| a.label.contains("bob"))
             .unwrap();
         assert_eq!(bob.oauth["accessToken"], "fresh-access");
+        // Another request refused with the same token gets the renewal,
+        // without renewing again.
+        let login = app.claude_renew_login(&bob.id, "bob-access").await.unwrap();
+        assert_eq!(login["claudeAiOauth"]["accessToken"], "fresh-access");
+        assert_eq!(*fake.refreshed.lock().unwrap(), ["bob-refresh"]);
+        // A refused token is renewed only as the account's choice allows.
+        app.set_renewal(Pool::Claude, &bob.id, "never")
+            .await
+            .unwrap();
+        let error = app
+            .claude_renew_login(&bob.id, "fresh-access")
+            .await
+            .unwrap_err();
+        assert_eq!(error, RENEWAL_OFF);
+        assert_eq!(fake.refreshed.lock().unwrap().len(), 1);
         app.stop_proxy(Pool::Claude).await.unwrap();
     }
 

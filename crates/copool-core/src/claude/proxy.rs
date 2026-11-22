@@ -56,13 +56,13 @@ impl Application {
                 .claude_proxy_candidates()
         }));
         let renew = weak.clone();
-        storage.renew_candidate = Some(Arc::new(move |id, _| {
+        storage.renew_candidate = Some(Arc::new(move |id, rejected| {
             let renew = renew.clone();
             Box::pin(async move {
                 renew
                     .upgrade()
                     .ok_or("Copool is closing")?
-                    .claude_renew_login(&id)
+                    .claude_renew_login(&id, &rejected)
                     .await
             })
         }));
@@ -175,12 +175,13 @@ impl Application {
         }
         Ok(candidates)
     }
-    /// Renews a login the upstream refused, through the pool, which keeps
-    /// Claude Code's login in step; returns the login now kept.
-    pub(crate) async fn claude_renew_login(&self, id: &str) -> Result<Value> {
+    /// Renews a login the upstream refused (its access token `rejected`),
+    /// through the pool, which keeps Claude Code's login in step; returns
+    /// the login now kept.
+    pub(crate) async fn claude_renew_login(&self, id: &str, rejected: &str) -> Result<Value> {
         let mut renewed = false;
         let result = self
-            .claude_refresh_usage_scoped(id, Some(&mut renewed))
+            .claude_refresh_login(id, Some(&mut renewed), Some(rejected))
             .await;
         let account = self
             .claude_load()?
