@@ -1149,7 +1149,10 @@ async fn claude_code_lock(
         ) {
             Ok(Some(lock)) => Ok(Some(lock)),
             Ok(None) => Err(CLAUDE_CODE_RENEWING.to_owned()),
-            Err(_) => Err(CLAUDE_CODE_LOCK_UNAVAILABLE.to_owned()),
+            Err(error) => {
+                log::warn!("Claude Code's refresh lock could not be taken: {error}");
+                Err(CLAUDE_CODE_LOCK_UNAVAILABLE.to_owned())
+            }
         }
     })
     .await
@@ -1160,7 +1163,7 @@ async fn claude_code_lock(
 /// its lock and only while it still holds `seen`. Members Copool does not
 /// keep (`clientId`, MCP logins) stay as Claude Code wrote them.
 async fn sync_live(location: &Location, seen: &Live, oauth: &Value) -> Result<()> {
-    let _lock = claude_code_lock(location, true).await?;
+    let lock = claude_code_lock(location, true).await?;
     let current = read_live(location).await?.ok_or(CREDENTIALS_CHANGED)?;
     let unchanged = match (seen.oauth(), current.oauth()) {
         (Some(seen), Some(now)) => same_oauth_generation(seen, now),
@@ -1168,6 +1171,10 @@ async fn sync_live(location: &Location, seen: &Live, oauth: &Value) -> Result<()
     };
     if !unchanged || current.held != seen.held {
         return Err(CREDENTIALS_CHANGED.into());
+    }
+    // Taken over as a dead holder's: Claude Code may be renewing now.
+    if lock.as_ref().is_some_and(|lock| lock.compromised()) {
+        return Err(CLAUDE_CODE_RENEWING.into());
     }
     let mut document = current.document.clone();
     document["claudeAiOauth"] = merged_oauth(current.oauth(), oauth);
@@ -1961,7 +1968,7 @@ impl Application {
         // login being left over it: switch only while it renews nothing, and
         // read the login being left under the same lock. Waited for before
         // the store's lock, which the cards are read under.
-        let _claude_code = claude_code_lock(&location, true).await?;
+        let claude_code = claude_code_lock(&location, true).await?;
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         let live = read_live_with_access(&location, access).await?;
@@ -2030,6 +2037,10 @@ impl Application {
                 .map_err(|rollback| format!("{error}; rollback failed: {rollback}"))
                 .and(Err(error))
         };
+        // Taken over as a dead holder's: Claude Code may be renewing now.
+        if claude_code.as_ref().is_some_and(|lock| lock.compromised()) {
+            return Err(CLAUDE_CODE_RENEWING.into());
+        }
         // The Keychain may already hold the target when the file write fails.
         if let Err(error) = write_credentials(&location, &document, held, access).await {
             return rollback(error).await;
