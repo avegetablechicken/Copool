@@ -501,7 +501,7 @@
 "settings.sub2api.claude_mode_address" = "URL API";
 "settings.sub2api.claude_name" = "Название";
 "settings.sub2api.claude_name_placeholder" = "Название этого провайдера Sub2api";
-"settings.sub2api.claude_api_key_variable" = "Переменная API-ключа";
+"settings.sub2api.claude_api_key_variable" = "API-ключ";
 "settings.sub2api.claude_api_key_variable_placeholder" = "CLAUDE_SUB2API_API_KEY";
 "accounts.notice.claude_provider_switched_format" = "Claude Code теперь использует Sub2api %@; перезапустите Claude Code";
 "error.claude.sub2api_not_configured" = "Сначала добавьте провайдера Sub2api для Claude в настройках.";
@@ -575,7 +575,7 @@
 "settings.sub2api.antigravity_name_placeholder" = "Название этого провайдера Sub2api";
 "settings.sub2api.antigravity_base_url" = "URL API";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
-"settings.sub2api.antigravity_api_key_variable" = "Переменная API-ключа";
+"settings.sub2api.antigravity_api_key_variable" = "API-ключ";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy теперь использует Sub2api %@; запустите agy в новом терминале, чтобы применить";
 "error.antigravity.gemini_api_key_missing" = "Переменная API-ключа провайдера не экспортирована; экспортируйте её в оболочке перед переключением на карточку Sub2api";
@@ -592,7 +592,7 @@
 "settings.sub2api.grok_name_placeholder" = "Название этого провайдера Sub2api";
 "settings.sub2api.grok_base_url" = "URL API";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
-"settings.sub2api.grok_api_key_variable" = "Переменная API-ключа";
+"settings.sub2api.grok_api_key_variable" = "API-ключ";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build теперь использует Sub2api %@; запустите grok в новом терминале, чтобы применить";
 "error.grok.sub2api_api_key_missing" = "Переменная API-ключа провайдера не экспортирована; экспортируйте её в оболочке перед переключением на карточку Sub2api";

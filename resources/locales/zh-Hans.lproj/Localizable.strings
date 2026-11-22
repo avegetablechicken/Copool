@@ -529,7 +529,7 @@
 "settings.sub2api.claude_mode_address" = "API 地址";
 "settings.sub2api.claude_name" = "名称";
 "settings.sub2api.claude_name_placeholder" = "此 Sub2api 提供方的名称";
-"settings.sub2api.claude_api_key_variable" = "API Key 变量";
+"settings.sub2api.claude_api_key_variable" = "API Key";
 "settings.sub2api.claude_api_key_variable_placeholder" = "CLAUDE_SUB2API_API_KEY";
 "accounts.notice.claude_provider_switched_format" = "Claude Code 已改用 Sub2api %@，重启 Claude Code 后生效";
 "error.claude.sub2api_not_configured" = "请先在设置中添加 Claude 的 Sub2api Provider。";
@@ -605,7 +605,7 @@
 "settings.sub2api.antigravity_name_placeholder" = "此 Sub2api 提供方的名称";
 "settings.sub2api.antigravity_base_url" = "API 地址";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
-"settings.sub2api.antigravity_api_key_variable" = "API Key 变量";
+"settings.sub2api.antigravity_api_key_variable" = "API Key";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy 已改用 Sub2api %@，在新终端中启动 agy 后生效";
 "error.antigravity.gemini_api_key_missing" = "提供方的 API Key 变量未导出；请先在 shell 中导出它，再切换到 Sub2api 卡片";
@@ -622,7 +622,7 @@
 "settings.sub2api.grok_name_placeholder" = "此 Sub2api 提供方的名称";
 "settings.sub2api.grok_base_url" = "API 地址";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
-"settings.sub2api.grok_api_key_variable" = "API Key 变量";
+"settings.sub2api.grok_api_key_variable" = "API Key";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build 已改用 Sub2api %@，在新终端中启动 grok 后生效";
 "error.grok.sub2api_api_key_missing" = "提供方的 API Key 变量未导出；请先在 shell 中导出它，再切换到 Sub2api 卡片";

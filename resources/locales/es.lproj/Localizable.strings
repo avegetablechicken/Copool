@@ -501,7 +501,7 @@
 "settings.sub2api.claude_mode_address" = "URL de la API";
 "settings.sub2api.claude_name" = "Nombre";
 "settings.sub2api.claude_name_placeholder" = "Un nombre para este proveedor Sub2api";
-"settings.sub2api.claude_api_key_variable" = "Variable de la clave API";
+"settings.sub2api.claude_api_key_variable" = "Clave API";
 "settings.sub2api.claude_api_key_variable_placeholder" = "CLAUDE_SUB2API_API_KEY";
 "accounts.notice.claude_provider_switched_format" = "Claude Code ahora usa Sub2api %@; reinicia Claude Code para usarlo";
 "error.claude.sub2api_not_configured" = "Añade primero un proveedor Sub2api para Claude en Ajustes.";
@@ -575,7 +575,7 @@
 "settings.sub2api.antigravity_name_placeholder" = "Un nombre para este proveedor Sub2api";
 "settings.sub2api.antigravity_base_url" = "URL de la API";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
-"settings.sub2api.antigravity_api_key_variable" = "Variable de la clave API";
+"settings.sub2api.antigravity_api_key_variable" = "Clave API";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy ahora usa Sub2api %@; inicia agy en una terminal nueva para usarlo";
 "error.antigravity.gemini_api_key_missing" = "La variable de la clave API del proveedor no está exportada; expórtala en tu shell antes de cambiar a una tarjeta de Sub2api";
@@ -592,7 +592,7 @@
 "settings.sub2api.grok_name_placeholder" = "Un nombre para este proveedor Sub2api";
 "settings.sub2api.grok_base_url" = "URL de la API";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
-"settings.sub2api.grok_api_key_variable" = "Variable de la clave API";
+"settings.sub2api.grok_api_key_variable" = "Clave API";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build ahora usa Sub2api %@; inicia grok en una terminal nueva para usarlo";
 "error.grok.sub2api_api_key_missing" = "La variable de la clave API del proveedor no está exportada; expórtala en tu shell antes de cambiar a una tarjeta de Sub2api";

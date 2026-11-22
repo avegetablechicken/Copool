@@ -519,7 +519,7 @@
 "settings.sub2api.claude_mode_address" = "API URL";
 "settings.sub2api.claude_name" = "이름";
 "settings.sub2api.claude_name_placeholder" = "이 Sub2api 공급자의 이름";
-"settings.sub2api.claude_api_key_variable" = "API 키 변수";
+"settings.sub2api.claude_api_key_variable" = "API 키";
 "settings.sub2api.claude_api_key_variable_placeholder" = "CLAUDE_SUB2API_API_KEY";
 "accounts.notice.claude_provider_switched_format" = "Claude Code가 이제 Sub2api %@을(를) 사용합니다. Claude Code를 다시 시작하면 적용됩니다";
 "error.claude.sub2api_not_configured" = "먼저 설정에서 Claude용 Sub2api Provider를 추가하세요.";
@@ -595,7 +595,7 @@
 "settings.sub2api.antigravity_name_placeholder" = "이 Sub2api 공급자의 이름";
 "settings.sub2api.antigravity_base_url" = "API URL";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
-"settings.sub2api.antigravity_api_key_variable" = "API 키 변수";
+"settings.sub2api.antigravity_api_key_variable" = "API 키";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy가 이제 Sub2api %@을(를) 사용합니다. 새 터미널에서 agy를 시작하면 적용됩니다";
 "error.antigravity.gemini_api_key_missing" = "제공자의 API 키 변수가 export되지 않았습니다. Sub2api 카드로 전환하기 전에 셸에서 export하세요";
@@ -612,7 +612,7 @@
 "settings.sub2api.grok_name_placeholder" = "이 Sub2api 공급자의 이름";
 "settings.sub2api.grok_base_url" = "API URL";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
-"settings.sub2api.grok_api_key_variable" = "API 키 변수";
+"settings.sub2api.grok_api_key_variable" = "API 키";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build가 이제 Sub2api %@을(를) 사용합니다. 새 터미널에서 grok를 시작하면 적용됩니다";
 "error.grok.sub2api_api_key_missing" = "제공자의 API 키 변수가 export되지 않았습니다. Sub2api 카드로 전환하기 전에 셸에서 export하세요";

@@ -501,7 +501,7 @@
 "settings.sub2api.claude_mode_address" = "URL de l’API";
 "settings.sub2api.claude_name" = "Nom";
 "settings.sub2api.claude_name_placeholder" = "Un nom pour ce fournisseur Sub2api";
-"settings.sub2api.claude_api_key_variable" = "Variable de la clé API";
+"settings.sub2api.claude_api_key_variable" = "Clé API";
 "settings.sub2api.claude_api_key_variable_placeholder" = "CLAUDE_SUB2API_API_KEY";
 "accounts.notice.claude_provider_switched_format" = "Claude Code utilise maintenant Sub2api %@ ; redémarrez Claude Code pour l’utiliser";
 "error.claude.sub2api_not_configured" = "Ajoutez d’abord un fournisseur Sub2api pour Claude dans les réglages.";
@@ -575,7 +575,7 @@
 "settings.sub2api.antigravity_name_placeholder" = "Un nom pour ce fournisseur Sub2api";
 "settings.sub2api.antigravity_base_url" = "URL de l’API";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
-"settings.sub2api.antigravity_api_key_variable" = "Variable de la clé API";
+"settings.sub2api.antigravity_api_key_variable" = "Clé API";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy utilise désormais Sub2api %@ ; lancez agy dans un nouveau terminal pour l'utiliser";
 "error.antigravity.gemini_api_key_missing" = "La variable de la clé API du fournisseur n'est pas exportée ; exportez-la dans votre shell avant de passer à une carte Sub2api";
@@ -592,7 +592,7 @@
 "settings.sub2api.grok_name_placeholder" = "Un nom pour ce fournisseur Sub2api";
 "settings.sub2api.grok_base_url" = "URL de l’API";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
-"settings.sub2api.grok_api_key_variable" = "Variable de la clé API";
+"settings.sub2api.grok_api_key_variable" = "Clé API";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build utilise désormais Sub2api %@ ; lancez grok dans un nouveau terminal pour l'utiliser";
 "error.grok.sub2api_api_key_missing" = "La variable de la clé API du fournisseur n'est pas exportée ; exportez-la dans votre shell avant de passer à une carte Sub2api";

@@ -501,7 +501,7 @@
 "settings.sub2api.claude_mode_address" = "API-URL";
 "settings.sub2api.claude_name" = "Name";
 "settings.sub2api.claude_name_placeholder" = "Ein Name für diesen Sub2api-Anbieter";
-"settings.sub2api.claude_api_key_variable" = "API-Key-Variable";
+"settings.sub2api.claude_api_key_variable" = "API-Schlüssel";
 "settings.sub2api.claude_api_key_variable_placeholder" = "CLAUDE_SUB2API_API_KEY";
 "accounts.notice.claude_provider_switched_format" = "Claude Code verwendet jetzt Sub2api %@; starte Claude Code neu, um es zu nutzen";
 "error.claude.sub2api_not_configured" = "Füge zuerst in den Einstellungen einen Sub2api-Provider für Claude hinzu.";
@@ -575,7 +575,7 @@
 "settings.sub2api.antigravity_name_placeholder" = "Ein Name für diesen Sub2api-Anbieter";
 "settings.sub2api.antigravity_base_url" = "API-URL";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
-"settings.sub2api.antigravity_api_key_variable" = "API-Key-Variable";
+"settings.sub2api.antigravity_api_key_variable" = "API-Schlüssel";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy verwendet jetzt Sub2api %@; starte agy in einem neuen Terminal, um es zu nutzen";
 "error.antigravity.gemini_api_key_missing" = "Die API-Key-Variable des Anbieters ist nicht exportiert; exportiere sie in deiner Shell, bevor du zu einer Sub2api-Karte wechselst";
@@ -592,7 +592,7 @@
 "settings.sub2api.grok_name_placeholder" = "Ein Name für diesen Sub2api-Anbieter";
 "settings.sub2api.grok_base_url" = "API-URL";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
-"settings.sub2api.grok_api_key_variable" = "API-Key-Variable";
+"settings.sub2api.grok_api_key_variable" = "API-Schlüssel";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build verwendet jetzt Sub2api %@; starte grok in einem neuen Terminal, um es zu nutzen";
 "error.grok.sub2api_api_key_missing" = "Die API-Key-Variable des Anbieters ist nicht exportiert; exportiere sie in deiner Shell, bevor du zu einer Sub2api-Karte wechselst";

@@ -501,7 +501,7 @@
 "settings.sub2api.claude_mode_address" = "API-URL";
 "settings.sub2api.claude_name" = "Naam";
 "settings.sub2api.claude_name_placeholder" = "Een naam voor deze Sub2api-provider";
-"settings.sub2api.claude_api_key_variable" = "API-sleutelvariabele";
+"settings.sub2api.claude_api_key_variable" = "API-sleutel";
 "settings.sub2api.claude_api_key_variable_placeholder" = "CLAUDE_SUB2API_API_KEY";
 "accounts.notice.claude_provider_switched_format" = "Claude Code gebruikt nu Sub2api %@; herstart Claude Code om het te gebruiken";
 "error.claude.sub2api_not_configured" = "Voeg eerst een Sub2api-provider voor Claude toe in Instellingen.";
@@ -575,7 +575,7 @@
 "settings.sub2api.antigravity_name_placeholder" = "Een naam voor deze Sub2api-provider";
 "settings.sub2api.antigravity_base_url" = "API-URL";
 "settings.sub2api.antigravity_base_url_placeholder" = "https://api.example";
-"settings.sub2api.antigravity_api_key_variable" = "API-sleutelvariabele";
+"settings.sub2api.antigravity_api_key_variable" = "API-sleutel";
 "settings.sub2api.antigravity_api_key_variable_placeholder" = "GEMINI_API_KEY";
 "accounts.notice.antigravity_provider_switched_format" = "agy gebruikt nu Sub2api %@; start agy in een nieuwe terminal om het te gebruiken";
 "error.antigravity.gemini_api_key_missing" = "De API-sleutelvariabele van de provider is niet geëxporteerd; exporteer die in je shell voordat je naar een Sub2api-kaart wisselt";
@@ -592,7 +592,7 @@
 "settings.sub2api.grok_name_placeholder" = "Een naam voor deze Sub2api-provider";
 "settings.sub2api.grok_base_url" = "API-URL";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
-"settings.sub2api.grok_api_key_variable" = "API-sleutelvariabele";
+"settings.sub2api.grok_api_key_variable" = "API-sleutel";
 "settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
 "accounts.notice.grok_provider_switched_format" = "Grok Build gebruikt nu Sub2api %@; start grok in een nieuwe terminal om het te gebruiken";
 "error.grok.sub2api_api_key_missing" = "De API-sleutelvariabele van de provider is niet geëxporteerd; exporteer die in je shell voordat je naar een Sub2api-kaart wisselt";
