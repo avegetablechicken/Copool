@@ -1148,10 +1148,16 @@ async function saveGreeting(id, state, auto, times) {
 /// use's interval only on its own card.
 function refreshSection(current) {
   const refresh = preferences.refresh[pool];
+  const cardPool = pool;
+  // On the refresh as saved by then: another change made before this
+  // one is saved stays.
   const save = (patch) =>
-    queuePreferenceSave({
-      refresh: { ...preferences.refresh, [pool]: { ...refresh, ...patch } },
-    })
+    queuePreferenceSave((latest) => ({
+      refresh: {
+        ...latest.refresh,
+        [cardPool]: { ...latest.refresh[cardPool], ...patch },
+      },
+    }))
       .catch((error) => notice(error, true))
       .finally(renderEditing);
   // Its rows name what each interval is for; all the pool's cards share them.
@@ -2139,9 +2145,12 @@ function renderPreferences() {
 let preferenceSave = Promise.resolve();
 /// Every save of the preferences runs in turn, each over the preferences the
 /// previous one stored: each writes all of them.
+/// Saves a patch after those queued before it; a function gives the patch
+/// from the preferences as those left them.
 function queuePreferenceSave(patch) {
   const save = preferenceSave.then(async () => {
-    preferences = await settingsController.savePreferences(preferences, patch);
+    const value = typeof patch === "function" ? patch(preferences) : patch;
+    preferences = await settingsController.savePreferences(preferences, value);
   });
   preferenceSave = save.catch(() => {});
   return save;

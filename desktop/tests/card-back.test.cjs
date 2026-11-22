@@ -293,15 +293,38 @@ function refreshRows(pool, refresh) {
     backSection: () => ({ group: { rows: [], append(...rows) { this.rows.push(...rows); } } }),
     backRow: (label, control, note, tip) => ({ label, control, note, tip }),
     backSwitch: (field, on, label, onchange) => ({ dataset: { backField: field }, on, onchange }),
-    queuePreferenceSave: async (patch) => saved.push(patch),
+    // As the app's queue: each patch on the preferences the last left.
+    queuePreferenceSave: async (patch) => {
+      const value = typeof patch === "function" ? patch(scope.preferences) : patch;
+      scope.preferences = { ...scope.preferences, ...value };
+      saved.push(value);
+    },
     notice: () => {},
     renderEditing: () => {},
   };
   vm.createContext(scope);
   vm.runInContext(refreshSection, scope);
   const rows = scope.refreshSection(true).group.rows;
-  return { rows, saved, field: (name) => rows.find((r) => r.control.dataset.backField === name) };
+  return {
+    rows,
+    saved,
+    scope,
+    field: (name) => rows.find((r) => r.control.dataset.backField === name),
+  };
 }
+
+test("two refresh changes made before the card renders again both stay", async () => {
+  const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
+  const { field, scope } = refreshRows("claude", refresh);
+  field("refresh-backoff").control.onchange(false);
+  field("refresh-adaptive").control.onchange(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(scope.preferences.refresh.claude)), {
+    ...refresh,
+    adaptive: false,
+    backoff: false,
+  });
+});
 
 test("only Claude's refresh offers the slow-down after HTTP 429, on by default", async () => {
   const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
