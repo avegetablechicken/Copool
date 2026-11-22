@@ -553,15 +553,15 @@ impl Application {
     pub(crate) async fn background_round(&self, tick: u64, pool: Pool) -> Duration {
         let refresh = self.pool_refresh(pool);
         let interval = self.round_interval(pool);
-        let set_schedule = |at, tick, interval: Duration| {
+        let set_schedule = |at, tick, interval: Duration, full_every| {
             *self.rounds(pool).schedule.lock().unwrap() = Some(Schedule {
                 at,
                 tick,
                 interval: interval.as_secs() as i64,
-                full_every: refresh.full_every,
+                full_every,
             });
         };
-        set_schedule(now_unix_seconds(), tick, interval);
+        set_schedule(now_unix_seconds(), tick, interval, refresh.full_every);
         let before = if refresh.adaptive {
             Some(self.usage_values(pool).await)
         } else {
@@ -572,7 +572,11 @@ impl Application {
             let _ = self.claude_authorize_at_startup().await;
         }
         let _ = self.refresh_recurring(pool, tick).await;
+        // A refresh set while the round ran applies from the next round:
+        // `reschedule` leaves a round under way to schedule it.
+        let latest = self.pool_refresh(pool);
         let interval = match before {
+            _ if latest != refresh => latest.interval(),
             Some(before) => {
                 let changed =
                     refresh_policy::usage_changed(&before, &self.usage_values(pool).await);
@@ -589,6 +593,7 @@ impl Application {
             now_unix_seconds() + interval.as_secs() as i64,
             tick.wrapping_add(1),
             interval,
+            latest.full_every,
         );
         self.publish();
         interval

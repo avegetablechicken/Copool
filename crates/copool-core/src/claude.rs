@@ -3522,6 +3522,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_refresh_set_while_a_round_runs_schedules_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        // Set while the round asks for usage.
+        let settings = app.paths.data_dir.join("settings.json");
+        fake.usage_hooks.lock().unwrap().push(Box::new(move || {
+            let mut value: Value = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+            value["refresh"]["claude"] =
+                json!({"seconds": 600, "fullEvery": 2, "adaptive": false, "backoff": true});
+            fs::write(&settings, serde_json::to_vec(&value).unwrap()).unwrap();
+        }));
+        age(&app, REFRESH_SECONDS);
+        let interval = app.background_round(1, Pool::Claude).await;
+        assert!(fake.usage_hooks.lock().unwrap().is_empty());
+        assert_eq!(interval.as_secs(), 600);
+        let schedule = app.schedule(Pool::Claude).unwrap();
+        assert_eq!((schedule.interval, schedule.full_every), (600, 2));
+    }
+
+    #[tokio::test]
     async fn refreshing_the_pool_puts_the_next_round_off_by_an_interval() {
         use crate::refresh_policy::Schedule;
         let dir = tempfile::tempdir().unwrap();
