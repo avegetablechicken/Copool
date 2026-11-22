@@ -140,6 +140,17 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
         }
     }
 
+    /// The sample plans' tier colors, as the app resolves them.
+    private var samplePlanAccents: [String] {
+        switch variant {
+        case .codex: ["teal", "orange", "teal", "pink"]
+        case .claude: ["orange", "pink", "teal", "orange"]
+        case .antigravity: ["pink", "orange", "pink", "gray"]
+        case .grok: ["teal", "teal", "teal", "gray"]
+        case .all: ["teal", "orange", "orange", "pink"]
+        }
+    }
+
     /// A sample card's five-hour window; xAI reports none for Grok.
     private func sampleFiveHour(_ window: AccountsWidgetWindowSnapshot) -> AccountsWidgetWindowSnapshot {
         guard variant == .grok else { return window }
@@ -161,6 +172,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 id: "current",
                 poolLabel: samplePools[0],
                 planLabel: samplePlans[0],
+                planAccent: samplePlanAccents[0],
                 workspaceLabel: variant == .codex || variant == .all ? "workspace" : nil,
                 accountLabel: "current_account",
                 fiveHour: sampleFiveHour(AccountsWidgetWindowSnapshot(
@@ -184,6 +196,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                 id: "next",
                 poolLabel: samplePools[1],
                 planLabel: samplePlans[1],
+                planAccent: samplePlanAccents[1],
                 workspaceLabel: nil,
                 accountLabel: "next_account",
                 fiveHour: sampleFiveHour(AccountsWidgetWindowSnapshot(
@@ -208,6 +221,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     id: "row-1",
                     poolLabel: samplePools[2],
                     planLabel: samplePlans[2],
+                    planAccent: samplePlanAccents[2],
                     workspaceLabel: variant == .codex || variant == .claude ? "abcdefg" : nil,
                     accountLabel: "account_name",
                     fiveHour: sampleFiveHour(AccountsWidgetWindowSnapshot(
@@ -231,6 +245,7 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
                     id: "row-2",
                     poolLabel: samplePools[3],
                     planLabel: samplePlans[3],
+                    planAccent: samplePlanAccents[3],
                     workspaceLabel: nil,
                     accountLabel: "plus_account",
                     fiveHour: sampleFiveHour(AccountsWidgetWindowSnapshot(

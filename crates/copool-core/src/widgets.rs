@@ -112,6 +112,9 @@ pub struct CardSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool_label: Option<String>,
     pub plan_label: String,
+    /// The plan's tier color, as the app's plan tag (`plan_accent`).
+    #[serde(default)]
+    pub plan_accent: String,
     pub workspace_label: Option<String>,
     pub account_label: String,
     pub five_hour: WindowSnapshot,
@@ -216,6 +219,22 @@ fn claude_plan(raw: Option<String>) -> String {
         "TEAM".into()
     }
 }
+/// A plan's color, by tier so that providers' comparable plans match, as
+/// the app's `planAccent`: the entry subscription (Codex Plus, Claude Pro,
+/// Google AI Pro) and the top one (Codex Pro, Claude Max, Google AI Ultra)
+/// share their colors.
+pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
+    match plan {
+        "PRO" if pool != Pool::Codex => "pink",
+        "ULTRA" => "orange",
+        max if max.starts_with("MAX") => "orange",
+        "PRO" => "orange",
+        "PLUS" => "pink",
+        "FREE" => "gray",
+        "BUSINESS" | "ENTERPRISE" => "indigo",
+        _ => "teal",
+    }
+}
 fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapshot {
     let raw = account
         .usage
@@ -266,6 +285,7 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
     CardSnapshot {
         id: account.id.clone(),
         pool_label: None,
+        plan_accent: plan_accent(pool, &plan).into(),
         plan_label: plan,
         workspace_label: workspace,
         account_label: label,
@@ -374,24 +394,23 @@ pub struct Palette {
     pub fill: [f64; 4],
     pub text: [f64; 4],
 }
-pub fn plan_palette(plan: &str, dark: bool, monochrome: bool) -> Palette {
+/// A plan tag's colors by its `plan_accent`, as the widget draws them.
+pub fn plan_palette(accent: &str, dark: bool, monochrome: bool) -> Palette {
     if monochrome {
         return Palette {
             fill: [1., 1., 1., 0.18],
             text: [1., 1., 1., 0.98],
         };
     }
-    let (fill, text) = match (plan, dark) {
-        ("PRO", true) => ([0.46, 0.30, 0.15, 1.], [1., 0.73, 0.28, 1.]),
-        ("PRO", false) => ([0.98, 0.82, 0.63, 1.], [0.78, 0.42, 0.03, 1.]),
-        ("PLUS", true) => ([0.39, 0.19, 0.31, 1.], [0.98, 0.58, 0.82, 1.]),
-        ("PLUS", false) => ([0.97, 0.78, 0.88, 1.], [0.70, 0.19, 0.44, 1.]),
-        ("FREE", true) => ([0.24, 0.28, 0.37, 1.], [0.84, 0.88, 0.95, 1.]),
-        ("FREE", false) => ([0.87, 0.89, 0.94, 1.], [0.34, 0.39, 0.50, 1.]),
-        (max, true) if max.starts_with("MAX") => ([0.42, 0.24, 0.19, 1.], [1., 0.64, 0.50, 1.]),
-        (max, false) if max.starts_with("MAX") => ([0.97, 0.84, 0.78, 1.], [0.76, 0.36, 0.22, 1.]),
-        ("BUSINESS" | "ENTERPRISE", true) => ([0.22, 0.27, 0.46, 1.], [0.70, 0.77, 1., 1.]),
-        ("BUSINESS" | "ENTERPRISE", false) => ([0.81, 0.85, 0.98, 1.], [0.24, 0.35, 0.69, 1.]),
+    let (fill, text) = match (accent, dark) {
+        ("orange", true) => ([0.46, 0.30, 0.15, 1.], [1., 0.73, 0.28, 1.]),
+        ("orange", false) => ([0.98, 0.82, 0.63, 1.], [0.78, 0.42, 0.03, 1.]),
+        ("pink", true) => ([0.39, 0.19, 0.31, 1.], [0.98, 0.58, 0.82, 1.]),
+        ("pink", false) => ([0.97, 0.78, 0.88, 1.], [0.70, 0.19, 0.44, 1.]),
+        ("gray", true) => ([0.24, 0.28, 0.37, 1.], [0.84, 0.88, 0.95, 1.]),
+        ("gray", false) => ([0.87, 0.89, 0.94, 1.], [0.34, 0.39, 0.50, 1.]),
+        ("indigo", true) => ([0.22, 0.27, 0.46, 1.], [0.70, 0.77, 1., 1.]),
+        ("indigo", false) => ([0.81, 0.85, 0.98, 1.], [0.24, 0.35, 0.69, 1.]),
         (_, true) => ([0.16, 0.35, 0.42, 1.], [0.19, 0.86, 0.93, 1.]),
         (_, false) => ([0.71, 0.90, 0.94, 1.], [0., 0.55, 0.65, 1.]),
     };

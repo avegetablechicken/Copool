@@ -425,6 +425,7 @@ private struct AccountsWidgetLargeView: View {
                     id: current.id,
                     poolLabel: current.poolLabel,
                     planLabel: current.planLabel,
+                    planAccent: current.planAccent,
                     workspaceLabel: current.workspaceLabel,
                     accountLabel: current.accountLabel,
                     fiveHour: current.fiveHour,
@@ -439,6 +440,7 @@ private struct AccountsWidgetLargeView: View {
                     id: $0.id,
                     poolLabel: $0.poolLabel,
                     planLabel: $0.planLabel,
+                    planAccent: $0.planAccent,
                     workspaceLabel: $0.workspaceLabel,
                     accountLabel: $0.accountLabel,
                     fiveHour: $0.fiveHour,
@@ -458,24 +460,9 @@ private struct AccountsWidgetCompactCardContent: View {
     let usageProgressDisplayMode: AccountsWidgetUsageProgressDisplayMode
     let layout: AccountsWidgetLayout
 
-    private var accentColor: Color {
-        switch card.planLabel {
-        case "PRO":
-            .orange
-        case "PLUS":
-            .pink
-        case "FREE":
-            .gray
-        case "ENTERPRISE", "BUSINESS":
-            .indigo
-        default:
-            .teal
-        }
-    }
-
     private var planTagPalette: AccountsWidgetTagPalette {
         AccountsWidgetTagPaletteResolver.planTagPalette(
-            for: card.planLabel,
+            for: card.planAccent,
             colorScheme: colorScheme,
             renderingMode: renderingMode
         )
@@ -712,6 +699,7 @@ private struct AccountsWidgetLargeGroup: Identifiable {
     let id: String
     let poolLabel: String?
     let planLabel: String
+    let planAccent: String?
     let workspaceLabel: String?
     let accountLabel: String
     let fiveHour: AccountsWidgetWindowSnapshot
@@ -732,24 +720,9 @@ private struct AccountsWidgetLargeGroupView: View {
     let iconSize: CGFloat
     let progressHeight: CGFloat
 
-    private var accentColor: Color {
-        switch group.planLabel {
-        case "PRO":
-            .orange
-        case "PLUS":
-            .pink
-        case "FREE":
-            .gray
-        case "ENTERPRISE", "BUSINESS":
-            .indigo
-        default:
-            .teal
-        }
-    }
-
     private var planTagPalette: AccountsWidgetTagPalette {
         AccountsWidgetTagPaletteResolver.planTagPalette(
-            for: group.planLabel,
+            for: group.planAccent,
             colorScheme: colorScheme,
             renderingMode: renderingMode
         )

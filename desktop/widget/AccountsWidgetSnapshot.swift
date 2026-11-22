@@ -116,8 +116,10 @@ struct AccountsWidgetTagPalette: Equatable, Sendable {
 }
 
 enum AccountsWidgetTagPaletteResolver {
+    /// A plan tag's colors by its tier color, which the app resolves so that
+    /// comparable plans of every pool match.
     static func planTagPalette(
-        for planLabel: String,
+        for planAccent: String?,
         colorScheme: ColorScheme,
         renderingMode: WidgetRenderingMode
     ) -> AccountsWidgetTagPalette {
@@ -125,53 +127,43 @@ enum AccountsWidgetTagPaletteResolver {
             return .accentedContrast
         }
 
-        switch (planLabel, colorScheme) {
-        case ("PRO", .dark):
+        switch (planAccent ?? "teal", colorScheme) {
+        case ("orange", .dark):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.46, green: 0.30, blue: 0.15, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 1.00, green: 0.73, blue: 0.28, opacity: 1)
             )
-        case ("PRO", _):
+        case ("orange", _):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.98, green: 0.82, blue: 0.63, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.78, green: 0.42, blue: 0.03, opacity: 1)
             )
-        case ("PLUS", .dark):
+        case ("pink", .dark):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.39, green: 0.19, blue: 0.31, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.98, green: 0.58, blue: 0.82, opacity: 1)
             )
-        case ("PLUS", _):
+        case ("pink", _):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.97, green: 0.78, blue: 0.88, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.70, green: 0.19, blue: 0.44, opacity: 1)
             )
-        case ("FREE", .dark):
+        case ("gray", .dark):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.24, green: 0.28, blue: 0.37, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.84, green: 0.88, blue: 0.95, opacity: 1)
             )
-        case ("FREE", _):
+        case ("gray", _):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.87, green: 0.89, blue: 0.94, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.34, green: 0.39, blue: 0.50, opacity: 1)
             )
-        case (let plan, .dark) where plan.hasPrefix("MAX"):
-            return AccountsWidgetTagPalette(
-                fill: AccountsWidgetResolvedColor(red: 0.42, green: 0.24, blue: 0.19, opacity: 1),
-                text: AccountsWidgetResolvedColor(red: 1.00, green: 0.64, blue: 0.50, opacity: 1)
-            )
-        case (let plan, _) where plan.hasPrefix("MAX"):
-            return AccountsWidgetTagPalette(
-                fill: AccountsWidgetResolvedColor(red: 0.97, green: 0.84, blue: 0.78, opacity: 1),
-                text: AccountsWidgetResolvedColor(red: 0.76, green: 0.36, blue: 0.22, opacity: 1)
-            )
-        case ("ENTERPRISE", .dark), ("BUSINESS", .dark):
+        case ("indigo", .dark):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.22, green: 0.27, blue: 0.46, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.70, green: 0.77, blue: 1.00, opacity: 1)
             )
-        case ("ENTERPRISE", _), ("BUSINESS", _):
+        case ("indigo", _):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.81, green: 0.85, blue: 0.98, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.24, green: 0.35, blue: 0.69, opacity: 1)
@@ -240,6 +232,8 @@ struct AccountsWidgetCardSnapshot: Codable, Equatable, Sendable, Identifiable {
     /// The card's pool, on the widget showing both.
     var poolLabel: String?
     var planLabel: String
+    /// The plan's tier color (`planAccent`); absent from older snapshots.
+    var planAccent: String? = nil
     var workspaceLabel: String?
     var accountLabel: String
     var fiveHour: AccountsWidgetWindowSnapshot
@@ -260,6 +254,8 @@ struct AccountsWidgetRowSnapshot: Codable, Equatable, Sendable, Identifiable {
     var id: String
     var poolLabel: String?
     var planLabel: String
+    /// The plan's tier color (`planAccent`); absent from older snapshots.
+    var planAccent: String? = nil
     var workspaceLabel: String?
     var accountLabel: String
     var fiveHour: AccountsWidgetWindowSnapshot

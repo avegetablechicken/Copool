@@ -73,24 +73,31 @@ fn testSnapshotCarriesOwnDisplayModeForWidgetRendering() {
 }
 #[test]
 fn testPlanTagPaletteUsesMonochromeContrastInAccentedMode() {
-    let p = plan_palette("PRO", false, true);
+    let p = plan_palette("orange", false, true);
     assert_eq!(p.fill, [1., 1., 1., 0.18]);
     assert_eq!(p.text, [1., 1., 1., 0.98]);
 }
 #[test]
 fn testPlanTagPaletteKeepsFullColorPaletteOutsideAccentedMode() {
-    let p = plan_palette("PRO", false, false);
+    let p = plan_palette("orange", false, false);
     assert_eq!(p.fill, [0.98, 0.82, 0.63, 1.]);
     assert_eq!(p.text, [0.78, 0.42, 0.03, 1.]);
 }
 #[test]
-fn testPlanTagPaletteGivesClaudeMaxPlansTheirOwnColor() {
-    assert_eq!(
-        plan_palette("MAX 5X", false, false),
-        plan_palette("MAX", false, false)
-    );
+fn testPlanTagColorsMatchComparablePlansAcrossPools() {
+    // The entry subscription.
+    assert_eq!(plan_accent(Pool::Codex, "PLUS"), "pink");
+    assert_eq!(plan_accent(Pool::Claude, "PRO"), "pink");
+    assert_eq!(plan_accent(Pool::Antigravity, "PRO"), "pink");
+    // The top subscription.
+    assert_eq!(plan_accent(Pool::Codex, "PRO"), "orange");
+    assert_eq!(plan_accent(Pool::Claude, "MAX 5X"), "orange");
+    assert_eq!(plan_accent(Pool::Claude, "MAX 20X"), "orange");
+    assert_eq!(plan_accent(Pool::Antigravity, "ULTRA"), "orange");
+    assert_eq!(plan_accent(Pool::Codex, "BUSINESS"), "indigo");
+    assert_eq!(plan_accent(Pool::Codex, "TEAM"), "teal");
     assert_ne!(
-        plan_palette("MAX 5X", true, false),
-        plan_palette("TEAM", true, false)
+        plan_palette("orange", true, false),
+        plan_palette("teal", true, false)
     );
 }

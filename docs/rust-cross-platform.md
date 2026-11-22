@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-23（套餐标签按档位配色）：账号卡片和 macOS 小组件的套餐标签改为按档位配色，各账号池的同档套餐颜色相同。免费档为灰色；入门档为粉色（Codex Plus、Claude Pro、Antigravity Pro）；最高档为橙色（Codex Pro、Claude Max 5x/20x、Antigravity Ultra）；Business/Enterprise 为靛蓝；Team 及未知套餐为青色。此前 Claude Pro 与 Max 都显示橙色，难以区分；Antigravity Ultra 显示青色。小组件快照新增 `planAccent` 字段，缺少该字段的旧快照使用青色。前端测试和 Rust 小组件测试通过；WidgetKit 扩展已单独编译通过，尚未在桌面上查看。
+
 2026-11-23（Sub2api 卡片邮箱）：Claude、Grok 和 Antigravity 卡片刷新后优先显示上游账号邮箱。同步时依次读取账号列表的 `extra.email_address`、`extra.email` 和 `credentials.email`，缺少邮箱时显示 Sub2api 账号名称。Codex 继续优先使用额度接口返回的邮箱。macOS 上的本地模拟服务测试覆盖三种邮箱来源、停用账号和名称回退。
 
 2026-11-23（Grok 的 Sub2api 请求协议）：切换提供方时，Copool 在 `~/.grok/config.toml` 中给接入网关的每个模型写入 `api_backend = "responses"`，与 Sub2api 0.1.177 的 Grok Build 模板一致。切回账号时恢复原协议；旧版切换记录在再次切换提供方时补记原值。在 macOS 上用 Grok Build 1.0.92、临时配置和本地模拟网关验证：省略该字段时请求 `/v1/chat/completions`，指定后请求 `/v1/responses`，两次都使用模型配置指定的变量。19 项 Grok 测试通过。
