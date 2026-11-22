@@ -253,6 +253,7 @@ pub(crate) fn usage_snapshot(
         plan_type: plan,
         five_hour: window("five_hour", FIVE_HOUR_SECONDS),
         one_week: window("seven_day", ONE_WEEK_SECONDS),
+        one_month: None,
         credits: None,
         third_party_five_hour: None,
         third_party_one_week: None,

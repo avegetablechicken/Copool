@@ -172,6 +172,7 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
       tr: (key) => ({
         "accounts.window.five_hour": "Session",
         "accounts.window.one_week": "Weekly",
+        "accounts.window.one_month": "Monthly",
         "accounts.window.fable": "Fable",
       })[key],
       usageWindow: (view, title, tone) => [title, tone, view.available],
@@ -207,6 +208,19 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
   assert.deepEqual(rows("claude", { ...gemini, fableOneWeek: null }), own);
   assert.deepEqual(rows("codex", { ...gemini, fableOneWeek: window(35, 604800) }), own);
   assert.deepEqual(rows("antigravity", { ...gemini, fableOneWeek: window(35, 604800) }), own);
+  // Codex Free monthly window: solo Monthly, Session + Monthly, or appended after Weekly.
+  assert.deepEqual(rows("codex", { oneMonth: window(40, 2592000) }), [
+    ["Monthly", "one-month", true],
+  ]);
+  assert.deepEqual(rows("codex", { fiveHour: window(10, 18000), oneMonth: window(40, 2592000) }), [
+    ["Session", "five-hour", true],
+    ["Monthly", "one-month", true],
+  ]);
+  assert.deepEqual(rows("codex", { ...gemini, oneMonth: window(40, 2592000) }), [
+    ...own,
+    ["Monthly", "one-month", true],
+  ]);
+  assert.deepEqual(rows("claude", { ...gemini, oneMonth: window(40, 2592000) }), own);
   assert.deepEqual(rows("antigravity", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), [
     ...own,
     { "account-member": ["Claude", ["Session", "five-hour", true], ["Weekly", "one-week", false]] },

@@ -281,6 +281,8 @@
             : credits.balance,
       fiveHour: windowPresentation(account.usage?.fiveHour, mode, formatDate),
       oneWeek: windowPresentation(account.usage?.oneWeek, mode, formatDate),
+      // Codex Free's 30-day monthly window, shown only when reported.
+      oneMonth: windowPresentation(account.usage?.oneMonth, mode, formatDate),
       // Claude's weekly Fable window, shown only on accounts that report it.
       fableOneWeek: windowPresentation(account.usage?.fableOneWeek, mode, formatDate),
       // Antigravity's third-party (Claude) pool.
@@ -290,7 +292,7 @@
       outdatedSub2api: clean(account.outdatedSub2apiVersion) || null,
       compact: [
         displayPercent(account.usage?.fiveHour, mode),
-        displayPercent(account.usage?.oneWeek, mode),
+        displayPercent(account.usage?.oneWeek ?? account.usage?.oneMonth, mode),
       ],
       selectionAccent: account.isCurrent ? plan : null,
     };

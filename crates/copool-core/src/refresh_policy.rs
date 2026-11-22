@@ -75,7 +75,7 @@ pub(crate) fn usage_changed(
 ) -> bool {
     current.iter().any(|(id, usage)| match previous.get(id) {
         Some(previous) => previous != usage,
-        None => ["fiveHour", "oneWeek", "fableOneWeek", "credits"]
+        None => ["fiveHour", "oneWeek", "oneMonth", "fableOneWeek", "credits"]
             .iter()
             .any(|key| !usage[*key].is_null()),
     })
@@ -96,7 +96,7 @@ pub(crate) fn target_ids(accounts: &[AccountSummary], now: i64, lead: i64) -> Ve
         .chain(accounts.iter().filter(|a| !a.is_current))
     {
         let near_reset = account.usage.as_ref().is_some_and(|u| {
-            [&u.five_hour, &u.one_week, &u.fable_one_week]
+            [&u.five_hour, &u.one_week, &u.one_month, &u.fable_one_week]
                 .into_iter()
                 .flatten()
                 .filter_map(|w| {

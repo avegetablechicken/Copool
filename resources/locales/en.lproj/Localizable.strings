@@ -142,6 +142,7 @@
 "accounts.card.status.deactivated" = "DEACTIVATED";
 "accounts.window.five_hour" = "Session";
 "accounts.window.one_week" = "Weekly";
+"accounts.window.one_month" = "Monthly";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Used %@";
 "accounts.window.remaining_format" = "Remaining %@";

@@ -131,6 +131,7 @@
 "accounts.card.switch_to_this" = "이 계정으로 전환";
 "accounts.window.five_hour" = "세션";
 "accounts.window.one_week" = "주간";
+"accounts.window.one_month" = "월간";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "사용 %@";
 "accounts.window.remaining_format" = "남음 %@";

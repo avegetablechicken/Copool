@@ -136,6 +136,10 @@ pub struct UsageSnapshot {
     pub plan_type: Option<String>,
     pub five_hour: Option<UsageWindow>,
     pub one_week: Option<UsageWindow>,
+    /// Codex Free's 30-day monthly window (`limit_window_seconds == 2592000`);
+    /// absent on plans without a monthly window and in other pools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_month: Option<UsageWindow>,
     pub credits: Option<CreditSnapshot>,
     /// Antigravity's pool of third-party models (Claude), beside the Gemini
     /// windows above; absent elsewhere.
@@ -170,22 +174,31 @@ pub enum ResetKind {
 
 impl UsageSnapshot {
     /// Snapshots stored by earlier versions may hold another window (weekly,
-    /// or a free plan's 30 days) in a slot; only a five-hour window, a weekly
-    /// window or one without a duration is shown.
+    /// or a free plan's 30 days) in a slot; move any 30-day window into
+    /// `one_month` and keep only matching or undated windows in each slot.
     pub(crate) fn with_matching_windows(mut self) -> Self {
         let keep = |w: &UsageWindow, seconds| w.window_seconds == seconds || w.window_seconds <= 0;
+        if self.one_month.is_none() {
+            self.one_month = [&self.one_week, &self.five_hour]
+                .into_iter()
+                .flatten()
+                .find(|w| w.window_seconds == 30 * 24 * 60 * 60)
+                .cloned();
+        }
         self.five_hour = self.five_hour.filter(|w| keep(w, 5 * 60 * 60));
         self.one_week = self.one_week.filter(|w| keep(w, 7 * 24 * 60 * 60));
+        self.one_month = self.one_month.filter(|w| keep(w, 30 * 24 * 60 * 60));
         self
     }
 
-    /// Percent left in the five-hour window. With a weekly window but none of
-    /// five hours, the account has no five-hour limit, so none of it is used.
+    /// Percent left in the five-hour window. With a weekly or monthly window
+    /// but none of five hours, the account has no five-hour limit, so none of
+    /// it is used.
     pub fn five_hour_remaining(&self) -> Option<f64> {
-        match (&self.five_hour, &self.one_week) {
-            (Some(window), _) => Some((100.0 - window.used_percent).clamp(0.0, 100.0)),
-            (None, Some(_)) => Some(100.0),
-            (None, None) => None,
+        match (&self.five_hour, &self.one_week, &self.one_month) {
+            (Some(window), _, _) => Some((100.0 - window.used_percent).clamp(0.0, 100.0)),
+            (None, Some(_), _) | (None, None, Some(_)) => Some(100.0),
+            (None, None, None) => None,
         }
     }
 }

@@ -455,4 +455,19 @@ test("card presentation formats Claude Fable usage window when reported", () => 
   assert.equal(remaining.fableOneWeek.primaryPercent, 58);
   const absent = P.card({ ...account, usage: { fiveHour: account.usage.fiveHour } }, false, "used", String);
   assert.equal(absent.fableOneWeek.available, false);
+
+  const freeMonthly = P.card(
+    {
+      email: "free@example.com",
+      planType: "free",
+      usage: { oneMonth: { usedPercent: 40, windowSeconds: 2592000, resetAt: 1_802_000_000 } },
+    },
+    false,
+    "remaining",
+    (epoch) => `at:${epoch}`,
+  );
+  assert.equal(freeMonthly.oneMonth.available, true);
+  assert.equal(freeMonthly.oneMonth.primaryPercent, 60);
+  assert.equal(freeMonthly.oneMonth.reset, "at:1802000000");
+  assert.deepEqual(freeMonthly.compact, [null, 60]);
 });

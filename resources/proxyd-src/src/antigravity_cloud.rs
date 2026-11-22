@@ -174,6 +174,7 @@ pub(crate) fn snapshot(now: i64) -> UsageSnapshot {
         plan_type: None,
         five_hour: None,
         one_week: None,
+        one_month: None,
         credits: None,
         third_party_five_hour: None,
         third_party_one_week: None,

@@ -131,6 +131,7 @@
 "accounts.card.switch_to_this" = "Переключиться на этот аккаунт";
 "accounts.window.five_hour" = "Сессия";
 "accounts.window.one_week" = "Неделя";
+"accounts.window.one_month" = "Месяц";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Использовано %@";
 "accounts.window.remaining_format" = "Осталось %@";

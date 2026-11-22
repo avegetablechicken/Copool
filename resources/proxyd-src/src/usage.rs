@@ -9,6 +9,7 @@ use crate::utils::now_unix_seconds;
 const DEFAULT_CHATGPT_BASE_URL: &str = "https://chatgpt.com";
 const FIVE_HOUR_SECONDS: i64 = 5 * 60 * 60;
 const ONE_WEEK_SECONDS: i64 = 7 * 24 * 60 * 60;
+const ONE_MONTH_SECONDS: i64 = 30 * 24 * 60 * 60;
 const CODEX_USAGE_PATH: &str = "/api/codex/usage";
 const WHAM_USAGE_PATH: &str = "/wham/usage";
 const BACKEND_API_PREFIX: &str = "/backend-api";
@@ -270,10 +271,11 @@ pub(crate) fn chatgpt_base_url_in(contents: &str) -> Option<String> {
 }
 
 fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
-    let (five_hour, one_week) = classify_windows(payload.rate_limit);
-    let (five_hour, one_week) = (
+    let (five_hour, one_week, one_month) = classify_windows(payload.rate_limit);
+    let (five_hour, one_week, one_month) = (
         five_hour.map(to_usage_window),
         one_week.map(to_usage_window),
+        one_month.map(to_usage_window),
     );
 
     let resets = payload.rate_limit_reset_credits.as_ref();
@@ -286,6 +288,7 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
         plan_type: payload.plan_type,
         five_hour,
         one_week,
+        one_month,
         credits: payload.credits.map(|credit| CreditSnapshot {
             // WHAM usage reports the balance without its expiry dates.
             expiries: Vec::new(),
@@ -299,16 +302,20 @@ fn map_usage_payload(payload: UsageApiResponse) -> UsageSnapshot {
     }
 }
 
-/// Splits the account's rate limit into its five-hour and weekly windows, as
-/// OpenQuota does: a window is matched by its duration, so an account with
-/// only a weekly limit has no five-hour window rather than a copy of the
-/// weekly one. Only a window without a duration falls back to its slot
-/// (primary five-hour, secondary weekly). Windows of any other duration, such
-/// as a free plan's 30 days, are neither and are not shown. Additional limits,
-/// such as Codex Spark, are separate quotas and never stand in for these.
+/// Splits the account's rate limit into its five-hour, weekly and (for Codex
+/// Free) 30-day monthly windows: a window is matched by its duration, so an
+/// account with only a weekly or monthly limit has no five-hour window rather
+/// than a copy of it. Only a window without a duration falls back to its slot
+/// (primary five-hour, secondary weekly). Windows of any other duration are
+/// ignored. Additional limits, such as Codex Spark, are separate quotas and
+/// never stand in for these.
 fn classify_windows(
     rate_limit: Option<RateLimitDetails>,
-) -> (Option<UsageWindowRaw>, Option<UsageWindowRaw>) {
+) -> (
+    Option<UsageWindowRaw>,
+    Option<UsageWindowRaw>,
+    Option<UsageWindowRaw>,
+) {
     let (primary, secondary) = rate_limit
         .map(|limit| (limit.primary_window, limit.secondary_window))
         .unwrap_or((None, None));
@@ -316,7 +323,10 @@ fn classify_windows(
     let mut undated = [None, None];
     for (slot, window) in [primary, secondary].into_iter().enumerate() {
         match window {
-            Some(w) if [FIVE_HOUR_SECONDS, ONE_WEEK_SECONDS].contains(&w.limit_window_seconds) => {
+            Some(w)
+                if [FIVE_HOUR_SECONDS, ONE_WEEK_SECONDS, ONE_MONTH_SECONDS]
+                    .contains(&w.limit_window_seconds) =>
+            {
                 known.push(w)
             }
             Some(w) if w.limit_window_seconds <= 0 => undated[slot] = Some(w),
@@ -329,6 +339,7 @@ fn classify_windows(
     (
         exact(FIVE_HOUR_SECONDS).or(primary),
         exact(ONE_WEEK_SECONDS).or(secondary),
+        exact(ONE_MONTH_SECONDS),
     )
 }
 

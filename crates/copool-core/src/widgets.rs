@@ -243,6 +243,13 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
         ),
     };
     let label = name.trim().split('@').next().unwrap_or_default().to_owned();
+    let (long_title, long_window) = match (
+        account.usage.as_ref().and_then(|u| u.one_week.as_ref()),
+        account.usage.as_ref().and_then(|u| u.one_month.as_ref()),
+    ) {
+        (None, Some(month)) if pool == Pool::Codex => ("1m", Some(month)),
+        (week, _) => ("1w", week),
+    };
     CardSnapshot {
         id: account.id.clone(),
         pool_label: None,
@@ -254,11 +261,7 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
             account.usage.as_ref().and_then(|u| u.five_hour.as_ref()),
             offset,
         ),
-        one_week: window(
-            "1w",
-            account.usage.as_ref().and_then(|u| u.one_week.as_ref()),
-            offset,
-        ),
+        one_week: window(long_title, long_window, offset),
     }
 }
 /// The first card is the current one, the next the secondary; the large

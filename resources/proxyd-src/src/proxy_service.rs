@@ -5416,6 +5416,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
                     window_seconds: 1,
                     reset_at: None,
                 }),
+                one_month: None,
                 credits: None,
                 third_party_five_hour: None,
                 third_party_one_week: None,

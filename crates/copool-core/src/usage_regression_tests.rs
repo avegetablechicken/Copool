@@ -259,18 +259,27 @@ fn codex_spark_limits_do_not_stand_in_for_the_account_windows() {
 }
 
 #[test]
-fn windows_of_other_durations_are_not_shown() {
-    assert_eq!(
-        windows(serde_json::json!({"rate_limit": {
-            "primary_window": {"used_percent": 100, "limit_window_seconds": 2592000, "reset_at": 600},
+fn free_plan_monthly_window_is_classified_and_other_durations_are_ignored() {
+    let usage = parse_payload(
+        serde_json::json!({"plan_type": "free", "rate_limit": {
+            "primary_window": {"used_percent": 40, "limit_window_seconds": 2592000, "reset_at": 600},
             "secondary_window": {"used_percent": 30, "limit_window_seconds": 86400, "reset_at": 700}
-        }})),
-        (None, None)
+        }}),
+        0,
+    )
+    .unwrap();
+    assert!(usage.five_hour.is_none());
+    assert!(usage.one_week.is_none());
+    let month = usage.one_month.as_ref().unwrap();
+    assert_eq!(
+        (month.used_percent, month.window_seconds, month.reset_at),
+        (40., 2592000, Some(600))
     );
+    assert_eq!(usage.five_hour_remaining(), Some(100.));
 }
 
 #[test]
-fn stored_windows_of_other_durations_are_not_shown() {
+fn stored_windows_migrate_monthly_and_drop_other_durations() {
     let window = |window_seconds| crate::models::UsageWindow {
         clock_offset_seconds: None,
         used_percent: 63.,
@@ -287,6 +296,7 @@ fn stored_windows_of_other_durations_are_not_shown() {
             plan_type: None,
             five_hour: Some(window(five)),
             one_week: Some(window(week)),
+            one_month: None,
             credits: None,
             third_party_five_hour: None,
             third_party_one_week: None,
@@ -294,13 +304,20 @@ fn stored_windows_of_other_durations_are_not_shown() {
         }
         .with_matching_windows()
     };
-    let shown = |u: crate::models::UsageSnapshot| (u.five_hour.is_some(), u.one_week.is_some());
+    let shown = |u: crate::models::UsageSnapshot| {
+        (
+            u.five_hour.is_some(),
+            u.one_week.is_some(),
+            u.one_month.is_some(),
+        )
+    };
     // Earlier versions copied the weekly window into the five-hour slot, or
     // a free plan's 30-day window into either.
-    assert_eq!(shown(stored(604800, 604800)), (false, true));
-    assert_eq!(shown(stored(2592000, 2592000)), (false, false));
-    assert_eq!(shown(stored(18000, 604800)), (true, true));
-    assert_eq!(shown(stored(0, 0)), (true, true));
+    assert_eq!(shown(stored(604800, 604800)), (false, true, false));
+    assert_eq!(shown(stored(2592000, 2592000)), (false, false, true));
+    assert_eq!(shown(stored(86400, 86400)), (false, false, false));
+    assert_eq!(shown(stored(18000, 604800)), (true, true, false));
+    assert_eq!(shown(stored(0, 0)), (true, true, false));
 }
 
 #[test]
@@ -335,6 +352,7 @@ fn a_missing_five_hour_window_counts_as_no_five_hour_limit() {
             window_seconds: 604800,
             reset_at: None,
         }),
+        one_month: None,
         credits: None,
         third_party_five_hour: None,
         third_party_one_week: None,

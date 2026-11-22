@@ -131,6 +131,7 @@
 "accounts.card.switch_to_this" = "Basculer vers ce compte";
 "accounts.window.five_hour" = "Session";
 "accounts.window.one_week" = "Hebdomadaire";
+"accounts.window.one_month" = "Mensuel";
 "accounts.window.fable" = "Fable";
 "accounts.window.used_format" = "Utilisé %@";
 "accounts.window.remaining_format" = "Restant %@";

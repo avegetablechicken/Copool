@@ -1034,12 +1034,14 @@ function accountCard(account, grouped = false) {
     row.dataset.plan = view.plan;
     const name = el("span", "account-row-name", view.name);
     name.title = full;
+    const secondCompactLabel =
+      pool === "codex" && !view.oneWeek.available && view.oneMonth.available ? "1m" : "1w";
     row.append(
       el("span", grouped ? "" : "dot"),
       name,
       planTag(account, view) || el("span", "tag plan placeholder"),
       compactUsage(view.compact[0], "5h"),
-      compactUsage(view.compact[1], "1w"),
+      compactUsage(view.compact[1], secondCompactLabel),
       accountControls(account, full, view, grouped),
     );
     if (!grouped) row.dataset.reorderHandle = "";
@@ -1082,11 +1084,12 @@ function accountCard(account, grouped = false) {
   );
   return card;
 }
-/// A card's usage rows: five hours and the week. Claude cards that report
-/// Fable quota add its weekly row beneath them. An Antigravity card's are
-/// Gemini's; its third-party (Claude) pool, once reported, follows
-/// in an inset of its own, as a Sub2api provider's accounts. The weekly
-/// rows of a Sub2api too old to report them say so when clicked.
+/// A card's usage rows: five hours and the week. Codex Free cards that report
+/// a 30-day monthly quota show Monthly (omitting empty Session/Weekly rows).
+/// Claude cards that report Fable quota add its weekly row beneath them. An
+/// Antigravity card's are Gemini's; its third-party (Claude) pool, once
+/// reported, follows in an inset of its own, as a Sub2api provider's accounts.
+/// The weekly rows of a Sub2api too old to report them say so when clicked.
 function usageWindows(view) {
   const five = tr("accounts.window.five_hour"), week = tr("accounts.window.one_week");
   const rows = (fiveHour, oneWeek) => [
@@ -1094,6 +1097,15 @@ function usageWindows(view) {
     weeklyNotice(usageWindow(oneWeek, week, "one-week"), view.outdatedSub2api),
   ];
   const shown = rows(view.fiveHour, view.oneWeek);
+  if (pool === "codex" && view.oneMonth.available) {
+    const month = usageWindow(view.oneMonth, tr("accounts.window.one_month"), "one-month");
+    if (!view.oneWeek.available) {
+      return view.fiveHour.available
+        ? [usageWindow(view.fiveHour, five, "five-hour"), month]
+        : [month];
+    }
+    shown.push(month);
+  }
   if (pool === "claude" && view.fableOneWeek.available) {
     shown.push(usageWindow(view.fableOneWeek, tr("accounts.window.fable"), "fable"));
   }
@@ -1202,6 +1214,7 @@ function renderAccounts(accounts) {
         return [
           view.fiveHour,
           view.oneWeek,
+          view.oneMonth,
           view.fableOneWeek,
           view.thirdPartyFiveHour,
           view.thirdPartyOneWeek,

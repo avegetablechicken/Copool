@@ -5,7 +5,11 @@ pub(crate) fn remaining_score(a: &AccountSummary) -> f64 {
         w.map(|w| (100.0 - w.used_percent).clamp(0.0, 100.0))
             .unwrap_or(0.0)
     };
-    0.7 * remaining(a.usage.as_ref().and_then(|u| u.one_week.as_ref()))
+    let long = a
+        .usage
+        .as_ref()
+        .and_then(|u| u.one_week.as_ref().or(u.one_month.as_ref()));
+    0.7 * remaining(long)
         + 0.3
             * a.usage
                 .as_ref()
@@ -27,7 +31,7 @@ pub(crate) fn best(accounts: &[AccountSummary]) -> Option<&AccountSummary> {
 }
 pub(crate) fn exhausted(a: &AccountSummary) -> bool {
     a.usage.as_ref().is_some_and(|u| {
-        [&u.five_hour, &u.one_week]
+        [&u.five_hour, &u.one_week, &u.one_month]
             .iter()
             .any(|w| w.as_ref().is_some_and(|w| w.used_percent >= 100.0))
     })
