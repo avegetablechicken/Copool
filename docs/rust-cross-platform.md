@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-23（Grok 订阅与 Sub2API 经 Coport 切换）：订阅是否经 Coport 由 Grok Build 原有的 `cli_chat_proxy_base_url` 和 `xai_api_base_url` 决定。提供方 API 地址可填 `http://127.0.0.1:8787/grok/https://sub2api.example.com/v1`，Site 留空时从内嵌地址推导管理 API。显式选用 `XAI_API_KEY` 时切换模型目录、推理和 xAI API 地址，使用专用变量时只覆盖默认模型的路由。两种方式都保留会话地址，切回订阅时恢复原配置。回归测试覆盖两种往返和 CURRENT 标签；在 macOS 用 Grok Build 1.0.92、假凭据和回环接收端确认订阅会话请求走 `/grok/v1`，模型请求携带对应的 Key 走显式上游路径。
+
 2026-11-23（Grok 提供方的 CURRENT 标签）：保存新网关或 Key 变量后，卡片根据已保存的提供方和 Grok Build 实际配置判定是否正在使用。旧路由尚在生效时不把普通登录误标为当前。模拟网关拒绝新 Key 返回 401 时保留原配置；成功应用新地址后恢复 CURRENT。并发刷新使用最新账号列表，较慢的旧刷新不会重新显示旧标签。216 项前端测试在 LF 和 CRLF 下均通过。
 
 2026-11-23（ChatGPT Go）：Codex 的 `plan_type` 为 `go` 时（ChatGPT Go，美国 $8/月，含有限的 Codex 额度，Codex 中仅可用 GPT-5.6 Terra），卡片和小组件显示 `GO`，归入门档，显示粉色。此前未被识别，显示为 `TEAM`。前端与 Rust 小组件测试通过；未用真实 Go 账号核对。

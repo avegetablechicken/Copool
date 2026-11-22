@@ -1072,3 +1072,87 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
             .is_current
     );
 }
+
+#[tokio::test]
+async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_modes() {
+    let h = harness(true).await;
+    h.sign_in(&sign_in_of("alice", "access-alice", later()));
+    h.app.import_current(Pool::Grok).await.unwrap();
+    let subscription = cards(&h.app).await.remove(0);
+    let config = h.auth.with_file_name("config.toml");
+    let listener = "http://127.0.0.1:8787/grok/v1";
+    let original = format!(
+        "[endpoints]\ncli_chat_proxy_base_url = '{listener}'\nxai_api_base_url = '{listener}' # Coport\n"
+    );
+    fs::write(&config, &original).unwrap();
+    let base = sub2api_server(Arc::default(), Arc::new(Mutex::new("0.1.177"))).await;
+    let id = grok_provider(&h, &base).await;
+    h.app.refresh_provider(Pool::Grok, &id, true).await.unwrap();
+    let card = sub2api_cards(cards(&h.app).await)
+        .into_iter()
+        .find(|c| c.available)
+        .unwrap();
+    let gateway = "http://127.0.0.1:8787/grok/https://relay.example:6060/v1";
+    *h.fake.gateway.lock().unwrap() = Some(json!({"data": [{"id":"grok-test"}]}));
+    for variable in ["XAI_API_KEY", "SUB2API_KEY"] {
+        h.app.set_grok_environment(Arc::new(move |name| {
+            (name == variable).then(|| "sub2api-key".into())
+        }));
+        h.app
+            .save_provider(
+                Pool::Grok,
+                json!({
+                    "id":id, "name":"Relay", "baseURL":gateway.trim_end_matches("/v1"),
+                    "apiKeyVariable":variable, "username":"admin@example.com"
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            h.app.grok_member_connection(&id).unwrap().admin_base,
+            "https://relay.example:6060/api/v1"
+        );
+        h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
+        assert!(h
+            .fake
+            .calls()
+            .iter()
+            .any(|call| call.starts_with(&format!("models {gateway}/models "))));
+        let doc: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
+        let endpoints = &doc["endpoints"];
+        assert_eq!(
+            endpoints["cli_chat_proxy_base_url"].as_str(),
+            Some(listener)
+        );
+        if variable == "XAI_API_KEY" {
+            assert_eq!(endpoints["models_base_url"].as_str(), Some(gateway));
+            assert_eq!(
+                endpoints["models_list_url"].as_str(),
+                Some(format!("{gateway}/models").as_str())
+            );
+            assert_eq!(endpoints["xai_api_base_url"].as_str(), Some(gateway));
+            assert_eq!(doc["auth"]["preferred_method"].as_str(), Some("api_key"));
+            assert!(doc.get("model").is_none());
+        } else {
+            assert_eq!(endpoints["xai_api_base_url"].as_str(), Some(listener));
+            assert!(endpoints.get("models_base_url").is_none());
+            let model = &doc["model"]["grok-test"];
+            assert_eq!(model["env_key"].as_str(), Some(variable));
+            assert_eq!(model["base_url"].as_str(), Some(gateway));
+            assert_eq!(model["api_backend"].as_str(), Some("responses"));
+        }
+        assert!(cards(&h.app)
+            .await
+            .iter()
+            .any(|c| c.id == card.id && c.is_current));
+        h.app
+            .switch_account(Pool::Grok, &subscription.id)
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(&config).unwrap(), original);
+        assert!(cards(&h.app)
+            .await
+            .iter()
+            .any(|c| c.id == subscription.id && c.is_current));
+    }
+}
