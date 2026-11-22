@@ -1,7 +1,7 @@
 /* Coport's native menu styling (../coding-agent-proxy/gui/ui/style.css), modeled
    on eul's status menu: system material behind light blocks, small system
    type, monochrome data, AppKit semantic colors (exposed by WebKit as
-   -apple-system-*), and color-only hover. */
+   -apple-system-*). */
 :root {
   color-scheme: light dark;
   --window: #ececec;
@@ -12,6 +12,14 @@
   --block: rgba(255, 255, 255, 0.55);
   --block-border: rgba(0, 0, 0, 0.06);
   --block-shadow: 0 0 5px rgba(0, 0, 0, 0.06);
+  --card-contact-shadow: rgba(0, 0, 0, 0.19);
+  --card-cast-shadow: rgba(0, 0, 0, 0.24);
+  --card-raised-shadow: 0 0 0 0.5px var(--separator),
+    0 1px 4px var(--card-contact-shadow), 0 5px 12px var(--card-cast-shadow);
+  --card-drag-shadow: 0 0 0 0.5px var(--separator),
+    0 2px 6px var(--card-contact-shadow), 0 9px 20px var(--card-cast-shadow);
+  --card-highlight: 40%;
+  --card-drag-fill: #fcfcfc;
   --track: rgba(0, 0, 0, 0.08);
   --control: #ffffff;
   --control-border: rgba(0, 0, 0, 0.12);
@@ -45,6 +53,10 @@
   --block: rgba(30, 30, 30, 0.5);
   --block-border: rgba(255, 255, 255, 0.06);
   --block-shadow: 0 0 5px rgba(0, 0, 0, 0.18);
+  --card-contact-shadow: rgba(0, 0, 0, 0.56);
+  --card-cast-shadow: rgba(0, 0, 0, 0.65);
+  --card-highlight: 4%;
+  --card-drag-fill: #343436;
   --track: rgba(255, 255, 255, 0.1);
   --control: rgba(255, 255, 255, 0.14);
   --control-border: transparent;
@@ -70,6 +82,10 @@
     --block: rgba(30, 30, 30, 0.5);
     --block-border: rgba(255, 255, 255, 0.06);
     --block-shadow: 0 0 5px rgba(0, 0, 0, 0.18);
+    --card-contact-shadow: rgba(0, 0, 0, 0.56);
+    --card-cast-shadow: rgba(0, 0, 0, 0.65);
+    --card-highlight: 4%;
+    --card-drag-fill: #343436;
     --track: rgba(255, 255, 255, 0.1);
     --control: rgba(255, 255, 255, 0.14);
     --control-border: transparent;
@@ -931,10 +947,32 @@ main > section.page-leaving {
   pointer-events: auto;
 }
 
-/* A provider's group shows its own button, not its accounts', over them. */
 .account-group:has(.account-member:hover) > .card-edit {
   opacity: 0;
   pointer-events: none;
+}
+
+/* Account cards and compact rows lift relative to their group. */
+:where(:root:not(.is-reordering) #accounts) :is([data-reorder-id], [data-card-id]):not(.reorder-raised) {
+  transition: scale 150ms ease-out, box-shadow 150ms ease-out, background-color 150ms ease;
+
+  /* The rotating face can briefly move out from under the pointer. */
+  &:is(.flip-raised, :has(.flip-raised)) {
+    transition: none;
+  }
+
+  &:is(.flip-raised, :has(.flip-raised)),
+  &:hover,
+  &:has(:focus-visible) {
+    position: relative;
+    z-index: 1;
+    box-shadow: var(--card-raised-shadow);
+    background-color: color-mix(in srgb, var(--card-fill, var(--block)), white var(--card-highlight));
+
+    @media (prefers-reduced-motion: no-preference) {
+      scale: 1.012;
+    }
+  }
 }
 
 .account > .block-head,
@@ -1915,13 +1953,14 @@ button.usage-reset:hover {
 }
 
 .account-member {
+  --card-fill: color-mix(in srgb, var(--label) 4%, transparent);
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
   padding: 4px 8px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--label) 4%, transparent);
+  background: var(--card-fill);
 }
 
 /* Dragging a card, as in OpenQuota: the card keeps its slot unseen while a
@@ -1951,9 +1990,8 @@ button.usage-reset:hover {
   position: absolute;
   margin: 0;
   border-radius: 8px;
-  /* The card as it shows over the window, but opaque above the others. */
-  background: linear-gradient(var(--block), var(--block)), var(--window);
-  box-shadow: 0 0 0 0.5px var(--block-border), 0 8px 28px rgba(0, 0, 0, 0.18);
+  background: var(--card-drag-fill);
+  box-shadow: var(--card-drag-shadow);
   transform: scale(1.018);
   transform-origin: center;
   transition: none !important;
@@ -1961,6 +1999,12 @@ button.usage-reset:hover {
 
 .reorder-lift * {
   pointer-events: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reorder-lift {
+    transform: none;
+  }
 }
 
 /* Cards leaving the page (removed, or a pool switched away) animate out
@@ -2014,7 +2058,7 @@ button.usage-reset:hover {
   z-index: 1;
   border-radius: 8px;
   background: linear-gradient(var(--block), var(--block)), var(--window);
-  box-shadow: 0 0 0 0.5px var(--block-border), 0 8px 28px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--card-drag-shadow);
 }
 
 :root.is-reordering,
@@ -2025,6 +2069,7 @@ button.usage-reset:hover {
 /* Collapsed: one row per account in a single flush block. */
 /* Fixed columns keep the values aligned from row to row. */
 .account-row {
+  --card-fill: transparent;
   display: grid;
   grid-template-columns: 6px minmax(0, 1fr) 52px 50px 50px 42px;
   align-items: center;

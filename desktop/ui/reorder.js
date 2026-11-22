@@ -137,6 +137,43 @@
     setTimeout(() => window.removeEventListener("click", swallow, true), 0);
   }
 
+  // Pick up the on-screen color and shadow, even halfway through a hover or
+  // lift. The empty end keyframe resolves to the receiving card's own style.
+  function handoffCard(from, to, dropping) {
+    if (reducedMotion()) return;
+    const timing = { duration: 180, easing: "ease-out" };
+    function surface(source, target, geometry) {
+      const { backgroundColor, boxShadow } = getComputedStyle(source);
+      target.animate([{ backgroundColor, boxShadow, ...geometry }, {}], timing);
+      const oldButton = source.querySelector(":scope > .card-edit");
+      const newButton = target.querySelector(":scope > .card-edit");
+      if (oldButton && newButton)
+        newButton.animate([{ opacity: getComputedStyle(oldButton).opacity }, {}], timing);
+    }
+
+    let transform;
+    if (dropping) {
+      const a = from.getBoundingClientRect();
+      const b = to.getBoundingClientRect();
+      if (!b.width || !b.height) return;
+      const dx = a.left - b.left + (a.width - b.width) / 2;
+      const dy = a.top - b.top + (a.height - b.height) / 2;
+      const targetScale = parseFloat(getComputedStyle(to).scale) || 1;
+      transform = `translate(${dx / targetScale}px, ${dy / targetScale}px) scale(${a.width / b.width}, ${a.height / b.height})`;
+    } else {
+      const hoverScale = parseFloat(getComputedStyle(from).scale) || 1;
+      transform = `scale(${hoverScale})`;
+    }
+    surface(from, to, { transform });
+    const members = new Map([...from.querySelectorAll("[data-card-id]")].map(
+      (node) => [node.dataset.cardId, node],
+    ));
+    for (const member of to.querySelectorAll("[data-card-id]")) {
+      const source = members.get(member.dataset.cardId);
+      if (source) surface(source, member, { scale: getComputedStyle(source).scale });
+    }
+  }
+
   /// Makes the children of `list` with `data-reorder-id` draggable by their
   /// `data-reorder-handle` parts. One marked `data-reorder-fixed` keeps its
   /// place: it cannot be dragged or swapped with. `onEnd({ order, moved,
@@ -189,6 +226,10 @@
     }
     function lift(item, point) {
       const rect = item.getBoundingClientRect();
+      // Keep the copy's layout size. Its pickup animation supplies the hover scale.
+      const style = getComputedStyle(item);
+      const width = parseFloat(style.width);
+      const height = parseFloat(style.height);
       const layer = document.createElement("div");
       layer.className = "reorder-layer";
       const clone = item.cloneNode(true);
@@ -201,24 +242,25 @@
       for (const name of list.style)
         if (name.startsWith("--"))
           clone.style.setProperty(name, list.style.getPropertyValue(name));
-      clone.style.width = `${rect.width}px`;
-      clone.style.height = `${rect.height}px`;
+      clone.style.width = `${width}px`;
+      clone.style.height = `${height}px`;
       layer.append(clone);
       document.body.append(layer);
       Object.assign(gesture, {
         dragging: true,
         layer,
         lift: clone,
-        width: rect.width,
-        height: rect.height,
+        width,
+        height,
         offset: {
-          x: Math.min(Math.max(point.x - rect.left, 0), rect.width),
-          y: Math.min(Math.max(point.y - rect.top, 0), rect.height),
+          x: point.x - (rect.left + (rect.width - width) / 2),
+          y: point.y - (rect.top + (rect.height - height) / 2),
         },
         scroller: scrollParent(list),
       });
       gesture.anchor = gesture.start.y + (gesture.scroller?.scrollTop ?? 0);
       moveLift(point);
+      handoffCard(item, clone, false);
       item.classList.add("reorder-source");
       document.documentElement.classList.add("is-reordering");
       try {
@@ -252,7 +294,6 @@
       try {
         list.releasePointerCapture(g.pointerId);
       } catch {}
-      g.layer.remove();
       document.documentElement.classList.remove("is-reordering");
       if (cancelled) {
         gesture = g;
@@ -262,11 +303,18 @@
       g.item.classList.remove("reorder-source");
       suppressClick();
       const order = items().map((n) => n.dataset.reorderId);
-      onEnd({
-        order,
-        moved: order.join("\n") !== g.original.map((n) => n.dataset.reorderId).join("\n"),
-        cancelled,
-      });
+      try {
+        onEnd({
+          order,
+          moved: order.join("\n") !== g.original.map((n) => n.dataset.reorderId).join("\n"),
+          cancelled,
+        });
+        // onEnd can rebuild the list. Land on the newly rendered card.
+        const target = items().find((node) => node.dataset.reorderId === g.item.dataset.reorderId);
+        if (target) handoffCard(g.lift, target, true);
+      } finally {
+        g.layer.remove();
+      }
     }
     function move(event) {
       if (!gesture || event.pointerId !== gesture.pointerId) return;

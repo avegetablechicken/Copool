@@ -741,8 +741,8 @@ let pendingEdit = null;
 let editGeneration = 0;
 // Each half of a turn: edge-on at its middle, where the sides swap.
 const FLIP_HALF_MS = 210;
-// A render of a turn, whose card's accounts neither leave nor arrive.
-let turnRender = false;
+// The list entry whose face is changing during this render.
+let turningEntry = null;
 /// What a flip key names among the shown cards: an account, maybe one of a
 /// Sub2api provider's, or a provider's group.
 function flipTarget(key) {
@@ -884,8 +884,13 @@ async function turnCard(key, direction, change) {
     [...list.querySelectorAll("[data-flip-key]")].find((n) => n.dataset.flipKey === key);
   const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   const node = find();
-  const before = node?.closest("[data-reorder-id]")?.offsetHeight;
+  const entry = node?.closest("[data-reorder-id]");
+  const before = entry?.offsetHeight;
+  const keyboardFocus = node?.contains(document.activeElement) &&
+    document.activeElement.matches(":focus-visible");
+  const raised = !still && node?.matches(":hover, :has(:focus-visible), .flip-raised");
   if (node && !still) {
+    if (raised) node.classList.add("flip-raised");
     await node
       .animate(
         [
@@ -898,15 +903,19 @@ async function turnCard(key, direction, change) {
     node.style.visibility = "hidden";
   }
   await change();
-  turnRender = true;
+  turningEntry = entry?.dataset.reorderId;
   try {
     renderEditing();
   } finally {
-    turnRender = false;
+    turningEntry = null;
   }
   const next = find();
-  if (!next || still) return;
-  next.animate(
+  if (!next) return;
+  if (keyboardFocus && document.activeElement === document.body)
+    next.querySelector(":scope > .card-edit, :scope > .back-head > .back-done")?.focus({ preventScroll: true });
+  if (still) return;
+  if (raised) next.classList.add("flip-raised");
+  const turn = next.animate(
     [
       { transform: `perspective(900px) rotateY(${-90 * direction}deg) scale(0.96)` },
       { transform: "none" },
@@ -915,11 +924,14 @@ async function turnCard(key, direction, change) {
   );
   const holder = next.closest("[data-reorder-id]");
   const after = holder?.offsetHeight;
+  // Reveal the extra height without cropping the lifted card's outer shadow.
   if (before && after > before)
     window.CopoolReorder.springAnimate(holder, [
-      { clipPath: `inset(0 0 ${after - before}px 0 round 8px)` },
-      { clipPath: "inset(0 0 0 0 round 8px)" },
+      { clipPath: `inset(-24px -24px ${after - before}px round 8px)` },
+      { clipPath: "inset(-24px round 8px)" },
     ]);
+  await turn.finished.catch(() => {});
+  next.classList.remove("flip-raised");
 }
 /// A card's settings side: its proxy, token renewal, greetings, the pool's
 /// refresh and its removal; a provider's group has the provider's proxy;
@@ -1867,6 +1879,8 @@ function animateLayout(list, before, current) {
       continue;
     }
     kept.add(key);
+    // Its height can change, but the turning card already owns its transform.
+    if (key === turningEntry) continue;
     // A card still rising or dropping keeps passing over the others.
     R.slide(
       node,
@@ -1875,9 +1889,8 @@ function animateLayout(list, before, current) {
     );
     // An account joining a provider's group arrives inside it; a group
     // turned over shows its accounts again without them arriving.
-    if (!turnRender)
-      for (const member of node.querySelectorAll("[data-card-id]"))
-        if (!before.cards.has(member.dataset.cardId)) appear(member);
+    for (const member of node.querySelectorAll("[data-card-id]"))
+      if (!before.cards.has(member.dataset.cardId)) appear(member);
   }
   const gone = [...before.entries]
     .filter(([key]) => !kept.has(key))
