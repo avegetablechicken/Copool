@@ -5207,10 +5207,13 @@ mod tests {
             assert_eq!(fs::read(app.claude_store_path()).unwrap(), saved);
             assert_eq!(fs::read(location.credentials_file()).unwrap(), live);
         }
-        assert!(app
-            .claude_import_json(&" ".repeat(16 * 1024 * 1024 + 1))
-            .await
-            .is_err());
+        // Over the limit, an import is refused unread.
+        assert_eq!(
+            app.import_json(Pool::Claude, &" ".repeat(16 * 1024 * 1024 + 1))
+                .await
+                .unwrap_err(),
+            "Import exceeds 16 MiB"
+        );
         // A file over the limit, or no file, is not read.
         let file = dir.path().join("big.json");
         fs::write(&file, " ".repeat(16 * 1024 * 1024 + 1)).unwrap();
