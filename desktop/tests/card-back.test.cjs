@@ -108,6 +108,17 @@ test("a provider's group edits its provider's proxy, saved once through its firs
   assert.deepEqual(saved, [["sub2api-team-1", "direct://"]]);
 });
 
+test("a provider's only card turns over as an ordinary card, to its proxy", async () => {
+  const card = { id: "sub2api-team-1", sourceTag: "SUB2API", proxyUrl: "" };
+  const { scope, saved } = editor([card, { id: "solo", proxyUrl: "" }]);
+  const target = scope.flipTarget(card.id);
+  assert.equal(target.grouped, false);
+  assert.equal(scope.hasBack(target), true);
+  scope.editing = { key: card.id, proxy: { enabled: false, url: "" } };
+  await scope.saveProxyDraft(scope.editing);
+  assert.deepEqual(saved, [["sub2api-team-1", "direct://"]]);
+});
+
 test("a blank card proxy is described and shown as the shared account proxy when one is set", () => {
   const { scope } = editor([]);
   scope.preferences.accountProxyUrl = " socks5://127.0.0.1:7891 ";

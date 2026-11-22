@@ -741,7 +741,12 @@ function flipTarget(key) {
     return members.length ? { group: { key: provider, accounts: members } } : null;
   }
   const account = accounts.find((a) => a.id === key);
-  return account ? { account, grouped: providerKey(account) !== null } : null;
+  if (!account) return null;
+  // A provider's only card is an ordinary card, as P.providerGroups shows it.
+  const provider = providerKey(account);
+  const grouped =
+    provider !== null && accounts.filter((a) => providerKey(a) === provider).length > 1;
+  return { account, grouped };
 }
 /// A provider's account has only its greetings to edit.
 function hasBack(target) {
