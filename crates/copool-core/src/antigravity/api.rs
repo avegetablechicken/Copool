@@ -193,10 +193,12 @@ pub(super) fn project(value: &Value) -> Option<String> {
 }
 
 /// The models a hi starts each five-hour window with, from
-/// `fetchAvailableModels`: the Gemini model Antigravity runs commands with,
-/// else another Gemini model; for the third-party pool, which its models
-/// share, GPT-OSS, the cheapest, else Claude Sonnet. Only models that hold
-/// quota (a reset) count.
+/// `fetchAvailableModels`. For the Gemini pool, one of Antigravity's agent
+/// models (`agentModelSorts`, else `defaultAgentModelId`), the lowest effort
+/// first: the command model (`commandModelIds`, Gemini 3 Flash) answers but
+/// leaves Gemini's five-hour window idle. For the third-party pool, which its
+/// models share, GPT-OSS, the cheapest, else Claude Sonnet. Only models that
+/// hold quota (a reset) count.
 pub(super) fn hello_models(value: &Value) -> (Option<String>, Option<String>) {
     let Some(models) = value.get("models").and_then(Value::as_object) else {
         return (None, None);
@@ -207,14 +209,22 @@ pub(super) fn hello_models(value: &Value) -> (Option<String>, Option<String>) {
         .filter(|(_, m)| m.get("isInternal").and_then(Value::as_bool) != Some(true))
         .map(|(key, _)| key.as_str())
         .collect();
-    let gemini = value
-        .get("commandModelIds")
+    let agent: Vec<&str> = value
+        .get("agentModelSorts")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .filter_map(|sort| sort.get("groups").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|group| group.get("modelIds").and_then(Value::as_array))
+        .flatten()
+        .chain(value.get("defaultAgentModelId"))
         .filter_map(Value::as_str)
-        .find(|id| quota.contains(id))
-        .or_else(|| quota.iter().copied().find(|id| id.starts_with("gemini")));
+        .filter(|id| id.starts_with("gemini") && quota.contains(id))
+        .collect();
+    let gemini = ["-low", "-medium", ""]
+        .iter()
+        .find_map(|effort| agent.iter().copied().find(|id| id.ends_with(effort)));
     let third_party = ["gpt-oss", "claude-sonnet", "claude"]
         .iter()
         .find_map(|prefix| quota.iter().copied().find(|id| id.starts_with(prefix)));
@@ -284,31 +294,44 @@ mod tests {
         let models = json!({
             "models": {
                 "tab_flash_lite_preview": {"model": "MODEL_PLACEHOLDER_M19", "quotaInfo": {"remainingFraction": 1}},
-                "gemini-3.1-flash-lite": {"displayName": "Gemini 3.1 Flash Lite", "quotaInfo": {"remainingFraction": 0.98, "resetTime": "2026-11-20T21:18:53Z"}},
-                "claude-sonnet-5-5-medium": {"displayName": "Claude Sonnet 5.5 (Medium)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T22:59:41Z"}},
-                "gemini-3-flash": {"displayName": "Gemini 3 Flash", "quotaInfo": {"remainingFraction": 0.98, "resetTime": "2026-11-20T21:18:53Z"}},
-                "gpt-oss-120b-medium": {"displayName": "GPT-OSS 120B (Medium)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T22:59:41Z"}}
+                "gemini-3.1-flash-lite": {"displayName": "Gemini 3.1 Flash Lite", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-22T08:44:11Z"}},
+                "claude-sonnet-5-5-medium": {"displayName": "Claude Sonnet 5.5 (Medium)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-22T08:24:35Z"}},
+                "gemini-3-flash": {"displayName": "Gemini 3 Flash", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-22T08:44:11Z"}},
+                "gemini-3.8-flash-high": {"displayName": "Gemini 3.8 Flash (High)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-22T08:44:11Z"}},
+                "gemini-3.8-flash-medium": {"displayName": "Gemini 3.8 Flash (Medium)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-22T08:44:11Z"}},
+                "gemini-3.8-flash-low": {"displayName": "Gemini 3.8 Flash (Low)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-22T08:44:11Z"}},
+                "gpt-oss-120b-medium": {"displayName": "GPT-OSS 120B (Medium)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-22T08:24:35Z"}}
             },
+            "defaultAgentModelId": "gemini-3.8-flash-high",
+            "agentModelSorts": [{"displayName": "Recommended", "groups": [{"modelIds": [
+                "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+                "claude-sonnet-5-5-medium", "gpt-oss-120b-medium"
+            ]}]}],
             "commandModelIds": ["gemini-3-flash"]
         });
         assert_eq!(
             hello_models(&models),
             (
-                Some("gemini-3-flash".into()),
+                Some("gemini-3.8-flash-low".into()),
                 Some("gpt-oss-120b-medium".into())
             )
         );
         let mut fewer = models.clone();
+        fewer["agentModelSorts"] = json!([]);
         let list = fewer["models"].as_object_mut().unwrap();
         list.remove("gpt-oss-120b-medium");
-        list.remove("gemini-3-flash");
         assert_eq!(
             hello_models(&fewer),
             (
-                Some("gemini-3.1-flash-lite".into()),
+                Some("gemini-3.8-flash-high".into()),
                 Some("claude-sonnet-5-5-medium".into())
             )
         );
+        // The command model alone does not start Gemini's window.
+        let mut command = models.clone();
+        command["agentModelSorts"] = json!([]);
+        command["defaultAgentModelId"] = Value::Null;
+        assert_eq!(hello_models(&command).0, None);
         assert_eq!(hello_models(&json!({})), (None, None));
         let body = hello("project-1", "gemini-3-flash");
         assert_eq!(body["project"], "project-1");

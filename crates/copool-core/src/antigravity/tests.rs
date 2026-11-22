@@ -173,9 +173,10 @@ impl Network for Fake {
                     200,
                     json!({"models": {
                         "gemini-3-flash": {"displayName": "Gemini 3 Flash", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T21:18:53Z"}},
+                        "gemini-3.8-flash-low": {"displayName": "Gemini 3.8 Flash (Low)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T21:18:53Z"}},
                         "claude-sonnet-5-5-low": {"displayName": "Claude Sonnet 5.5 (Low)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T22:59:41Z"}},
                         "gpt-oss-120b-medium": {"displayName": "GPT-OSS 120B (Medium)", "quotaInfo": {"remainingFraction": 1, "resetTime": "2026-11-20T22:59:41Z"}}
-                    }, "commandModelIds": ["gemini-3-flash"]}),
+                    }, "defaultAgentModelId": "gemini-3.8-flash-low", "commandModelIds": ["gemini-3-flash"]}),
                 ),
                 api::GENERATE_PATH => (200, json!({"response": {"candidates": []}})),
                 _ => (404, Value::Null),
@@ -758,13 +759,13 @@ async fn a_hi_starts_each_idle_five_hour_window() {
         .iter()
         .map(|m| m.1.clone())
         .collect();
-    assert_eq!(models, ["gemini-3-flash", "gpt-oss-120b-medium"]);
+    assert_eq!(models, ["gemini-3.8-flash-low", "gpt-oss-120b-medium"]);
     // Both running: Gemini's, as asked.
     h.fake.messages.lock().unwrap().clear();
     set_usage(Some(later_reset), Some(later_reset));
     h.app.say_hi(Pool::Antigravity, &id).await.unwrap();
     assert_eq!(h.fake.messages.lock().unwrap().len(), 1);
-    assert_eq!(h.fake.messages.lock().unwrap()[0].1, "gemini-3-flash");
+    assert_eq!(h.fake.messages.lock().unwrap()[0].1, "gemini-3.8-flash-low");
     // A refused token is renewed by a refresh, then the hi goes again.
     h.fake.messages.lock().unwrap().clear();
     {
@@ -786,7 +787,7 @@ async fn a_hi_starts_each_idle_five_hour_window() {
         .iter()
         .map(|m| m.1.clone())
         .collect();
-    assert_eq!(models, ["gemini-3-flash", "gpt-oss-120b-medium"]);
+    assert_eq!(models, ["gemini-3.8-flash-low", "gpt-oss-120b-medium"]);
 }
 
 fn stored_document(app: &Application, id: &str) -> Value {
