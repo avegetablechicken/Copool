@@ -228,6 +228,17 @@ impl Preferences {
         Ok(p)
     }
 }
+struct InstanceLock {
+    file: fs::File,
+}
+
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        // A forked child can keep a descriptor open after the app closes its own.
+        let _ = self.file.unlock();
+    }
+}
+
 pub struct Application {
     pub paths: Paths,
     pub(crate) secrets: Arc<dyn crate::credentials::SecretStore>,
@@ -239,8 +250,6 @@ pub struct Application {
     pub(crate) operations: Mutex<()>,
     proxy_operations: Mutex<()>,
     pub(crate) greetings_inflight: std::sync::Mutex<std::collections::BTreeSet<String>>,
-    // Prevent two app processes from concurrently mutating the same account pool.
-    _instance_lock: fs::File,
     switch_effects: Arc<std::sync::RwLock<Option<SwitchEffect>>>,
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
     pub(crate) changes: Arc<std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
@@ -251,6 +260,8 @@ pub struct Application {
     pub(crate) rounds: [crate::pool::Rounds; Pool::ALL.len()],
     /// Itself, once shared (`into_shared`).
     this: std::sync::OnceLock<std::sync::Weak<Application>>,
+    // Release the directory after the rest of the application has been dropped.
+    _instance_lock: InstanceLock,
 }
 pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
@@ -304,6 +315,7 @@ impl Application {
             .map_err(|e| e.to_string())?;
         file.try_lock()
             .map_err(|_| "This Copool data directory is already in use")?;
+        let instance_lock = InstanceLock { file };
         // Recover malformed account JSON only after a private backup succeeds.
         store::load_store_from_path(&paths.store())?;
         let network = Arc::new(crate::account_network::Network {
@@ -318,7 +330,6 @@ impl Application {
             operations: Mutex::new(()),
             proxy_operations: Mutex::new(()),
             greetings_inflight: Default::default(),
-            _instance_lock: file,
             switch_effects: Arc::new(std::sync::RwLock::new(None)),
             refreshing: Default::default(),
             changes: Arc::new(std::sync::RwLock::new(None)),
@@ -327,6 +338,7 @@ impl Application {
             grok: Default::default(),
             rounds: Default::default(),
             this: Default::default(),
+            _instance_lock: instance_lock,
         };
         app.migrate_provider_credentials()?;
         app.preferences()?;
@@ -1394,6 +1406,23 @@ mod tests {
         app.persist_configuration(&settings).unwrap();
         app
     }
+    #[cfg(unix)]
+    #[test]
+    fn instance_lock_releases_even_with_an_inherited_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = app(&dir);
+        let paths = first.paths.clone();
+        // A forked child shares the open file description until exec or exit.
+        let inherited = first._instance_lock.file.try_clone().unwrap();
+        assert_eq!(
+            Application::open(paths.clone()).err().as_deref(),
+            Some("This Copool data directory is already in use")
+        );
+        drop(first);
+        let _reopened = Application::open(paths).unwrap();
+        drop(inherited);
+    }
+
     #[tokio::test]
     async fn account_proxy_migrates_the_previous_setting_name() {
         let (_dir, app, _) = crate::legacy_tests::network_fixture::fixture();
