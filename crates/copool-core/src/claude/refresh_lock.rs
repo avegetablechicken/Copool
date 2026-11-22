@@ -957,17 +957,32 @@ mod tests {
             let home = tempfile::tempdir().unwrap();
             let dir = config_dir(&home);
             let [current, _] = held_by(&dir, dead_pid(), |_| {});
+            let stop = Arc::new(AtomicBool::new(false));
+            let (ready_tx, ready_rx) = mpsc::channel();
             let bumper = {
                 let current = current.clone();
+                let stop = stop.clone();
                 thread::spawn(move || {
-                    for step in 0..20u64 {
-                        thread::sleep(Duration::from_millis(30));
-                        let _ = touch(&current, SystemTime::now() + Duration::from_millis(step));
+                    let base = SystemTime::now() + Duration::from_secs(1);
+                    let mut step = 0u64;
+                    let _ = ready_tx.send(());
+                    while !stop.load(Ordering::Relaxed) {
+                        step += 1;
+                        let _ = touch(&current, base + Duration::from_millis(step * 10));
+                        thread::sleep(Duration::from_millis(20));
                     }
                 })
             };
-            assert!(RefreshLock::acquire(&dir, quick(500)).unwrap().is_none());
+            ready_rx.recv().unwrap();
+            let wait = Wait {
+                total: Duration::from_millis(600),
+                backoff: Duration::from_millis(10),
+                watch: Duration::from_millis(250),
+            };
+            let acquired = RefreshLock::acquire(&dir, wait).unwrap();
+            stop.store(true, Ordering::Relaxed);
             bumper.join().unwrap();
+            assert!(acquired.is_none());
             assert!(current.is_dir());
         }
     }
