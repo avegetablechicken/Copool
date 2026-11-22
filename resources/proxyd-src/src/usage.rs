@@ -233,7 +233,12 @@ pub(crate) fn format_reqwest_error(err: &reqwest::Error) -> String {
         }
         source = next.source();
     }
-    parts.join(" -> ")
+    let message = parts.join(" -> ");
+    if certificate_verification_failure(&message) {
+        format!("{message} — Certificate verification failed. If you updated the system certificates, fully quit and restart Copool, then retry. Otherwise, check the proxy certificate and system trust settings.")
+    } else {
+        message
+    }
 }
 
 /// The daemon's Codex configuration: `CODEX_HOME`, else `~/.codex`. The
@@ -465,5 +470,47 @@ mod idle_window_tests {
         assert!(!moving_idle_window(&first, &reading(1000, 19000, 0.0)));
         assert!(!moving_idle_window(&first, &reading(1002, 19020, 0.0)));
         assert!(!moving_idle_window(&first, &reading(999, 19001, 0.0)));
+    }
+}
+
+/// Certificate verification failures can persist in cached clients after CA updates.
+fn certificate_verification_failure(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "invalid peer certificate",
+        "certificate verify failed",
+        "certificate verification failed",
+        "unknownissuer",
+        "unknown issuer",
+        "unable to get local issuer certificate",
+        "self-signed certificate",
+        "self signed certificate",
+        "certificate has expired",
+    ]
+    .iter()
+    .any(|pattern| message.contains(pattern))
+}
+
+#[cfg(test)]
+mod certificate_hint_tests {
+    use super::certificate_verification_failure;
+
+    #[test]
+    fn recognizes_verification_errors_without_labeling_other_network_failures() {
+        for message in [
+            "invalid peer certificate: BadSignature",
+            "certificate verify failed: unable to get local issuer certificate",
+            "invalid peer certificate: UnknownIssuer",
+        ] {
+            assert!(certificate_verification_failure(message));
+        }
+        for message in [
+            "connection refused",
+            "operation timed out",
+            "HTTP 401",
+            "TLS handshake EOF",
+        ] {
+            assert!(!certificate_verification_failure(message));
+        }
     }
 }

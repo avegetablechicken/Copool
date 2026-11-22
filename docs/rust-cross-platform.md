@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-22（证书错误恢复提示）：网络错误链包含证书验证失败时，保留原始诊断并提示：若已更新系统证书，请彻底退出并重新启动 Copool 后重试；否则检查代理证书与系统信任。普通超时、拒绝连接和 HTTP 错误不显示此提示。不修改系统信任或放宽 TLS 校验。Linux 错误分类测试及独立 daemon 编译检查通过；macOS、Windows 未实机验证。
+
 2026-11-22（Codex Free 月窗口与用量标签本地化）：展开卡片的 5 小时、1 周窗口标签改为按 11 种语言本地化的 Session / Weekly（简体中文为“会话”/“每周”），并与 `Fable` 风格一致。同时为 Codex Free 恢复 30 天月窗口解析与展示：`UsageSnapshot` 新增可选字段 `one_month`（`oneMonth`，匹配 `limit_window_seconds == 2592000`，旧缓存中错放在 5h/1w 槽位的 30 天窗口也会自动迁移）；其余非 5h/7d/30d 时长窗口仍忽略。Codex 视图中上报月窗口的账号按本地化标签显示 Monthly（简体中文“每月”）：仅有月窗口时只显示月窗口行，含 5h 时显示“会话 + 每月”，含周窗口时追加在周窗口之后；折叠行与 macOS 小组件在无周窗口而有月窗口时显示 `1m`；排序、耗尽判定、变更检测与临近重置刷新均已纳入 `one_month`。核心单元测试、桌面端测试、独立 daemon 检查及对应前端 LF/CRLF 测试通过；尚未用真实 Codex Free 账号实测或重新打包。
 
 2026-11-22（Claude Fable 用量）：Claude 视图中，支持 Fable 的账号卡片（含官方账号及 Sub2api 提供方成员卡片）在原有 5 小时与 1 周用量行下方新增 `Fable` 周用量行，沿用已用/剩余显示模式、重置时间/倒计时切换、颜色告警与速率提示；未上报 Fable 用量的账号不显示该行，折叠行和其余池不变。`UsageSnapshot` 新增可选字段 `fable_one_week`（`fableOneWeek`），官方 `/api/oauth/usage`、Sub2api `/admin/accounts/{id}/usage` 与独立 daemon 共用解析：优先读取 `limits[]` 中 `kind` 为 `weekly_scoped` 且 `scope.model` 含 `fable` 的项（不因 `is_active: false` 过滤），其次读取顶层 `seven_day_overage_included`，再回退 `seven_day_fable`，并同步记录服务器时钟偏移、变更检测与临近重置刷新。核心测试 570 项通过、2 项忽略；桌面测试 8 项通过；前端测试 185 项在 LF 与 CRLF 下均通过；独立 daemon 检查通过。尚未用真实支持 Fable 的账号端到端复核或重新打包。
