@@ -6,10 +6,17 @@ const vm = require("node:vm");
 const P = require("../ui/presentation.js");
 
 const root = path.resolve(__dirname, "../..");
-const readNormalized = (relativePath) =>
-  fs.readFileSync(path.join(root, relativePath), "utf8").replace(/\r\n/g, "\n");
+/// A file in the given line endings, whatever the checkout's.
+const read = (relativePath, newline) =>
+  fs
+    .readFileSync(path.join(root, relativePath), "utf8")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n/g, newline);
+// Each reading below takes either line ending, as a Windows checkout has.
+const lf = (text) => text.replace(/\r\n/g, "\n");
 
-function extractFunction(source, name) {
+function extractFunction(text, name) {
+  const source = lf(text);
   const start = source.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `missing function ${name}`);
   const end = source.indexOf("\n}\n", start);
@@ -19,10 +26,8 @@ function extractFunction(source, name) {
 
 for (const [format, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
   test(`Settings page exposes display theme options (${format})`, () => {
-    const html = readNormalized("desktop/ui/index.html")
-      .replace(/\n/g, newline)
-      .replace(/\r\n/g, "\n");
-    const selectMatch = html.match(/<select id="theme" class="select">([\s\S]*?)<\/select>/);
+    const html = read("desktop/ui/index.html", newline);
+    const selectMatch = lf(html).match(/<select id="theme" class="select">([\s\S]*?)<\/select>/);
     assert(selectMatch, "theme select is missing");
     const options = [...selectMatch[1].matchAll(/value="([^"]+)"[\s\S]*?data-l10n="([^"]+)"/g)].map(
       (match) => [match[1], match[2]],
@@ -35,9 +40,7 @@ for (const [format, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
   });
 
   test(`Stylesheet supports explicit light, dark, and system themes (${format})`, () => {
-    const css = readNormalized("desktop/ui/style.css")
-      .replace(/\n/g, newline)
-      .replace(/\r\n/g, "\n");
+    const css = lf(read("desktop/ui/style.css", newline));
     assert.match(css, /:root\[data-theme="light"\]\s*\{\s*color-scheme:\s*light;\s*\}/);
     assert.match(css, /:root\[data-theme="dark"\]\s*\{\s*color-scheme:\s*dark;\s*\}/);
     assert.match(css, /:root:where\(\[data-theme="dark"\]\)\s*\{/);
@@ -50,10 +53,7 @@ for (const [format, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
   });
 
   test(`applyTheme updates root dataset, color-scheme meta, and storage (${format})`, () => {
-    const appSource = readNormalized("desktop/ui/app.js")
-      .replace(/\n/g, newline)
-      .replace(/\r\n/g, "\n");
-    const fnSource = extractFunction(appSource, "applyTheme");
+    const fnSource = extractFunction(read("desktop/ui/app.js", newline), "applyTheme");
     const storage = new Map();
     const meta = { content: "light dark" };
     const rootElement = { dataset: {} };
