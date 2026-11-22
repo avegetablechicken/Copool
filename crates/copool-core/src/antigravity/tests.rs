@@ -10,6 +10,8 @@ pub(crate) struct Live {
     writes: Mutex<usize>,
     /// Writes are refused, as when the item needs authorization.
     refused: std::sync::atomic::AtomicBool,
+    /// Writes take this long, as while the user is asked to allow them.
+    write_delay_ms: std::sync::atomic::AtomicU64,
 }
 impl LiveStore for Live {
     fn read(&self, _: KeychainAccess) -> Response<'_, Option<Vec<u8>>> {
@@ -20,9 +22,15 @@ impl LiveStore for Live {
         if self.refused.load(std::sync::atomic::Ordering::Relaxed) {
             return Box::pin(async { Err("User interaction is not allowed.".into()) });
         }
-        *self.bytes.lock().unwrap() = Some(bytes);
-        *self.writes.lock().unwrap() += 1;
-        Box::pin(async { Ok(()) })
+        let delay = self
+            .write_delay_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            *self.bytes.lock().unwrap() = Some(bytes);
+            *self.writes.lock().unwrap() += 1;
+            Ok(())
+        })
     }
 }
 impl Live {
@@ -513,10 +521,23 @@ async fn switching_writes_the_login_in_its_form_and_keeps_an_unknown_one() {
         .iter()
         .find(|a| a.email.as_deref() == Some("alice@gmail.com"))
         .unwrap();
-    h.app
-        .switch_account(Pool::Antigravity, &alice.id)
-        .await
-        .unwrap();
+    // The cards are read while the login is written, as while the user is
+    // asked to allow it.
+    h.live
+        .write_delay_ms
+        .store(300, std::sync::atomic::Ordering::Relaxed);
+    let (switched, read) =
+        tokio::join!(h.app.switch_account(Pool::Antigravity, &alice.id), async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::timeout(std::time::Duration::from_millis(150), cards(&h.app))
+                .await
+                .is_ok()
+        });
+    switched.unwrap();
+    assert!(read);
+    h.live
+        .write_delay_ms
+        .store(0, std::sync::atomic::Ordering::Relaxed);
     let written = h.live.document();
     assert!(written.wrapped);
     assert_eq!(

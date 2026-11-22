@@ -615,22 +615,29 @@ impl Application {
             return self.antigravity_switch_sub2api(id).await;
         }
         let live = self.antigravity_read_live(access).await?;
-        let _lock = self.antigravity.lock.lock().await;
-        let mut store = self.antigravity_load()?;
-        follow_live(&mut store, live.as_ref());
-        let target = store
-            .accounts
-            .iter()
-            .find(|a| a.id == id)
-            .ok_or("Account not found")?
-            .clone();
-        if let Some(live) = live.as_ref().filter(|_| store.current_account_id.is_none()) {
-            let backup = self.paths.data_dir.join("antigravity-before-switch.json");
-            write_json(&backup, &live.value)?;
-        }
-        // agy keeps to the Gemini API while its settings say so.
         let path = self.antigravity_settings_path();
-        let settings = sub2api::leave_api_key(&path, &mut store)?;
+        // The store is not locked while the item is written, which may wait
+        // for the user to allow it: the cards are read meanwhile.
+        let (target, settings) = {
+            let _lock = self.antigravity.lock.lock().await;
+            let mut store = self.antigravity_load()?;
+            if follow_live(&mut store, live.as_ref()) {
+                self.antigravity_save(&store)?;
+            }
+            let target = store
+                .accounts
+                .iter()
+                .find(|a| a.id == id)
+                .ok_or("Account not found")?
+                .clone();
+            if let Some(live) = live.as_ref().filter(|_| store.current_account_id.is_none()) {
+                let backup = self.paths.data_dir.join("antigravity-before-switch.json");
+                write_json(&backup, &live.value)?;
+            }
+            // agy keeps to the Gemini API while its settings say so. The
+            // store records leaving it once the switch is made.
+            (target, sub2api::leave_api_key(&path, &mut store)?)
+        };
         if let Err(error) = self
             .antigravity_live()
             .write(
@@ -645,7 +652,16 @@ impl Application {
             sub2api::restore_settings(&path, settings);
             return Err(error);
         }
-        store.current_account_id = Some(target.id);
+        let _lock = self.antigravity.lock.lock().await;
+        let mut store = self.antigravity_load()?;
+        store.settings_record = None;
+        store.settings_provider = None;
+        // Unless the account was removed while its login was written.
+        store.current_account_id = store
+            .accounts
+            .iter()
+            .any(|a| a.id == target.id)
+            .then_some(target.id);
         self.antigravity_save(&store)?;
         Ok(SwitchExecution::default())
     }
