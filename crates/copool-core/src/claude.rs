@@ -1957,11 +1957,12 @@ impl Application {
         // Keep tokens Claude Code refreshed for the account being left.
         self.claude_accounts().await?;
         let location = self.claude_location();
-        let _lock = self.claude.lock.lock().await;
         // A renewal Claude Code finishes after the switch would write the
         // login being left over it: switch only while it renews nothing, and
-        // read the login being left under the same lock.
+        // read the login being left under the same lock. Waited for before
+        // the store's lock, which the cards are read under.
         let _claude_code = claude_code_lock(&location, true).await?;
+        let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         let live = read_live_with_access(&location, access).await?;
         if follow_live(&mut store, live.as_ref()) {
@@ -6117,8 +6118,14 @@ mod tests {
             .id
             .clone();
         let locks = hold_claude_code_locks(&location);
-        let error = app.switch_account(Pool::Claude, &alice).await.unwrap_err();
+        // The cards are read while it waits.
+        let (switched, read) = tokio::join!(app.switch_account(Pool::Claude, &alice), async {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            app.claude.lock.try_lock().is_ok()
+        });
+        let error = switched.unwrap_err();
         assert!(error.contains(CLAUDE_CODE_RENEWING), "{error}");
+        assert!(read);
         assert_eq!(live_access(&location), "bob-access");
         for lock in locks.iter().rev() {
             fs::remove_dir(lock).unwrap();
