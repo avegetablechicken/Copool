@@ -556,6 +556,7 @@
 "accounts.notice.antigravity_switch_done" = "Аккаунт Antigravity переключён; перезапустите Antigravity, чтобы использовать его";
 "error.antigravity.login_not_found" = "Вход Antigravity не найден. Сначала войдите через Antigravity или agy.";
 "error.antigravity.credentials_invalid" = "Недопустимый JSON входа Antigravity. Ожидается токен с непустым refresh_token.";
+"error.antigravity.quota_license_format" = "Google не распознал действующую лицензию Antigravity для этого запроса квоты. %@";
 "error.antigravity.sign_in_expired" = "Срок входа Antigravity истёк. Войдите снова через Antigravity или agy, затем импортируйте вход.";
 "accounts.card.antigravity_say_hi.help" = "Поздоровайтесь, чтобы сейчас запустить неактивные 5-часовые окна Gemini и Claude";
 "accounts.card.antigravity_say_hi.sent" = "Приветствие отправлено; ждём ответа Antigravity";

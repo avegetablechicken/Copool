@@ -314,17 +314,38 @@ pub(crate) fn available_models(value: &Value, now: i64) -> Option<UsageSnapshot>
 pub(crate) enum Failure {
     /// The access token was refused: renewing it may help.
     Expired,
+    /// Google denied this request. Keep its reason even if a fallback exists.
+    Denied(String),
     Other(String),
 }
+fn error_reason(body: &Value) -> Option<&str> {
+    body.pointer("/error/details")?
+        .as_array()?
+        .iter()
+        .find_map(|detail| detail["reason"].as_str())
+}
+pub(crate) fn unauthenticated(status: u16, body: &Value) -> bool {
+    status == 401
+        || (status == 403
+            && (body.pointer("/error/status").and_then(Value::as_str) == Some("UNAUTHENTICATED")
+                || error_reason(body) == Some("ACCESS_TOKEN_EXPIRED")))
+}
 pub(crate) fn status_error(what: &str, status: u16, body: &Value) -> String {
-    let message = body
-        .pointer("/error/message")
-        .or_else(|| body.get("error_description"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    format!("{what} failed: HTTP {status} {message}")
-        .trim()
-        .to_owned()
+    let mut error = format!("{what} failed: HTTP {status}");
+    for detail in [
+        body.pointer("/error/status").and_then(Value::as_str),
+        error_reason(body).or_else(|| body["error"].as_str()),
+        body.pointer("/error/message")
+            .or_else(|| body.get("error_description"))
+            .and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        error.push(' ');
+        error.push_str(detail);
+    }
+    error
 }
 /// One quota request: its parsed usage, none for a reply without quota.
 async fn quota(
@@ -340,7 +361,16 @@ async fn quota(
         .await
         .map_err(Failure::Other)?;
     match status {
-        401 | 403 => Err(Failure::Expired),
+        _ if unauthenticated(status, &body) => Err(Failure::Expired),
+        403 => {
+            let error = status_error("Antigravity usage request", status, &body);
+            let error = if error_reason(&body) == Some("SUBSCRIPTION_REQUIRED") {
+                crate::utils::localized("error.antigravity.quota_license_format", &[&error])
+            } else {
+                error
+            };
+            Err(Failure::Denied(error))
+        }
         200..=299 => Ok(parse(&body, now)),
         _ => Err(Failure::Other(status_error(
             "Antigravity usage request",
@@ -369,8 +399,8 @@ pub(crate) async fn fetch_usage(
     )
     .await
     {
-        Err(Failure::Expired) => return Err(Failure::Expired),
         Err(Failure::Other(error)) => Err(error),
+        Err(failure) => return Err(failure),
         Ok(summary) => Ok(summary),
     };
     if let Ok(Some(usage)) = &summary {
@@ -388,7 +418,7 @@ pub(crate) async fn fetch_usage(
     )
     .await;
     match (summary, models) {
-        (_, Err(Failure::Expired)) => Err(Failure::Expired),
+        (_, Err(failure @ (Failure::Expired | Failure::Denied(_)))) => Err(failure),
         (Ok(Some(mut usage)), Ok(Some(models))) => {
             usage.five_hour = models.five_hour;
             if usage.third_party_five_hour.is_none() && usage.third_party_one_week.is_none() {
@@ -434,7 +464,9 @@ pub(crate) async fn renew_token(
             Ok(renewed)
         }
         // invalid_grant: the login was signed out or revoked.
-        400 | 401 | 403 => Err("error.antigravity.sign_in_expired".into()),
+        400 | 401 | 403 if body["error"].as_str() == Some("invalid_grant") => {
+            Err("error.antigravity.sign_in_expired".into())
+        }
         _ => Err(status_error("Google token request", status, &body)),
     }
 }

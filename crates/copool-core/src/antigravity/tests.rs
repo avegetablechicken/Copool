@@ -60,6 +60,8 @@ struct Fake {
     messages: Mutex<Vec<(String, String)>>,
     /// Refresh tokens Google refuses.
     revoked: Mutex<Vec<String>>,
+    /// A 403 reply for a specific Cloud Code method.
+    denied: Mutex<Option<(&'static str, Value)>>,
     /// Remaining fraction of the Gemini five-hour pool.
     remaining: Mutex<f64>,
     /// The summary reports only the third-party pool, the Gemini models
@@ -110,6 +112,16 @@ impl Network for Fake {
         proxy: &'a str,
     ) -> Response<'a, api::Reply> {
         self.call(format!("{path} {token} {agent} {proxy}"));
+        if let Some((_, error)) = self
+            .denied
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(method, _)| *method == path)
+        {
+            let error = error.clone();
+            return Box::pin(async move { Ok((403, error)) });
+        }
         if path == api::GENERATE_PATH && !token.starts_with("expired") {
             self.messages.lock().unwrap().push((
                 body["project"].as_str().unwrap_or_default().into(),
@@ -497,6 +509,45 @@ async fn expired_or_refused_tokens_are_renewed_as_the_renewal_allows() {
         .find(|c| c.id == alice.id)
         .unwrap();
     assert_eq!(alice.usage_error.as_deref(), Some(SIGN_IN_EXPIRED));
+}
+
+#[tokio::test]
+async fn quota_permission_errors_reach_the_card_without_consuming_a_renewal() {
+    let h = harness(true).await;
+    h.live.sign_in(&login_of("alice", "access-alice", later()));
+    h.app.import_current(Pool::Antigravity).await.unwrap();
+    let card = cards(&h.app).await.remove(0);
+    h.app
+        .set_renewal(Pool::Antigravity, &card.id, "once")
+        .await
+        .unwrap();
+    let body = json!({"error": {
+        "status": "PERMISSION_DENIED",
+        "message": "You do not have a valid license of this product. (#3501)",
+        "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "SUBSCRIPTION_REQUIRED"}]
+    }});
+    for method in [api::QUOTA_SUMMARY_PATH, api::FETCH_MODELS_PATH] {
+        h.fake
+            .per_model_gemini
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        *h.fake.denied.lock().unwrap() = Some((method, body.clone()));
+        let start = h.fake.calls().len();
+        let error = h
+            .app
+            .refresh_usage(Pool::Antigravity, &card.id)
+            .await
+            .unwrap_err();
+        assert!(error.starts_with("error.antigravity.quota_license_format"));
+        assert!(error.contains("HTTP 403 PERMISSION_DENIED SUBSCRIPTION_REQUIRED"));
+        assert!(error.contains("(#3501)"));
+        let calls = h.fake.calls();
+        assert!(calls[start..].last().unwrap().starts_with(method));
+        assert_eq!(h.fake.renewals(), 0);
+        let updated = cards(&h.app).await.remove(0);
+        assert_eq!(updated.usage_error.as_deref(), Some(error.as_str()));
+        assert_eq!(updated.renewal.as_deref(), Some("once"));
+        assert!(updated.usage.is_some());
+    }
 }
 
 #[tokio::test]

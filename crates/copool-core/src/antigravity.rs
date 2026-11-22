@@ -817,7 +817,7 @@ impl Application {
             let token = login::access_token(&document).unwrap_or_default();
             match fetch_usage(network, &token, &proxy, now).await {
                 Ok(usage) => Ok(Some(usage)),
-                Err(Failure::Other(error)) => Err(error),
+                Err(Failure::Denied(error) | Failure::Other(error)) => Err(error),
                 Err(Failure::Expired) if renewed => Err(SIGN_IN_EXPIRED.into()),
                 Err(Failure::Expired) => {
                     // Antigravity may have renewed the login since it was
@@ -828,7 +828,9 @@ impl Application {
                         let token = login::access_token(&document).unwrap_or_default();
                         match fetch_usage(network, &token, &proxy, now).await {
                             Ok(usage) => return Ok(Some(usage)),
-                            Err(Failure::Other(error)) => return Err(error),
+                            Err(Failure::Denied(error) | Failure::Other(error)) => {
+                                return Err(error)
+                            }
                             Err(Failure::Expired) => {}
                         }
                     }
@@ -842,7 +844,7 @@ impl Application {
                     match fetch_usage(network, &token, &proxy, now).await {
                         Ok(usage) => Ok(Some(usage)),
                         Err(Failure::Expired) => Err(SIGN_IN_EXPIRED.into()),
-                        Err(Failure::Other(error)) => Err(error),
+                        Err(Failure::Denied(error) | Failure::Other(error)) => Err(error),
                     }
                 }
             }
@@ -960,7 +962,7 @@ impl Application {
         };
         let answer = |what: &str, (status, body): api::Reply| match status {
             200..=299 => Ok(Some(body)),
-            401 | 403 => Ok(None),
+            _ if crate::antigravity_cloud::unauthenticated(status, &body) => Ok(None),
             _ => Err(status_error(what, status, &body)),
         };
         let project = match account.project.clone() {

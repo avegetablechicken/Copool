@@ -556,6 +556,7 @@
 "accounts.notice.antigravity_switch_done" = "已切換 Antigravity 帳號，重新啟動 Antigravity 後生效";
 "error.antigravity.login_not_found" = "找不到 Antigravity 登入。請先在 Antigravity 或 agy 中登入。";
 "error.antigravity.credentials_invalid" = "無效的 Antigravity 登入 JSON：需要包含非空 refresh_token 的權杖。";
+"error.antigravity.quota_license_format" = "Google 未識別到此次配額查詢所需的 Antigravity 授權。%@";
 "error.antigravity.sign_in_expired" = "Antigravity 登入已過期。請在 Antigravity 或 agy 中重新登入，然後匯入該登入。";
 "accounts.card.antigravity_say_hi.help" = "打個招呼，立即開始閒置的 Gemini 與 Claude 5 小時計時";
 "accounts.card.antigravity_say_hi.sent" = "已傳送招呼，等待 Antigravity 回覆";

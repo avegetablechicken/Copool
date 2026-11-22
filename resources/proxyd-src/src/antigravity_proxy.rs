@@ -383,7 +383,7 @@ pub(super) async fn remote_usage(
     };
     let mut usage = result.map_err(|failure| match failure {
         Failure::Expired => "Antigravity login expired".to_owned(),
-        Failure::Other(error) => error,
+        Failure::Denied(error) | Failure::Other(error) => error,
     })?;
     usage.plan_type = candidate.plan_type.clone();
     Ok(usage)

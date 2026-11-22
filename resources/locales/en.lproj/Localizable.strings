@@ -586,6 +586,7 @@
 "accounts.notice.antigravity_switch_done" = "Switched Antigravity account; restart Antigravity to use it";
 "error.antigravity.login_not_found" = "Antigravity login not found. Sign in with Antigravity or agy first.";
 "error.antigravity.credentials_invalid" = "Invalid Antigravity login JSON. Expected a token with a non-empty refresh_token.";
+"error.antigravity.quota_license_format" = "Google did not recognize a valid Antigravity license for this quota request. %@";
 "error.antigravity.sign_in_expired" = "Antigravity sign-in expired. Sign in again with Antigravity or agy, then import the login.";
 "accounts.card.antigravity_say_hi.help" = "Say hi to start the idle Gemini and Claude 5-hour windows now";
 "accounts.card.antigravity_say_hi.sent" = "Hi sent; waiting for Antigravity's reply";

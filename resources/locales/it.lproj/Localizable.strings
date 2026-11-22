@@ -556,6 +556,7 @@
 "accounts.notice.antigravity_switch_done" = "Account Antigravity cambiato; riavvia Antigravity per usarlo";
 "error.antigravity.login_not_found" = "Accesso di Antigravity non trovato. Accedi prima con Antigravity o agy.";
 "error.antigravity.credentials_invalid" = "JSON di accesso Antigravity non valido. È previsto un token con refresh_token non vuoto.";
+"error.antigravity.quota_license_format" = "Google non ha riconosciuto una licenza Antigravity valida per questa richiesta di quota. %@";
 "error.antigravity.sign_in_expired" = "L’accesso ad Antigravity è scaduto. Accedi di nuovo con Antigravity o agy, poi importa l’accesso.";
 "accounts.card.antigravity_say_hi.help" = "Saluta per avviare ora le finestre di 5 ore inattive di Gemini e Claude";
 "accounts.card.antigravity_say_hi.sent" = "Saluto inviato; in attesa della risposta di Antigravity";

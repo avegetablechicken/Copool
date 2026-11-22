@@ -556,6 +556,7 @@
 "accounts.notice.antigravity_switch_done" = "Antigravity-Konto gewechselt; starte Antigravity neu, um es zu verwenden";
 "error.antigravity.login_not_found" = "Antigravity-Anmeldung nicht gefunden. Melde dich zuerst mit Antigravity oder agy an.";
 "error.antigravity.credentials_invalid" = "Ungültiges Antigravity-Anmelde-JSON. Erwartet wird ein Token mit nicht leerem refresh_token.";
+"error.antigravity.quota_license_format" = "Google hat für diese Kontingentabfrage keine gültige Antigravity-Lizenz erkannt. %@";
 "error.antigravity.sign_in_expired" = "Die Antigravity-Anmeldung ist abgelaufen. Melde dich mit Antigravity oder agy erneut an und importiere die Anmeldung.";
 "accounts.card.antigravity_say_hi.help" = "Hallo sagen, um die inaktiven 5-Stunden-Fenster von Gemini und Claude jetzt zu starten";
 "accounts.card.antigravity_say_hi.sent" = "Hallo gesendet; warte auf die Antwort von Antigravity";
