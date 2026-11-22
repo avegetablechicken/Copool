@@ -143,6 +143,60 @@ fn claudesMaxPlansAreNamedAsTheyWereAtTheTime() {
     assert_eq!(label("pro", after), named("PRO", "pink"));
 }
 #[test]
+fn codexAndGooglePlansAreNamedAsTheyWereAtTheTime() {
+    let label = |pool, plan: &str, now| {
+        let mut a = account("current", true, "current@example.com", 10., 20.);
+        a.plan_type = Some(plan.into());
+        let card = build(pool, &[a], "used", Some(0), now)
+            .current_card
+            .unwrap();
+        (card.plan_label, card.plan_accent)
+    };
+    let named = |name: &str, accent: &str| (name.to_owned(), accent.to_owned());
+    let now = 1_795_392_000; // 2026-11-23
+                             // OpenAI's $100 Pro came on 2026-04-09.
+    let before_pro = 1_772_323_200; // 2026-03-01
+    assert_eq!(
+        label(Pool::Codex, "pro", before_pro),
+        named("PRO", "purple")
+    );
+    assert_eq!(label(Pool::Codex, "pro", now), named("PRO 20X", "purple"));
+    assert_eq!(
+        label(Pool::Codex, "prolite", now),
+        named("PRO 5X", "orange")
+    );
+    assert_eq!(
+        label(Pool::Codex, "promax", now),
+        named("PRO 50X", "purple")
+    );
+    // Google's $100 Ultra came on 2026-05-19.
+    let before_ultra = 1_777_593_600; // 2026-05-01
+    assert_eq!(
+        label(Pool::Antigravity, "ultra 20x", before_ultra),
+        named("ULTRA", "purple")
+    );
+    assert_eq!(
+        label(Pool::Antigravity, "ultra", before_ultra),
+        named("ULTRA", "purple")
+    );
+    assert_eq!(
+        label(Pool::Antigravity, "ultra 20x", now),
+        named("ULTRA 20X", "purple")
+    );
+    assert_eq!(
+        label(Pool::Antigravity, "ultra 5x", now),
+        named("ULTRA 5X", "orange")
+    );
+    assert_eq!(
+        label(Pool::Antigravity, "ultra lite", now),
+        named("ULTRA 5X", "orange")
+    );
+    assert_eq!(
+        label(Pool::Antigravity, "ultra", now),
+        named("ULTRA", "orange")
+    );
+}
+#[test]
 fn codexCardsKeepTreatingUnknownPlansAsTeam() {
     let mut a = account("current", true, "current@example.com", 10., 20.);
     a.plan_type = Some("max 20x".into());

@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-23（区分 Codex Pro 与 Google AI Ultra 的子档）：Codex 的 `plan_type` 区分三种 Pro：`prolite`（$100）、`pro`（$200）、`promax`。`promax` 对应 $500 是按命名推断的，未经核实；这三个取值见于 Codex CLI 0.171.0 的 `PlanType` 枚举。接口只给档位，不给倍数，标签采用 OpenAI 的叫法 `PRO 5X`、`PRO 20X`、`PRO 50X`：$100 档在 2026-04-09 推出，此前 `pro` 显示为 `PRO`；$100 档额度后来翻倍，名称仍为 5X。此前 `prolite`、`promax` 被当作未知套餐，显示为 `TEAM`。Antigravity 的两档 Ultra 在 `loadCodeAssist` 中都叫 "Google AI Ultra"，只能由 `paidTier.id` 区分：`g1-ultra-lite-tier`（$100，额度为 Pro 的 5 倍，2026-05-19 推出）与 `g1-ultra-tier`（$200，20 倍）。核心与 Sub2api 现分别记为 `ultra 5x`、`ultra 20x`，标签为 `ULTRA 5X`、`ULTRA 20X`。2026-05-19 之前 Ultra 只有一档，标签为 `ULTRA`。配色：$100 档为橙色，$200 与 $500 档为紫色；只知道是 Ultra、分不出子档时（例如只有名称，或旧版本保存的 `ultra`），2026-05-19 之后按 $100 档显示橙色。新增前端与 Rust 测试，以 2026-03-01、2026-05-01、2026-11-23 验证各名称和颜色；核心 625 项测试通过，WidgetKit 扩展编译通过；未用真实 Pro 或 Ultra 账号核对，也未在界面上实机查看。
+
 2026-11-23（未区分的套餐按 $100 档配色）：接口未区分 $100 与更高价位变体的套餐，按约 $100 的一档配色，显示橙色。目前包括 Codex 的 `pro` 和 Antigravity 的 `ultra`：Copool 尚未读取 Codex 的 `prolite`、`promax`，也未读取 Antigravity 的 `paidTier.id`（`g1-ultra-lite-tier` / `g1-ultra-tier`）。Codex Pro 因此仍为原版 SwiftUI 的橙色。Claude 的 Ultra（`max 20x`）可以与 Max 区分，仍为紫色。前端与 Rust 小组件测试通过，WidgetKit 扩展编译通过。
 
 2026-11-23（Claude 套餐按时间命名）：Claude Max 套餐的名称随当前时间而定，以改名时刻 2026-10-30 00:00 UTC 为界（app 用 `Date.now()`，小组件用生成快照的时间）。此前显示当时的名称 `MAX 5X`、`MAX 20X`；此后显示 `MAX`、`ULTRA`。不带倍数的 `max` 始终显示 `MAX`；报为 `ultra` 时，改名前显示 `MAX 20X`。颜色不随名称变化：20 倍档为紫色，5 倍档为橙色。新增前端与 Rust 小组件测试，分别以 2026-10-01 和 2026-11-23 验证两种名称；未在界面上实机查看。

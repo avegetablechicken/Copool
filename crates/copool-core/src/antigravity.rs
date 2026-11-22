@@ -26,7 +26,7 @@ mod proxy;
 mod security;
 mod sub2api;
 
-pub(crate) use api::{sign_in_url, sub2api_usage, Network};
+pub(crate) use api::{sign_in_url, sub2api_usage, ultra_by_id, Network};
 
 /// Environment variables as agy would have them; with `now`, as agy started
 /// from a terminal opened now would, all from one shell, after Copool

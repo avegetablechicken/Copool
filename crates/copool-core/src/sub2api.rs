@@ -109,6 +109,9 @@ fn subscription_tier(pool: Pool, field: &Value) -> Option<String> {
     }
     match pool {
         Pool::Antigravity => {
+            if let Some(plan) = crate::antigravity::ultra_by_id(&lower) {
+                return Some(plan.into());
+            }
             let id = lower.strip_suffix("-tier").unwrap_or(&lower);
             Some(id.strip_prefix("g1-").unwrap_or(id).replace('-', " "))
         }

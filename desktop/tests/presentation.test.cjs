@@ -59,6 +59,32 @@ test("Claude's Max plans are named as they were at the time", () => {
   assert.equal(accent("max 5x", before), "orange");
   assert.equal(accent("max 5x", after), "orange");
 });
+test("Codex's and Google's plans are named as they were at the time", () => {
+  const view = (planType, pool, now) =>
+    P.card({ planType, usage: null }, false, "used", String, pool, now);
+  const named = (planType, pool, now) => {
+    const v = view(planType, pool, now);
+    return [v.plan, v.accent];
+  };
+  // OpenAI's $100 Pro came on 2026-04-09.
+  const beforePro = Date.UTC(2026, 2, 1);
+  const now = Date.UTC(2026, 10, 23);
+  assert.deepEqual(named("pro", "codex", beforePro), ["PRO", "purple"]);
+  assert.deepEqual(named("pro", "codex", now), ["PRO 20X", "purple"]);
+  assert.deepEqual(named("prolite", "codex", now), ["PRO 5X", "orange"]);
+  assert.deepEqual(named("promax", "codex", now), ["PRO 50X", "purple"]);
+  // Google's $100 Ultra came on 2026-05-19.
+  const beforeUltra = Date.UTC(2026, 4, 1);
+  assert.deepEqual(named("ultra 20x", "antigravity", beforeUltra), ["ULTRA", "purple"]);
+  assert.deepEqual(named("ultra", "antigravity", beforeUltra), ["ULTRA", "purple"]);
+  assert.deepEqual(named("ultra 20x", "antigravity", now), ["ULTRA 20X", "purple"]);
+  assert.deepEqual(named("ultra 5x", "antigravity", now), ["ULTRA 5X", "orange"]);
+  assert.deepEqual(named("ultra lite", "antigravity", now), ["ULTRA 5X", "orange"]);
+  assert.deepEqual(named("ultra", "antigravity", now), ["ULTRA", "orange"]);
+  assert.deepEqual(named("pro", "antigravity", now), ["PRO", "pink"]);
+  const sub2api = { planType: "ultra 20x", sourceTag: "SUB2API", usage: null };
+  assert.equal(P.card(sub2api, false, "used", String, "antigravity", now).plan, "ULTRA 20X");
+});
 test("Comparable plans share a color across providers", () => {
   const accent = (planType, pool) =>
     P.card({ planType, usage: null }, false, "used", String, pool).accent;
@@ -72,10 +98,14 @@ test("Comparable plans share a color across providers", () => {
   assert.equal(accent("max 5x", "claude"), "orange");
   assert.equal(accent("max", "claude"), "orange");
   assert.equal(accent("SuperGrok Plus", "grok"), "orange");
-  // Neither tells its $100 variant apart, so counts as it.
-  assert.equal(accent("pro", "codex"), "orange");
+  assert.equal(accent("prolite", "codex"), "orange");
+  assert.equal(accent("ultra 5x", "antigravity"), "orange");
+  // An Ultra not told apart from the $100 one counts as it.
   assert.equal(accent("ultra", "antigravity"), "orange");
   // The top subscription.
+  assert.equal(accent("pro", "codex"), "purple");
+  assert.equal(accent("promax", "codex"), "purple");
+  assert.equal(accent("ultra 20x", "antigravity"), "purple");
   assert.equal(accent("max 20x", "claude"), "purple");
   assert.equal(accent("SuperGrok Heavy", "grok"), "purple");
   assert.equal(accent("SUPER GROK HEAVY", "grok"), "purple");
@@ -83,7 +113,7 @@ test("Comparable plans share a color across providers", () => {
   assert.equal(accent("Free", "grok"), "gray");
   assert.equal(accent("Something New", "grok"), "teal");
   // Without a pool, Codex's colors.
-  assert.equal(P.card({ planType: "pro", usage: null }).accent, "orange");
+  assert.equal(P.card({ planType: "pro", usage: null }).accent, "purple");
 });
 test("Claude Max plans keep their multiplier", () => {
   assert.equal(P.normalizedPlan("max 20x"), "MAX 20X");
@@ -129,8 +159,10 @@ legacy(
   "AccountCardPresentationTests",
   "testCurrentAccountPaletteUsesOwnAccentForSelectionHighlight",
   () => {
-    const c = P.card({ ...a, planType: "pro", usage: null });
-    assert.equal(c.accent, "orange");
+    // Before the $100 Pro came, Pro was the $200 plan, of the top tier.
+    const before = Date.UTC(2026, 2, 1);
+    const c = P.card({ ...a, planType: "pro", usage: null }, false, "used", String, "codex", before);
+    assert.equal(c.accent, "purple");
     assert.equal(c.selectionAccent, "PRO");
   },
 );

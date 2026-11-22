@@ -56,6 +56,10 @@
   }
   /// When Claude renamed Max 5x to Max and Max 20x to Ultra.
   const CLAUDE_PLAN_RENAME = Date.UTC(2026, 9, 30);
+  /// When OpenAI added its $100 Pro (prolite) beside the $200 one.
+  const CODEX_PRO_LITE = Date.UTC(2026, 3, 9);
+  /// When Google added its $100 Ultra beside the top one.
+  const GOOGLE_ULTRA_LITE = Date.UTC(2026, 4, 19);
   /// A Claude Max plan by its name at `now`: "MAX 5X" and "MAX 20X" before
   /// the rename, "MAX" and "ULTRA" after; a Max without multiplier is "MAX".
   function claudeMaxName(times, now) {
@@ -68,6 +72,12 @@
         ? clean(account.usage?.planType) || clean(account.planType)
         : clean(account);
     let p = (raw || "team").toUpperCase().replace(/\s+/g, " ");
+    if (pool === "antigravity") {
+      // Both Ultra plans are "Google AI Ultra": known by their tier id as
+      // "ultra 5x" and "ultra 20x", else as "ultra" alone.
+      if (p === "ULTRA 5X" || p === "ULTRA LITE") return "ULTRA 5X";
+      if (p === "ULTRA 20X") return now >= GOOGLE_ULTRA_LITE ? "ULTRA 20X" : "ULTRA";
+    }
     // Grok's plans are shown as named ("SUPERGROK HEAVY"), as its widget.
     if (pool === "grok" || (pool === "antigravity" && account?.sourceTag === "SUB2API")) return p;
     if (pool === "claude") {
@@ -77,6 +87,13 @@
       const max = /^MAX(?: (\d+)X)?$/.exec(p);
       if (max) return claudeMaxName(max[1] ? Number(max[1]) : 0, now);
       if (p === "ULTRA") return claudeMaxName(20, now);
+    }
+    if (pool === "codex") {
+      // OpenAI's Pro plans: $100 (prolite), $200 (pro) and $500 (promax),
+      // named as OpenAI does once the $100 one came.
+      if (p === "PROLITE") return "PRO 5X";
+      if (p === "PROMAX") return "PRO 50X";
+      if (p === "PRO") return now >= CODEX_PRO_LITE ? "PRO 20X" : "PRO";
     }
     // Claude's Max plans keep their usage multiplier ("MAX 20X").
     if (/^MAX( \d+X)?$/.test(p)) return p;
@@ -312,10 +329,12 @@
   }
   /// A plan's color, by tier so that providers' comparable plans match:
   /// the entry subscription (Codex Plus, Claude Pro, Google AI Pro,
-  /// SuperGrok) is pink, the one near $100 (Claude Max, formerly Max 5x;
-  /// SuperGrok Plus) orange, and the top one (Claude Ultra, formerly Max
-  /// 20x; SuperGrok Heavy) purple.
-  function planAccent(plan, pool = "codex") {
+  /// SuperGrok) is pink, the one near $100 (Codex Pro 5x, Claude Max,
+  /// formerly Max 5x; Google AI Ultra 5x, SuperGrok Plus) orange, and the
+  /// top one (Codex Pro 20x and 50x, Claude Ultra, formerly Max 20x; Google
+  /// AI Ultra 20x, SuperGrok Heavy) purple. A plan not told apart from its
+  /// $100 variant counts as it.
+  function planAccent(plan, pool = "codex", now = Date.now()) {
     if (pool === "grok") {
       // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
       // Subscription's names, which may replace SuperGrok's.
@@ -325,9 +344,20 @@
       if (["SUPERGROKHEAVY", "ULTRA"].includes(name)) return "purple";
       if (!["FREE", "BUSINESS", "ENTERPRISE"].includes(plan)) return "teal";
     }
-    // A plan not told apart from its $100 variant (Codex Pro, Google AI
-    // Ultra) counts as the $100 tier; Claude's Ultra is its top one.
-    if (plan === "PRO") return pool === "codex" ? "orange" : "pink";
+    if (pool === "codex") {
+      if (plan === "PRO 5X") return "orange";
+      // The $200 Pro, also before the $100 one came, and the $500 one.
+      if (["PRO", "PRO 20X", "PRO 50X"].includes(plan)) return "purple";
+    }
+    if (pool === "antigravity") {
+      if (plan === "ULTRA 5X") return "orange";
+      if (plan === "ULTRA 20X") return "purple";
+      // An Ultra not told apart counts as the $100 one, once there was one.
+      if (plan === "ULTRA") return now >= GOOGLE_ULTRA_LITE ? "orange" : "purple";
+    }
+    if (plan === "PRO") return "pink";
+    // Claude's Ultra is its top plan; an Ultra not told apart from a $100
+    // one counts as it.
     if (plan === "ULTRA") return pool === "claude" ? "purple" : "orange";
     // Claude's Max is 5x unless it names more.
     const max = /^MAX(?: (\d+)X)?$/.exec(plan);
@@ -355,7 +385,7 @@
       credits = account.usage?.credits;
     return {
       plan,
-      accent: planAccent(plan, pool),
+      accent: planAccent(plan, pool, now),
       workspaceTag: workspaceTag(account),
       name:
         collapsed && name.includes("@")

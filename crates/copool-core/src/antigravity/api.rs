@@ -238,12 +238,26 @@ pub(super) fn hello(project: &str, model: &str) -> Value {
     )
 }
 
-/// `loadCodeAssist`'s plan: "ultra", "pro" or "free", else as named.
+/// The Ultra plan a tier id names: Google AI Ultra's $100 plan (since
+/// 2026-05-19) and its top one are both named "Google AI Ultra".
+pub(crate) fn ultra_by_id(id: &str) -> Option<&'static str> {
+    match id.trim().to_ascii_lowercase().as_str() {
+        "g1-ultra-lite-tier" => Some("ultra 5x"),
+        "g1-ultra-tier" => Some("ultra 20x"),
+        _ => None,
+    }
+}
+
+/// `loadCodeAssist`'s plan: an Ultra by its tier id ("ultra 5x", "ultra
+/// 20x"), else "ultra", "pro" or "free", else as named.
 pub(super) fn plan(value: &Value) -> Option<String> {
     let tier = ["/paidTier", "/currentTier"]
         .iter()
         .filter_map(|path| value.pointer(path))
         .find(|tier| tier.is_object())?;
+    if let Some(plan) = tier.get("id").and_then(Value::as_str).and_then(ultra_by_id) {
+        return Some(plan.into());
+    }
     let raw = ["name", "id"]
         .iter()
         .find_map(|key| tier.get(*key).and_then(Value::as_str))
@@ -419,6 +433,15 @@ mod tests {
         );
         assert_eq!(
             plan_of(json!({"currentTier": {"id": "g1-ultra-tier"}})),
+            Some("ultra 20x".into())
+        );
+        // Both Ultra plans are named alike; only the id tells them apart.
+        assert_eq!(
+            plan_of(json!({"paidTier": {"id": "g1-ultra-lite-tier", "name": "Google AI Ultra"}})),
+            Some("ultra 5x".into())
+        );
+        assert_eq!(
+            plan_of(json!({"paidTier": {"name": "Google AI Ultra"}})),
             Some("ultra".into())
         );
         assert_eq!(

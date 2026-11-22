@@ -191,13 +191,32 @@ fn window(title: &str, window: Option<&UsageWindow>, offset: Option<i32>) -> Win
         reset_text: reset,
     }
 }
-/// Codex treats an unknown plan as Team.
-fn codex_plan(raw: Option<String>) -> String {
+/// When OpenAI added its $100 Pro (prolite) beside the $200 one
+/// (2026-04-09 UTC).
+const CODEX_PRO_LITE: i64 = 1_775_692_800;
+/// When Google added its $100 Ultra beside the top one (2026-05-19 UTC).
+const GOOGLE_ULTRA_LITE: i64 = 1_779_148_800;
+/// Codex treats an unknown plan as Team. Its Pro plans, $100 (prolite),
+/// $200 (pro) and $500 (promax), are named as OpenAI does once the $100
+/// one came.
+fn codex_plan(raw: Option<String>, now: i64) -> String {
     let raw = raw.unwrap_or_else(|| "TEAM".into());
-    if ["PRO", "PLUS", "FREE", "TEAM", "BUSINESS", "ENTERPRISE"].contains(&raw.as_str()) {
-        raw
-    } else {
-        "TEAM".into()
+    match raw.as_str() {
+        "PROLITE" => "PRO 5X".into(),
+        "PROMAX" => "PRO 50X".into(),
+        "PRO" if now >= CODEX_PRO_LITE => "PRO 20X".into(),
+        "PRO" | "PLUS" | "FREE" | "TEAM" | "BUSINESS" | "ENTERPRISE" => raw,
+        _ => "TEAM".into(),
+    }
+}
+/// Both Ultra plans are "Google AI Ultra": known by their tier id as
+/// "ULTRA 5X" and "ULTRA 20X", else as "ULTRA" alone. The top one is plain
+/// Ultra before the $100 one came.
+fn antigravity_plan(plan: String, now: i64) -> String {
+    match plan.as_str() {
+        "ULTRA 5X" | "ULTRA LITE" => "ULTRA 5X".into(),
+        "ULTRA 20X" if now < GOOGLE_ULTRA_LITE => "ULTRA".into(),
+        _ => plan,
     }
 }
 /// When Claude renamed Max 5x to Max and Max 20x to Ultra (2026-10-30 UTC).
@@ -241,10 +260,28 @@ fn claude_plan(raw: Option<String>, now: i64) -> String {
 }
 /// A plan's color, by tier so that providers' comparable plans match, as
 /// the app's `planAccent`: the entry subscription (Codex Plus, Claude Pro,
-/// Google AI Pro, SuperGrok) is pink, the one near $100 (Claude Max, formerly
-/// Max 5x; SuperGrok Plus) orange, and the top one (Claude Ultra, formerly Max
-/// 20x; SuperGrok Heavy) purple.
-pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
+/// Google AI Pro, SuperGrok) is pink, the one near $100 (Codex Pro 5x, Claude
+/// Max, formerly Max 5x; Google AI Ultra 5x, SuperGrok Plus) orange, and the
+/// top one (Codex Pro 20x and 50x, Claude Ultra, formerly Max 20x; Google AI
+/// Ultra 20x, SuperGrok Heavy) purple. A plan not told apart from its $100
+/// variant counts as it.
+pub fn plan_accent(pool: Pool, plan: &str, now: i64) -> &'static str {
+    match (pool, plan) {
+        (Pool::Codex, "PRO 5X") => return "orange",
+        // The $200 Pro, also before the $100 one came, and the $500 one.
+        (Pool::Codex, "PRO" | "PRO 20X" | "PRO 50X") => return "purple",
+        (Pool::Antigravity, "ULTRA 5X") => return "orange",
+        (Pool::Antigravity, "ULTRA 20X") => return "purple",
+        // An Ultra not told apart counts as the $100 one, once there was one.
+        (Pool::Antigravity, "ULTRA") => {
+            return if now >= GOOGLE_ULTRA_LITE {
+                "orange"
+            } else {
+                "purple"
+            }
+        }
+        _ => {}
+    }
     if pool == Pool::Grok {
         // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
         // Subscription's names, which may replace SuperGrok's.
@@ -267,10 +304,9 @@ pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
         }
     }
     match plan {
-        // A plan not told apart from its $100 variant (Codex Pro, Google AI
-        // Ultra) counts as the $100 tier; Claude's Ultra is its top one.
-        "PRO" if pool == Pool::Codex => "orange",
         "PRO" => "pink",
+        // Claude's Ultra is its top plan; an Ultra not told apart from a
+        // $100 one counts as it.
         "ULTRA" if pool == Pool::Claude => "purple",
         "ULTRA" => "orange",
         "PLUS" => "pink",
@@ -289,7 +325,7 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>, now: i64) -> 
         .map(|s| s.trim().to_uppercase());
     let (plan, workspace, name) = match pool {
         Pool::Codex => (
-            codex_plan(raw),
+            codex_plan(raw, now),
             account.team_name.clone(),
             account.email.as_deref().unwrap_or(&account.account_id),
         ),
@@ -313,6 +349,10 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>, now: i64) -> 
         // are Gemini's, as the app's collapsed rows show them.
         Pool::Antigravity | Pool::Grok => (
             raw.map(|plan| plan.split_whitespace().collect::<Vec<_>>().join(" "))
+                .map(|plan| match pool {
+                    Pool::Antigravity => antigravity_plan(plan, now),
+                    _ => plan,
+                })
                 .unwrap_or_default(),
             None,
             account.email.as_deref().unwrap_or(&account.label),
@@ -330,7 +370,7 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>, now: i64) -> 
     CardSnapshot {
         id: account.id.clone(),
         pool_label: None,
-        plan_accent: plan_accent(pool, &plan).into(),
+        plan_accent: plan_accent(pool, &plan, now).into(),
         plan_label: plan,
         workspace_label: workspace,
         account_label: label,

@@ -132,9 +132,9 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
 
     private var samplePlans: [String] {
         switch variant {
-        case .codex: ["TEAM", "PRO", "TEAM", "PLUS"]
+        case .codex: ["TEAM", "PRO 20X", "TEAM", "PLUS"]
         case .claude: ["ULTRA", "PRO", "TEAM", "MAX"]
-        case .antigravity: ["PRO", "ULTRA", "PRO", "FREE"]
+        case .antigravity: ["PRO", "ULTRA 20X", "PRO", "FREE"]
         case .grok: ["SUPERGROK", "SUPERGROK", "SUPERGROK HEAVY", "FREE"]
         case .all: ["TEAM", "ULTRA", "ULTRA", "PLUS"]
         }
@@ -143,9 +143,9 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
     /// The sample plans' tier colors, as the app resolves them.
     private var samplePlanAccents: [String] {
         switch variant {
-        case .codex: ["teal", "orange", "teal", "pink"]
+        case .codex: ["teal", "purple", "teal", "pink"]
         case .claude: ["purple", "pink", "teal", "orange"]
-        case .antigravity: ["pink", "orange", "pink", "gray"]
+        case .antigravity: ["pink", "purple", "pink", "gray"]
         case .grok: ["pink", "pink", "purple", "gray"]
         case .all: ["teal", "purple", "purple", "pink"]
         }

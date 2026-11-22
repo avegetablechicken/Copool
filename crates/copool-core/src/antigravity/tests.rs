@@ -1546,7 +1546,7 @@ fn sub2apis_antigravity_usage_is_its_quota_groups_else_each_models() {
         now,
     )
     .unwrap();
-    assert_eq!(groups.plan_type.as_deref(), Some("ultra lite"));
+    assert_eq!(groups.plan_type.as_deref(), Some("ultra 5x"));
     assert_eq!(groups.five_hour.as_ref().unwrap().used_percent, 12.5);
     assert!(groups.third_party_five_hour.is_none() && groups.one_week.is_none());
     // Each model's, pooled by the one with the least left.

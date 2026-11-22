@@ -85,29 +85,39 @@ fn testPlanTagPaletteKeepsFullColorPaletteOutsideAccentedMode() {
 }
 #[test]
 fn testPlanTagColorsMatchComparablePlansAcrossPools() {
+    let now = 1_795_392_000; // 2026-11-23
+    let accent = |pool, plan| plan_accent(pool, plan, now);
     // The entry subscription.
-    assert_eq!(plan_accent(Pool::Codex, "PLUS"), "pink");
-    assert_eq!(plan_accent(Pool::Claude, "PRO"), "pink");
-    assert_eq!(plan_accent(Pool::Antigravity, "PRO"), "pink");
-    assert_eq!(plan_accent(Pool::Grok, "SUPERGROK LITE"), "pink");
-    assert_eq!(plan_accent(Pool::Grok, "SUPERGROK"), "pink");
+    assert_eq!(accent(Pool::Codex, "PLUS"), "pink");
+    assert_eq!(accent(Pool::Claude, "PRO"), "pink");
+    assert_eq!(accent(Pool::Antigravity, "PRO"), "pink");
+    assert_eq!(accent(Pool::Grok, "SUPERGROK LITE"), "pink");
+    assert_eq!(accent(Pool::Grok, "SUPERGROK"), "pink");
     // The one near $100.
-    assert_eq!(plan_accent(Pool::Claude, "MAX 5X"), "orange");
-    assert_eq!(plan_accent(Pool::Claude, "MAX"), "orange");
-    assert_eq!(plan_accent(Pool::Grok, "SUPERGROK PLUS"), "orange");
-    // Neither tells its $100 variant apart, so counts as it.
-    assert_eq!(plan_accent(Pool::Codex, "PRO"), "orange");
-    assert_eq!(plan_accent(Pool::Antigravity, "ULTRA"), "orange");
+    assert_eq!(accent(Pool::Codex, "PRO 5X"), "orange");
+    assert_eq!(accent(Pool::Claude, "MAX 5X"), "orange");
+    assert_eq!(accent(Pool::Claude, "MAX"), "orange");
+    assert_eq!(accent(Pool::Antigravity, "ULTRA 5X"), "orange");
+    assert_eq!(accent(Pool::Grok, "SUPERGROK PLUS"), "orange");
+    // An Ultra not told apart from the $100 one counts as it.
+    assert_eq!(accent(Pool::Antigravity, "ULTRA"), "orange");
     // The top subscription.
-    assert_eq!(plan_accent(Pool::Claude, "MAX 20X"), "purple");
-    assert_eq!(plan_accent(Pool::Claude, "ULTRA"), "purple");
-    assert_eq!(plan_accent(Pool::Grok, "SUPERGROK HEAVY"), "purple");
-    assert_eq!(plan_accent(Pool::Grok, "SUPER GROK HEAVY"), "purple");
-    assert_eq!(plan_accent(Pool::Grok, "FREE"), "gray");
-    assert_eq!(plan_accent(Pool::Codex, "BUSINESS"), "indigo");
-    assert_eq!(plan_accent(Pool::Codex, "TEAM"), "teal");
-    assert_eq!(plan_accent(Pool::Claude, "MAXIMUM"), "teal");
-    assert_eq!(plan_accent(Pool::Grok, "SOMETHING NEW"), "teal");
+    assert_eq!(accent(Pool::Codex, "PRO 20X"), "purple");
+    assert_eq!(accent(Pool::Codex, "PRO 50X"), "purple");
+    assert_eq!(accent(Pool::Claude, "MAX 20X"), "purple");
+    assert_eq!(accent(Pool::Claude, "ULTRA"), "purple");
+    assert_eq!(accent(Pool::Antigravity, "ULTRA 20X"), "purple");
+    assert_eq!(accent(Pool::Grok, "SUPERGROK HEAVY"), "purple");
+    assert_eq!(accent(Pool::Grok, "SUPER GROK HEAVY"), "purple");
+    assert_eq!(accent(Pool::Grok, "FREE"), "gray");
+    assert_eq!(accent(Pool::Codex, "BUSINESS"), "indigo");
+    assert_eq!(accent(Pool::Codex, "TEAM"), "teal");
+    assert_eq!(accent(Pool::Claude, "MAXIMUM"), "teal");
+    assert_eq!(accent(Pool::Grok, "SOMETHING NEW"), "teal");
+    // Before either $100 plan came, Pro and Ultra were the top ones.
+    let before = 1_772_323_200; // 2026-03-01
+    assert_eq!(plan_accent(Pool::Codex, "PRO", before), "purple");
+    assert_eq!(plan_accent(Pool::Antigravity, "ULTRA", before), "purple");
     assert_ne!(
         plan_palette("purple", true, false),
         plan_palette("indigo", true, false)
