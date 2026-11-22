@@ -1138,7 +1138,8 @@ async fn sub2api_server(
                 }
             } else if uri.starts_with("/api/v1/admin/accounts?") {
                 json!({"items": [
-                    {"id": 7, "name": "pro@gmail.com", "platform": "antigravity", "type": "oauth", "status": "active"},
+                    {"id": 7, "name": "relay-alias", "platform": "antigravity", "type": "oauth", "status": "active",
+                     "extra": {"email": " "}, "credentials": {"email": "pro@gmail.com"}},
                     {"id": 8, "name": "cli@gmail.com", "platform": "gemini", "type": "oauth", "status": "active"}
                 ], "pages": 1})
             } else {
@@ -1345,6 +1346,7 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     assert_eq!(card.source_tag.as_deref(), Some("SUB2API"));
     assert_eq!(card.outdated_sub2api_version, None);
     assert_eq!(card.email.as_deref(), Some("pro@gmail.com"));
+    assert_eq!(card.label, "pro@gmail.com");
     assert_eq!(card.plan_type.as_deref(), Some("pro"));
     let usage = card.usage.as_ref().unwrap();
     assert_eq!(usage.five_hour.as_ref().unwrap().used_percent, 25.0);

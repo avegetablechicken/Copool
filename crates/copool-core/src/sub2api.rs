@@ -42,8 +42,7 @@ impl Account {
             .filter(|s| !s.is_empty())
             .unwrap_or("--")
     }
-    /// The card's email: Sub2api's name for the account stands in until its
-    /// usage reports one.
+    /// Show Sub2api's account name when the upstream email is unavailable.
     fn shown_email(&self) -> Option<String> {
         [self.email.as_deref(), Some(self.name.as_str())]
             .into_iter()
@@ -86,6 +85,20 @@ impl Account {
             outdated_sub2api_version: self.outdated_version.clone(),
         }
     }
+}
+/// Email fields in the order Sub2api's admin account list displays them.
+fn listed_email(item: &Value) -> Option<String> {
+    [
+        &item["extra"]["email_address"],
+        &item["extra"]["email"],
+        &item["credentials"]["email"],
+        &item["name"],
+    ]
+    .into_iter()
+    .filter_map(Value::as_str)
+    .map(str::trim)
+    .find(|email| email.contains('@'))
+    .map(str::to_owned)
 }
 /// The upstream platform whose OAuth accounts a pool shows. Sub2api keeps
 /// Antigravity's apart from Gemini CLI's (`gemini`); its `/antigravity`
@@ -487,10 +500,7 @@ impl Connection {
                     accounts.push(Account {
                         id,
                         name: item["name"].as_str().unwrap_or_default().into(),
-                        email: item["name"]
-                            .as_str()
-                            .filter(|s| s.contains('@'))
-                            .map(str::to_owned),
+                        email: listed_email(&item),
                         account_id: None,
                         account_type: "oauth".into(),
                         status: if status.is_empty() { "unknown" } else { status }.into(),
@@ -513,10 +523,7 @@ impl Connection {
             let mut account = Account {
                 id,
                 name: item["name"].as_str().unwrap_or_default().into(),
-                email: item["name"]
-                    .as_str()
-                    .filter(|s| s.contains('@'))
-                    .map(str::to_owned),
+                email: listed_email(&item),
                 account_id: None,
                 account_type: "oauth".into(),
                 status: "active".into(),
@@ -563,7 +570,13 @@ impl Connection {
                     }
                 }
                 Ok(value) => {
-                    account.email = value["email"].as_str().map(str::to_owned).or(account.email);
+                    if let Some(email) = value["email"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        account.email = Some(email.to_owned());
+                    }
                     account.account_id = value["account_id"].as_str().map(str::to_owned);
                     match usage::parse_payload(value, now) {
                         Ok(usage) => {

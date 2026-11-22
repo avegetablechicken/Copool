@@ -722,7 +722,8 @@ async fn sub2api_server(
             } else if uri.starts_with("/api/v1/admin/accounts?") {
                 assert!(uri.contains("platform=grok"), "{uri}");
                 json!({"items": [
-                    {"id": 7, "name": "super@example.com", "platform": "grok", "type": "oauth", "status": "active"},
+                    {"id": 7, "name": "alias@example.com", "platform": "grok", "type": "oauth", "status": "active",
+                     "extra": {"email": " super@example.com "}, "credentials": {"email": "other@example.com"}},
                     {"id": 8, "name": "lapsed@example.com", "platform": "grok", "type": "oauth", "status": "active"},
                     {"id": 9, "name": "key", "platform": "grok", "type": "apikey", "status": "active"},
                     {"id": 10, "name": "codex@example.com", "platform": "openai", "type": "oauth", "status": "active"}
@@ -795,6 +796,7 @@ async fn sub2api_grok_cards_show_the_weekly_usage_of_old_and_new_releases() {
             .find(|c| c.email.as_deref() == Some("super@example.com"))
             .unwrap();
         let usage = card.usage.as_ref().unwrap();
+        assert_eq!(card.label, "super@example.com");
         if release == "0.1.150" {
             assert!(usage.one_week.is_none(), "{release}");
             assert!(card.usage_error.is_none(), "{release}");

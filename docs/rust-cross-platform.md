@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-23（Sub2api 卡片邮箱）：Claude、Grok 和 Antigravity 卡片刷新后优先显示上游账号邮箱。同步时依次读取账号列表的 `extra.email_address`、`extra.email` 和 `credentials.email`，缺少邮箱时显示 Sub2api 账号名称。Codex 继续优先使用额度接口返回的邮箱。macOS 上的本地模拟服务测试覆盖三种邮箱来源、停用账号和名称回退。
+
 2026-11-23（Grok 的 Sub2api 请求协议）：切换提供方时，Copool 在 `~/.grok/config.toml` 中给接入网关的每个模型写入 `api_backend = "responses"`，与 Sub2api 0.1.177 的 Grok Build 模板一致。切回账号时恢复原协议；旧版切换记录在再次切换提供方时补记原值。在 macOS 上用 Grok Build 1.0.92、临时配置和本地模拟网关验证：省略该字段时请求 `/v1/chat/completions`，指定后请求 `/v1/responses`，两次都使用模型配置指定的变量。19 项 Grok 测试通过。
 
 2026-11-23（Codex 问候）：按上游地址分别缓存上次成功的模型。macOS CI 曾在不同上游交替问候时丢失缓存，导致模型尝试顺序改变。回归测试用两个本地模拟上游复现了相同的顺序错误；修复后三项问候测试在 macOS 上并行运行 25 轮全部通过。

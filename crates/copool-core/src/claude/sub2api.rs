@@ -741,7 +741,8 @@ mod tests {
     async fn a_card_sub2api_stops_serving_says_why_instead_of_its_last_error() {
         use axum::{extract::Request, routing::any, Json, Router};
         let items = std::sync::Arc::new(Mutex::new(json!([
-            {"id": 7, "name": "claude-team", "platform": "anthropic", "type": "oauth", "status": "active"}
+            {"id": 7, "name": "claude-team", "platform": "anthropic", "type": "oauth", "status": "active",
+             "extra": {"email_address": "upstream@example.com", "email": "other@example.com"}}
         ])));
         let queries = std::sync::Arc::new(Mutex::new(vec![]));
         let (listed, asked) = (items.clone(), queries.clone());
@@ -779,6 +780,8 @@ mod tests {
         let card = crate::sub2api::card_id(Pool::Claude, &saved.id, 7);
         let shown = |app: &Application| {
             let summary = app.provider_cards(Pool::Claude, None).unwrap().remove(0);
+            assert_eq!(summary.email.as_deref(), Some("upstream@example.com"));
+            assert_eq!(summary.label, "upstream@example.com");
             (
                 summary.workspace_status,
                 summary.usage.is_some(),
@@ -809,8 +812,10 @@ mod tests {
             .unwrap();
         assert!(added.usage.is_some());
         assert!(added.usage_error.is_none());
+        assert_eq!(added.summary("9".into()).label, "new-account");
 
         *items.lock().unwrap() = json!([{"id": 7, "name": "claude-team", "platform": "anthropic",
+            "extra": {"email_address": "upstream@example.com"},
             "type": "oauth", "status": "error", "error_message": "Token expired"}]);
         app.refresh_usage(Pool::Claude, &card).await.unwrap();
         assert_eq!(
