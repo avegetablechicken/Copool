@@ -143,9 +143,9 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
     /// The sample plans' tier colors, as the app resolves them.
     private var samplePlanAccents: [String] {
         switch variant {
-        case .codex: ["teal", "purple", "teal", "pink"]
+        case .codex: ["teal", "orange", "teal", "pink"]
         case .claude: ["purple", "pink", "teal", "orange"]
-        case .antigravity: ["pink", "purple", "pink", "gray"]
+        case .antigravity: ["pink", "orange", "pink", "gray"]
         case .grok: ["pink", "pink", "purple", "gray"]
         case .all: ["teal", "purple", "purple", "pink"]
         }

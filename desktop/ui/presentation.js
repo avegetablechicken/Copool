@@ -54,7 +54,15 @@
     }
     return "en";
   }
-  function normalizedPlan(account, pool = "codex") {
+  /// When Claude renamed Max 5x to Max and Max 20x to Ultra.
+  const CLAUDE_PLAN_RENAME = Date.UTC(2026, 9, 30);
+  /// A Claude Max plan by its name at `now`: "MAX 5X" and "MAX 20X" before
+  /// the rename, "MAX" and "ULTRA" after; a Max without multiplier is "MAX".
+  function claudeMaxName(times, now) {
+    if (now >= CLAUDE_PLAN_RENAME) return times >= 20 ? "ULTRA" : "MAX";
+    return times ? `MAX ${times}X` : "MAX";
+  }
+  function normalizedPlan(account, pool = "codex", now = Date.now()) {
     const raw =
       typeof account === "object" && account !== null
         ? clean(account.usage?.planType) || clean(account.planType)
@@ -63,11 +71,12 @@
     // Grok's plans are shown as named ("SUPERGROK HEAVY"), as its widget.
     if (pool === "grok" || (pool === "antigravity" && account?.sourceTag === "SUB2API")) return p;
     if (pool === "claude") {
-      // Claude renamed Max 5x to Max and Max 20x to Ultra (October 2026),
-      // yet Claude Code still reports both as "max" with the old multiplier.
+      // Claude Code reports Max 5x and Max 20x as "max" with the multiplier,
+      // also since their renaming; "ultra" is taken should it report one.
       p = p.replace(/^CLAUDE[ _]/, "");
       const max = /^MAX(?: (\d+)X)?$/.exec(p);
-      if (max) return Number(max[1] || 5) >= 20 ? "ULTRA" : "MAX";
+      if (max) return claudeMaxName(max[1] ? Number(max[1]) : 0, now);
+      if (p === "ULTRA") return claudeMaxName(20, now);
     }
     // Claude's Max plans keep their usage multiplier ("MAX 20X").
     if (/^MAX( \d+X)?$/.test(p)) return p;
@@ -304,8 +313,8 @@
   /// A plan's color, by tier so that providers' comparable plans match:
   /// the entry subscription (Codex Plus, Claude Pro, Google AI Pro,
   /// SuperGrok) is pink, the one near $100 (Claude Max, formerly Max 5x;
-  /// SuperGrok Plus) orange, and the top one (Codex Pro, Claude Ultra,
-  /// formerly Max 20x; Google AI Ultra, SuperGrok Heavy) purple.
+  /// SuperGrok Plus) orange, and the top one (Claude Ultra, formerly Max
+  /// 20x; SuperGrok Heavy) purple.
   function planAccent(plan, pool = "codex") {
     if (pool === "grok") {
       // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
@@ -316,8 +325,10 @@
       if (["SUPERGROKHEAVY", "ULTRA"].includes(name)) return "purple";
       if (!["FREE", "BUSINESS", "ENTERPRISE"].includes(plan)) return "teal";
     }
-    if (plan === "PRO") return pool === "codex" ? "purple" : "pink";
-    if (plan === "ULTRA") return "purple";
+    // A plan not told apart from its $100 variant (Codex Pro, Google AI
+    // Ultra) counts as the $100 tier; Claude's Ultra is its top one.
+    if (plan === "PRO") return pool === "codex" ? "orange" : "pink";
+    if (plan === "ULTRA") return pool === "claude" ? "purple" : "orange";
     // Claude's Max is 5x unless it names more.
     const max = /^MAX(?: (\d+)X)?$/.exec(plan);
     if (max) return Number(max[1] || 5) >= 20 ? "purple" : "orange";
@@ -330,8 +341,15 @@
       }[plan] || "teal"
     );
   }
-  function card(account, collapsed = false, mode = "used", formatDate, pool = "codex") {
-    const plan = normalizedPlan(account, pool),
+  function card(
+    account,
+    collapsed = false,
+    mode = "used",
+    formatDate,
+    pool = "codex",
+    now = Date.now(),
+  ) {
+    const plan = normalizedPlan(account, pool, now),
       name =
         clean(account.email) || clean(account.accountId) || clean(account.label) || "",
       credits = account.usage?.credits;

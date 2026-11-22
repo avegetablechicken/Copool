@@ -95,10 +95,12 @@ fn testPlanTagColorsMatchComparablePlansAcrossPools() {
     assert_eq!(plan_accent(Pool::Claude, "MAX 5X"), "orange");
     assert_eq!(plan_accent(Pool::Claude, "MAX"), "orange");
     assert_eq!(plan_accent(Pool::Grok, "SUPERGROK PLUS"), "orange");
+    // Neither tells its $100 variant apart, so counts as it.
+    assert_eq!(plan_accent(Pool::Codex, "PRO"), "orange");
+    assert_eq!(plan_accent(Pool::Antigravity, "ULTRA"), "orange");
     // The top subscription.
-    assert_eq!(plan_accent(Pool::Codex, "PRO"), "purple");
     assert_eq!(plan_accent(Pool::Claude, "MAX 20X"), "purple");
-    assert_eq!(plan_accent(Pool::Antigravity, "ULTRA"), "purple");
+    assert_eq!(plan_accent(Pool::Claude, "ULTRA"), "purple");
     assert_eq!(plan_accent(Pool::Grok, "SUPERGROK HEAVY"), "purple");
     assert_eq!(plan_accent(Pool::Grok, "SUPER GROK HEAVY"), "purple");
     assert_eq!(plan_accent(Pool::Grok, "FREE"), "gray");

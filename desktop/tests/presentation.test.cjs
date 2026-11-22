@@ -35,21 +35,29 @@ test("Antigravity Sub2api cards keep explicit tiers outside the Codex plan list"
   const card = { sourceTag: "SUB2API", planType: "standard" };
   assert.equal(P.card(card, false, "used", String, "antigravity").plan, "STANDARD");
 });
-test("Claude's plans take their current names", () => {
-  const plan = (planType) =>
-    P.card({ planType, usage: null }, false, "used", String, "claude").plan;
-  // Claude Code still reports Max 5x and Max 20x by their old names.
-  assert.equal(plan("max 20x"), "ULTRA");
-  assert.equal(plan("max 5x"), "MAX");
-  assert.equal(plan("max"), "MAX");
-  assert.equal(plan("ultra"), "ULTRA");
-  assert.equal(plan("Claude Ultra"), "ULTRA");
-  assert.equal(plan("Claude Max"), "MAX");
-  assert.equal(plan("pro"), "PRO");
-  const accent = (planType) =>
-    P.card({ planType, usage: null }, false, "used", String, "claude").accent;
-  assert.equal(accent("max 20x"), "purple");
-  assert.equal(accent("max 5x"), "orange");
+test("Claude's Max plans are named as they were at the time", () => {
+  const before = Date.UTC(2026, 9, 1);
+  const after = Date.UTC(2026, 10, 23);
+  const plan = (planType, now) =>
+    P.card({ planType, usage: null }, false, "used", String, "claude", now).plan;
+  // Claude Code reports both by their old names, also since the rename.
+  assert.equal(plan("max 20x", before), "MAX 20X");
+  assert.equal(plan("max 5x", before), "MAX 5X");
+  assert.equal(plan("max 20x", after), "ULTRA");
+  assert.equal(plan("max 5x", after), "MAX");
+  assert.equal(plan("max", before), "MAX");
+  assert.equal(plan("max", after), "MAX");
+  assert.equal(plan("ultra", before), "MAX 20X");
+  assert.equal(plan("Claude Ultra", after), "ULTRA");
+  assert.equal(plan("Claude Max", after), "MAX");
+  assert.equal(plan("pro", after), "PRO");
+  // The rename leaves the colors as they were.
+  const accent = (planType, now) =>
+    P.card({ planType, usage: null }, false, "used", String, "claude", now).accent;
+  assert.equal(accent("max 20x", before), "purple");
+  assert.equal(accent("max 20x", after), "purple");
+  assert.equal(accent("max 5x", before), "orange");
+  assert.equal(accent("max 5x", after), "orange");
 });
 test("Comparable plans share a color across providers", () => {
   const accent = (planType, pool) =>
@@ -64,17 +72,18 @@ test("Comparable plans share a color across providers", () => {
   assert.equal(accent("max 5x", "claude"), "orange");
   assert.equal(accent("max", "claude"), "orange");
   assert.equal(accent("SuperGrok Plus", "grok"), "orange");
+  // Neither tells its $100 variant apart, so counts as it.
+  assert.equal(accent("pro", "codex"), "orange");
+  assert.equal(accent("ultra", "antigravity"), "orange");
   // The top subscription.
-  assert.equal(accent("pro", "codex"), "purple");
   assert.equal(accent("max 20x", "claude"), "purple");
-  assert.equal(accent("ultra", "antigravity"), "purple");
   assert.equal(accent("SuperGrok Heavy", "grok"), "purple");
   assert.equal(accent("SUPER GROK HEAVY", "grok"), "purple");
   assert.equal(accent("free", "claude"), "gray");
   assert.equal(accent("Free", "grok"), "gray");
   assert.equal(accent("Something New", "grok"), "teal");
   // Without a pool, Codex's colors.
-  assert.equal(P.card({ planType: "pro", usage: null }).accent, "purple");
+  assert.equal(P.card({ planType: "pro", usage: null }).accent, "orange");
 });
 test("Claude Max plans keep their multiplier", () => {
   assert.equal(P.normalizedPlan("max 20x"), "MAX 20X");
@@ -121,8 +130,7 @@ legacy(
   "testCurrentAccountPaletteUsesOwnAccentForSelectionHighlight",
   () => {
     const c = P.card({ ...a, planType: "pro", usage: null });
-    // Purple rather than SwiftUI's orange: Codex Pro is of the top tier.
-    assert.equal(c.accent, "purple");
+    assert.equal(c.accent, "orange");
     assert.equal(c.selectionAccent, "PRO");
   },
 );

@@ -107,8 +107,8 @@ fn claudeCardsFollowTheAppsPlanAndWorkspaceTags() {
         100,
     );
     let current = s.current_card.unwrap();
-    // Max 20x by its current name.
-    assert_eq!(current.plan_label, "ULTRA");
+    // Max 20x by its name at the time, before Claude renamed it Ultra.
+    assert_eq!(current.plan_label, "MAX 20X");
     assert_eq!(current.plan_accent, "purple");
     assert_eq!(current.workspace_label, None);
     let rows: std::collections::HashMap<_, _> = s.rows.iter().map(|r| (r.id.as_str(), r)).collect();
@@ -117,6 +117,30 @@ fn claudeCardsFollowTheAppsPlanAndWorkspaceTags() {
     assert_eq!(rows["unknown"].plan_label, "");
     assert_eq!(rows["unknown"].account_label, "label");
     assert_eq!(rows["provider"].workspace_label.as_deref(), Some("SUB2API"));
+}
+#[test]
+fn claudesMaxPlansAreNamedAsTheyWereAtTheTime() {
+    let before = 1_790_812_800; // 2026-10-01
+    let after = 1_795_392_000; // 2026-11-23
+    let label = |plan: &str, now| {
+        let mut a = account("current", true, "current@example.com", 10., 20.);
+        a.plan_type = Some(plan.into());
+        let card = build(Pool::Claude, &[a], "used", Some(0), now)
+            .current_card
+            .unwrap();
+        (card.plan_label, card.plan_accent)
+    };
+    let named = |name: &str, accent: &str| (name.to_owned(), accent.to_owned());
+    // Claude Code reports both by their old names, also since the rename.
+    assert_eq!(label("max 20x", before), named("MAX 20X", "purple"));
+    assert_eq!(label("max 5x", before), named("MAX 5X", "orange"));
+    assert_eq!(label("max 20x", after), named("ULTRA", "purple"));
+    assert_eq!(label("max 5x", after), named("MAX", "orange"));
+    assert_eq!(label("max", before), named("MAX", "orange"));
+    assert_eq!(label("max", after), named("MAX", "orange"));
+    assert_eq!(label("ultra", before), named("MAX 20X", "purple"));
+    assert_eq!(label("claude ultra", after), named("ULTRA", "purple"));
+    assert_eq!(label("pro", after), named("PRO", "pink"));
 }
 #[test]
 fn codexCardsKeepTreatingUnknownPlansAsTeam() {
@@ -149,7 +173,7 @@ fn bothPoolsWidgetLeadsWithEachPoolsCurrentAccountThenRanksTheRest() {
     let secondary = s.secondary_card.unwrap();
     assert_eq!(secondary.id, "claude-current");
     assert_eq!(secondary.pool_label.as_deref(), Some("CLAUDE"));
-    assert_eq!(secondary.plan_label, "MAX");
+    assert_eq!(secondary.plan_label, "MAX 5X");
     assert_eq!(secondary.plan_accent, "orange");
     let ids: Vec<_> = s.rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, ["claude-current", "claude-high", "codex-low"]);

@@ -1,5 +1,9 @@
 # Rust 跨平台版本
 
+2026-11-23（未区分的套餐按 $100 档配色）：接口未区分 $100 与更高价位变体的套餐，按约 $100 的一档配色，显示橙色。目前包括 Codex 的 `pro` 和 Antigravity 的 `ultra`：Copool 尚未读取 Codex 的 `prolite`、`promax`，也未读取 Antigravity 的 `paidTier.id`（`g1-ultra-lite-tier` / `g1-ultra-tier`）。Codex Pro 因此仍为原版 SwiftUI 的橙色。Claude 的 Ultra（`max 20x`）可以与 Max 区分，仍为紫色。前端与 Rust 小组件测试通过，WidgetKit 扩展编译通过。
+
+2026-11-23（Claude 套餐按时间命名）：Claude Max 套餐的名称随当前时间而定，以改名时刻 2026-10-30 00:00 UTC 为界（app 用 `Date.now()`，小组件用生成快照的时间）。此前显示当时的名称 `MAX 5X`、`MAX 20X`；此后显示 `MAX`、`ULTRA`。不带倍数的 `max` 始终显示 `MAX`；报为 `ultra` 时，改名前显示 `MAX 20X`。颜色不随名称变化：20 倍档为紫色，5 倍档为橙色。新增前端与 Rust 小组件测试，分别以 2026-10-01 和 2026-11-23 验证两种名称；未在界面上实机查看。
+
 2026-11-23（Claude 套餐改名）：Anthropic 于 2026-10-30 将 Max 5x 改名为 Max、Max 20x 改名为 Ultra，价格不变。Claude Code 的凭据仍把两者都记为 `subscriptionType: "max"`，只能由 `rateLimitTier`（`default_claude_max_5x` / `default_claude_max_20x`）区分；Copool 由此得到 `max 5x` / `max 20x`。卡片和小组件的套餐标签现在统一显示新名称：`MAX 20X`（倍数 ≥ 20）、`ULTRA` 和 `CLAUDE ULTRA` 显示为 `ULTRA`（紫色）；`MAX 5X`、不带倍数的 `MAX` 和 `CLAUDE MAX` 显示为 `MAX`（橙色）。转换只在显示时进行，保存的数据和共享守护进程不变，旧版远程守护进程报的旧名称同样会被转换。Claude Code 若日后改报 `ultra`，也能识别；不带倍数的 `max` 无法区分，按 Max 处理。前端和 Rust 小组件测试通过，WidgetKit 扩展编译通过；未用真实 Ultra 账号核对，也未在界面上实机查看。
 
 2026-11-23（最高档拆分为两档）：套餐标签的最高档再按价位拆分。约 $100 的一档为橙色（Claude Max 5x，以及未注明倍数的 Max、SuperGrok Plus）；$200 以上的一档为紫色（Codex Pro、Claude Max 20x、Antigravity Ultra、SuperGrok Heavy）。入门档仍为粉色，SuperGrok Lite 也在此档。Codex Pro 由原版 SwiftUI 的橙色改为紫色，属有意偏离，已记入 AGENTS.md。Grok 套餐名比较时忽略空格，Sub2api 报出的 `SUPER GROK HEAVY` 与 `SUPERGROK HEAVY` 同色。前端测试、Rust 小组件测试通过，WidgetKit 扩展单独编译通过；未在界面上实机查看。

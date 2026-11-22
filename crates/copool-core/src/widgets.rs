@@ -200,11 +200,14 @@ fn codex_plan(raw: Option<String>) -> String {
         "TEAM".into()
     }
 }
+/// When Claude renamed Max 5x to Max and Max 20x to Ultra (2026-10-30 UTC).
+const CLAUDE_PLAN_RENAME: i64 = 1_793_318_400;
 /// As the app's plan tag: Claude shows none until its plan is known, and its
-/// plans take their current names. Claude renamed Max 5x to Max and Max 20x
-/// to Ultra (October 2026), yet Claude Code still reports both as "max" with
-/// the old multiplier.
-fn claude_plan(raw: Option<String>) -> String {
+/// Max plans are named as they were at `now`: "MAX 5X" and "MAX 20X" before
+/// the rename, "MAX" and "ULTRA" after. Claude Code reports both as "max"
+/// with the multiplier, also since the rename; "ultra" is taken should it
+/// report one.
+fn claude_plan(raw: Option<String>, now: i64) -> String {
     let Some(raw) = raw else {
         return String::new();
     };
@@ -213,16 +216,24 @@ fn claude_plan(raw: Option<String>) -> String {
         .strip_prefix("CLAUDE ")
         .or_else(|| raw.strip_prefix("CLAUDE_"))
         .unwrap_or(&raw);
-    if let Some(rest) = name.strip_prefix("MAX") {
-        let times = match rest.strip_prefix(' ').and_then(|r| r.strip_suffix('X')) {
-            Some(n) => n.parse::<u32>().ok(),
-            None => rest.is_empty().then_some(5),
+    let times = match name.strip_prefix("MAX") {
+        Some("") => Some(0),
+        Some(rest) => rest
+            .strip_prefix(' ')
+            .and_then(|r| r.strip_suffix('X'))
+            .and_then(|n| n.parse::<u32>().ok()),
+        None => (name == "ULTRA").then_some(20),
+    };
+    if let Some(times) = times {
+        return if now >= CLAUDE_PLAN_RENAME {
+            if times >= 20 { "ULTRA" } else { "MAX" }.into()
+        } else if times == 0 {
+            "MAX".into()
+        } else {
+            format!("MAX {times}X")
         };
-        if let Some(times) = times {
-            return if times >= 20 { "ULTRA" } else { "MAX" }.into();
-        }
     }
-    if ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE", "ULTRA"].contains(&name) {
+    if ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE"].contains(&name) {
         name.into()
     } else {
         "TEAM".into()
@@ -231,8 +242,8 @@ fn claude_plan(raw: Option<String>) -> String {
 /// A plan's color, by tier so that providers' comparable plans match, as
 /// the app's `planAccent`: the entry subscription (Codex Plus, Claude Pro,
 /// Google AI Pro, SuperGrok) is pink, the one near $100 (Claude Max, formerly
-/// Max 5x; SuperGrok Plus) orange, and the top one (Codex Pro, Claude Ultra,
-/// formerly Max 20x; Google AI Ultra, SuperGrok Heavy) purple.
+/// Max 5x; SuperGrok Plus) orange, and the top one (Claude Ultra, formerly Max
+/// 20x; SuperGrok Heavy) purple.
 pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
     if pool == Pool::Grok {
         // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
@@ -256,16 +267,19 @@ pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
         }
     }
     match plan {
-        "PRO" if pool == Pool::Codex => "purple",
+        // A plan not told apart from its $100 variant (Codex Pro, Google AI
+        // Ultra) counts as the $100 tier; Claude's Ultra is its top one.
+        "PRO" if pool == Pool::Codex => "orange",
         "PRO" => "pink",
-        "ULTRA" => "purple",
+        "ULTRA" if pool == Pool::Claude => "purple",
+        "ULTRA" => "orange",
         "PLUS" => "pink",
         "FREE" => "gray",
         "BUSINESS" | "ENTERPRISE" => "indigo",
         _ => "teal",
     }
 }
-fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapshot {
+fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>, now: i64) -> CardSnapshot {
     let raw = account
         .usage
         .as_ref()
@@ -280,7 +294,7 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
             account.email.as_deref().unwrap_or(&account.account_id),
         ),
         Pool::Claude => {
-            let plan = claude_plan(raw);
+            let plan = claude_plan(raw, now);
             // Every Claude login names an organization; as the app, only a
             // shared plan's, or the provider's source, is shown.
             let workspace = account.source_tag.clone().or_else(|| {
@@ -355,7 +369,7 @@ pub fn build(
     sort_for_display(&mut accounts);
     let cards = accounts
         .iter()
-        .map(|a| card(pool, a, offset_seconds))
+        .map(|a| card(pool, a, offset_seconds, now))
         .collect();
     snapshot(cards, mode, now)
 }
@@ -386,7 +400,7 @@ pub fn build_all(
         .chain(others)
         .map(|(pool, a)| CardSnapshot {
             pool_label: Some(pool_label(pool).into()),
-            ..card(pool, &a, offset_seconds)
+            ..card(pool, &a, offset_seconds, now)
         })
         .collect();
     snapshot(cards, mode, now)
