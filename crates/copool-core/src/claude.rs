@@ -2478,9 +2478,15 @@ impl Application {
             // while our refresh is in flight. Never overwrite that generation
             // with our response. Retry the read with the adopted credentials once.
             let mut latest = read_live(&location).await.ok().flatten();
+            // Best effort: returning here would lose a renewal already made,
+            // its refresh token spent, before it is saved below.
             if live_generation_changed(live.as_ref(), latest.as_ref()) {
-                self.identify_live_rotation(&location, &mut latest, &account)
-                    .await?;
+                if let Err(error) = self
+                    .identify_live_rotation(&location, &mut latest, &account)
+                    .await
+                {
+                    log::warn!("Claude Code's renewed login was not identified: {error}");
+                }
             }
             if let Some(updated) =
                 changed_live_oauth(&account, &rejected, live.as_ref(), latest.as_ref())
