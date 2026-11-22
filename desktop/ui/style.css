@@ -1344,8 +1344,7 @@ select:disabled {
 }
 
 input.field,
-.row > input:not(.switch),
-.copy-row input {
+.row > input:not(.switch) {
   width: 100%;
   min-width: 0;
   height: 22px;
@@ -1375,19 +1374,6 @@ input::placeholder,
 textarea::placeholder {
   color: var(--tertiary);
 }
-
-.copy-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.copy-row input {
-  flex: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-
 
 .number-field {
   display: flex;
@@ -2201,8 +2187,7 @@ button.usage-reset:hover {
   text-overflow: ellipsis;
 }
 
-.provider-save,
-.provider-actions {
+.provider-save {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2604,6 +2589,10 @@ details.remote-action-guide p:first-of-type {
   padding-top: 6px;
   border-top: 0.5px solid var(--separator);
   font-size: 11px;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 #tunnel-status dt,
@@ -2615,13 +2604,6 @@ details.remote-action-guide p:first-of-type {
 #tunnel-status dt {
   display: flex;
   align-items: center;
-}
-
-#tunnel-status {
-  color: var(--secondary);
-  overflow-wrap: anywhere;
-  -webkit-user-select: text;
-  user-select: text;
 }
 
 /* ------------------------------------------------------------- dialogs */
