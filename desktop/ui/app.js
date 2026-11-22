@@ -2142,7 +2142,7 @@ function renderProxy() {
 async function refreshView() {
   const controller = accountsController;
   const proxies = proxyController;
-  const [accounts, proxy, fullRefresh] = await Promise.all([
+  const [, proxy, fullRefresh] = await Promise.all([
     controller.load(),
     proxies.invoke("proxy_status"),
     invoke("next_full_refresh_at", { pool }),
@@ -2151,8 +2151,9 @@ async function refreshView() {
   // A pool switched during the load renders through its own refresh.
   if (controller === accountsController) {
     fullRefreshAt = fullRefresh;
-    accountsCache = accounts;
-    renderAccounts(accounts);
+    // A newer load may have finished while the other requests were pending.
+    accountsCache = controller.accounts;
+    renderAccounts(accountsCache);
     await renderPendingWorkspaces();
   }
   // The proxy page switched pools meanwhile renders through its own refresh.

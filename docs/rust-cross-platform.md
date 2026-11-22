@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-23（Grok 提供方的 CURRENT 标签）：保存新网关或 Key 变量后，卡片根据已保存的提供方和 Grok Build 实际配置判定是否正在使用。旧路由尚在生效时不把普通登录误标为当前。模拟网关拒绝新 Key 返回 401 时保留原配置；成功应用新地址后恢复 CURRENT。并发刷新使用最新账号列表，较慢的旧刷新不会重新显示旧标签。216 项前端测试在 LF 和 CRLF 下均通过。
+
 2026-11-23（ChatGPT Go）：Codex 的 `plan_type` 为 `go` 时（ChatGPT Go，美国 $8/月，含有限的 Codex 额度，Codex 中仅可用 GPT-5.6 Terra），卡片和小组件显示 `GO`，归入门档，显示粉色。此前未被识别，显示为 `TEAM`。前端与 Rust 小组件测试通过；未用真实 Go 账号核对。
 
 2026-11-23（$100 至 $300 档合并为橙色）：标签已用倍数区分子档（`PRO 5X`/`PRO 20X`、`MAX`/`ULTRA` 或改名前的 `MAX 5X`/`MAX 20X`、`ULTRA 5X`/`ULTRA 20X`），因此 $100 至 $300 的套餐不再按价位分色，统一为橙色。包括 Codex Pro 5x 和 20x、Claude Max 和 Ultra、Google AI Ultra 各档、SuperGrok Plus 和 Heavy；名称中不带倍数的 Pro、Max、Ultra 同样为橙色。紫色只用于 Codex 的 $500 档 Pro 50x。“分不出子档按 $100 档显示”的规则随之不再影响配色，配色也不再随日期变化。Codex Pro 20x 因此与原版 SwiftUI 的 Pro 同为橙色。前端与 Rust 小组件测试通过，WidgetKit 扩展编译通过；未在界面上实机查看。

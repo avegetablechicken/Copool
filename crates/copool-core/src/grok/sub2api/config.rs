@@ -204,6 +204,50 @@ impl Layout {
         Ok(())
     }
 
+    // The old gateway may still be live after a provider edit. CURRENT also
+    // requires the credentials and default route Grok would use now.
+    pub(super) fn matches_provider(
+        &self,
+        doc: &DocumentMut,
+        gateway: &str,
+        variable: &str,
+    ) -> bool {
+        if self.model.is_none() && self.provider.is_none() {
+            let endpoints = doc.get("endpoints");
+            let url = |key| endpoints.and_then(|t| t.get(key)).and_then(Item::as_str);
+            return variable == XAI_KEY
+                && url("xai_api_base_url") == Some(gateway)
+                && url("models_list_url") == Some(format!("{gateway}/models").as_str())
+                && doc
+                    .get("auth")
+                    .and_then(|t| t.get("preferred_method"))
+                    .and_then(Item::as_str)
+                    == Some("api_key");
+        }
+        let Some(default) = doc
+            .get("models")
+            .and_then(|t| t.get("default"))
+            .and_then(Item::as_str)
+        else {
+            return false;
+        };
+        let Some(model) = doc.get("model").and_then(|t| t.get(default)) else {
+            return false;
+        };
+        let routed = match &self.model {
+            Some(id) => default == id,
+            None => {
+                model.get("base_url").is_none()
+                    && model.get("model_provider").and_then(Item::as_str)
+                        == self.provider.as_deref()
+            }
+        };
+        routed
+            && model.get("api_key").is_none()
+            && model.get("env_key").and_then(Item::as_str) == Some(variable)
+            && model.get("api_backend").and_then(Item::as_str) == Some("responses")
+    }
+
     pub(super) fn active(&self, doc: &DocumentMut, gateway: &str) -> bool {
         if let Some(id) = &self.model {
             super::on_gateway(doc, gateway, id)

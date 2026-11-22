@@ -11,6 +11,32 @@ const start = source.indexOf("function providerSyncChoices(");
 const end = source.indexOf("\nasync function syncProvider", start);
 const appSource = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8")
   .replace(/\r\n/g, "\n");
+test("a delayed refresh cannot put the previous CURRENT tag back on a card", async () => {
+  const start = appSource.indexOf("async function refreshView()");
+  const end = appSource.indexOf("function applyTheme(", start);
+  assert.ok(start >= 0 && end > start, "refreshView found");
+  let finishOld;
+  const waiting = new Promise(resolve => { finishOld = resolve; });
+  const controller = { accounts: [{ isCurrent: true }], load() { return this.accounts; } };
+  const rendered = [];
+  const scope = {
+    accountsController: controller, pool: "grok", configurationCache: {},
+    proxyController: { invoke() {}, localConfiguration() {}, applyLocal() {} },
+    invoke() {}, refreshFeatureState: () => waiting,
+    renderAccounts: cards => rendered.push(cards[0].isCurrent),
+    renderPendingWorkspaces() {}, syncButtons() {},
+  };
+  vm.createContext(scope);
+  vm.runInContext(appSource.slice(start, end), scope);
+  const older = scope.refreshView();
+  controller.accounts = [{ isCurrent: false }];
+  scope.refreshFeatureState = () => {};
+  await scope.refreshView();
+  finishOld();
+  await older;
+  assert.deepEqual(rendered, [false, false]);
+});
+
 test("Import shows provider sync only for pools with saved providers", () => {
   assert(start >= 0 && end > start, "providerSyncChoices found");
   const calls = [];

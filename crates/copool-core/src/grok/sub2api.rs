@@ -294,16 +294,50 @@ fn uses_gateway(doc: &DocumentMut, record: &ConfigRecord) -> bool {
         .iter()
         .any(|m| on_gateway(doc, &record.gateway, &m.id))
 }
-/// Whether Grok Build uses a provider's gateway, as its `config.toml` says.
-pub(super) fn provider_mode(path: &Path, store: &Store) -> bool {
-    let Some(record) = store.config_record.as_ref() else {
-        return false;
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CurrentRoute<'a> {
+    Login,
+    Provider(&'a str),
+    // No card matches the applied route, or the recorded config cannot be read.
+    Unmatched,
+}
+
+pub(super) fn current_route<'a>(path: &Path, store: &'a Store) -> CurrentRoute<'a> {
+    let Some(record) = &store.config_record else {
+        return CurrentRoute::Login;
     };
-    read_text(path)
-        .ok()
-        .flatten()
-        .and_then(|text| text.parse::<DocumentMut>().ok())
-        .is_some_and(|doc| uses_gateway(&doc, record))
+    let doc = match read_text(path).and_then(|text| parse(text.as_deref())) {
+        Ok(doc) => doc,
+        Err(_) => return CurrentRoute::Unmatched,
+    };
+    if !uses_gateway(&doc, record) {
+        return CurrentRoute::Login;
+    }
+    let Some(provider) = store
+        .providers
+        .iter()
+        .find(|p| Some(p.id.as_str()) == store.config_provider.as_deref())
+    else {
+        return CurrentRoute::Unmatched;
+    };
+    if gateway(provider).as_deref() != Ok(record.gateway.as_str()) {
+        return CurrentRoute::Unmatched;
+    }
+    let Ok(variable) = key_variable(provider) else {
+        return CurrentRoute::Unmatched;
+    };
+    let matches_key = match &record.layout {
+        Some(layout) => layout.matches_provider(&doc, &record.gateway, variable),
+        None => record.models.iter().any(|m| {
+            on_gateway(&doc, &record.gateway, &m.id)
+                && doc["model"][&m.id].get("env_key").and_then(Item::as_str) == Some(variable)
+        }),
+    };
+    if matches_key {
+        CurrentRoute::Provider(&provider.id)
+    } else {
+        CurrentRoute::Unmatched
+    }
 }
 /// What leaving the gateway changed, to be undone on a failed switch.
 pub(super) struct Left {
@@ -669,7 +703,15 @@ mod tests {
         put_text(&path, Some(&text)).unwrap();
         store.config_record = Some(record.clone());
         store.config_provider = Some("p".into());
-        assert!(provider_mode(&path, &store));
+        store.providers.push(Provider {
+            id: "p".into(),
+            base_url: "https://relay.example.com".into(),
+            api_key_variable: "GROK_SUB2API_API_KEY".into(),
+            ..Provider::default()
+        });
+        assert_eq!(current_route(&path, &store), CurrentRoute::Provider("p"));
+        store.providers[0].api_key_variable = "DIFFERENT".into();
+        assert_eq!(current_route(&path, &store), CurrentRoute::Unmatched);
 
         // Another provider keeps the record of the login's configuration;
         // a model it does not serve goes back as it was.
@@ -701,15 +743,17 @@ mod tests {
         );
         put_text(&path, Some(&doc.to_string())).unwrap();
         store.config_record = Some(record);
-        assert!(provider_mode(&path, &store));
+        store.providers[0].base_url = "https://other.example.com".into();
+        store.providers[0].api_key_variable = "OTHER".into();
+        assert_eq!(current_route(&path, &store), CurrentRoute::Provider("p"));
 
         let left = leave_gateway(&path, &mut store).unwrap();
         assert_eq!(read_text(&path).unwrap().as_deref(), Some(before));
         assert!(store.config_record.is_none() && store.config_provider.is_none());
-        assert!(!provider_mode(&path, &store));
+        assert_eq!(current_route(&path, &store), CurrentRoute::Login);
         // A failed account switch takes Grok Build back to the gateway.
         restore_left(&path, &mut store, left);
-        assert!(provider_mode(&path, &store));
+        assert_eq!(current_route(&path, &store), CurrentRoute::Provider("p"));
     }
 
     #[test]

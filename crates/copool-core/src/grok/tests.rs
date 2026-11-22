@@ -1008,6 +1008,51 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
             .is_current
     );
 
+    // Editing the active provider does not apply its new route. A refused
+    // switch must leave both the old file and the edited card's status honest.
+    let old_config = fs::read_to_string(&config).unwrap();
+    let change = |url: &str, variable: &str| {
+        json!({
+            "id": id, "name": "Relay", "baseURL": url, "adminBaseURL": base,
+            "apiKeyVariable": variable, "username": "admin@example.com"
+        })
+    };
+    let coport = "http://127.0.0.1:8787/v1";
+    h.app
+        .save_provider(Pool::Grok, change(coport, "XAI_API_KEY"))
+        .await
+        .unwrap();
+    assert!(!cards(&h.app).await.iter().any(|a| a.is_current));
+    *key.lock().unwrap() = "rejected";
+    assert!(h
+        .app
+        .switch_account(Pool::Grok, &card.id)
+        .await
+        .unwrap_err()
+        .contains("401"));
+    assert_eq!(fs::read_to_string(&config).unwrap(), old_config);
+    assert!(!cards(&h.app).await.iter().any(|a| a.is_current));
+    h.app
+        .save_provider(Pool::Grok, change(&base, "ANOTHER_KEY"))
+        .await
+        .unwrap();
+    assert!(!cards(&h.app).await.iter().any(|a| a.is_current));
+    h.app
+        .save_provider(Pool::Grok, change(coport, "XAI_API_KEY"))
+        .await
+        .unwrap();
+    *key.lock().unwrap() = "sub2api-key";
+    h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
+    let applied: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
+    assert_eq!(
+        applied["endpoints"]["models_base_url"].as_str(),
+        Some(coport)
+    );
+    assert!(cards(&h.app)
+        .await
+        .iter()
+        .any(|a| a.id == card.id && a.is_current));
+
     // An account's switch puts Grok Build's configuration back.
     h.app.switch_account(Pool::Grok, &alice.id).await.unwrap();
     assert_eq!(fs::read_to_string(&config).unwrap(), original);

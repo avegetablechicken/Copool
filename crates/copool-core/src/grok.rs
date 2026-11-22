@@ -394,13 +394,19 @@ impl Application {
             self.grok_save(&store)?;
         }
         // On a provider's gateway Grok Build uses the provider; else its login.
-        let gateway = sub2api::provider_mode(&self.grok_config_path(), &store);
-        let provider = store.config_provider.as_deref().filter(|_| gateway);
+        let route = sub2api::current_route(&self.grok_config_path(), &store);
+        let provider = match route {
+            sub2api::CurrentRoute::Provider(id) => Some(id),
+            _ => None,
+        };
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
             .map(|a| {
-                a.summary(!gateway && store.current_account_id.as_deref() == Some(a.id.as_str()))
+                a.summary(
+                    route == sub2api::CurrentRoute::Login
+                        && store.current_account_id.as_deref() == Some(a.id.as_str()),
+                )
             })
             .chain(self.provider_cards(Pool::Grok, provider)?)
             .collect();
