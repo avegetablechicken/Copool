@@ -147,10 +147,22 @@ impl Application {
             let Some(key) = text(&source.document["env"][source.auth_key]) else {
                 continue;
             };
-            let representative = provider.cached_accounts.iter().max_by(|a, b| {
-                crate::ranking::remaining_score(&a.summary(String::new()))
-                    .total_cmp(&crate::ranking::remaining_score(&b.summary(String::new())))
-            });
+            // A provider none of whose cards Sub2api still serves is no route,
+            // as in the Antigravity proxy.
+            let Some(representative) = provider
+                .cached_accounts
+                .iter()
+                .filter(|a| {
+                    provider.imported_account_ids.contains(&a.id)
+                        && a.status.eq_ignore_ascii_case("active")
+                })
+                .max_by(|a, b| {
+                    crate::ranking::remaining_score(&a.summary(String::new()))
+                        .total_cmp(&crate::ranking::remaining_score(&b.summary(String::new())))
+                })
+            else {
+                continue;
+            };
             let route = provider_route(&provider.id);
             candidates.push(
                 serde_json::from_value(json!({
@@ -166,9 +178,9 @@ impl Application {
                         "preferred": applied == Some(provider.id.as_str()),
                     }},
                     "proxyUrl": provider.proxy_url.trim(),
-                    "addedAt": representative.map(|a| a.id).unwrap_or_default(),
+                    "addedAt": representative.id,
                     "updatedAt": 0,
-                    "usage": representative.and_then(|a| a.usage.clone()),
+                    "usage": representative.usage,
                 }))
                 .map_err(|e| e.to_string())?,
             );

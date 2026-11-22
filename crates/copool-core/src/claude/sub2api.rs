@@ -1231,5 +1231,15 @@ mod tests {
         assert_eq!(provider["authHeader"], "authorization");
         assert_eq!(provider["preferred"], false);
         assert!(route.usage.is_some());
+        // None of its cards active, the provider is no route.
+        let mut store = app.claude_load().unwrap();
+        for account in &mut store.providers[0].cached_accounts {
+            account.status = "missing".into();
+        }
+        app.claude_save(&store).unwrap();
+        let candidates = app.claude_proxy_candidates().unwrap();
+        assert!(candidates
+            .iter()
+            .all(|c| c.auth_json.get("copoolProvider").is_none()));
     }
 }
