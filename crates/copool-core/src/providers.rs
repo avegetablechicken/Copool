@@ -247,7 +247,6 @@ impl Application {
             })
             .ok_or_else(|| "Account not found".into())
     }
-    /// Removes a card; only an explicit sync of its provider restores it.
     pub(crate) async fn delete_card(&self, pool: Pool, id: &str) -> Result<()> {
         let (member, account) = self.card(pool, id)?;
         self.edit_member(pool, &member.key, |m| {
