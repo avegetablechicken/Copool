@@ -774,6 +774,13 @@ function copyButton(value) {
   copy.setAttribute("aria-label", copy.title);
   return copy;
 }
+// A new server's directory and port, apart for each pool, so that the
+// pools' daemons can share a host; the ports are their local proxies'.
+const REMOTE_DEFAULTS = {
+  codex: { remoteDir: "/opt/codex-tools", listenPort: 8787 },
+  claude: { remoteDir: "/opt/copool-claude", listenPort: 8788 },
+  antigravity: { remoteDir: "/opt/copool-antigravity", listenPort: 8789 },
+};
 // Adding a server takes no lock, as Swift's addRemoteServer.
 $("remote-add").onclick = () =>
   action(async () => {
@@ -785,8 +792,7 @@ $("remote-add").onclick = () =>
       sshPort: 22,
       sshUser: "root",
       authMode: "keyPath",
-      remoteDir: proxyPool === "antigravity" ? "/opt/copool-antigravity" : "/opt/codex-tools",
-      listenPort: proxyPool === "antigravity" ? 8789 : 8787,
+      ...REMOTE_DEFAULTS[proxyPool],
     });
     remoteDrafts.set(id, saved);
     expandedRemotes.add(id);
