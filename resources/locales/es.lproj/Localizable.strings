@@ -590,4 +590,5 @@
 "error.grok.api_key_variable_invalid" = "Escribe el nombre de la variable que contiene la clave API, como GROK_SUB2API_API_KEY, no la clave en sí";
 "error.grok.config_invalid" = "El config.toml de Grok Build no es TOML válido; corrige primero ~/.grok/config.toml";
 "error.grok.sub2api_no_models" = "No hay ningún modelo de Grok que enviar a Sub2api: ni la lista de modelos de Grok Build ni el gateway de Sub2api indican ninguno";
+"error.grok.sub2api_models_taken" = "Cada modelo de Grok en ~/.grok/config.toml ya apunta a una dirección que usted definió; Copool no los modifica y no cambió a Sub2api";
 "accounts.window.sub2api_grok_weekly_upgrade" = "Actualiza Sub2api a la versión 0.1.155 o posterior para verlo.";

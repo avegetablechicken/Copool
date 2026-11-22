@@ -34,6 +34,7 @@ pub(crate) const API_KEY_MISSING: &str = "error.grok.sub2api_api_key_missing";
 pub(crate) const API_KEY_VARIABLE_INVALID: &str = "error.grok.api_key_variable_invalid";
 pub(crate) const CONFIG_INVALID: &str = "error.grok.config_invalid";
 pub(crate) const NO_MODELS: &str = "error.grok.sub2api_no_models";
+pub(crate) const MODELS_TAKEN: &str = "error.grok.sub2api_models_taken";
 const CONFIGURATION_INCOMPLETE: &str = "error.sub2api.configuration_incomplete";
 /// The roles `[models]` gives a model besides the default.
 const ROLES: [&str; 4] = [
@@ -612,6 +613,11 @@ impl Application {
             ..Default::default()
         });
         apply(&mut doc, &mut record, &models, &gateway, variable)?;
+        // Every model names an endpoint of the user's own: Grok Build would
+        // not use the gateway.
+        if !uses_gateway(&doc, &record) {
+            return Err(MODELS_TAKEN.into());
+        }
         put_text(&path, Some(&doc.to_string()))?;
         store.config_record = Some(record);
         store.config_provider = Some(member.key);

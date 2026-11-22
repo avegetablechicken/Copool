@@ -620,4 +620,5 @@
 "error.grok.api_key_variable_invalid" = "请填写存放 API Key 的变量名，例如 GROK_SUB2API_API_KEY，而不是 Key 本身";
 "error.grok.config_invalid" = "Grok Build 的 config.toml 不是有效的 TOML，请先修复 ~/.grok/config.toml";
 "error.grok.sub2api_no_models" = "没有可发往 Sub2api 的 Grok 模型：Grok Build 的模型列表和 Sub2api 网关都没有列出";
+"error.grok.sub2api_models_taken" = "~/.grok/config.toml 里每个 Grok 模型都已指向你自己设置的地址；Copool 不改动它们，未切换到 Sub2api";
 "accounts.window.sub2api_grok_weekly_upgrade" = "将 Sub2api 升级到 0.1.155 或更高版本后即可显示。";

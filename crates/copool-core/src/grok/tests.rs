@@ -903,6 +903,23 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
         )
         .await
         .unwrap();
+    // Every model it would route names an endpoint of the user's own: the
+    // switch is refused, and Grok Build left as it was.
+    let mut taken = "[models]\nweb_search = \"grok-4.5\"\n".to_owned();
+    for model in ["grok-4.7", "grok-4.5", "grok-4.6", "grok-3-mini"] {
+        taken += &format!("\n[model.\"{model}\"]\nbase_url = \"http://localhost:11434/v1\"\n");
+    }
+    fs::write(&config, &taken).unwrap();
+    assert_eq!(
+        h.app
+            .switch_account(Pool::Grok, &card.id)
+            .await
+            .unwrap_err(),
+        sub2api::MODELS_TAKEN
+    );
+    assert_eq!(fs::read_to_string(&config).unwrap(), taken);
+    assert!(h.app.grok_load().unwrap().config_record.is_none());
+    fs::write(&config, original).unwrap();
     let execution = h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
     assert_eq!(execution.provider.as_deref(), Some("Relay"));
     let switched: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
