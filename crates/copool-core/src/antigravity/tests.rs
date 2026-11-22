@@ -60,6 +60,8 @@ struct Fake {
     per_model_gemini: std::sync::atomic::AtomicBool,
     /// `loadCodeAssist` fails, as a server error.
     assist_down: std::sync::atomic::AtomicBool,
+    /// Renewals rotate the refresh token, as Google may.
+    rotates: std::sync::atomic::AtomicBool,
     /// Logins another app gives Antigravity's item during the first call
     /// starting with each prefix.
     meanwhile: Mutex<Vec<(String, Arc<Live>, Value)>>,
@@ -190,14 +192,17 @@ impl Network for Fake {
             .lock()
             .unwrap()
             .contains(&refresh_token.to_owned());
+        let rotates = self.rotates.load(std::sync::atomic::Ordering::Relaxed);
         Box::pin(async move {
             Ok(if revoked {
                 (400, json!({"error": "invalid_grant"}))
             } else {
-                (
-                    200,
-                    json!({"access_token": format!("fresh-{refresh_token}"), "expires_in": 3599}),
-                )
+                let mut body =
+                    json!({"access_token": format!("fresh-{refresh_token}"), "expires_in": 3599});
+                if rotates {
+                    body["refresh_token"] = format!("rotated-{refresh_token}").into();
+                }
+                (200, body)
             })
         })
     }
@@ -840,6 +845,33 @@ async fn renewing_the_login_antigravity_uses_writes_it_back_in_its_form() {
         let card = cards(&h.app).await.remove(0);
         assert!(card.is_current && card.usage.is_some() && card.usage_error.is_none());
     }
+}
+
+#[tokio::test]
+async fn a_renewal_that_rotates_the_refresh_token_is_written_back_too() {
+    let h = harness(false).await;
+    h.live
+        .sign_in(&login_of("alice", "access-alice", now_unix_seconds() - 10));
+    h.app.import_current(Pool::Antigravity).await.unwrap();
+    let id = cards(&h.app).await[0].id.clone();
+    h.fake
+        .rotates
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    h.app
+        .refresh_now(Pool::Antigravity, Some(&id))
+        .await
+        .unwrap();
+    assert_eq!(h.fake.renewals(), 1);
+    // Antigravity's login gets the new refresh token, and stays the
+    // card in use.
+    assert_eq!(h.live.writes(), 1);
+    let written = h.live.document().value;
+    assert_eq!(
+        login::refresh_token(&written).as_deref(),
+        Some("rotated-refresh-alice")
+    );
+    assert_eq!(written, stored_document(&h.app, &id));
+    assert!(cards(&h.app).await[0].is_current);
 }
 
 #[tokio::test]

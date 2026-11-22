@@ -683,14 +683,18 @@ impl Application {
         document: &mut Value,
         proxy: &str,
     ) -> Result<()> {
+        // The login as renewed from: Google may have rotated its refresh
+        // token, which tells the login apart.
+        let before = document.clone();
         let renewed = renew(network, document, proxy).await?;
-        self.antigravity_write_back(&renewed, document).await;
+        self.antigravity_write_back(&renewed, &before).await;
         Ok(())
     }
     /// Puts a renewal in Antigravity's login, in the item's own form, when
-    /// the item still holds the renewed login and no token lasting longer;
-    /// never another login or a newer token. Silent: no authorization UI,
-    /// and a failure only logged, for Copool's store keeps the renewal.
+    /// the item still holds the login renewed (`document`, as it was before)
+    /// and no token lasting longer; never another login or a newer token.
+    /// Silent: no authorization UI, and a failure only logged, for Copool's
+    /// store keeps the renewal.
     async fn antigravity_write_back(&self, renewed: &Renewed, document: &Value) {
         let outcome: Result<()> = async {
             let Some(mut live) = self
