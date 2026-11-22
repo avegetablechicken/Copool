@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-23（编辑卡片时按 Esc）：代理地址输入框有焦点时，第一次按 Esc 移开焦点并保留草稿。添加问候时间时，Esc 取消本次添加。退出输入框后再按 Esc，卡片翻回正面并丢弃未提交的代理地址；再次单独按下才收起主面板。按住 Esc 只处理一次。208 项前端测试在 LF 和 CRLF 下均通过。在 macOS 27.2.1 的独立状态栏测试窗口中，使用实际的代理输入框和快捷键处理代码，已验证连续两次按下 Esc 后的焦点、草稿和面板会话状态。尚未在完整应用内手动验证。
+
 2026-11-22（Grok 审查修复）：按 `docs/grok-support-ocr-review.md` 的审查逐条核对后修复六处。用量的数字过滤 NaN 与无穷（`"NaN"`、`"inf"` 能解析成数，存不进 `grok-accounts.json`）。带 UTF-8 BOM 的 `auth.json` 写回时保留其他 issuer 的登录。刷新时沿用 Grok Build 续期过的登录，不论过期时间是否更晚都存回，以保住轮换后的 refresh token（卡片在此期间被改动时除外）。按月计的额度窗口在面板与小组件中按 Codex Free 的方式显示为 1m。Sub2api 提供方之间切换时交接模型：新提供方不提供的模型恢复原样，用户已从网关改走的模型（`base_url` 不再是记录的网关）归用户，切换与离开网关都不再改动它。切换时若所有候选模型都指向用户自己的地址，报错 `error.grok.sub2api_models_taken` 且不改动任何文件。审查第 8 条（`seven_day` 与 `grok_billing` 周期混用）不成立：Sub2api 各版本的 `seven_day` 重置时间、`period_start` 与 `period_type` 都取自同一额度周期，`period_type` 已规范为小写。核心测试 616 项通过；前端测试 205 项在 LF 与 CRLF 下均通过。
 
 2026-11-22（Grok 小组件）：macOS 小组件新增 “Copool Grok Accounts”（kind `CopoolGrokAccountsWidget`，快照 `grok-accounts-widget-snapshot.json`），小、中、大三种尺寸，布局与其他单池小组件相同，不显示池标签。xAI 只报告周额度（`/billing?format=credits` 的 `USAGE_PERIOD_TYPE_WEEKLY`），卡片的 5h 窗口显示为无数据，周窗口显示已用比例与重置时间；套餐标签为 `/settings` 的套餐名大写（如 `SUPERGROK`），用默认配色。“Copool Accounts” 已按 `Pool::ALL` 显示全部四个池，Grok 卡片的池标签为 `GROK`，排在 Codex、Claude、Antigravity 之后。xAI 另有按自然月计的 `/billing`（`monthlyLimit`、`used`，美分），用真实 SuperGrok 账号只读查询，统一计费账号（`isUnifiedBillingUser: true`）的月限额与已用均为 0，故不读取。新增 1 项核心测试；WidgetKit 扩展已单独编译通过，尚未在桌面上放置查看。

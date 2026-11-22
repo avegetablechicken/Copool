@@ -140,7 +140,7 @@ test("a blank card proxy is described and shown as the shared account proxy when
   assert.equal(scope.proxyPlaceholder({}), "http://127.0.0.1:7890");
 });
 
-test("Escape turns a card back at once without saving when the page changes under it", () => {
+test("a page change turns a card back at once without saving", () => {
   const card = { id: "card", proxyUrl: "" };
   const { scope, saved, rendered } = editor([card]);
   scope.editing = { key: "card", proxy: { enabled: true, url: "http://new:1" } };
@@ -148,6 +148,36 @@ test("Escape turns a card back at once without saving when the page changes unde
   assert.equal(scope.editing, null);
   assert.equal(saved.length, 0);
   assert.deepEqual(rendered, [null]);
+});
+
+test("Escape cancels card editing and only a fresh press can hide the panel", () => {
+  const document = new EventTarget();
+  document.querySelector = () => null;
+  const commands = [];
+  const { scope, saved } = editor([{ id: "card", proxyUrl: "" }], {
+    document,
+    selectedPage: "accounts",
+    openMenu: null,
+    navigator: { userAgent: "Mac" },
+    invoke: async (command) => commands.push(command),
+  });
+  scope.P.menuBarStep = require("../ui/presentation.js").menuBarStep;
+  scope.turnCard = (_key, _direction, change) => change();
+  vm.runInContext(between("let menuBarNavigation", "/// Refreshes one account"), scope);
+  function escape(repeat = false) {
+    const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape", repeat });
+    document.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true);
+  }
+
+  scope.editing = { key: "card", proxy: { enabled: true, url: "http://draft:1" } };
+  escape();
+  assert.equal(scope.editing, null);
+  assert.deepEqual(saved, []);
+  escape(true);
+  assert.deepEqual(commands, []);
+  escape();
+  assert.deepEqual(commands, ["hide_panel"]);
 });
 
 test("a card turning over is turned back by Escape or by another card's edit", async () => {
@@ -377,8 +407,9 @@ test("only Claude's refresh offers the slow-down after HTTP 429, on by default",
 });
 
 const greetingSectionSource = between("/// Saying hi now, automatically, and at which times.", "/// The times with a new one, in order;");
-/// The label of a card's greeting times, as its back draws it.
-function greetingTimesLabel(lastError) {
+const proxySectionSource = between("/// The proxy, saved with Done or Return.", "/// The token's time left");
+function cardFields() {
+  const inputs = [];
   const node = (tag, className = "", text = "") => ({
     tag,
     className,
@@ -396,20 +427,74 @@ function greetingTimesLabel(lastError) {
     accountsController: { refreshingIds: new Set(), remoteRefreshingIds: new Set() },
     canSayHi: () => true,
     tr: (key) => key,
-    el: node,
+    el: (...args) => {
+      const field = node(...args);
+      if (field.tag === "input") inputs.push(field);
+      return field;
+    },
     button: () => node("button"),
-    backSection: () => ({ group: node("div", "back-group") }),
+    backSection: () => Object.assign(node("div"), { group: node("div", "back-group") }),
     backButton: () => node("button"),
     backRow: () => node("label", "back-row"),
     backSwitch: () => node("input", "switch"),
+    backHelp: () => node("p"),
+    proxyHelp: () => "",
+    proxyPlaceholder: () => "",
   };
   vm.createContext(scope);
-  vm.runInContext(greetingSectionSource, scope);
+  vm.runInContext(greetingSectionSource + proxySectionSource, scope);
+  return { scope, inputs };
+}
+function greetingTimesLabel(lastError) {
+  const { scope } = cardFields();
   const state = { adding: null, schedule: { auto: false, times: ["08:00"], lastError } };
   const section = scope.greetingSection({ id: "a" }, state);
   const daily = section.group.children.find((n) => n.className === "back-row back-stack");
   return daily.children.find((n) => n.className === "back-label");
 }
+
+test("Escape leaves the proxy field with its draft intact; Enter still finishes editing", () => {
+  const { scope, inputs } = cardFields();
+  const state = { proxy: { enabled: true, url: "" } };
+  let finished = 0;
+  let blurred = 0;
+  scope.finishEditing = () => finished++;
+  scope.proxySection(state, {});
+  const [url] = inputs;
+  url.blur = () => blurred++;
+  url.value = "http://draft:1";
+  url.oninput();
+  for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+    const ime = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape", ...composition });
+    url.onkeydown(ime);
+    assert.equal(ime.defaultPrevented, false);
+    assert.equal(blurred, 0);
+  }
+  const esc = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
+  url.onkeydown(esc);
+  assert.equal(esc.defaultPrevented, true);
+  assert.equal(esc.cancelBubble, true);
+  assert.equal(blurred, 1);
+  assert.equal(finished, 0);
+  assert.equal(state.proxy.url, "http://draft:1");
+  url.onkeydown(Object.assign(new Event("keydown", { cancelable: true }), { key: "Enter" }));
+  assert.equal(finished, 1);
+});
+
+test("Escape cancels only the new greeting time, including when the field blurs", () => {
+  const { scope, inputs } = cardFields();
+  const state = { adding: "12:30", schedule: { auto: false, times: [] } };
+  scope.greetingSection({ id: "a" }, state);
+  const [time] = inputs;
+  time.isConnected = true;
+  scope.renderEditing = () => time.onblur();
+  const esc = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
+  time.onkeydown(esc);
+  assert.equal(esc.defaultPrevented, true);
+  assert.equal(esc.cancelBubble, true);
+  assert.equal(state.adding, null);
+  assert.deepEqual(state.schedule.times, []);
+});
 
 test("what the greeting times do shows on their name, a failed greeting under it", () => {
   const label = greetingTimesLabel(null);

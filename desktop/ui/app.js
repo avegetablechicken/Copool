@@ -1010,9 +1010,15 @@ function proxySection(state, owner) {
     draft.url = url.value;
   };
   url.onkeydown = (event) => {
-    if (event.key !== "Enter" || event.isComposing) return;
-    event.preventDefault();
-    finishEditing();
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) url.blur();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      finishEditing();
+    }
   };
   const enabled = backSwitch("proxy-enabled", draft.enabled, tr("accounts.proxy.enabled"), (on) => {
     draft.enabled = on;
@@ -1119,12 +1125,14 @@ function greetingSection(account, state) {
       state.adding = input.value;
     };
     input.onkeydown = (event) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commit();
       } else if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
+        if (event.repeat) return;
         state.adding = null;
         renderEditing();
       }
@@ -2941,6 +2949,10 @@ document.addEventListener("keydown", (event) => {
       ? event.metaKey && !event.ctrlKey && !event.altKey && event.key === "["
       : event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft");
   if (event.key === "Escape") {
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    // Holding Escape through a card flip must not dismiss the panel too.
+    if (event.repeat) return;
     // Back from a subpage first; on the accounts page, turn an edited card
     // back without saving, else dismiss like a menu.
     if (selectedPage !== "accounts") showPage("accounts");
