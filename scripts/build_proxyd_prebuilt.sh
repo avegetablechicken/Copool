@@ -74,12 +74,28 @@ fi
 
 mkdir -p "$PREBUILT_DIR" "$ARCHIVE_DIR" "$TARGET_DIR"
 
+# shasum where Perl has it (macOS), sha256sum elsewhere; the same output.
+if command -v shasum >/dev/null 2>&1; then
+  SHA256="shasum -a 256"
+elif command -v sha256sum >/dev/null 2>&1; then
+  SHA256="sha256sum"
+else
+  echo "shasum or sha256sum is required" >&2
+  exit 1
+fi
+
 SOURCE_STAMP="$(mktemp)"
 (
   cd "$ROOT/resources/proxyd-src"
-  find src proxyd/src -type f -name '*.rs' -exec shasum -a 256 {} +
-  shasum -a 256 proxyd/Cargo.toml proxyd/Cargo.lock
+  find src proxyd/src -type f -name '*.rs' -exec $SHA256 {} +
+  $SHA256 proxyd/Cargo.toml proxyd/Cargo.lock
 ) | LC_ALL=C sort > "$SOURCE_STAMP"
+# sh has no pipefail: a failed hash would leave an empty stamp, which an
+# empty stamp saved by it would then match forever.
+if [ ! -s "$SOURCE_STAMP" ] || ! grep -q 'proxyd/Cargo.lock$' "$SOURCE_STAMP"; then
+  echo "Could not hash the proxyd sources" >&2
+  exit 1
+fi
 
 build_target() {
   target="$1"
