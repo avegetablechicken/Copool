@@ -93,14 +93,18 @@ fn shell_key(name: &str, shell: Shell) -> Option<String> {
             Shell::Login => name.to_owned(),
             Shell::Interactive => format!("interactive:{name}"),
         };
-        let mut cache = CACHE.lock().ok()?;
-        if let Some((time, value)) = cache.get(&key) {
+        if let Some((time, value)) = CACHE.lock().ok()?.get(&key) {
             if time.elapsed() < std::time::Duration::from_secs(30) {
                 return value.clone();
             }
         }
+        // Asked without the cache's lock: the shell may take seconds, and
+        // other variables are read meanwhile.
         let value = login_shell_keys(&program, flags, &[name], timeout, true).remove(0);
-        cache.insert(key, (std::time::Instant::now(), value.clone()));
+        CACHE
+            .lock()
+            .ok()?
+            .insert(key, (std::time::Instant::now(), value.clone()));
         return value;
     }
     None
