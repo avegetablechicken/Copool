@@ -29,6 +29,14 @@ pub(crate) trait Network: Send + Sync {
     fn api<'a>(&'a self, path: &'a str, token: &'a str, proxy: &'a str) -> Response<'a, Reply>;
     /// Renews the access token with the refresh token.
     fn renew<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Reply>;
+    /// A Sub2api gateway's `/v1/models`, with the key Grok Build sends it.
+    fn gateway_models<'a>(
+        &'a self,
+        url: &'a str,
+        key: &'a str,
+        proxy: &'a str,
+        insecure: bool,
+    ) -> Response<'a, Reply>;
 }
 
 pub(crate) struct Http;
@@ -67,6 +75,28 @@ impl Network for Http {
                     ("client_id", CLIENT_ID),
                     ("refresh_token", refresh_token),
                 ])
+                .send()
+                .await
+                .map_err(|e| crate::usage::format_reqwest_error(&e))?;
+            Ok(reply(response).await)
+        })
+    }
+    fn gateway_models<'a>(
+        &'a self,
+        url: &'a str,
+        key: &'a str,
+        proxy: &'a str,
+        insecure: bool,
+    ) -> Response<'a, Reply> {
+        Box::pin(async move {
+            let response = crate::utils::with_account_proxy(reqwest::Client::builder(), proxy)?
+                .danger_accept_invalid_certs(insecure)
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| e.to_string())?
+                .get(url)
+                .bearer_auth(key)
+                .header("Accept", "application/json")
                 .send()
                 .await
                 .map_err(|e| crate::usage::format_reqwest_error(&e))?;
@@ -136,9 +166,8 @@ fn time(value: &Value) -> Option<i64> {
         .map(|date| date.timestamp())
 }
 /// The usage limit of `/billing?format=credits`: the share of the current
-/// period's allowance used, and when the period ends. A period of about a
-/// week is the card's weekly window; a longer one its monthly window. None
-/// for a reply without the share.
+/// period's allowance used, and when the period ends. None for a reply
+/// without the share.
 pub(crate) fn usage(body: &Value, now: i64) -> Option<UsageSnapshot> {
     let config = body.get("config").unwrap_or(body);
     let used = config.get("creditUsagePercent").and_then(number)?;
@@ -151,13 +180,24 @@ pub(crate) fn usage(body: &Value, now: i64) -> Option<UsageSnapshot> {
         .and_then(|p| p.get("end"))
         .and_then(time)
         .or_else(|| config.get("billingPeriodEnd").and_then(time));
-    let kind = period
+    let monthly = period
         .and_then(|p| p.get("type"))
         .and_then(Value::as_str)
-        .unwrap_or_default();
+        .is_some_and(|kind| kind.ends_with("MONTHLY"));
+    Some(snapshot(used, start, end, monthly, now))
+}
+/// A usage limit's snapshot: a period of about a week is the card's weekly
+/// window, a longer one its monthly window.
+fn snapshot(
+    used: f64,
+    start: Option<i64>,
+    end: Option<i64>,
+    monthly: bool,
+    now: i64,
+) -> UsageSnapshot {
     let seconds = match (start, end) {
         (Some(start), Some(end)) if end > start => end - start,
-        _ if kind.ends_with("MONTHLY") => 30 * ONE_DAY,
+        _ if monthly => 30 * ONE_DAY,
         _ => ONE_WEEK,
     };
     let window = UsageWindow {
@@ -167,7 +207,7 @@ pub(crate) fn usage(body: &Value, now: i64) -> Option<UsageSnapshot> {
         reset_at: end,
     };
     let monthly = seconds > 8 * ONE_DAY;
-    Some(UsageSnapshot {
+    UsageSnapshot {
         remaining_reset_count: None,
         resets_last_confirmed_at: None,
         reset_expiries: Vec::new(),
@@ -181,7 +221,62 @@ pub(crate) fn usage(body: &Value, now: i64) -> Option<UsageSnapshot> {
         third_party_five_hour: None,
         third_party_one_week: None,
         fable_one_week: None,
-    })
+    }
+}
+fn text(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+}
+/// A Sub2api Grok account's usage (`/admin/accounts/{id}/usage`), from the
+/// xAI billing Sub2api keeps for it: its `seven_day` progress since Sub2api
+/// 0.1.173; before, from 0.1.155, the billing itself (`grok_billing`), which
+/// both carry. Before 0.1.155 there is no billing, only the rate limits of
+/// xAI's response headers, and no window; the card says so beside its
+/// weekly row. An account Sub2api cannot use says why.
+pub(crate) fn sub2api_usage(value: &Value, now: i64) -> Result<UsageSnapshot, String> {
+    if value.get("is_forbidden").and_then(Value::as_bool) == Some(true) {
+        return Err(text(&value["forbidden_reason"])
+            .unwrap_or_else(|| "xAI refuses this account in Sub2api".into()));
+    }
+    if value.get("needs_reauth").and_then(Value::as_bool) == Some(true) {
+        return Err("The account must sign in to Sub2api again".into());
+    }
+    let billing = &value["grok_billing"];
+    let start = billing.get("period_start").and_then(time);
+    let end = billing.get("period_end").and_then(time);
+    let monthly = billing["period_type"].as_str() == Some("monthly");
+    let progress = value
+        .get("seven_day")
+        .filter(|w| w.is_object() && w["utilization_unknown"].as_bool() != Some(true))
+        .and_then(|w| {
+            let used = w.get("utilization").and_then(number)?;
+            Some((used, w.get("resets_at").and_then(time).or(end)))
+        });
+    let window = progress.or_else(|| {
+        billing
+            .get("usage_percent")
+            .and_then(number)
+            .map(|used| (used, end))
+    });
+    let plan = text(&value["subscription_tier"]).or_else(|| text(&billing["plan"]));
+    let mut usage = match window {
+        Some((used, reset)) => snapshot(used, start, reset, monthly, now),
+        None => {
+            // Not yet probed, or a Sub2api without billing: no window.
+            let code = value["error_code"].as_str().unwrap_or_default();
+            if !code.is_empty() && code != "quota_unknown" {
+                return Err(text(&value["error"]).unwrap_or_else(|| code.to_owned()));
+            }
+            let mut usage = snapshot(0.0, None, None, false, now);
+            usage.one_week = None;
+            usage
+        }
+    };
+    usage.plan_type = plan;
+    Ok(usage)
 }
 /// The plan `/settings` names, as Grok Build shows it (`Free`, `SuperGrok`).
 pub(crate) fn plan(body: &Value) -> Option<String> {

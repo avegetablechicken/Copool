@@ -22,8 +22,8 @@ let iconFrame = 0;
 const ACCOUNT_POOLS = ["codex", "claude", "antigravity", "grok"];
 // The pools with an API proxy: all but Grok.
 const PROXY_POOLS = ["codex", "claude", "antigravity"];
-// The pools with Sub2api providers: those with a proxy.
-const PROVIDER_POOLS = PROXY_POOLS;
+// The pools with Sub2api providers: every account pool.
+const PROVIDER_POOLS = ACCOUNT_POOLS;
 // The account pool on the accounts page: Codex, Claude Code, Antigravity or
 // Grok.
 let pool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.pool"))
@@ -490,12 +490,13 @@ async function droppingNewCards(origin, task) {
   }
 }
 /// The provider of a Sub2api card, from its id (`sub2api-<provider>-<n>`,
-/// `claude-sub2api-<provider>-<n>`, `antigravity-sub2api-<provider>-<n>`):
+/// `claude-sub2api-<provider>-<n>`, `antigravity-sub2api-<provider>-<n>`,
+/// `grok-sub2api-<provider>-<n>`):
 /// cards synced since the provider list was last read still group with
 /// their provider.
 function providerKey(account) {
   if (account.sourceTag !== "SUB2API") return null;
-  return /^(?:claude-|antigravity-)?sub2api-(.+)-\d+$/.exec(account.id)?.[1] ?? null;
+  return /^(?:claude-|antigravity-|grok-)?sub2api-(.+)-\d+$/.exec(account.id)?.[1] ?? null;
 }
 /// The saved Sub2api provider a card belongs to, if any.
 function accountProvider(account) {
@@ -1607,9 +1608,12 @@ function usageWindows(view) {
 /// A weekly row's notice that its Sub2api `version` reports no weekly usage.
 function weeklyNotice(row, version) {
   if (!version) return row;
+  // Each pool's weekly usage came with its own Sub2api release.
   const lines = [
     tr("accounts.window.sub2api_weekly_unavailable_format", version),
-    tr("accounts.window.sub2api_weekly_upgrade"),
+    tr(pool === "grok"
+      ? "accounts.window.sub2api_grok_weekly_upgrade"
+      : "accounts.window.sub2api_weekly_upgrade"),
   ];
   const notice = button("", "reset-notice", "reset-warning", () =>
     showResetPopover(notice, lines, true),
@@ -3000,6 +3004,7 @@ function switchNotice(execution) {
           {
             claude: "accounts.notice.claude_provider_switched_format",
             antigravity: "accounts.notice.antigravity_provider_switched_format",
+            grok: "accounts.notice.grok_provider_switched_format",
           }[pool] || "accounts.notice.provider_switched_format",
           execution.provider,
         )

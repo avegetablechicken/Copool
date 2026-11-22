@@ -579,3 +579,15 @@
 "error.grok.login_not_found" = "Вход Grok Build не найден. Сначала войдите с помощью grok login.";
 "error.grok.credentials_invalid" = "Недопустимый JSON входа Grok. Ожидается вход Grok Build с непустым refresh_token.";
 "error.grok.sign_in_expired" = "Срок входа Grok истёк. Войдите снова с помощью grok login, затем импортируйте вход.";
+"settings.sub2api.grok_name" = "Название";
+"settings.sub2api.grok_name_placeholder" = "Название этого провайдера Sub2api";
+"settings.sub2api.grok_base_url" = "URL Sub2api";
+"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_api_key_variable" = "Переменная API-ключа";
+"settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
+"accounts.notice.grok_provider_switched_format" = "Grok Build теперь использует Sub2api %@; запустите grok в новом терминале, чтобы применить";
+"error.grok.sub2api_api_key_missing" = "Переменная API-ключа провайдера не экспортирована; экспортируйте её в оболочке перед переключением на карточку Sub2api";
+"error.grok.api_key_variable_invalid" = "Укажите имя переменной с API-ключом, например GROK_SUB2API_API_KEY, а не сам ключ";
+"error.grok.config_invalid" = "config.toml Grok Build не является корректным TOML; сначала исправьте ~/.grok/config.toml";
+"error.grok.sub2api_no_models" = "Нет модели Grok для Sub2api: её не называют ни список моделей Grok Build, ни шлюз Sub2api";
+"accounts.window.sub2api_grok_weekly_upgrade" = "Обновите Sub2api до версии 0.1.155 или новее, чтобы его увидеть.";

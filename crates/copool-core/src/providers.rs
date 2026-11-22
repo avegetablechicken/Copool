@@ -122,8 +122,7 @@ impl Application {
             Pool::Codex => serde_json::to_value(self.configuration()?.sub2_api_provider.providers),
             Pool::Claude => serde_json::to_value(self.claude_providers()?),
             Pool::Antigravity => serde_json::to_value(self.antigravity_providers()?),
-            // The Grok pool has no Sub2api providers.
-            Pool::Grok => Ok(Value::Array(Vec::new())),
+            Pool::Grok => serde_json::to_value(self.grok_providers()?),
         }
         .map_err(|e| e.to_string())
     }
@@ -143,7 +142,10 @@ impl Application {
                 self.antigravity_save_provider(serde_json::from_value(draft).map_err(invalid)?)
                     .await?,
             ),
-            Pool::Grok => return self.grok_unavailable(),
+            Pool::Grok => serde_json::to_value(
+                self.grok_save_provider(serde_json::from_value(draft).map_err(invalid)?)
+                    .await?,
+            ),
         }
         .map_err(invalid)
     }
@@ -152,7 +154,7 @@ impl Application {
             Pool::Codex => self.codex_remove_provider(id).await?,
             Pool::Claude => self.claude_remove_provider(id).await?,
             Pool::Antigravity => self.antigravity_remove_provider(id).await?,
-            Pool::Grok => return self.grok_unavailable(),
+            Pool::Grok => self.grok_remove_provider(id).await?,
         }
         self.secrets.remove(&sub2api::password_secret(pool, id))
     }
@@ -181,7 +183,7 @@ impl Application {
                 .collect()),
             Pool::Claude => self.claude_members(),
             Pool::Antigravity => self.antigravity_members(),
-            Pool::Grok => Ok(Vec::new()),
+            Pool::Grok => self.grok_members(),
         }
     }
     fn member(&self, pool: Pool, key: &str) -> Result<Member> {
@@ -206,7 +208,7 @@ impl Application {
             ),
             Pool::Claude => self.claude_member_connection(&member.key),
             Pool::Antigravity => self.antigravity_member_connection(&member.key),
-            Pool::Grok => self.grok_unavailable(),
+            Pool::Grok => self.grok_member_connection(&member.key),
         }
     }
     /// Edits a provider's cards where its pool keeps them; none when it was
@@ -221,7 +223,7 @@ impl Application {
             Pool::Codex => self.codex_edit_member(key, edit).await,
             Pool::Claude => self.claude_edit_member(key, edit).await,
             Pool::Antigravity => self.antigravity_edit_member(key, edit).await,
-            Pool::Grok => Ok(None),
+            Pool::Grok => self.grok_edit_member(key, edit).await,
         }
     }
     /// Every provider's cards; those of the provider the pool uses

@@ -1,8 +1,9 @@
 //! Grok account pool (Grok Build with SuperGrok): the logins Copool keeps,
 //! the one Grok Build uses (`login`), the usage limit of each (`api`) and
 //! switching. As in the Antigravity pool, the logins are kept in the pool's
-//! file in Copool's data directory. Copool has no Grok API proxy, Sub2api
-//! providers or hi.
+//! file in Copool's data directory, with the pool's Sub2api providers
+//! (`sub2api`), whose cards put Grok Build on their gateway. Copool has no
+//! Grok API proxy or hi.
 use crate::{
     application::{Application, SwitchExecution},
     models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
@@ -16,8 +17,13 @@ use std::{fs, path::PathBuf, sync::Arc};
 
 mod api;
 mod login;
+mod sub2api;
 
-pub(crate) use api::{sign_in_url, Network};
+pub(crate) use api::{sign_in_url, sub2api_usage, Network};
+
+/// A variable's value as Grok Build started from a terminal opened now has
+/// it.
+type Environment = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -41,8 +47,11 @@ pub(crate) async fn sign_in(code: &str, verifier: &str, redirect: &str) -> Resul
 /// The Grok pool's place in the application.
 pub(crate) struct State {
     network: std::sync::RwLock<Arc<dyn Network>>,
-    /// Grok Build's `auth.json`.
+    /// Grok Build's `auth.json`; its `config.toml` and model catalog are
+    /// beside it.
     auth_file: std::sync::RwLock<PathBuf>,
+    /// Grok Build's environment, where a provider's card finds its key.
+    environment: std::sync::RwLock<Environment>,
     /// Held across a load and save of the store.
     lock: tokio::sync::Mutex<()>,
     /// Serializes imports, switches and refreshes.
@@ -61,6 +70,16 @@ impl Default for State {
                     .join(format!("copool-test-grok-{}", uuid::Uuid::new_v4()))
                     .join("auth.json"),
             ),
+            #[cfg(not(test))]
+            environment: std::sync::RwLock::new(Arc::new(|name: &str| {
+                use crate::proxy_integration::{new_shell_keys, Shell};
+                new_shell_keys(&[name], Shell::Interactive)
+                    .into_iter()
+                    .next()
+                    .flatten()
+            })),
+            #[cfg(test)]
+            environment: std::sync::RwLock::new(Arc::new(|_: &str| None)),
             lock: Default::default(),
             operations: Default::default(),
         }
@@ -87,6 +106,15 @@ struct Store {
     accounts: Vec<Stored>,
     /// The account whose login Grok Build was last seen to use.
     current_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    providers: Vec<sub2api::Provider>,
+    /// The provider Grok Build's models were last given the gateway of.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_provider: Option<String>,
+    /// What that replaced in Grok Build's `config.toml`, until an account's
+    /// switch puts it back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_record: Option<sub2api::ConfigRecord>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -321,6 +349,18 @@ impl Application {
     fn set_grok_auth_file(&self, path: PathBuf) {
         *self.grok.auth_file.write().unwrap() = path;
     }
+    #[cfg(test)]
+    fn set_grok_environment(&self, environment: Environment) {
+        *self.grok.environment.write().unwrap() = environment;
+    }
+    /// Grok Build's `config.toml`, beside its `auth.json`.
+    fn grok_config_path(&self) -> PathBuf {
+        self.grok_auth_file().with_file_name("config.toml")
+    }
+    /// Grok Build's catalog of models, as it last fetched it.
+    fn grok_models_cache_path(&self) -> PathBuf {
+        self.grok_auth_file().with_file_name("models_cache.json")
+    }
     /// The bytes of Grok Build's `auth.json`: none when absent.
     fn grok_read_file(&self) -> Result<Option<Vec<u8>>> {
         match fs::read(self.grok_auth_file()) {
@@ -355,10 +395,16 @@ impl Application {
         if follow_live(&mut store, live.as_ref()) {
             self.grok_save(&store)?;
         }
+        // On a provider's gateway Grok Build uses the provider; else its login.
+        let gateway = sub2api::provider_mode(&self.grok_config_path(), &store);
+        let provider = store.config_provider.as_deref().filter(|_| gateway);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
-            .map(|a| a.summary(store.current_account_id.as_deref() == Some(a.id.as_str())))
+            .map(|a| {
+                a.summary(!gateway && store.current_account_id.as_deref() == Some(a.id.as_str()))
+            })
+            .chain(self.provider_cards(Pool::Grok, provider)?)
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.schedule(Pool::Grok) {
@@ -366,11 +412,11 @@ impl Application {
                 // Every round asks for the card in use, full rounds for all.
                 let every = card.is_current;
                 card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
+                    None => Some(schedule.next_refresh_at(every, 0)),
                     Some(a) if a.first_request_pending => None,
                     Some(a) => {
                         Some(schedule.next_refresh_at(every, a.updated_at + schedule.interval))
                     }
-                    None => None,
                 };
             }
         }
@@ -497,10 +543,15 @@ impl Application {
         }
         Ok(())
     }
-    /// Gives Grok Build this account's sign-in. A sign-in there that the
-    /// pool does not hold is kept in `grok-before-switch.json` first.
+    /// Gives Grok Build this account's sign-in, off the gateway a provider
+    /// put its models on, or a Sub2api card's provider. A sign-in there
+    /// that the pool does not hold is kept in `grok-before-switch.json`
+    /// first; a failed step is rolled back.
     pub(crate) async fn grok_switch_account(&self, id: &str) -> Result<SwitchExecution> {
         let _op = self.grok.operations.lock().await;
+        if crate::sub2api::is_card(Pool::Grok, id) {
+            return self.grok_switch_sub2api(id).await;
+        }
         let live = self.grok_read_live().ok().flatten();
         let _lock = self.grok.lock.lock().await;
         let mut store = self.grok_load()?;
@@ -515,7 +566,13 @@ impl Application {
             let backup = self.paths.data_dir.join("grok-before-switch.json");
             write_json(&backup, live)?;
         }
-        self.grok_write_live(&target.document)?;
+        // Grok Build's models keep to a provider's gateway until put back.
+        let config = self.grok_config_path();
+        let left = sub2api::leave_gateway(&config, &mut store)?;
+        if let Err(error) = self.grok_write_live(&target.document) {
+            sub2api::restore_left(&config, &mut store, left);
+            return Err(error);
+        }
         store.current_account_id = Some(target.id);
         self.grok_save(&store)?;
         Ok(SwitchExecution::default())

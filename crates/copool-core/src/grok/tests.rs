@@ -17,6 +17,8 @@ struct Fake {
     settings_down: std::sync::atomic::AtomicBool,
     /// A file Grok Build writes while a renewal is under way.
     meanwhile: Mutex<Option<(PathBuf, Value)>>,
+    /// The Sub2api gateway's `/v1/models`, for the key `sub2api-key`.
+    gateway: Mutex<Option<Value>>,
 }
 impl Fake {
     fn calls(&self) -> Vec<String> {
@@ -104,6 +106,25 @@ impl Network for Fake {
                         "token_type": "Bearer"
                     }),
                 )
+            })
+        })
+    }
+    fn gateway_models<'a>(
+        &'a self,
+        url: &'a str,
+        key: &'a str,
+        proxy: &'a str,
+        insecure: bool,
+    ) -> Response<'a, api::Reply> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("models {url} {key} {proxy} {insecure}"));
+        let listed = self.gateway.lock().unwrap().clone();
+        Box::pin(async move {
+            Ok(match listed {
+                Some(body) if key == "sub2api-key" => (200, body),
+                _ => (401, json!({"error": {"message": "Invalid API key"}})),
             })
         })
     }
@@ -474,7 +495,7 @@ async fn imports_are_checked_whole_and_folded_into_known_accounts() {
 }
 
 #[tokio::test]
-async fn the_pool_has_no_proxy_providers_or_hi() {
+async fn the_pool_has_no_proxy_or_hi() {
     let h = harness(true).await;
     h.sign_in(&sign_in_of("alice", "access-alice", later()));
     h.app.import_current(Pool::Grok).await.unwrap();
@@ -485,13 +506,14 @@ async fn the_pool_has_no_proxy_providers_or_hi() {
         h.app.start_proxy(Pool::Grok).await.unwrap_err(),
         NOT_AVAILABLE
     );
+    // A provider needs its Sub2api address.
     assert_eq!(h.app.providers(Pool::Grok).unwrap(), json!([]));
     assert_eq!(
         h.app
-            .save_provider(Pool::Grok, json!({}))
+            .save_provider(Pool::Grok, json!({"name": "Relay"}))
             .await
             .unwrap_err(),
-        NOT_AVAILABLE
+        "error.sub2api.configuration_incomplete"
     );
     assert_eq!(
         h.app.say_hi(Pool::Grok, &id).await.unwrap_err(),
@@ -570,4 +592,263 @@ fn a_browser_sign_in_is_kept_as_grok_build_keeps_its_sign_in() {
     assert!(url.starts_with("https://auth.x.ai/oauth2/authorize?"));
     assert!(url.contains("client_id=b1a00492-073a-47ea-816f-4c329264a828"));
     assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A5%2Fcallback"));
+}
+
+/// What a Sub2api reports for a Grok account's usage: before 0.1.155 no
+/// billing, from it the billing (`grok_billing`), from 0.1.173 its weekly
+/// progress too (`seven_day`), as 0.1.177 and 0.2.24 do alike.
+fn grok_usage(version: &str) -> Value {
+    let billing = json!({
+        "period_type": "weekly", "usage_percent": 7.0,
+        "period_start": "2099-01-01T00:00:00Z", "period_end": "2099-01-08T00:00:00Z",
+        "plan": "SuperGrok", "status_code": 200
+    });
+    let parts: Vec<u64> = version.split('.').map(|p| p.parse().unwrap()).collect();
+    match parts[..] {
+        [0, 1, minor] if minor < 155 => json!({
+            "source": "passive", "error_code": "quota_unknown",
+            "error": "Grok quota is unknown until billing is probed or an upstream response includes xAI rate-limit headers",
+            "grok_request_quota": {"limit": 60, "remaining": 59}
+        }),
+        [0, 1, minor] if minor < 173 => json!({
+            "source": "passive", "grok_billing": billing, "subscription_tier": "SuperGrok"
+        }),
+        _ => json!({
+            "source": "passive", "grok_billing": billing, "subscription_tier": "SuperGrok",
+            "seven_day": {"utilization": 7.0, "resets_at": "2099-01-08T00:00:00Z", "remaining_seconds": 600},
+            "thirty_day": {"utilization": 0.0, "resets_at": "2099-02-01T00:00:00Z"}
+        }),
+    }
+}
+/// A Sub2api admin API with Grok accounts, recording request paths: one
+/// usable, one whose sign-in expired, and an API-key account and an OpenAI
+/// account the pool must not show. It reports `version`.
+async fn sub2api_server(
+    requests: Arc<Mutex<Vec<String>>>,
+    version: Arc<Mutex<&'static str>>,
+) -> String {
+    use axum::{extract::Request, response::IntoResponse, routing::any, Json, Router};
+    let router = Router::new().fallback(any(move |request: Request| {
+        let requests = requests.clone();
+        let version = *version.lock().unwrap();
+        async move {
+            let uri = request.uri().path_and_query().unwrap().to_string();
+            requests.lock().unwrap().push(uri.clone());
+            let data = if uri.starts_with("/api/v1/auth/login") {
+                json!({"access_token": "admin"})
+            } else if uri == "/api/v1/admin/system/version" {
+                json!({"version": version})
+            } else if uri.starts_with("/api/v1/admin/accounts?") {
+                assert!(uri.contains("platform=grok"), "{uri}");
+                json!({"items": [
+                    {"id": 7, "name": "super@example.com", "platform": "grok", "type": "oauth", "status": "active"},
+                    {"id": 8, "name": "lapsed@example.com", "platform": "grok", "type": "oauth", "status": "active"},
+                    {"id": 9, "name": "key", "platform": "grok", "type": "apikey", "status": "active"},
+                    {"id": 10, "name": "codex@example.com", "platform": "openai", "type": "oauth", "status": "active"}
+                ], "pages": 1})
+            } else if uri == "/api/v1/admin/accounts/8/usage" {
+                json!({"needs_reauth": true, "error_code": "unauthenticated",
+                       "grok_billing": {"status_code": 401}})
+            } else {
+                assert_eq!(uri, "/api/v1/admin/accounts/7/usage");
+                grok_usage(version)
+            };
+            Json(json!({"code": 0, "data": data})).into_response()
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    format!("http://{address}")
+}
+async fn grok_provider(h: &Harness, base: &str) -> String {
+    let saved = h
+        .app
+        .save_provider(
+            Pool::Grok,
+            json!({"name": "Relay", "baseURL": format!("{base}/v1/"),
+                   "username": "admin@example.com", "password": "secret"}),
+        )
+        .await
+        .unwrap();
+    // The gateway's `/v1` is the provider's root; the variable a default.
+    assert_eq!(saved["baseURL"], base);
+    assert_eq!(saved["apiKeyVariable"], "GROK_SUB2API_API_KEY");
+    saved["id"].as_str().unwrap().to_owned()
+}
+fn sub2api_cards(accounts: Vec<AccountSummary>) -> Vec<AccountSummary> {
+    accounts
+        .into_iter()
+        .filter(|a| crate::sub2api::is_card(Pool::Grok, &a.id))
+        .collect()
+}
+
+// Sub2api 0.1.177 and 0.2.24 report the weekly progress, 0.1.160 only the
+// billing it comes from: the cards read alike. 0.1.150 has neither, and its
+// cards name its version.
+#[tokio::test]
+async fn sub2api_grok_cards_show_the_weekly_usage_of_old_and_new_releases() {
+    let h = harness(true).await;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let version = Arc::new(Mutex::new("0.2.24"));
+    let base = sub2api_server(requests.clone(), version.clone()).await;
+    let id = grok_provider(&h, &base).await;
+    let reset = chrono::DateTime::parse_from_rfc3339("2099-01-08T00:00:00Z")
+        .unwrap()
+        .timestamp();
+    for release in ["0.2.24", "0.1.177", "0.1.160", "0.1.150"] {
+        *version.lock().unwrap() = release;
+        h.app.refresh_provider(Pool::Grok, &id, true).await.unwrap();
+        let cards = sub2api_cards(cards(&h.app).await);
+        assert_eq!(cards.len(), 2, "{release}");
+        let lapsed = cards
+            .iter()
+            .find(|c| c.email.as_deref() == Some("lapsed@example.com"))
+            .unwrap();
+        assert_eq!(
+            lapsed.usage_error.as_deref(),
+            Some("The account must sign in to Sub2api again")
+        );
+        let card = cards
+            .iter()
+            .find(|c| c.email.as_deref() == Some("super@example.com"))
+            .unwrap();
+        let usage = card.usage.as_ref().unwrap();
+        if release == "0.1.150" {
+            assert!(usage.one_week.is_none(), "{release}");
+            assert!(card.usage_error.is_none(), "{release}");
+            assert_eq!(card.outdated_sub2api_version.as_deref(), Some("0.1.150"));
+            continue;
+        }
+        let week = usage.one_week.as_ref().unwrap();
+        assert_eq!(
+            (week.used_percent, week.reset_at, week.window_seconds),
+            (7.0, Some(reset), 7 * 24 * 60 * 60),
+            "{release}"
+        );
+        assert!(usage.one_month.is_none() && usage.five_hour.is_none());
+        assert_eq!(usage.plan_type.as_deref(), Some("SuperGrok"));
+        assert_eq!(card.outdated_sub2api_version, None, "{release}");
+    }
+    // Usage is read without probing a model, which would spend quota.
+    assert!(requests
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|uri| !uri.contains("/quota")));
+}
+
+// Grok Build's configuration, environment and the Sub2api server are all
+// temporary: no real `~/.grok`, shell or relay is used.
+#[tokio::test]
+async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_takes_it_back() {
+    let h = harness(true).await;
+    h.sign_in(&sign_in_of("alice", "access-alice", later()));
+    h.app.import_current(Pool::Grok).await.unwrap();
+    let alice = cards(&h.app).await.remove(0);
+    assert!(alice.is_current);
+    let config = h.auth.with_file_name("config.toml");
+    let original =
+        "[models]\nweb_search = \"grok-4.5\"\n\n[model.\"grok-4.7\"]\ntemperature = 0.3\n";
+    fs::write(&config, original).unwrap();
+    fs::write(
+        h.auth.with_file_name("models_cache.json"),
+        r#"{"models": {"grok-4.7": {"info": {"id": "grok-4.7", "model": "grok-4.7"}}}}"#,
+    )
+    .unwrap();
+    let version = Arc::new(Mutex::new("0.1.177"));
+    let base = sub2api_server(Arc::new(Mutex::new(Vec::new())), version).await;
+    let id = grok_provider(&h, &base).await;
+    h.app.refresh_provider(Pool::Grok, &id, true).await.unwrap();
+    let card = sub2api_cards(cards(&h.app).await)
+        .into_iter()
+        .find(|c| c.email.as_deref() == Some("super@example.com"))
+        .unwrap();
+    // 0.1.177 lists no grok-4.7, but forwards it as it is.
+    *h.fake.gateway.lock().unwrap() = Some(json!({"object": "list", "data": [
+        {"id": "grok-4.6"}, {"id": "grok-3-mini"}, {"id": "grok-imagine-image"}
+    ]}));
+
+    // Without the variable exported, nothing changes.
+    assert_eq!(
+        h.app
+            .switch_account(Pool::Grok, &card.id)
+            .await
+            .unwrap_err(),
+        sub2api::API_KEY_MISSING
+    );
+    // A key Sub2api refuses is refused before Grok Build is changed.
+    let key = Arc::new(Mutex::new("wrong"));
+    let exported = key.clone();
+    h.app.set_grok_environment(Arc::new(move |name: &str| {
+        (name == "GROK_SUB2API_API_KEY").then(|| (*exported.lock().unwrap()).to_owned())
+    }));
+    assert!(h
+        .app
+        .switch_account(Pool::Grok, &card.id)
+        .await
+        .unwrap_err()
+        .contains("HTTP 401"));
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+
+    *key.lock().unwrap() = "sub2api-key";
+    let execution = h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
+    assert_eq!(execution.provider.as_deref(), Some("Relay"));
+    let switched: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
+    for model in ["grok-4.7", "grok-4.5", "grok-4.6", "grok-3-mini"] {
+        assert_eq!(
+            switched["model"][model]["base_url"].as_str(),
+            Some(format!("{base}/v1").as_str()),
+            "{model}"
+        );
+        assert_eq!(
+            switched["model"][model]["env_key"].as_str(),
+            Some("GROK_SUB2API_API_KEY")
+        );
+    }
+    assert!(switched["model"].get("grok-imagine-image").is_none());
+    assert_eq!(
+        switched["model"]["grok-4.7"]["temperature"].as_float(),
+        Some(0.3)
+    );
+    // The login stays for an account's switch; the provider's card is the
+    // one in use.
+    assert_eq!(
+        login::email(&h.live()).as_deref(),
+        Some("alice@example.com")
+    );
+    let accounts = cards(&h.app).await;
+    assert!(
+        !accounts
+            .iter()
+            .find(|a| a.id == alice.id)
+            .unwrap()
+            .is_current
+    );
+    assert!(
+        accounts
+            .iter()
+            .find(|a| a.id == card.id)
+            .unwrap()
+            .is_current
+    );
+
+    // An account's switch puts Grok Build's configuration back.
+    h.app.switch_account(Pool::Grok, &alice.id).await.unwrap();
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+    let accounts = cards(&h.app).await;
+    assert!(
+        accounts
+            .iter()
+            .find(|a| a.id == alice.id)
+            .unwrap()
+            .is_current
+    );
+    assert!(
+        !accounts
+            .iter()
+            .find(|a| a.id == card.id)
+            .unwrap()
+            .is_current
+    );
 }

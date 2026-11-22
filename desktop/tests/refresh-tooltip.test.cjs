@@ -264,7 +264,7 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
   );
 });
 
-test("A weekly row of an outdated Sub2api opens a notice naming its version", () => {
+test("A weekly row of an outdated Sub2api opens a notice naming its version and the pool's upgrade", () => {
   const opened = [];
   const node = () => ({
     attributes: {}, children: [], listeners: {},
@@ -277,6 +277,7 @@ test("A weekly row of an outdated Sub2api opens a notice naming its version", ()
     el: (tag, className) => Object.assign(node(), { tag, className }),
     icon: (name) => ({ glyph: name }),
     showResetPopover: (...args) => opened.push(args),
+    pool: "antigravity",
   });
   vm.runInContext(body("button") + body("weeklyNotice"), context);
   const value = node();
@@ -300,4 +301,16 @@ test("A weekly row of an outdated Sub2api opens a notice naming its version", ()
   assert.equal(opened[0][0], notice);
   assert.deepEqual([...opened[0][1]], lines);
   assert.equal(opened[0][2], true);
+  // Grok's weekly usage came with an earlier Sub2api release.
+  context.pool = "grok";
+  const grokValue = node();
+  const grokRow = { querySelector: (selector) => (selector === ".usage-value" ? grokValue : null) };
+  context.weeklyNotice(grokRow, "0.1.150");
+  assert.equal(
+    grokValue.children[0].attributes["aria-label"],
+    [
+      "accounts.window.sub2api_weekly_unavailable_format:0.1.150",
+      "accounts.window.sub2api_grok_weekly_upgrade",
+    ].join("\n"),
+  );
 });

@@ -80,6 +80,31 @@
         allowInsecureTLS: false,
       }),
     },
+    grok: {
+      key: "id",
+      name: "name",
+      // Grok Build's key stays in the environment: the form names its
+      // variable, never the key. A switch gives Grok Build's models the
+      // Sub2api URL and the variable in ~/.grok/config.toml.
+      fields: [
+        ["name", "grok_name"],
+        ["baseURL", "grok_base_url"],
+        ["apiKeyVariable", "grok_api_key_variable"],
+        ["adminBaseURL", "admin_base_url"],
+        ["username", "username"],
+        ["password", "password", "password"],
+      ],
+      secrets: ["password"],
+      blank: () => ({
+        name: "",
+        baseURL: "",
+        apiKeyVariable: "",
+        adminBaseURL: "",
+        username: "",
+        password: "",
+        allowInsecureTLS: false,
+      }),
+    },
   };
   /// One pool's Sub2api providers: those saved, and the forms editing them.
   class Providers {

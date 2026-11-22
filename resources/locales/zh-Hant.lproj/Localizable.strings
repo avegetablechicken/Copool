@@ -579,3 +579,15 @@
 "error.grok.login_not_found" = "找不到 Grok Build 登入。請先執行 grok login 登入。";
 "error.grok.credentials_invalid" = "無效的 Grok 登入 JSON：需要包含非空 refresh_token 的 Grok Build 登入。";
 "error.grok.sign_in_expired" = "Grok 登入已過期。請執行 grok login 重新登入，然後匯入該登入。";
+"settings.sub2api.grok_name" = "名稱";
+"settings.sub2api.grok_name_placeholder" = "此 Sub2api 提供者的名稱";
+"settings.sub2api.grok_base_url" = "Sub2api 位址";
+"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_api_key_variable" = "API Key 變數";
+"settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
+"accounts.notice.grok_provider_switched_format" = "Grok Build 已改用 Sub2api %@，在新終端機中啟動 grok 後生效";
+"error.grok.sub2api_api_key_missing" = "提供者的 API Key 變數未匯出；請先在 shell 中匯出它，再切換到 Sub2api 卡片";
+"error.grok.api_key_variable_invalid" = "請填寫存放 API Key 的變數名稱，例如 GROK_SUB2API_API_KEY，而不是 Key 本身";
+"error.grok.config_invalid" = "Grok Build 的 config.toml 不是有效的 TOML，請先修正 ~/.grok/config.toml";
+"error.grok.sub2api_no_models" = "沒有可送往 Sub2api 的 Grok 模型：Grok Build 的模型清單和 Sub2api 閘道都沒有列出";
+"accounts.window.sub2api_grok_weekly_upgrade" = "將 Sub2api 升級至 0.1.155 或更新版本後即可顯示。";

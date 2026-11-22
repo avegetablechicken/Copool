@@ -599,3 +599,15 @@
 "error.grok.login_not_found" = "Grok Build のログインが見つかりません。先に grok login でサインインしてください。";
 "error.grok.credentials_invalid" = "Grok ログイン JSON が無効です。空でない refresh_token を含む Grok Build のサインインが必要です。";
 "error.grok.sign_in_expired" = "Grok のサインインが期限切れです。grok login で再度サインインしてから、ログインを読み込んでください。";
+"settings.sub2api.grok_name" = "名前";
+"settings.sub2api.grok_name_placeholder" = "この Sub2api プロバイダの名前";
+"settings.sub2api.grok_base_url" = "Sub2api の URL";
+"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_api_key_variable" = "API キーの変数";
+"settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
+"accounts.notice.grok_provider_switched_format" = "Grok Build は Sub2api %@ を使うようになりました。新しいターミナルで grok を起動すると反映されます";
+"error.grok.sub2api_api_key_missing" = "プロバイダーの API キー変数がエクスポートされていません。Sub2api のカードに切り替える前に、シェルでエクスポートしてください";
+"error.grok.api_key_variable_invalid" = "API キーそのものではなく、API キーを保持する変数名（例: GROK_SUB2API_API_KEY）を入力してください";
+"error.grok.config_invalid" = "Grok Build の config.toml が有効な TOML ではありません。先に ~/.grok/config.toml を修正してください";
+"error.grok.sub2api_no_models" = "Sub2api に送る Grok モデルがありません。Grok Build のモデル一覧にも Sub2api ゲートウェイにも見つかりません";
+"accounts.window.sub2api_grok_weekly_upgrade" = "Sub2api を 0.1.155 以降に更新すると表示されます。";

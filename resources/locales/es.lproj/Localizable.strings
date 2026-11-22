@@ -579,3 +579,15 @@
 "error.grok.login_not_found" = "No se encontró el inicio de sesión de Grok Build. Inicia sesión primero con grok login.";
 "error.grok.credentials_invalid" = "JSON de inicio de sesión de Grok no válido. Se espera un inicio de sesión de Grok Build con un refresh_token no vacío.";
 "error.grok.sign_in_expired" = "El inicio de sesión de Grok ha caducado. Vuelve a iniciar sesión con grok login y luego impórtalo.";
+"settings.sub2api.grok_name" = "Nombre";
+"settings.sub2api.grok_name_placeholder" = "Un nombre para este proveedor Sub2api";
+"settings.sub2api.grok_base_url" = "URL de Sub2api";
+"settings.sub2api.grok_base_url_placeholder" = "https://host:6060";
+"settings.sub2api.grok_api_key_variable" = "Variable de la clave API";
+"settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
+"accounts.notice.grok_provider_switched_format" = "Grok Build ahora usa Sub2api %@; inicia grok en una terminal nueva para usarlo";
+"error.grok.sub2api_api_key_missing" = "La variable de la clave API del proveedor no está exportada; expórtala en tu shell antes de cambiar a una tarjeta de Sub2api";
+"error.grok.api_key_variable_invalid" = "Escribe el nombre de la variable que contiene la clave API, como GROK_SUB2API_API_KEY, no la clave en sí";
+"error.grok.config_invalid" = "El config.toml de Grok Build no es TOML válido; corrige primero ~/.grok/config.toml";
+"error.grok.sub2api_no_models" = "No hay ningún modelo de Grok que enviar a Sub2api: ni la lista de modelos de Grok Build ni el gateway de Sub2api indican ninguno";
+"accounts.window.sub2api_grok_weekly_upgrade" = "Actualiza Sub2api a la versión 0.1.155 o posterior para verlo.";

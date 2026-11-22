@@ -2161,10 +2161,13 @@ button.usage-reset:hover {
   vertical-align: -2px;
 }
 
-/* The Claude and Antigravity providers continue the list in the same block. */
+/* The Claude, Antigravity and Grok providers continue the list in the same block. */
 #provider-forms:not(:empty) + #claude-provider-forms > .provider-form:first-child,
 #provider-forms:not(:empty) ~ #antigravity-provider-forms > .provider-form:first-child,
-#claude-provider-forms:not(:empty) + #antigravity-provider-forms > .provider-form:first-child {
+#claude-provider-forms:not(:empty) + #antigravity-provider-forms > .provider-form:first-child,
+#provider-forms:not(:empty) ~ #grok-provider-forms > .provider-form:first-child,
+#claude-provider-forms:not(:empty) ~ #grok-provider-forms > .provider-form:first-child,
+#antigravity-provider-forms:not(:empty) + #grok-provider-forms > .provider-form:first-child {
   border-top: 0.5px solid var(--separator);
 }
 
