@@ -1661,6 +1661,11 @@ async fn agy_proxy_forwards_to_the_imported_gateway_with_its_own_key() {
         "id":"relay", "name":"relay", "baseURL":base, "apiKeyVariable":"RELAY_KEY",
         "importedAccountIDs":[7], "cachedAccounts":[{"id":7,"name":"alice","accountType":"oauth","status":"active"}]
     })).unwrap());
+    // A provider without its URL is left out, not every route.
+    store.providers.push(serde_json::from_value(json!({
+        "id":"unset", "name":"unset", "baseURL":"", "apiKeyVariable":"RELAY_KEY",
+        "importedAccountIDs":[8], "cachedAccounts":[{"id":8,"name":"bob","accountType":"oauth","status":"active"}]
+    })).unwrap());
     app.antigravity_save(&store).unwrap();
     let storage = app.proxy_storage(Pool::Antigravity);
     let status = crate::proxy_service::start_api_proxy_with_runtime(

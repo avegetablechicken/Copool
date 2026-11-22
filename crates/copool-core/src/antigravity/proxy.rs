@@ -139,13 +139,17 @@ impl Application {
             else {
                 continue;
             };
+            // A provider not fully set up is no route; the others still are.
+            let Ok(gateway) = sub2api::gateway(provider) else {
+                continue;
+            };
             let id = format!("antigravity-sub2api-provider:{}", provider.id);
             candidates.push(
                 serde_json::from_value(json!({
                     "id": id, "accountId": id, "label": provider.name, "addedAt": account.id,
                     "updatedAt": 0, "proxyURL": provider.proxy_url, "usage": account.usage,
                     "authJson": {"copoolProvider": {
-                        "apiKey": key, "baseUrl": sub2api::gateway(provider)?,
+                        "apiKey": key, "baseUrl": gateway,
                         "allowInsecureTLS": provider.allow_insecure_tls,
                         "preferred": api_key_mode && store.settings_provider.as_ref() == Some(&provider.id)
                     }}
