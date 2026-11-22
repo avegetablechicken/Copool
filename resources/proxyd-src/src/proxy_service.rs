@@ -2504,11 +2504,12 @@ fn remaining_percent(window: Option<&UsageWindow>) -> i32 {
 }
 
 fn remaining_score(candidate: &ProxyCandidate) -> i32 {
+    // Codex Free reports a monthly window in place of the week's.
     let week = remaining_percent(
         candidate
             .usage
             .as_ref()
-            .and_then(|usage| usage.one_week.as_ref()),
+            .and_then(|usage| usage.one_week.as_ref().or(usage.one_month.as_ref())),
     );
     let five = candidate
         .usage
@@ -5350,6 +5351,29 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
 
         assert_eq!(
             compare_proxy_candidates(&richer, &selected_low_remaining),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn a_monthly_window_ranks_as_the_weekly_one() {
+        // Codex Free: a monthly window and none of five hours or a week.
+        let free = |id: &str, used: f64, added_at: i64| {
+            let mut candidate = make_proxy_candidate(id, id, None, None, added_at);
+            let usage = candidate.usage.as_mut().unwrap();
+            usage.one_month = Some(UsageWindow {
+                clock_offset_seconds: None,
+                used_percent: used,
+                window_seconds: 30 * 24 * 60 * 60,
+                reset_at: None,
+            });
+            candidate
+        };
+        // Added first, the spent account would win a tie.
+        let fresh = free("fresh", 0.0, 2);
+        let spent = free("spent", 100.0, 1);
+        assert_eq!(
+            compare_proxy_candidates(&fresh, &spent),
             std::cmp::Ordering::Less
         );
     }
