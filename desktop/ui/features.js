@@ -102,6 +102,26 @@ function settingsFileButton(field, provider, rerender) {
   field.classList.add("with-button");
   field.append(choose);
 }
+function claudeProviderMode(body, provider, rerender) {
+  const row = el("label", "row provider-field");
+  row.append(el("span", "", tr("settings.sub2api.claude_mode")));
+  const select = el("select", "select");
+  for (const mode of ["address", "settings"]) {
+    const option = el("option", "", tr(`settings.sub2api.claude_mode_${mode}`));
+    option.value = mode;
+    select.append(option);
+  }
+  // Providers saved before address mode have no mode, even when they
+  // carry a baseURL resolved from their settings file.
+  select.value = provider.mode === "address" ? "address" : "settings";
+  select.onchange = () => {
+    provider.mode = select.value;
+    rerender();
+  };
+  row.append(select);
+  body.append(row);
+  return select.value;
+}
 const expandedProviders = new Set();
 /// Every pool's provider forms, or one pool's.
 function renderProviders(target = null) {
@@ -149,7 +169,12 @@ function renderProviders(target = null) {
     form.append(header);
     if (expandedProviders.has(id)) {
       const body = el("div", "provider-body");
-      for (const [key, label, type] of providers.form.fields) {
+      let fields = providers.form.fields;
+      if (target === "claude") {
+        const mode = claudeProviderMode(body, provider, rerender);
+        fields = [...providers.form.sourceFields[mode], ...fields];
+      }
+      for (const [key, label, type] of fields) {
         providerField(body, provider, key, `settings.sub2api.${label}`, type, saved);
         if (key === "settings")
           settingsFileButton(body.lastElementChild, provider, rerender);

@@ -37,16 +37,25 @@
     claude: {
       key: "id",
       name: "name",
-      // Settings name a Claude Code settings file to search for, or its path.
+      sourceFields: {
+        address: [
+          ["name", "claude_name"],
+          ["baseURL", "claude_base_url"],
+          ["apiKeyVariable", "claude_api_key_variable"],
+        ],
+        settings: [["settings", "claude_settings"]],
+      },
       fields: [
-        ["settings", "claude_settings"],
         ["adminBaseURL", "admin_base_url"],
         ["username", "username"],
         ["password", "password", "password"],
       ],
       secrets: ["password", "apiKey"],
       blank: () => ({
+        mode: "address",
         name: "",
+        baseURL: "",
+        apiKeyVariable: "",
         settings: "",
         adminBaseURL: "",
         username: "",

@@ -72,3 +72,29 @@ test("Antigravity's Sub2api form keeps agy's key out and its password secret", (
   assert.equal(providers.key({ id: "p", name: "Relay" }), "p");
   assert.equal(providers.name({ id: "p", name: "Relay" }), "Relay");
 });
+
+test("Claude providers keep the selected source across saving and reopening the form", async () => {
+  const { Providers } = require("../ui/controllers.js");
+  const providers = new Providers(async (command, { pool, value }) => {
+    assert.equal(command, "save_provider");
+    assert.equal(pool, "claude");
+    assert.equal(value.mode, "address");
+    assert.equal(value.baseURL, "https://relay.example");
+    assert.equal(value.apiKeyVariable, "RELAY_KEY");
+    return value;
+  }, "claude");
+  const id = providers.add();
+  const draft = providers.providers.get(id);
+  assert.equal(draft.mode, "address");
+  assert.deepEqual(providers.form.sourceFields.address.map(([key]) => key),
+    ["name", "baseURL", "apiKeyVariable"]);
+  Object.assign(draft, { name: "Relay", baseURL: "https://relay.example", apiKeyVariable: "RELAY_KEY" });
+  await providers.save(id);
+  assert.equal(providers.providers.get(id).mode, "address");
+
+  const legacy = { id: "old", name: "Team", baseURL: "https://team.example", settings: "Team" };
+  providers.accept([legacy]);
+  assert.equal(providers.providers.get("old").mode, undefined);
+  assert.equal(providers.providers.get("old").settings, "Team");
+  assert.deepEqual(providers.form.sourceFields.settings.map(([key]) => key), ["settings"]);
+});
