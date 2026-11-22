@@ -227,7 +227,9 @@ fn set_launch_at_startup(enabled: bool) -> Result<(), String> {
 /// app did. One blocked in System Settings still counts as registered.
 #[cfg(target_os = "macos")]
 fn sync_launch_at_startup(app: &Application) {
-    if !login_item::available() {
+    // A separate data directory (a smoke test) leaves the installed app's
+    // login item alone, as it does the widgets.
+    if !login_item::available() || std::env::var_os("COPOOL_DATA_DIR").is_some() {
         return;
     }
     let result = app.preferences().and_then(|preferences| {
