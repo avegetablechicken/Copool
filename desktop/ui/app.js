@@ -2402,12 +2402,18 @@ function showProxyPool(next) {
     );
   $("proxy-auto-start").dataset.preference = PROXY_PREFERENCES[next].autoStart;
   if (next === proxyPool && proxyController === proxyControllers[next]) return;
+  // A port being typed is the pool left's.
+  savePortNow();
   proxyPool = next;
   closeMenu();
   proxyController = proxyControllers[next];
   tunnelConfiguration = proxyController.tunnelConfiguration;
   proxyCache = proxyController.proxyStatus;
-  if (preferences) renderPreferences();
+  if (preferences) {
+    renderPreferences();
+    // Shown even while focused, as the pool's own.
+    $("proxy-port").value = preferences[PROXY_PREFERENCES[next].port];
+  }
   renderProxy();
   renderRemotes();
   renderTunnelControls();
@@ -3104,17 +3110,25 @@ $("proxy-refresh").onclick = () =>
   action(() => proxyController.refreshStatus(), null, false);
 $("proxy-key-refresh").onclick = () =>
   action(() => proxyController.rotateKey(), null, false);
-// The preferred port is saved as it is edited, as updatePreferredPortText.
+// The preferred port is saved as it is edited, as updatePreferredPortText,
+// as the port of the pool it was typed for.
 let portSaveTimer;
+let pendingPortSave = null;
+function savePortNow() {
+  clearTimeout(portSaveTimer);
+  const save = pendingPortSave;
+  pendingPortSave = null;
+  if (save) save();
+}
 $("proxy-port").oninput = () => {
   clearTimeout(portSaveTimer);
+  pendingPortSave = null;
   const port = Number($("proxy-port").value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return;
-  portSaveTimer = setTimeout(() => {
-    queuePreferenceSave({ [PROXY_PREFERENCES[proxyPool].port]: port }).catch(
-      (error) => notice(error, true),
-    );
-  }, 350);
+  const key = PROXY_PREFERENCES[proxyPool].port;
+  pendingPortSave = () =>
+    queuePreferenceSave({ [key]: port }).catch((error) => notice(error, true));
+  portSaveTimer = setTimeout(savePortNow, 350);
 };
 $("toggle-key").onclick = () => {
   proxyKeyRevealed = !proxyKeyRevealed;
