@@ -174,11 +174,14 @@ function renderProviders(target = null) {
         const mode = claudeProviderMode(body, provider, rerender);
         fields = [...providers.form.sourceFields[mode], ...fields];
       }
+      const credentials = el("div", "provider-credentials");
       for (const [key, label, type] of fields) {
-        providerField(body, provider, key, `settings.sub2api.${label}`, type, saved);
+        const group = key === "username" || key === "password" ? credentials : body;
+        providerField(group, provider, key, `settings.sub2api.${label}`, type, saved);
         if (key === "settings")
           settingsFileButton(body.lastElementChild, provider, rerender);
       }
+      body.append(credentials);
       const row = el("label", "row");
       row.append(
         el("span", "row-label", tr("settings.sub2api.allow_insecure_tls")),
@@ -188,11 +191,10 @@ function renderProviders(target = null) {
       check.checked = !!provider.allowInsecureTLS;
       check.onchange = () => (provider.allowInsecureTLS = check.checked);
       row.append(check);
-      body.append(row);
       const actions = el("div", "provider-save");
       const save = button(tr("common.save"), null, "btn primary");
       save.type = "submit";
-      actions.append(save);
+      actions.append(row, save);
       body.append(actions);
       form.append(body);
     }

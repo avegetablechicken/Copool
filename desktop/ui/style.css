@@ -2221,10 +2221,16 @@ button.usage-reset:hover {
 }
 
 .provider-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: fit-content(34%) minmax(0, 1fr);
+  gap: 3px 8px;
   padding: 0 0 6px 18px;
+}
+
+.provider-body > .provider-field {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
 }
 
 .provider-field > span:first-child {
@@ -2235,12 +2241,50 @@ button.usage-reset:hover {
   text-overflow: ellipsis;
 }
 
+.provider-body .provider-field > span:first-child {
+  width: auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.provider-body .provider-field > input:not(.switch) {
+  width: 100%;
+}
+
+.provider-body select {
+  justify-self: start;
+  max-width: 100%;
+}
+
+.provider-credentials {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(112px, 100%), 1fr));
+  gap: 4px 8px;
+  margin-block: 3px;
+}
+
+.provider-credentials > .provider-field {
+  display: grid;
+  align-content: end;
+  gap: 3px;
+  min-width: 0;
+}
+
 .provider-save {
+  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
+  gap: 4px 12px;
+}
+
+.provider-save .row-label {
+  white-space: normal;
+}
+
+.provider-save .btn {
+  margin-inline-start: auto;
 }
 
 /* ------------------------------------------------------------- remotes */
