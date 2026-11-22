@@ -4020,6 +4020,19 @@ mod tests {
         apply_tokens(&mut renewed, &json!({"access_token": "b"}), now).unwrap();
         assert_eq!(renewed["refreshTokenExpiresAt"], 5);
         assert_eq!(renewed["refreshToken"], "r");
+        // A lifetime that is no number leaves the expiry; one too long for
+        // the clock is the latest it can say.
+        renewed["expiresAt"] = 7.into();
+        apply_tokens(
+            &mut renewed,
+            &json!({"access_token": "c", "expires_in": "NaN", "refresh_token_expires_in": 1e300}),
+            now,
+        )
+        .unwrap();
+        assert_eq!(renewed["expiresAt"], 7);
+        assert_eq!(renewed["refreshTokenExpiresAt"], i64::MAX);
+        assert_eq!(crate::claude_api::number(&json!("inf")), None);
+        assert_eq!(crate::claude_api::number(&json!("2.5")), Some(2.5));
     }
 
     /// Claude's real token endpoint, through `COPOOL_LIVE_CLAUDE_PROXY` (or

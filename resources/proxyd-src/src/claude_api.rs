@@ -143,10 +143,13 @@ pub(crate) fn plan(oauth: &Value) -> Option<String> {
     })
 }
 
+/// A number, or a string of one; never NaN or infinite, which a string
+/// such as "NaN" or "inf" would give.
 pub(crate) fn number(value: &Value) -> Option<f64> {
     value
         .as_f64()
         .or_else(|| value.as_str().and_then(|v| v.parse().ok()))
+        .filter(|v: &f64| v.is_finite())
 }
 
 pub(crate) fn clock_offset_seconds(value: &str, now: i64) -> Option<i64> {
@@ -358,15 +361,17 @@ pub(crate) fn apply_tokens(oauth: &mut Value, tokens: &Value, now_ms: i64) -> Re
     if let Some(refresh) = text(&tokens["refresh_token"]) {
         oauth["refreshToken"] = refresh.into();
     }
+    // Saturating: a lifetime too long for the clock is as good as forever.
+    let at = |seconds: f64| now_ms.saturating_add((seconds * 1000.0) as i64);
     if let Some(seconds) = number(&tokens["expires_in"]) {
-        oauth["expiresAt"] = (now_ms + (seconds * 1000.0) as i64).into();
+        oauth["expiresAt"] = at(seconds).into();
     }
     if let Some(scope) = text(&tokens["scope"]) {
         oauth["scopes"] = scope.split_whitespace().collect::<Vec<_>>().into();
     }
     // Claude Code records when the refresh token itself expires.
     if let Some(seconds) = number(&tokens["refresh_token_expires_in"]) {
-        oauth["refreshTokenExpiresAt"] = (now_ms + (seconds * 1000.0) as i64).into();
+        oauth["refreshTokenExpiresAt"] = at(seconds).into();
     }
     Ok(())
 }
