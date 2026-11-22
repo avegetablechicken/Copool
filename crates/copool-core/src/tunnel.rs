@@ -320,7 +320,11 @@ pub fn quick_url(log: &str) -> Option<String> {
         })
         .next()
 }
+/// Held while cloudflared is installed, which every pool's tunnel shares.
+static INSTALLING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub async fn install(data: &Path) -> Result<(), String> {
+    // Another pool may be installing it: one install, which this waits for.
+    let _installing = INSTALLING.lock().await;
     if binary(data).is_some() {
         return Ok(());
     }
@@ -393,19 +397,54 @@ pub async fn install(data: &Path) -> Result<(), String> {
         } else {
             "cloudflared"
         });
-        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        put_binary(&path, &bytes)
+    }
+}
+/// Writes an executable beside its path and moves it there whole: a tunnel
+/// started meanwhile finds none, never part of one.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn put_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(".download");
+    let partial = PathBuf::from(partial);
+    let written = std::fs::write(&partial, bytes).and_then(|()| {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-                .map_err(|e| e.to_string())?;
+            std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o700))?;
         }
-        Ok(())
+        std::fs::rename(&partial, path)
+    });
+    if written.is_err() {
+        let _ = std::fs::remove_file(&partial);
     }
+    written.map_err(|e| e.to_string())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_installed_binary_is_moved_into_place_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cloudflared");
+        put_binary(&path, b"binary").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"binary");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["cloudflared"]);
+        // A failed write leaves nothing behind.
+        let missing = dir.path().join("missing/cloudflared");
+        assert!(put_binary(&missing, b"binary").is_err());
+        assert!(!dir.path().join("missing").exists());
+    }
     #[test]
     fn each_pool_is_given_its_proxy_base_url() {
         let log = "INF |  https://quiet-river.trycloudflare.com  |";
