@@ -133,10 +133,10 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
     private var samplePlans: [String] {
         switch variant {
         case .codex: ["TEAM", "PRO", "TEAM", "PLUS"]
-        case .claude: ["MAX 20X", "PRO", "TEAM", "MAX 5X"]
+        case .claude: ["ULTRA", "PRO", "TEAM", "MAX"]
         case .antigravity: ["PRO", "ULTRA", "PRO", "FREE"]
         case .grok: ["SUPERGROK", "SUPERGROK", "SUPERGROK HEAVY", "FREE"]
-        case .all: ["TEAM", "MAX 20X", "MAX 20X", "PLUS"]
+        case .all: ["TEAM", "ULTRA", "ULTRA", "PLUS"]
         }
     }
 

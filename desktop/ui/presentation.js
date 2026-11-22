@@ -59,9 +59,16 @@
       typeof account === "object" && account !== null
         ? clean(account.usage?.planType) || clean(account.planType)
         : clean(account);
-    const p = (raw || "team").toUpperCase().replace(/\s+/g, " ");
+    let p = (raw || "team").toUpperCase().replace(/\s+/g, " ");
     // Grok's plans are shown as named ("SUPERGROK HEAVY"), as its widget.
     if (pool === "grok" || (pool === "antigravity" && account?.sourceTag === "SUB2API")) return p;
+    if (pool === "claude") {
+      // Claude renamed Max 5x to Max and Max 20x to Ultra (October 2026),
+      // yet Claude Code still reports both as "max" with the old multiplier.
+      p = p.replace(/^CLAUDE[ _]/, "");
+      const max = /^MAX(?: (\d+)X)?$/.exec(p);
+      if (max) return Number(max[1] || 5) >= 20 ? "ULTRA" : "MAX";
+    }
     // Claude's Max plans keep their usage multiplier ("MAX 20X").
     if (/^MAX( \d+X)?$/.test(p)) return p;
     return ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE", "ULTRA"].includes(p)
@@ -296,9 +303,9 @@
   }
   /// A plan's color, by tier so that providers' comparable plans match:
   /// the entry subscription (Codex Plus, Claude Pro, Google AI Pro,
-  /// SuperGrok) is pink, the one near $100 (Claude Max 5x, SuperGrok Plus)
-  /// orange, and the top one (Codex Pro, Claude Max 20x, Google AI Ultra,
-  /// SuperGrok Heavy) purple.
+  /// SuperGrok) is pink, the one near $100 (Claude Max, formerly Max 5x;
+  /// SuperGrok Plus) orange, and the top one (Codex Pro, Claude Ultra,
+  /// formerly Max 20x; Google AI Ultra, SuperGrok Heavy) purple.
   function planAccent(plan, pool = "codex") {
     if (pool === "grok") {
       // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X

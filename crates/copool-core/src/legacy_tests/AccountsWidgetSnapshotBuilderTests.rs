@@ -107,7 +107,9 @@ fn claudeCardsFollowTheAppsPlanAndWorkspaceTags() {
         100,
     );
     let current = s.current_card.unwrap();
-    assert_eq!(current.plan_label, "MAX 20X");
+    // Max 20x by its current name.
+    assert_eq!(current.plan_label, "ULTRA");
+    assert_eq!(current.plan_accent, "purple");
     assert_eq!(current.workspace_label, None);
     let rows: std::collections::HashMap<_, _> = s.rows.iter().map(|r| (r.id.as_str(), r)).collect();
     assert_eq!(rows["team"].plan_label, "TEAM");
@@ -147,7 +149,8 @@ fn bothPoolsWidgetLeadsWithEachPoolsCurrentAccountThenRanksTheRest() {
     let secondary = s.secondary_card.unwrap();
     assert_eq!(secondary.id, "claude-current");
     assert_eq!(secondary.pool_label.as_deref(), Some("CLAUDE"));
-    assert_eq!(secondary.plan_label, "MAX 5X");
+    assert_eq!(secondary.plan_label, "MAX");
+    assert_eq!(secondary.plan_accent, "orange");
     let ids: Vec<_> = s.rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, ["claude-current", "claude-high", "codex-low"]);
     // Each card keeps its own pool's tags.

@@ -200,30 +200,39 @@ fn codex_plan(raw: Option<String>) -> String {
         "TEAM".into()
     }
 }
-/// As the app's plan tag: Claude shows none until its plan is known, and Max
-/// plans keep their usage multiplier ("MAX 20X").
+/// As the app's plan tag: Claude shows none until its plan is known, and its
+/// plans take their current names. Claude renamed Max 5x to Max and Max 20x
+/// to Ultra (October 2026), yet Claude Code still reports both as "max" with
+/// the old multiplier.
 fn claude_plan(raw: Option<String>) -> String {
     let Some(raw) = raw else {
         return String::new();
     };
-    let max = raw.strip_prefix("MAX").is_some_and(|rest| {
-        rest.is_empty()
-            || rest
-                .strip_prefix(' ')
-                .and_then(|r| r.strip_suffix('X'))
-                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-    });
-    if max || ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE"].contains(&raw.as_str()) {
-        raw
+    let raw = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let name = raw
+        .strip_prefix("CLAUDE ")
+        .or_else(|| raw.strip_prefix("CLAUDE_"))
+        .unwrap_or(&raw);
+    if let Some(rest) = name.strip_prefix("MAX") {
+        let times = match rest.strip_prefix(' ').and_then(|r| r.strip_suffix('X')) {
+            Some(n) => n.parse::<u32>().ok(),
+            None => rest.is_empty().then_some(5),
+        };
+        if let Some(times) = times {
+            return if times >= 20 { "ULTRA" } else { "MAX" }.into();
+        }
+    }
+    if ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE", "ULTRA"].contains(&name) {
+        name.into()
     } else {
         "TEAM".into()
     }
 }
 /// A plan's color, by tier so that providers' comparable plans match, as
 /// the app's `planAccent`: the entry subscription (Codex Plus, Claude Pro,
-/// Google AI Pro, SuperGrok) is pink, the one near $100 (Claude Max 5x,
-/// SuperGrok Plus) orange, and the top one (Codex Pro, Claude Max 20x,
-/// Google AI Ultra, SuperGrok Heavy) purple.
+/// Google AI Pro, SuperGrok) is pink, the one near $100 (Claude Max, formerly
+/// Max 5x; SuperGrok Plus) orange, and the top one (Codex Pro, Claude Ultra,
+/// formerly Max 20x; Google AI Ultra, SuperGrok Heavy) purple.
 pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
     if pool == Pool::Grok {
         // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X

@@ -35,6 +35,22 @@ test("Antigravity Sub2api cards keep explicit tiers outside the Codex plan list"
   const card = { sourceTag: "SUB2API", planType: "standard" };
   assert.equal(P.card(card, false, "used", String, "antigravity").plan, "STANDARD");
 });
+test("Claude's plans take their current names", () => {
+  const plan = (planType) =>
+    P.card({ planType, usage: null }, false, "used", String, "claude").plan;
+  // Claude Code still reports Max 5x and Max 20x by their old names.
+  assert.equal(plan("max 20x"), "ULTRA");
+  assert.equal(plan("max 5x"), "MAX");
+  assert.equal(plan("max"), "MAX");
+  assert.equal(plan("ultra"), "ULTRA");
+  assert.equal(plan("Claude Ultra"), "ULTRA");
+  assert.equal(plan("Claude Max"), "MAX");
+  assert.equal(plan("pro"), "PRO");
+  const accent = (planType) =>
+    P.card({ planType, usage: null }, false, "used", String, "claude").accent;
+  assert.equal(accent("max 20x"), "purple");
+  assert.equal(accent("max 5x"), "orange");
+});
 test("Comparable plans share a color across providers", () => {
   const accent = (planType, pool) =>
     P.card({ planType, usage: null }, false, "used", String, pool).accent;

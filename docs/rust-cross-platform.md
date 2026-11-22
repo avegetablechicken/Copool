@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-23（Claude 套餐改名）：Anthropic 于 2026-10-30 将 Max 5x 改名为 Max、Max 20x 改名为 Ultra，价格不变。Claude Code 的凭据仍把两者都记为 `subscriptionType: "max"`，只能由 `rateLimitTier`（`default_claude_max_5x` / `default_claude_max_20x`）区分；Copool 由此得到 `max 5x` / `max 20x`。卡片和小组件的套餐标签现在统一显示新名称：`MAX 20X`（倍数 ≥ 20）、`ULTRA` 和 `CLAUDE ULTRA` 显示为 `ULTRA`（紫色）；`MAX 5X`、不带倍数的 `MAX` 和 `CLAUDE MAX` 显示为 `MAX`（橙色）。转换只在显示时进行，保存的数据和共享守护进程不变，旧版远程守护进程报的旧名称同样会被转换。Claude Code 若日后改报 `ultra`，也能识别；不带倍数的 `max` 无法区分，按 Max 处理。前端和 Rust 小组件测试通过，WidgetKit 扩展编译通过；未用真实 Ultra 账号核对，也未在界面上实机查看。
+
 2026-11-23（最高档拆分为两档）：套餐标签的最高档再按价位拆分。约 $100 的一档为橙色（Claude Max 5x，以及未注明倍数的 Max、SuperGrok Plus）；$200 以上的一档为紫色（Codex Pro、Claude Max 20x、Antigravity Ultra、SuperGrok Heavy）。入门档仍为粉色，SuperGrok Lite 也在此档。Codex Pro 由原版 SwiftUI 的橙色改为紫色，属有意偏离，已记入 AGENTS.md。Grok 套餐名比较时忽略空格，Sub2api 报出的 `SUPER GROK HEAVY` 与 `SUPERGROK HEAVY` 同色。前端测试、Rust 小组件测试通过，WidgetKit 扩展单独编译通过；未在界面上实机查看。
 
 2026-11-23（Grok 和 Antigravity 的 Sub2api 订阅等级）：从普通管理接口的账号列表和用量响应读取套餐。Antigravity 优先采用 Google 原始等级，缺少用量等级时读取 `credentials.plan_type`。Grok 优先读取用量返回的等级，并可从账号订阅字段和快照补充。实测 0.1.177 的 Antigravity 账号返回 Pro，Grok 账号刷新账单后仍未返回套餐，卡片留空。0.2.24 已用模拟响应验证。
