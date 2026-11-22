@@ -357,10 +357,6 @@ impl Application {
     fn grok_config_path(&self) -> PathBuf {
         self.grok_auth_file().with_file_name("config.toml")
     }
-    /// Grok Build's catalog of models, as it last fetched it.
-    fn grok_models_cache_path(&self) -> PathBuf {
-        self.grok_auth_file().with_file_name("models_cache.json")
-    }
     /// The bytes of Grok Build's `auth.json`: none when absent.
     fn grok_read_file(&self) -> Result<Option<Vec<u8>>> {
         match fs::read(self.grok_auth_file()) {

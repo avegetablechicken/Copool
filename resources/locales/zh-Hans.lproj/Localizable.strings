@@ -623,7 +623,7 @@
 "settings.sub2api.grok_base_url" = "API 地址";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "API Key";
-"settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
+"settings.sub2api.grok_api_key_variable_placeholder" = "环境变量名";
 "accounts.notice.grok_provider_switched_format" = "Grok Build 已改用 Sub2api %@，在新终端中启动 grok 后生效";
 "error.grok.sub2api_api_key_missing" = "提供方的 API Key 变量未导出；请先在 shell 中导出它，再切换到 Sub2api 卡片";
 "error.grok.api_key_variable_invalid" = "请填写存放 API Key 的变量名，例如 GROK_SUB2API_API_KEY，而不是 Key 本身";

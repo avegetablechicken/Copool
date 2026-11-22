@@ -92,9 +92,7 @@
     grok: {
       key: "id",
       name: "name",
-      // Grok Build's key stays in the environment: the form names its
-      // variable, never the key. A switch gives Grok Build's models the
-      // Sub2api URL and the variable in ~/.grok/config.toml.
+      // The variable authenticating Grok Build's Sub2API requests.
       fields: [
         ["name", "grok_name"],
         ["baseURL", "grok_base_url"],

@@ -744,19 +744,60 @@ async fn sub2api_server(
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     format!("http://{address}")
 }
+#[tokio::test]
+async fn grok_requires_the_providers_own_key_variable() {
+    let h = harness(true).await;
+    let mut value = json!({"name":"Relay", "baseURL":"https://relay.invalid", "username":"admin@example.com", "password":"secret"});
+    for variable in [None, Some("   "), Some("sk-not-a-variable")] {
+        if let Some(name) = variable {
+            value["apiKeyVariable"] = json!(name);
+        }
+        assert_eq!(
+            h.app
+                .save_provider(Pool::Grok, value.clone())
+                .await
+                .unwrap_err(),
+            sub2api::API_KEY_VARIABLE_INVALID
+        );
+    }
+    assert!(h.app.grok_providers().unwrap().is_empty());
+    value["apiKeyVariable"] = json!("  TEAM_RELAY_TOKEN  ");
+    let saved = h.app.save_provider(Pool::Grok, value).await.unwrap();
+    assert_eq!(saved["apiKeyVariable"], "TEAM_RELAY_TOKEN");
+    assert_eq!(
+        h.app.grok_providers().unwrap()[0].api_key_variable,
+        "TEAM_RELAY_TOKEN"
+    );
+
+    // Older records without a name stay editable without acquiring a key.
+    let mut store = h.app.grok_load().unwrap();
+    store.providers[0].api_key_variable.clear();
+    h.app.grok_save(&store).unwrap();
+    assert!(h.app.grok_providers().unwrap()[0]
+        .api_key_variable
+        .is_empty());
+    assert!(h
+        .app
+        .grok_member_connection(&store.providers[0].id)
+        .unwrap()
+        .definition
+        .env_key
+        .is_none());
+}
+
 async fn grok_provider(h: &Harness, base: &str) -> String {
     let saved = h
         .app
         .save_provider(
             Pool::Grok,
-            json!({"name": "Relay", "baseURL": format!("{base}/v1/"),
+            json!({"name": "Relay", "baseURL": format!("{base}/v1/"), "apiKeyVariable": "XAI_API_KEY",
                    "username": "admin@example.com", "password": "secret"}),
         )
         .await
         .unwrap();
-    // The gateway's `/v1` is the provider's root; the variable a default.
+    // Normalize the URL and keep the explicitly selected key variable.
     assert_eq!(saved["baseURL"], base);
-    assert_eq!(saved["apiKeyVariable"], "GROK_SUB2API_API_KEY");
+    assert_eq!(saved["apiKeyVariable"], "XAI_API_KEY");
     saved["id"].as_str().unwrap().to_owned()
 }
 fn sub2api_cards(accounts: Vec<AccountSummary>) -> Vec<AccountSummary> {
@@ -836,7 +877,7 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
     assert!(alice.is_current);
     let config = h.auth.with_file_name("config.toml");
     let original =
-        "[models]\nweb_search = \"grok-4.5\"\n\n[model.\"grok-4.7\"]\ntemperature = 0.3\n";
+        "[models]\ndefault = \"grok-4.7\"\nweb_search = \"grok-4.5\"\n\n[model.\"grok-4.7\"]\ntemperature = 0.3\n";
     fs::write(&config, original).unwrap();
     fs::write(
         h.auth.with_file_name("models_cache.json"),
@@ -879,7 +920,7 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
             store["providers"][0]["baseURL"] = url.into();
             fs::write(&store_file, store.to_string()).unwrap();
         }
-        (name == "GROK_SUB2API_API_KEY").then(|| (*exported.lock().unwrap()).to_owned())
+        (name == "XAI_API_KEY").then(|| (*exported.lock().unwrap()).to_owned())
     }));
     assert!(h
         .app
@@ -904,7 +945,7 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
     h.app
         .save_provider(
             Pool::Grok,
-            json!({"id": id, "name": "Relay", "baseURL": base,
+            json!({"id": id, "name": "Relay", "baseURL": base, "apiKeyVariable": "XAI_API_KEY",
                    "username": "admin@example.com"}),
         )
         .await
@@ -929,26 +970,22 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
     let execution = h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
     assert_eq!(execution.provider.as_deref(), Some("Relay"));
     let switched: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
-    for model in ["grok-4.7", "grok-4.5", "grok-4.6", "grok-3-mini"] {
-        assert_eq!(
-            switched["model"][model]["base_url"].as_str(),
-            Some(format!("{base}/v1").as_str()),
-            "{model}"
-        );
-        assert_eq!(
-            switched["model"][model]["env_key"].as_str(),
-            Some("GROK_SUB2API_API_KEY")
-        );
-        assert_eq!(
-            switched["model"][model]["api_backend"].as_str(),
-            Some("responses")
-        );
-    }
-    assert!(switched["model"].get("grok-imagine-image").is_none());
     assert_eq!(
-        switched["model"]["grok-4.7"]["temperature"].as_float(),
-        Some(0.3)
+        switched["endpoints"]["models_base_url"].as_str(),
+        Some(format!("{base}/v1").as_str())
     );
+    assert_eq!(
+        switched["endpoints"]["models_list_url"].as_str(),
+        Some(format!("{base}/v1/models").as_str())
+    );
+    assert_eq!(
+        switched["auth"]["preferred_method"].as_str(),
+        Some("api_key")
+    );
+    // Global model discovery needs no overrides, including for existing roles.
+    let before: toml_edit::DocumentMut = original.parse().unwrap();
+    assert_eq!(switched["model"].to_string(), before["model"].to_string());
+    assert_eq!(switched["models"].to_string(), before["models"].to_string());
     // The login stays for an account's switch; the provider's card is the
     // one in use.
     assert_eq!(

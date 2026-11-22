@@ -593,7 +593,7 @@
 "settings.sub2api.grok_base_url" = "API-URL";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "API-sleutel";
-"settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
+"settings.sub2api.grok_api_key_variable_placeholder" = "Naam van de omgevingsvariabele";
 "accounts.notice.grok_provider_switched_format" = "Grok Build gebruikt nu Sub2api %@; start grok in een nieuwe terminal om het te gebruiken";
 "error.grok.sub2api_api_key_missing" = "De API-sleutelvariabele van de provider is niet geëxporteerd; exporteer die in je shell voordat je naar een Sub2api-kaart wisselt";
 "error.grok.api_key_variable_invalid" = "Vul de naam in van de variabele met de API-sleutel, zoals GROK_SUB2API_API_KEY, niet de sleutel zelf";

@@ -69,6 +69,7 @@ function providerField(form, provider, key, label, type, saved) {
   row.append(el("span", "", tr(label)));
   const input = el("input");
   input.type = type || "text";
+  input.required = label === "settings.sub2api.grok_api_key_variable";
   input.value = provider[key] || "";
   input.autocomplete = type === "password" ? "new-password" : "off";
   input.setAttribute("aria-label", tr(label));

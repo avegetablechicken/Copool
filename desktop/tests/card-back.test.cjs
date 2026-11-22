@@ -267,6 +267,7 @@ test("a hi or renewal takes the refresh button's place: under way, then done", (
 const menu = between("/// A card's menu, at the pointer", "/// The plan tag.");
 test("a card's menu edits it, then refreshes, greets, renews, switches and removes it", () => {
   const scope = {
+    pool: "codex",
     collapsed: false,
     switchingId: null,
     sayingHi: new Map(),
@@ -307,6 +308,10 @@ test("a card's menu edits it, then refreshes, greets, renews, switches and remov
   ]);
   // A provider's account that cannot greet has no menu of its own.
   assert.deepEqual(labels({ account: member, grouped: true }), []);
+  const currentGroup = { group: { key: "team", accounts: [{ ...member, isCurrent: true }] } };
+  assert(!labels(currentGroup).includes("accounts.card.switch_to_this"));
+  scope.pool = "grok";
+  assert(labels(currentGroup).includes("accounts.card.switch_to_this"));
   // Busy, its refresh, greeting and renewal wait.
   scope.accountsController.renewingIds.add("a");
   const busy = scope.cardMenu({ account });

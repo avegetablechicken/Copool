@@ -593,7 +593,7 @@
 "settings.sub2api.grok_base_url" = "URL API";
 "settings.sub2api.grok_base_url_placeholder" = "https://api.example";
 "settings.sub2api.grok_api_key_variable" = "API-ключ";
-"settings.sub2api.grok_api_key_variable_placeholder" = "GROK_SUB2API_API_KEY";
+"settings.sub2api.grok_api_key_variable_placeholder" = "Имя переменной окружения";
 "accounts.notice.grok_provider_switched_format" = "Grok Build теперь использует Sub2api %@; запустите grok в новом терминале, чтобы применить";
 "error.grok.sub2api_api_key_missing" = "Переменная API-ключа провайдера не экспортирована; экспортируйте её в оболочке перед переключением на карточку Sub2api";
 "error.grok.api_key_variable_invalid" = "Укажите имя переменной с API-ключом, например GROK_SUB2API_API_KEY, а не сам ключ";

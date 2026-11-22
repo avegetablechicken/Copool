@@ -1331,7 +1331,9 @@ function cardMenu(target) {
     });
   if (account?.renewal)
     items.push({ label: tr("accounts.renewal.now"), disabled: busy, run: () => renewNow(account) });
-  if (!cards.some((a) => a.isCurrent)) {
+  // A Grok provider can reapply its config after an app or gateway update.
+  const canReapply = pool === "grok" && cards[0]?.sourceTag === "SUB2API";
+  if (canReapply || !cards.some((a) => a.isCurrent)) {
     const target = group ? switchTarget(group) : account;
     items.push({
       label: tr("accounts.card.switch_to_this"),
