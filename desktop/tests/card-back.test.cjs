@@ -76,14 +76,18 @@ test("a card's proxy saves none as direct, restores it and inherits again when b
 
 test("an invalid proxy keeps the card open with its error", async () => {
   const card = { id: "card", proxyUrl: "" };
-  const { scope, saved, rendered } = editor([card]);
+  const savingWhenRendered = [];
+  const { scope, saved } = editor([card], {
+    renderAccounts: () => savingWhenRendered.push(scope.editing.saving),
+  });
   scope.failSave = "Invalid account proxy URL";
   scope.editing = { key: "card", proxy: { enabled: true, url: "ftp://x" }, proxyError: null };
   assert.equal(await scope.saveProxyDraft(scope.editing), false);
   assert.equal(scope.editing.proxyError, "Invalid account proxy URL");
   assert.equal(scope.editing.saving, false);
   assert.equal(saved.length, 0);
-  assert.equal(rendered.length, 1, "the error shows");
+  // The error shows with Done enabled, to try again.
+  assert.deepEqual(savingWhenRendered, [false]);
 });
 
 test("a provider's group edits its provider's proxy, saved once through its first card", async () => {

@@ -841,6 +841,8 @@ async function saveProxyDraft(state) {
     await accountsController.saveProxy(owner.id, value);
     return true;
   } catch (error) {
+    // Done shows enabled again, to save the corrected proxy.
+    state.saving = false;
     state.proxyError = tr(String(error?.message ?? error));
     renderEditing();
     return false;
