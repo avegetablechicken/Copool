@@ -387,6 +387,33 @@ async fn switching_writes_the_sign_in_keeps_other_issuers_and_backs_up_a_strange
 }
 
 #[tokio::test]
+async fn a_sign_in_grok_build_renewed_is_kept_whatever_its_expiry() {
+    let h = harness(true).await;
+    let expires = later();
+    for (user, live_expiry) in [("dana", true), ("erin", false)] {
+        // Grok Build renewed the card's refused token, with no later expiry.
+        let mut live = sign_in_of(user, &format!("live-{user}"), expires);
+        live["refresh_token"] = format!("rotated-by-grok-{user}").into();
+        if !live_expiry {
+            live.as_object_mut().unwrap().remove("expires_at");
+        }
+        h.sign_in(&live);
+        h.app
+            .import_sign_in(
+                Pool::Grok,
+                sign_in_of(user, &format!("expired-{user}"), expires),
+                None,
+            )
+            .await
+            .unwrap();
+        let card = card_of(&cards(&h.app).await, user);
+        h.app.refresh_usage(Pool::Grok, &card.id).await.unwrap();
+        assert_eq!(h.stored(&card.id), live, "{user}");
+    }
+    assert_eq!(h.fake.renewals(), 0);
+}
+
+#[tokio::test]
 async fn expired_tokens_are_renewed_and_given_to_grok_build_when_it_holds_them() {
     let h = harness(true).await;
     h.sign_in(&sign_in_of(

@@ -668,6 +668,8 @@ impl Application {
         let mut document = account.document.clone();
         let may_renew = forced || Renewal::of(account.renewal) != Renewal::Never;
         let mut renewed = false;
+        // A sign-in Grok Build renewed, taken in place of the card's.
+        let mut adopted = false;
         let outcome: Result<Option<UsageSnapshot>> = async {
             if forced {
                 self.grok_renew(network, &mut document, &proxy).await?;
@@ -679,6 +681,7 @@ impl Application {
             if expired {
                 if let Some(live) = self.grok_live_renewal(&document, now) {
                     document = live;
+                    adopted = true;
                 } else {
                     if !may_renew {
                         return Err(RENEWAL_OFF.into());
@@ -697,6 +700,7 @@ impl Application {
                     // read: its token is tried once before renewing.
                     if let Some(live) = self.grok_live_renewal(&document, now) {
                         document = live;
+                        adopted = true;
                         let token = login::access_token(&document).unwrap_or_default();
                         match fetch_usage(network, &token, &proxy, now).await {
                             Ok(usage) => return Ok(Some(usage)),
@@ -737,7 +741,13 @@ impl Application {
             return outcome.map(|_| ());
         };
         // Grok Build may have renewed the login meanwhile; keep the newer.
-        if renewed || login::expiry(&document) > login::expiry(&stored.document) {
+        // A sign-in taken from Grok Build is kept whatever its expiry, for
+        // its refresh token is the one that still works, unless the card
+        // changed meanwhile.
+        if renewed
+            || (adopted && stored.document == account.document)
+            || login::expiry(&document) > login::expiry(&stored.document)
+        {
             stored.document = document;
         }
         if let Some(plan) = plan {
