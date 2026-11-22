@@ -201,11 +201,23 @@ async fn save_preferences(
     value: Preferences,
 ) -> Result<(), String> {
     let old = app.preferences()?;
-    if old.launch_at_startup != value.launch_at_startup {
-        set_launch_at_startup(value.launch_at_startup)?;
-    }
     let theme = value.theme.clone();
-    app.save_preferences(value).await?;
+    let launch = value.launch_at_startup;
+    // Saved first, for the preferences may be refused: the login item
+    // then stays as it was. One that cannot be changed takes the saved
+    // choice back.
+    app.save_preferences(value.clone()).await?;
+    if old.launch_at_startup != launch {
+        if let Err(error) = set_launch_at_startup(launch) {
+            let _ = app
+                .save_preferences(Preferences {
+                    launch_at_startup: old.launch_at_startup,
+                    ..value
+                })
+                .await;
+            return Err(error);
+        }
+    }
     if old.theme != theme {
         appearance::apply_theme(&handle, &theme).map_err(|e| e.to_string())?;
     }
