@@ -32,6 +32,10 @@
 "settings.usage_progress_display" = "Visualizzazione barra di avanzamento";
 "settings.usage_progress_display.used" = "Usato";
 "settings.usage_progress_display.remaining" = "Rimanente";
+"settings.theme" = "Tema";
+"settings.theme.system" = "Sistema";
+"settings.theme.light" = "Chiaro";
+"settings.theme.dark" = "Scuro";
 "settings.section.sub2api" = "Provider non ufficiale";
 "settings.sub2api.enabled" = "Usa quota Sub2api";
 "settings.sub2api.default_provider" = "Provider predefinito attuale";

@@ -32,6 +32,10 @@
 "settings.usage_progress_display" = "進捗バー表示";
 "settings.usage_progress_display.used" = "使用量";
 "settings.usage_progress_display.remaining" = "残量";
+"settings.theme" = "表示テーマ";
+"settings.theme.system" = "システム";
+"settings.theme.light" = "ライト";
+"settings.theme.dark" = "ダーク";
 "settings.section.sub2api" = "非公式 Provider";
 "settings.sub2api.enabled" = "Sub2api の使用量を利用";
 "settings.sub2api.default_provider" = "現在のデフォルトプロバイダー";

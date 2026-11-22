@@ -32,6 +32,10 @@
 "settings.usage_progress_display" = "Progress bar display";
 "settings.usage_progress_display.used" = "Used";
 "settings.usage_progress_display.remaining" = "Remaining";
+"settings.theme" = "Theme";
+"settings.theme.system" = "System";
+"settings.theme.light" = "Light";
+"settings.theme.dark" = "Dark";
 "settings.section.sub2api" = "Unofficial Provider";
 "settings.sub2api.enabled" = "Use Sub2api quota";
 "settings.sub2api.default_provider" = "Current default provider";

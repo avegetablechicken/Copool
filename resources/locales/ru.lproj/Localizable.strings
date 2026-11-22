@@ -32,6 +32,10 @@
 "settings.usage_progress_display" = "Отображение индикатора прогресса";
 "settings.usage_progress_display.used" = "Использовано";
 "settings.usage_progress_display.remaining" = "Остаток";
+"settings.theme" = "Тема";
+"settings.theme.system" = "Системная";
+"settings.theme.light" = "Светлая";
+"settings.theme.dark" = "Тёмная";
 "settings.section.sub2api" = "Неофициальный Provider";
 "settings.sub2api.enabled" = "Использовать квоту Sub2api";
 "settings.sub2api.default_provider" = "Текущий провайдер по умолчанию";

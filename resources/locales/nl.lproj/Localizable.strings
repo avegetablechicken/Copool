@@ -32,6 +32,10 @@
 "settings.usage_progress_display" = "Weergave van voortgangsbalk";
 "settings.usage_progress_display.used" = "Gebruikt";
 "settings.usage_progress_display.remaining" = "Resterend";
+"settings.theme" = "Thema";
+"settings.theme.system" = "Systeem";
+"settings.theme.light" = "Licht";
+"settings.theme.dark" = "Donker";
 "settings.section.sub2api" = "Niet-officiële Provider";
 "settings.sub2api.enabled" = "Sub2api-limiet gebruiken";
 "settings.sub2api.default_provider" = "Huidige standaardprovider";

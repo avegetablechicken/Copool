@@ -1,6 +1,32 @@
 //! System-owned backdrop plus semantic WebKit colors, as used by Coport.
 //! Keep the material behind the WebView; an opaque HTML panel would hide it.
-use tauri::{App, Manager};
+use tauri::{App, AppHandle, Manager, Theme};
+
+pub fn window_theme(value: &str) -> Option<Theme> {
+    match value {
+        "dark" => Some(Theme::Dark),
+        "light" => Some(Theme::Light),
+        _ => None,
+    }
+}
+
+pub fn apply_theme(app: &AppHandle, value: &str) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_theme(window_theme(value))?;
+    }
+    Ok(())
+}
+
+pub fn apply_initial_theme(app: &AppHandle, saved: &str) -> tauri::Result<()> {
+    // An isolated smoke-test bundle can override the saved appearance.
+    #[cfg(debug_assertions)]
+    if let Ok(preview) = std::env::var("COPOOL_PREVIEW_APPEARANCE") {
+        if matches!(preview.as_str(), "dark" | "light") {
+            return apply_theme(app, &preview);
+        }
+    }
+    apply_theme(app, saved)
+}
 
 pub fn configure(app: &mut App) -> tauri::Result<()> {
     // Other platforms only report to the UI (Linux) whether WebKit composites.
@@ -26,14 +52,6 @@ pub fn configure(app: &mut App) -> tauri::Result<()> {
                 policy.is_some_and(|policy| policy != HardwareAccelerationPolicy::Never),
             );
         })?;
-        // An isolated smoke-test bundle can exercise both native appearances.
-        // Release builds always follow the OS, like the SwiftUI application.
-        #[cfg(debug_assertions)]
-        match std::env::var("COPOOL_PREVIEW_APPEARANCE").as_deref() {
-            Ok("dark") => _window.set_theme(Some(tauri::Theme::Dark))?,
-            Ok("light") => _window.set_theme(Some(tauri::Theme::Light))?,
-            _ => {}
-        }
     }
     Ok(())
 }
@@ -58,4 +76,17 @@ pub fn enable_compositing() {
     // Called first in main, before any thread or WebKit process starts.
     std::env::set_var("WEBKIT_FORCE_DMABUF_RENDERER", "1");
     std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_theme_preferences_to_native_window_themes() {
+        assert_eq!(window_theme("dark"), Some(Theme::Dark));
+        assert_eq!(window_theme("light"), Some(Theme::Light));
+        assert_eq!(window_theme("system"), None);
+        assert_eq!(window_theme("unexpected"), None);
+    }
 }

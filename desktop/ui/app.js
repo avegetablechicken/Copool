@@ -2093,8 +2093,18 @@ async function refreshView() {
   );
   syncButtons();
 }
+function applyTheme(value) {
+  const theme = P.resolveTheme(value);
+  if (theme === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  if (meta) meta.content = theme === "system" ? "light dark" : theme;
+  try {
+    localStorage.setItem("copool.theme", theme);
+  } catch {}
+}
 function syncGeneralSelectLabels() {
-  for (const id of ["usage-display", "language"]) {
+  for (const id of ["usage-display", "theme", "language"]) {
     $(`${id}-label`).textContent = $(id).selectedOptions[0]?.textContent || "";
   }
 }
@@ -2109,6 +2119,8 @@ function renderPreferences() {
     $("account-proxy").value = preferences.accountProxyUrl || "";
   const controls = P.settingsControls(preferences, installedEditors);
   $("usage-display").value = controls.usagePicker.selectedValue;
+  $("theme").value = controls.themePicker.selectedValue;
+  applyTheme(controls.themePicker.selectedValue);
   syncGeneralSelectLabels();
   $("restart-target").disabled = !controls.restartPicker.isEnabled;
   $("restart-target").value = controls.restartPicker.selectedValue || "";
@@ -3135,6 +3147,11 @@ $("account-proxy").onchange = () =>
 $("usage-display").onchange = () => {
   syncGeneralSelectLabels();
   savePreference({ usageDisplay: $("usage-display").value });
+};
+$("theme").onchange = () => {
+  syncGeneralSelectLabels();
+  applyTheme($("theme").value);
+  savePreference({ theme: $("theme").value });
 };
 $("language").onchange = () => {
   syncGeneralSelectLabels();

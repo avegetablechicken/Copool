@@ -63,6 +63,7 @@ pub struct Preferences {
     pub antigravity_auto_start_proxy: bool,
     pub locale: String,
     pub usage_display: String,
+    pub theme: String,
     pub launch_at_startup: bool,
     pub launch_codex_after_switch: bool,
     pub sync_opencode_openai_auth: bool,
@@ -103,6 +104,7 @@ impl Default for Preferences {
             antigravity_auto_start_proxy: false,
             locale: String::new(),
             usage_display: "used".into(),
+            theme: "system".into(),
             launch_at_startup: false,
             launch_codex_after_switch: true,
             sync_opencode_openai_auth: false,
@@ -182,6 +184,14 @@ impl Preferences {
                 .unwrap_or(false),
             locale: settings.locale,
             usage_display: settings.usage_progress_display_mode,
+            // An unrecognized theme is only a display preference.
+            theme: settings
+                .extra
+                .get("theme")
+                .and_then(Value::as_str)
+                .filter(|value| matches!(*value, "system" | "light" | "dark"))
+                .unwrap_or("system")
+                .into(),
             launch_at_startup: settings.launch_at_startup,
             launch_codex_after_switch: settings.launch_codex_after_switch,
             sync_opencode_openai_auth: settings.sync_opencode_openai_auth,
@@ -500,6 +510,7 @@ impl Application {
         s.auto_start_api_proxy = p.auto_start_proxy;
         s.locale = p.locale.clone();
         s.usage_progress_display_mode = p.usage_display.clone();
+        s.extra.insert("theme".into(), p.theme.clone().into());
         s.proxy_configuration["preferredPortText"] = p.proxy_port.to_string().into();
         s.extra.insert(
             "claudeAutoStartProxy".into(),
@@ -1284,6 +1295,9 @@ fn validate_preferences(p: &Preferences) -> Result<()> {
     if !["used", "remaining"].contains(&p.usage_display.as_str()) {
         return Err("Invalid usage display mode".into());
     }
+    if !["system", "light", "dark"].contains(&p.theme.as_str()) {
+        return Err("Invalid theme".into());
+    }
     if ![
         "", "en", "zh-Hans", "zh-Hant", "ja", "ko", "fr", "de", "it", "es", "ru", "nl",
     ]
@@ -1791,6 +1805,32 @@ mod tests {
             app.preferences().unwrap().account_order,
             AccountOrder::default()
         );
+    }
+    #[tokio::test]
+    async fn theme_round_trips_validates_and_tolerates_a_bad_saved_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(&dir);
+        assert_eq!(app.preferences().unwrap().theme, "system");
+        for theme in ["dark", "light", "system"] {
+            app.save_preferences(Preferences {
+                theme: theme.into(),
+                ..app.preferences().unwrap()
+            })
+            .await
+            .unwrap();
+            assert_eq!(app.preferences().unwrap().theme, theme);
+        }
+        assert!(app
+            .save_preferences(Preferences {
+                theme: "sepia".into(),
+                ..app.preferences().unwrap()
+            })
+            .await
+            .is_err());
+        let mut settings = app.configuration().unwrap();
+        settings.extra.insert("theme".into(), json!("sepia"));
+        app.persist_configuration(&settings).unwrap();
+        assert_eq!(app.preferences().unwrap().theme, "system");
     }
     #[test]
     fn the_fixed_refresh_interval_is_dropped_from_old_preferences_and_settings() {

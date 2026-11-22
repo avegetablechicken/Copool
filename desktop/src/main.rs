@@ -195,12 +195,21 @@ fn preferences(app: State<'_, App>) -> Result<Preferences, String> {
     app.preferences()
 }
 #[tauri::command]
-async fn save_preferences(app: State<'_, App>, value: Preferences) -> Result<(), String> {
+async fn save_preferences(
+    handle: tauri::AppHandle,
+    app: State<'_, App>,
+    value: Preferences,
+) -> Result<(), String> {
     let old = app.preferences()?;
     if old.launch_at_startup != value.launch_at_startup {
         set_launch_at_startup(value.launch_at_startup)?;
     }
-    app.save_preferences(value).await
+    let theme = value.theme.clone();
+    app.save_preferences(value).await?;
+    if old.theme != theme {
+        appearance::apply_theme(&handle, &theme).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 /// On macOS 13 and later the app registers as a login item; elsewhere, or
 /// outside an app bundle, the core writes the platform's startup entry.
@@ -574,6 +583,9 @@ fn main() {
             let service = Application::open(Paths::discover()?)
                 .map_err(std::io::Error::other)?
                 .into_shared();
+            if let Ok(preferences) = service.preferences() {
+                appearance::apply_initial_theme(app.handle(), &preferences.theme)?;
+            }
             let handle = app.handle().clone();
             let (widget_tx, mut widget_rx) = tokio::sync::mpsc::channel::<()>(1);
             let widget_app = service.clone();

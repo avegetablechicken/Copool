@@ -32,6 +32,10 @@
 "settings.usage_progress_display" = "Fortschrittsanzeige";
 "settings.usage_progress_display.used" = "Verbraucht";
 "settings.usage_progress_display.remaining" = "Verbleibend";
+"settings.theme" = "Design";
+"settings.theme.system" = "System";
+"settings.theme.light" = "Hell";
+"settings.theme.dark" = "Dunkel";
 "settings.section.sub2api" = "Inoffizieller Provider";
 "settings.sub2api.enabled" = "Sub2api-Kontingent verwenden";
 "settings.sub2api.default_provider" = "Aktueller Standardanbieter";

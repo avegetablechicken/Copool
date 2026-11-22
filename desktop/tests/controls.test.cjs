@@ -28,6 +28,15 @@ legacy(
     assert.deepEqual(p.usagePicker.options, ["used", "remaining"]);
   },
 );
+test("SettingsControlPresentationTests.testGeneralSectionIncludesThemePicker", () => {
+  assert.deepEqual(P.settingsControls({}).themePicker, {
+    selectedValue: "system",
+    options: ["system", "light", "dark"],
+  });
+  assert.equal(P.settingsControls({ theme: "dark" }).themePicker.selectedValue, "dark");
+  assert.equal(P.settingsControls({ theme: "light" }).themePicker.selectedValue, "light");
+  assert.equal(P.settingsControls({ theme: "invalid" }).themePicker.selectedValue, "system");
+});
 legacy(
   "SettingsControlPresentationTests",
   "testSwitchBehaviorSectionEnablesRestartTargetPickerWhenConfigured",

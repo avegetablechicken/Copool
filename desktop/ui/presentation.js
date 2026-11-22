@@ -17,6 +17,10 @@
     "ru",
     "nl",
   ];
+  const themes = ["system", "light", "dark"];
+  function resolveTheme(value) {
+    return themes.includes(value) ? value : "system";
+  }
   const clean = (value) =>
     typeof value === "string" && value.trim() ? value.trim() : null;
   function formatLocalized(template, args = []) {
@@ -397,6 +401,10 @@
           settings.usageProgressDisplayMode ?? settings.usageDisplay ?? "used",
         options: ["used", "remaining"],
       },
+      themePicker: {
+        selectedValue: resolveTheme(settings.theme),
+        options: themes,
+      },
       switchToggles: [
         "autoSmartSwitch",
         "syncOpencodeOpenaiAuth",
@@ -766,6 +774,7 @@
     remoteMetrics,
     clean,
     resolveLocale,
+    resolveTheme,
     preferredLocale,
     normalizedPlan,
     workspaceTag,
