@@ -289,11 +289,11 @@ $("provider-add").onclick = ({ currentTarget: trigger }) => {
   }
   showMenu(trigger, [{
     label: "Sub2API",
-    run: () => showMenu(trigger, PROVIDER_POOLS.map((target) => ({
+    children: PROVIDER_POOLS.map((target) => ({
       label: tr(`pool.${target}`),
       icon: brandIcon(target),
       run: () => addProvider(target),
-    }))),
+    })),
   }]);
 };
 /// A new provider's form opens, ready to fill in.

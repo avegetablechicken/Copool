@@ -2522,6 +2522,15 @@ function deferSubmenuDismiss() {
     if (openSubmenu === pending) closeSubmenu();
   }, 350);
 }
+// Entering a menu or returning from its child focuses the row without
+// opening the child until the user navigates to it.
+function focusMenuRow(row) {
+  if (!row) return;
+  const onfocus = row.onfocus;
+  row.onfocus = null;
+  row.focus();
+  row.onfocus = onfocus;
+}
 function closeSubmenu(restoreFocus = false) {
   cancelSubmenuDismiss();
   if (!openSubmenu) return;
@@ -2529,13 +2538,7 @@ function closeSubmenu(restoreFocus = false) {
   openSubmenu = null;
   menu.remove();
   trigger.setAttribute("aria-expanded", "false");
-  if (restoreFocus) {
-    // Focusing the parent normally opens its submenu.
-    const onfocus = trigger.onfocus;
-    trigger.onfocus = null;
-    trigger.focus();
-    trigger.onfocus = onfocus;
-  }
+  if (restoreFocus) focusMenuRow(trigger);
 }
 function closeMenu(restoreFocus = false) {
   closeSubmenu();
@@ -2689,6 +2692,7 @@ function showMenu(trigger, items, at = null) {
       };
       for (const child of item.children) {
         const button = el("button", "", child.label);
+        if (child.icon) button.prepend(child.icon);
         button.type = "button";
         button.setAttribute("role", "menuitem");
         button.disabled = !!child.disabled;
@@ -2756,9 +2760,9 @@ function showMenu(trigger, items, at = null) {
   menu.style.maxHeight = `${panel.bottom - top - 8}px`;
   if (!at) trigger.setAttribute("aria-expanded", "true");
   openMenu = { menu, trigger, at };
-  (
+  focusMenuRow(
     menu.querySelector("[aria-checked=true]") || menu.querySelector("button:not(:disabled)")
-  )?.focus();
+  );
 }
 document.addEventListener("pointerdown", (event) => {
   if (

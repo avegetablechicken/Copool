@@ -59,6 +59,27 @@ test("Import shows provider sync only for pools with saved providers", () => {
   assert.deepEqual(calls, [["claude", "c2"], ["codex", "Codex One"]]);
 });
 
+test("Add unofficial provider offers the pools as children of Sub2API", () => {
+  const start = source.indexOf('$("provider-add").onclick =');
+  const end = source.indexOf("\n};", start);
+  assert.ok(start >= 0 && end > start, "Add provider handler found");
+  const trigger = {};
+  const pools = ["codex", "claude", "antigravity", "grok"];
+  const added = [];
+  let items;
+  vm.runInNewContext(source.slice(start, end + 3), {
+    $: () => trigger, openMenu: null, PROVIDER_POOLS: pools,
+    tr: key => key, brandIcon: pool => pool, addProvider: pool => added.push(pool),
+    showMenu: (_, choices) => { items = choices; },
+  });
+  trigger.onclick({ currentTarget: trigger });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].label, "Sub2API");
+  assert.deepEqual(Array.from(items[0].children, child => child.label), pools.map(pool => `pool.${pool}`));
+  for (const child of items[0].children) child.run();
+  assert.deepEqual(added, pools);
+});
+
 test("Menu hover suppresses stale focus without moving focus; keyboard restores it", () => {
   const start = appSource.indexOf("function configureMenuNavigation(");
   const end = appSource.indexOf("\nfunction showMenu", start);
