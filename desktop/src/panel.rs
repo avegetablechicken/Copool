@@ -118,7 +118,13 @@ fn join_active_space(w: &WebviewWindow) {
     #[cfg(target_os = "macos")]
     if let Ok(ns_window) = w.ns_window() {
         use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
-        // SAFETY: Tauri returns the panel's NSWindow, used here on the main thread.
+        // AppKit's windows are used on the main thread only.
+        if ns_window.is_null() || objc2::MainThreadMarker::new().is_none() {
+            eprintln!("The panel joins the active space only on the main thread");
+            return;
+        }
+        // SAFETY: Tauri returns the panel's NSWindow, non-null, used here on
+        // the main thread, as just checked.
         let ns_window = unsafe { &*ns_window.cast::<NSWindow>() };
         ns_window.setCollectionBehavior(
             ns_window.collectionBehavior()
