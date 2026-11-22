@@ -75,6 +75,11 @@
     const used = Math.max(0, Math.min(100, window.usedPercent));
     return mode === "remaining" ? 100 - used : used;
   }
+  function roundDisplayPercent(value, mode = "used") {
+    if (value === null || !Number.isFinite(value)) return null;
+    const clamped = Math.max(0, Math.min(100, value));
+    return mode === "remaining" ? Math.ceil(clamped) : Math.floor(clamped);
+  }
   function formatReset(epoch, locale = "en", timeZone) {
     if (epoch == null) return "--";
     const date = new Date(epoch * 1000),
@@ -225,7 +230,7 @@
     const used = displayPercent(window);
     const result = (severity, projectedUsedPercent = null) => ({ severity, projectedUsedPercent });
     if (used === null) return result("level");
-    if (Math.round(100 - used) <= 0) return result("spent", 100);
+    if (100 - Math.floor(used) <= 0) return result("spent", 100);
     if (used <= 0) return result("level");
     now += window.clockOffsetSeconds ?? 0;
     const reset = window.resetAt;
@@ -243,7 +248,7 @@
     const pace = usagePace(window, now);
     if (pace.severity === "level") {
       const used = displayPercent(window);
-      return used === null ? "" : Math.round(used) >= 90 ? "full" : Math.round(used) >= 80 ? "high" : "";
+      return used === null ? "" : Math.floor(used) >= 90 ? "full" : Math.floor(used) >= 80 ? "high" : "";
     }
     return pace.severity === "healthy" ? "" : pace.severity === "close" ? "high" : "full";
   }
@@ -267,7 +272,7 @@
     mode = "used",
     formatDate = (value) => formatReset(value),
   ) {
-    const used = Math.round(displayPercent(window, "used", 100));
+    const used = Math.floor(displayPercent(window, "used", 100));
     return {
       // A missing window (e.g. no five-hour limit) has no data to show.
       available: displayPercent(window) !== null,
@@ -765,6 +770,7 @@
     normalizedPlan,
     workspaceTag,
     displayPercent,
+    roundDisplayPercent,
     windowPresentation,
     usageTone,
     usagePaceMessage,

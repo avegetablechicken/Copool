@@ -242,3 +242,18 @@ fn aWindowWithoutUsageShowsNoDataRatherThanExhausted() {
     assert!(card.one_week.available);
     assert_eq!(card.one_week.used_text, "20%");
 }
+#[test]
+fn widgetPercentagesFloorUsedAndCeilRemaining() {
+    let s = build(
+        Pool::Codex,
+        &[account("current", true, "current@example.com", 25.5, 99.9)],
+        "remaining",
+        Some(0),
+        100,
+    );
+    let card = s.current_card.unwrap();
+    assert_eq!(card.five_hour.used_text, "25%");
+    assert_eq!(card.five_hour.remaining_text, "75%");
+    assert_eq!(card.one_week.used_text, "99%");
+    assert_eq!(card.one_week.remaining_text, "1%");
+}

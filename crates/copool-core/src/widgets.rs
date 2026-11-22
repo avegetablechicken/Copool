@@ -167,12 +167,13 @@ fn window(title: &str, window: Option<&UsageWindow>, offset: Option<i32>) -> Win
                 .to_string()
         })
         .unwrap_or_else(|| "--".into());
+    let used_display = used.floor();
     WindowSnapshot {
         title: title.into(),
         available: true,
         progress_fraction: used / 100.,
-        used_text: format!("{}%", used.round()),
-        remaining_text: format!("{}%", 100. - used.round()),
+        used_text: format!("{}%", used_display),
+        remaining_text: format!("{}%", 100. - used_display),
         reset_text: reset,
     }
 }

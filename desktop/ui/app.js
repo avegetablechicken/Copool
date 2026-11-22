@@ -458,7 +458,8 @@ function usageWindow(view, title, tone) {
   return row;
 }
 function compactUsage(value, label) {
-  const text = value === null ? "--" : `${Math.round(value)}%`;
+  const rounded = P.roundDisplayPercent(value, usageMode());
+  const text = rounded === null ? "--" : `${rounded}%`;
   const node = el("span", "usage-value");
   node.append(`${label} `, el("b", "", text));
   node.setAttribute("aria-label", `${label}: ${text}`);

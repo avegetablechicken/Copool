@@ -389,7 +389,7 @@ test("Usage colors follow OpenQuota pacing and fallback boundaries", () => {
     [45, .5, ""], [49.5, .5, "high"], [49.8, .5, "full"], [50, .5, "full"],
     [1, .009, ""], [4, .02, ""], [5, .02, "full"], [85, .95, ""],
   ]) assert.equal(P.usageTone(quota(used, elapsed), now), tone, `${used}/${elapsed}`);
-  for (const [used, tone] of [[79.49, ""], [79.5, "high"], [89.49, "high"], [89.5, "full"], [100, "full"]]) {
+  for (const [used, tone] of [[79.99, ""], [80, "high"], [89.99, "high"], [90, "full"], [100, "full"]]) {
     for (const extra of [{resetAt: null}, {resetAt: now}, {windowSeconds: 0}])
       assert.equal(P.usageTone(quota(used, .5, extra), now), tone);
   }
@@ -470,4 +470,37 @@ test("card presentation formats Claude Fable usage window when reported", () => 
   assert.equal(freeMonthly.oneMonth.primaryPercent, 60);
   assert.equal(freeMonthly.oneMonth.reset, "at:1802000000");
   assert.deepEqual(freeMonthly.compact, [null, 60]);
+});
+
+test("Used percent floors and remaining percent ceils across cards and compact mode", () => {
+  for (const [usedPercent, wantUsed, wantRemaining] of [
+    [0, 0, 100],
+    [0.1, 0, 100],
+    [25.5, 25, 75],
+    [27.9, 27, 73],
+    [29, 29, 71],
+    [99.9, 99, 1],
+    [100, 100, 0],
+  ]) {
+    const window = { usedPercent };
+    const usedView = P.windowPresentation(window, "used");
+    const remView = P.windowPresentation(window, "remaining");
+    assert.equal(usedView.primaryPercent, wantUsed);
+    assert.equal(usedView.secondaryPercent, wantRemaining);
+    assert.equal(usedView.progressPercent, wantUsed);
+    assert.equal(remView.primaryPercent, wantRemaining);
+    assert.equal(remView.secondaryPercent, wantUsed);
+    assert.equal(remView.progressPercent, wantRemaining);
+    assert.equal(P.roundDisplayPercent(P.displayPercent(window, "used"), "used"), wantUsed);
+    assert.equal(
+      P.roundDisplayPercent(P.displayPercent(window, "remaining"), "remaining"),
+      wantRemaining,
+    );
+  }
+  assert.equal(P.roundDisplayPercent(null, "used"), null);
+  assert.equal(P.usagePaceMessage({ usedPercent: 99.9, resetAt: null }, 1_800_000_000), null);
+  assert.deepEqual(P.usagePaceMessage({ usedPercent: 100, resetAt: null }, 1_800_000_000), {
+    key: "accounts.window.pace_spent",
+    args: [],
+  });
 });
