@@ -7,7 +7,7 @@ use super::{
 use crate::{
     application::Application,
     claude_api::{plan, text},
-    models::{Pool, StoredAccount},
+    models::{Pool, Renewal, StoredAccount},
     proxy_service::{new_proxy_storage_context, ProxyStorageContext},
 };
 use serde_json::{json, Value};
@@ -270,6 +270,11 @@ impl Application {
                     && crate::claude_api::newer_login(oauth, &a.oauth)
             }) {
                 changed |= account.adopt(oauth, false);
+                // The single renewal allowed was used there.
+                if account.renewal == Some(Renewal::Once) && found["renewal"] == "never" {
+                    account.renewal = Some(Renewal::Never);
+                    changed = true;
+                }
             }
         }
         if changed {

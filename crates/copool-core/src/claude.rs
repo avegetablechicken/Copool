@@ -7533,5 +7533,20 @@ mod tests {
             app.claude_load().unwrap().accounts[0].oauth["accessToken"],
             "remote-access"
         );
+        // The single renewal allowed, used by the daemon, is used here too,
+        // and the next upload says so.
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.set_renewal(Pool::Claude, &id, "once").await.unwrap();
+        remote["accounts"][0]["renewal"] = "never".into();
+        remote["accounts"][0]["authJson"]["claudeAiOauth"] = json!({
+            "accessToken": "renewed-access", "refreshToken": "renewed-refresh", "expiresAt": LATER + 2
+        });
+        app.claude_adopt_remote_logins(&remote).await.unwrap();
+        assert_eq!(
+            app.claude_load().unwrap().accounts[0].renewal,
+            Some(Renewal::Never)
+        );
+        let payload: Value = serde_json::from_slice(&app.claude_remote_payload().unwrap()).unwrap();
+        assert_eq!(payload["accounts"][0]["renewal"], "never");
     }
 }
