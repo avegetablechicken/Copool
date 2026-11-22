@@ -399,7 +399,10 @@ test("Usage colors follow OpenQuota pacing and fallback boundaries", () => {
   const window = quota(46, .5);
   assert.equal(P.usageTone(window, now), "high");
   assert.equal(P.usageTone(window, now+1000), "");
-  assert.equal(P.windowPresentation(window, "used").tone, P.windowPresentation(window, "remaining").tone);
+  // A card's tone, as of now, is the same in either mode.
+  const live = { ...window, resetAt: Date.now() / 1000 + 5000 };
+  for (const mode of ["used", "remaining"])
+    assert.equal(P.windowPresentation(live, mode).tone, "high", mode);
 });
 
 test("Usage bar tooltips report estimated time to exhaustion, not excess percent", () => {
