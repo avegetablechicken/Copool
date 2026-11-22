@@ -341,7 +341,10 @@ async fn finish_login(
         *current = None;
     }
     if result.is_ok() {
-        panel::show(&handle, None);
+        // An async command runs on a worker thread; showing the panel uses
+        // AppKit or GTK.
+        let panel = handle.clone();
+        let _ = handle.run_on_main_thread(move || panel::show(&panel, None));
     }
     result
 }
