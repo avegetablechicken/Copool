@@ -2506,6 +2506,8 @@ impl Application {
                 live = latest;
                 profiled = None;
                 rate_limited = false;
+                // What could not be written belonged to the round replaced.
+                live_sync = Ok(());
                 if reloads == 0 {
                     reloads += 1;
                     continue;
