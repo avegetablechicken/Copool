@@ -91,6 +91,8 @@
     if (pool === "codex") {
       // OpenAI's Pro plans: $100 (prolite), $200 (pro) and $500 (promax),
       // named as OpenAI does once the $100 one came.
+      // ChatGPT Go, the $8 plan below Plus.
+      if (p === "GO") return p;
       if (p === "PROLITE") return "PRO 5X";
       if (p === "PROMAX") return "PRO 50X";
       if (p === "PRO") return now >= CODEX_PRO_LITE ? "PRO 20X" : "PRO";
@@ -328,10 +330,11 @@
     };
   }
   /// A plan's color, by tier so that providers' comparable plans match: the
-  /// entry subscription (Codex Plus, Claude Pro, Google AI Pro, SuperGrok) is
-  /// pink; those of $100 to $300, which their labels tell apart by multiplier
-  /// (Codex Pro 5x and 20x, Claude Max and Ultra, Google AI Ultra 5x and 20x,
-  /// SuperGrok Plus and Heavy), orange; and Codex's $500 Pro 50x purple.
+  /// entry subscription (Codex Go and Plus, Claude Pro, Google AI Pro,
+  /// SuperGrok Lite and SuperGrok) is pink; those of $100 to $300, which
+  /// their labels tell apart by multiplier (Codex Pro 5x and 20x, Claude Max
+  /// and Ultra, Google AI Ultra 5x and 20x, SuperGrok Plus and Heavy),
+  /// orange; and Codex's $500 Pro 50x purple.
   function planAccent(plan, pool = "codex") {
     if (pool === "grok") {
       // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
@@ -346,6 +349,7 @@
     if (/^(?:MAX|ULTRA)(?: \d+X)?$/.test(plan)) return "orange";
     return (
       {
+        GO: "pink",
         PRO: "pink",
         PLUS: "pink",
         FREE: "gray",

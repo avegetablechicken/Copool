@@ -73,6 +73,7 @@ test("Codex's and Google's plans are named as they were at the time", () => {
   assert.deepEqual(named("pro", "codex", now), ["PRO 20X", "orange"]);
   assert.deepEqual(named("prolite", "codex", now), ["PRO 5X", "orange"]);
   assert.deepEqual(named("promax", "codex", now), ["PRO 50X", "purple"]);
+  assert.deepEqual(named("go", "codex", now), ["GO", "pink"]);
   // Google's $100 Ultra came on 2026-05-19.
   const beforeUltra = Date.UTC(2026, 4, 1);
   assert.deepEqual(named("ultra 20x", "antigravity", beforeUltra), ["ULTRA", "orange"]);
@@ -89,6 +90,7 @@ test("Comparable plans share a color across providers", () => {
   const accent = (planType, pool) =>
     P.card({ planType, usage: null }, false, "used", String, pool).accent;
   // The entry subscription.
+  assert.equal(accent("go", "codex"), "pink");
   assert.equal(accent("plus", "codex"), "pink");
   assert.equal(accent("pro", "claude"), "pink");
   assert.equal(accent("pro", "antigravity"), "pink");

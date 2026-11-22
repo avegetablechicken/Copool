@@ -86,6 +86,7 @@ fn testPlanTagPaletteKeepsFullColorPaletteOutsideAccentedMode() {
 #[test]
 fn testPlanTagColorsMatchComparablePlansAcrossPools() {
     // The entry subscription.
+    assert_eq!(plan_accent(Pool::Codex, "GO"), "pink");
     assert_eq!(plan_accent(Pool::Codex, "PLUS"), "pink");
     assert_eq!(plan_accent(Pool::Claude, "PRO"), "pink");
     assert_eq!(plan_accent(Pool::Antigravity, "PRO"), "pink");

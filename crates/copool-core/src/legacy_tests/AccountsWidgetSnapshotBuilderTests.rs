@@ -169,6 +169,7 @@ fn codexAndGooglePlansAreNamedAsTheyWereAtTheTime() {
         label(Pool::Codex, "promax", now),
         named("PRO 50X", "purple")
     );
+    assert_eq!(label(Pool::Codex, "go", now), named("GO", "pink"));
     // Google's $100 Ultra came on 2026-05-19.
     let before_ultra = 1_777_593_600; // 2026-05-01
     assert_eq!(

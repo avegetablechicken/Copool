@@ -205,7 +205,8 @@ fn codex_plan(raw: Option<String>, now: i64) -> String {
         "PROLITE" => "PRO 5X".into(),
         "PROMAX" => "PRO 50X".into(),
         "PRO" if now >= CODEX_PRO_LITE => "PRO 20X".into(),
-        "PRO" | "PLUS" | "FREE" | "TEAM" | "BUSINESS" | "ENTERPRISE" => raw,
+        // ChatGPT Go, the $8 plan below Plus.
+        "GO" | "PRO" | "PLUS" | "FREE" | "TEAM" | "BUSINESS" | "ENTERPRISE" => raw,
         _ => "TEAM".into(),
     }
 }
@@ -266,8 +267,8 @@ fn multiplier(plan: &str, base: &str) -> Option<u32> {
     }
 }
 /// A plan's color, by tier so that providers' comparable plans match, as
-/// the app's `planAccent`: the entry subscription (Codex Plus, Claude Pro,
-/// Google AI Pro, SuperGrok) is pink; those of $100 to $300, which their
+/// the app's `planAccent`: the entry subscription (Codex Go and Plus, Claude
+/// Pro, Google AI Pro, SuperGrok Lite and SuperGrok) is pink; those of $100 to $300, which their
 /// labels tell apart by multiplier (Codex Pro 5x and 20x, Claude Max and
 /// Ultra, Google AI Ultra 5x and 20x, SuperGrok Plus and Heavy), orange; and
 /// Codex's $500 Pro 50x purple.
@@ -291,7 +292,7 @@ pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
         return "orange";
     }
     match plan {
-        "PRO" | "PLUS" => "pink",
+        "GO" | "PRO" | "PLUS" => "pink",
         "FREE" => "gray",
         "BUSINESS" | "ENTERPRISE" => "indigo",
         _ => "teal",
