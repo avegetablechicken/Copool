@@ -201,9 +201,17 @@ pub(crate) fn usage_changed(
 ) -> bool {
     current.iter().any(|(id, usage)| match previous.get(id) {
         Some(previous) => previous != usage,
-        None => ["fiveHour", "oneWeek", "oneMonth", "fableOneWeek", "credits"]
-            .iter()
-            .any(|key| !usage[*key].is_null()),
+        None => [
+            "fiveHour",
+            "oneWeek",
+            "oneMonth",
+            "fableOneWeek",
+            "thirdPartyFiveHour",
+            "thirdPartyOneWeek",
+            "credits",
+        ]
+        .iter()
+        .any(|key| !usage[*key].is_null()),
     })
 }
 
@@ -268,6 +276,17 @@ pub(crate) fn round_card(accounts: &[AccountSummary]) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cards_first_usage_of_any_window_is_a_change() {
+        let window = serde_json::json!({"usedPercent": 1, "windowSeconds": 18000});
+        for key in ["fiveHour", "thirdPartyFiveHour", "thirdPartyOneWeek"] {
+            let current = BTreeMap::from([("a".to_owned(), serde_json::json!({ key: window }))]);
+            assert!(usage_changed(&BTreeMap::new(), &current), "{key}");
+        }
+        let empty = BTreeMap::from([("a".to_owned(), serde_json::json!({}))]);
+        assert!(!usage_changed(&BTreeMap::new(), &empty));
+    }
 
     #[test]
     fn rounds_schedule_the_current_card_and_the_whole_pool() {
