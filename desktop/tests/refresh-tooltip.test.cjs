@@ -185,7 +185,7 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
       // The weekly rows carry the outdated Sub2api version they warn about.
       weeklyNotice: (row, version) => (version ? [...row, version] : row),
     });
-    vm.runInContext(body("usageWindows"), context);
+    vm.runInContext(body("hasMonthlyWindow") + body("usageWindows"), context);
     // The inset as its title and its rows; arrays from the context's realm
     // compare as plain values.
     const plain = (node) => Array.isArray(node)
@@ -227,6 +227,14 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
     ["Monthly", "one-month", true],
   ]);
   assert.deepEqual(rows("claude", { ...gemini, oneMonth: window(40, 2592000) }), own);
+  // A Grok allowance lasting a month is its only window.
+  assert.deepEqual(rows("grok", { oneMonth: window(40, 2592000) }), [
+    ["Monthly", "one-month", true],
+  ]);
+  assert.deepEqual(rows("grok", { oneWeek: window(7, 604800) }), [
+    ["Session", "five-hour", false],
+    ["Weekly", "one-week", true],
+  ]);
   assert.deepEqual(rows("antigravity", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), [
     ...own,
     { "account-member": ["Claude", ["Session", "five-hour", true], ["Weekly", "one-week", false]] },

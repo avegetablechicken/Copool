@@ -1516,7 +1516,7 @@ function accountCard(account, grouped = false) {
     const name = el("span", "account-row-name", view.name);
     name.title = full;
     const secondCompactLabel =
-      pool === "codex" && !view.oneWeek.available && view.oneMonth.available ? "1m" : "1w";
+      hasMonthlyWindow() && !view.oneWeek.available && view.oneMonth.available ? "1m" : "1w";
     row.append(
       el("span", grouped ? "" : "dot"),
       name,
@@ -1574,6 +1574,11 @@ function accountCard(account, grouped = false) {
 /// Antigravity card's are Gemini's; its third-party (Claude) pool, once
 /// reported, follows in an inset of its own, as a Sub2api provider's accounts.
 /// The weekly rows of a Sub2api too old to report them say so when clicked.
+/// Whether the pool's accounts may have a monthly window: Codex Free, and a
+/// Grok plan whose allowance lasts a month.
+function hasMonthlyWindow() {
+  return pool === "codex" || pool === "grok";
+}
 function usageWindows(view) {
   const five = tr("accounts.window.five_hour"), week = tr("accounts.window.one_week");
   const rows = (fiveHour, oneWeek) => [
@@ -1581,7 +1586,7 @@ function usageWindows(view) {
     weeklyNotice(usageWindow(oneWeek, week, "one-week"), view.outdatedSub2api),
   ];
   const shown = rows(view.fiveHour, view.oneWeek);
-  if (pool === "codex" && view.oneMonth.available) {
+  if (hasMonthlyWindow() && view.oneMonth.available) {
     const month = usageWindow(view.oneMonth, tr("accounts.window.one_month"), "one-month");
     if (!view.oneWeek.available) {
       return view.fiveHour.available

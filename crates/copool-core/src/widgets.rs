@@ -259,7 +259,8 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
         account.usage.as_ref().and_then(|u| u.one_week.as_ref()),
         account.usage.as_ref().and_then(|u| u.one_month.as_ref()),
     ) {
-        (None, Some(month)) if pool == Pool::Codex => ("1m", Some(month)),
+        // Codex Free, and a Grok allowance lasting a month.
+        (None, Some(month)) if matches!(pool, Pool::Codex | Pool::Grok) => ("1m", Some(month)),
         (week, _) => ("1w", week),
     };
     CardSnapshot {

@@ -248,6 +248,16 @@ fn grokHasItsOwnWidgetAndJoinsEveryPoolsWidget() {
     let grok_current = all.secondary_card.unwrap();
     assert_eq!(grok_current.id, "grok-current");
     assert_eq!(grok_current.pool_label.as_deref(), Some("GROK"));
+
+    // An allowance lasting a month shows as Codex Free's does.
+    let usage = grok[0].usage.as_mut().unwrap();
+    usage.one_month = usage.one_week.take();
+    let own = Widget::Grok.build(&[(Pool::Grok, &grok)], "used", Some(0), 100);
+    let month = own.current_card.unwrap().one_week;
+    assert_eq!(
+        (month.title.as_str(), month.used_text.as_str()),
+        ("1m", "7%")
+    );
 }
 #[test]
 fn bothPoolsWidgetShowsTheOtherPoolWhenOneIsEmpty() {
