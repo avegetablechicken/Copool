@@ -1889,11 +1889,11 @@ async fn send_over_candidates(
 }
 
 /// The model a greeting last completed with, per upstream.
-static HELLO_MODEL: std::sync::Mutex<Option<HelloModel>> = std::sync::Mutex::new(None);
+static HELLO_MODELS: std::sync::Mutex<BTreeMap<String, HelloModel>> =
+    std::sync::Mutex::new(BTreeMap::new());
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HelloModel {
-    base: String,
     slug: String,
     effort: String,
 }
@@ -1921,11 +1921,7 @@ pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), 
         },
     )?;
     let upstream = resolve_upstream_base_url(base, UpstreamRouteFamily::Codex);
-    let cached = HELLO_MODEL
-        .lock()
-        .unwrap()
-        .clone()
-        .filter(|m| m.base == upstream);
+    let cached = HELLO_MODELS.lock().unwrap().get(&upstream).cloned();
     let expired = || Err("Provided authentication token is expired".to_owned());
     let mut errors = Vec::new();
     if let Some(model) = &cached {
@@ -1934,7 +1930,7 @@ pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), 
             Err(HelloFailure::Expired) => return expired(),
             Err(HelloFailure::Other(error)) => return Err(error),
             Err(HelloFailure::Model(error)) => {
-                forget_hello_model(model);
+                forget_hello_model(&upstream, model);
                 errors.push(error);
             }
         }
@@ -1962,13 +1958,13 @@ pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), 
         ));
     }
     let listed = serde_json::from_slice::<Value>(&body).unwrap_or_default();
-    let models = hello_models(&upstream, &listed)
+    let models = hello_models(&listed)
         .into_iter()
         .filter(|m| cached.as_ref() != Some(m));
     for model in models {
         match greet(&client, &upstream, &auth, &model).await {
             Ok(()) => {
-                *HELLO_MODEL.lock().unwrap() = Some(model);
+                HELLO_MODELS.lock().unwrap().insert(upstream, model);
                 return Ok(());
             }
             Err(HelloFailure::Expired) => return expired(),
@@ -1985,16 +1981,16 @@ pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), 
 
 /// Forgets the cached greeting model, unless a greeting meanwhile
 /// completed with another.
-fn forget_hello_model(model: &HelloModel) {
-    let mut cached = HELLO_MODEL.lock().unwrap();
-    if cached.as_ref() == Some(model) {
-        *cached = None;
+fn forget_hello_model(upstream: &str, model: &HelloModel) {
+    let mut cached = HELLO_MODELS.lock().unwrap();
+    if cached.get(upstream) == Some(model) {
+        cached.remove(upstream);
     }
 }
 
 /// The mini and luna models of an upstream list, the oldest version first,
 /// each with the lowest reasoning effort it supports.
-fn hello_models(base: &str, listed: &Value) -> Vec<HelloModel> {
+fn hello_models(listed: &Value) -> Vec<HelloModel> {
     let mut models = listed["models"]
         .as_array()
         .into_iter()
@@ -2034,7 +2030,6 @@ fn hello_models(base: &str, listed: &Value) -> Vec<HelloModel> {
                 .copied()
                 .unwrap_or("low");
             HelloModel {
-                base: base.to_owned(),
                 slug: slug.to_owned(),
                 effort: effort.to_owned(),
             }
@@ -5799,6 +5794,14 @@ mod say_hi_tests {
         // The model that answered, without asking for the list.
         assert_eq!(greeted(&seen), ["gpt-5.4-mini"]);
         assert_eq!(seen.lock().unwrap().len(), 1);
+
+        // A greeting on a different upstream must not evict this one's model.
+        let (other, _, other_server) = upstream(json!([model("gpt-6-luna", &["low"])]), |_| {
+            (200, COMPLETED.to_owned())
+        })
+        .await;
+        say_hi(&other, &auth(), "").await.unwrap();
+        other_server.abort();
 
         seen.lock().unwrap().clear();
         retired.lock().unwrap().push("gpt-5.4-mini".into());
