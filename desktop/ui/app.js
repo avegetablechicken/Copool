@@ -2658,48 +2658,7 @@ function showMenu(trigger, items, at = null) {
           closeMenu(true);
           child.run();
         };
-        if (child.remove) {
-          const row = el("div", "menu-removable-row");
-          row.setAttribute("role", "presentation");
-          const remove = el("button", "menu-row-remove", "×");
-          remove.type = "button";
-          remove.setAttribute("role", "menuitem");
-          remove.setAttribute("aria-label", `${tr("common.remove")} ${child.label}`);
-          remove.title = tr("common.remove");
-          remove.onclick = async (event) => {
-            event.stopPropagation();
-            if (remove.disabled) return;
-            button.disabled = remove.disabled = true;
-            try {
-              await child.remove();
-              const hadFocus = row.contains(document.activeElement);
-              const next = row.nextElementSibling || row.previousElementSibling;
-              row.remove();
-              if (hadFocus && submenu.isConnected)
-                (next?.matches("button") ? next : next?.querySelector("button"))?.focus();
-            } catch (error) {
-              notice(error, true);
-            } finally {
-              button.disabled = remove.disabled = false;
-            }
-          };
-          button.onkeydown = (event) => {
-            if (event.key !== "ArrowRight") return;
-            event.preventDefault();
-            event.stopPropagation();
-            remove.focus();
-          };
-          remove.onkeydown = (event) => {
-            if (event.key !== "ArrowLeft") return;
-            event.preventDefault();
-            event.stopPropagation();
-            button.focus();
-          };
-          row.append(button, remove);
-          submenu.append(row);
-        } else {
-          submenu.append(button);
-        }
+        submenu.append(button);
       }
       submenus.push(submenu);
       submenu.onkeydown = (event) => {

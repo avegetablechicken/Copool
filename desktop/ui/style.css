@@ -2786,34 +2786,3 @@ button.reset-warning[aria-expanded="true"] {
 .reset-popover.wrapping {
   white-space: normal;
 }
-
-/* Keep time labels aligned; reveal their inline remove action on the active row. */
-.menu-removable-row {
-  position: relative;
-  border-radius: 6px;
-}
-.select-menu .menu-removable-row > button:first-child {
-  padding-right: 32px;
-}
-.select-menu .menu-row-remove {
-  position: absolute;
-  right: 2px;
-  top: 0;
-  bottom: 0;
-  width: 26px;
-  padding: 0;
-  text-align: center;
-  font-size: 15px;
-  opacity: 0;
-  pointer-events: none;
-}
-.action-menu:not(.inactive-menu) .menu-removable-row:hover > .menu-row-remove,
-.action-menu:not(.inactive-menu):not(.pointer-navigation) .menu-removable-row:focus-within > .menu-row-remove {
-  opacity: 1;
-  pointer-events: auto;
-}
-.action-menu:not(.inactive-menu) .menu-removable-row:hover,
-.action-menu:not(.inactive-menu):not(.pointer-navigation) .menu-removable-row:focus-within {
-  background: var(--accent);
-  color: #fff;
-}
