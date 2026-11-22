@@ -150,6 +150,30 @@ test("Escape turns a card back at once without saving when the page changes unde
   assert.deepEqual(rendered, [null]);
 });
 
+test("a card turning over is turned back by Escape or by another card's edit", async () => {
+  const { scope } = editor([{ id: "a", proxyUrl: "" }, { id: "b", proxyUrl: "" }], {
+    invoke: async () => null,
+  });
+  // Turns wait until run, as an animation's first half does.
+  const turns = [];
+  scope.turnCard = (key, direction, change) =>
+    new Promise((resolve) => turns.push({ key, direction, run: () => change().then(resolve) }));
+  // Escape while the card is edge-on: its back never shows.
+  const first = scope.editCard("a");
+  scope.cancelEditing();
+  await turns.shift().run();
+  await first;
+  assert.equal(scope.editing, null);
+  // Another card edited meanwhile is the one that shows its back.
+  const second = scope.editCard("a");
+  const third = scope.editCard("b");
+  await turns.shift().run();
+  await turns.shift().run();
+  await Promise.all([second, third]);
+  assert.equal(scope.editing.key, "b");
+  assert.equal(turns.length, 0);
+});
+
 const greeting = between("/// The times with a new one, in order;", "/// The pool's background refresh");
 test("greeting times are added in order once and removed by value", async () => {
   const saves = [];

@@ -728,6 +728,10 @@ async function sayHi(account) {
 /// proxy, greeting schedule once read, a time being added and a removal
 /// awaiting confirmation stay over renders.
 let editing = null;
+/// The card being turned over, until its back shows, and the turn's
+/// number: a later turn, or Escape, cancels one under way.
+let pendingEdit = null;
+let editGeneration = 0;
 // Each half of a turn: edge-on at its middle, where the sides swap.
 const FLIP_HALF_MS = 210;
 // A render of a turn, whose card's accounts neither leave nor arrive.
@@ -781,7 +785,7 @@ function proxyPlaceholder(owner) {
 }
 /// Turns a card over to its settings.
 async function editCard(key) {
-  if (collapsed || editing?.key === key) return;
+  if (collapsed || editing?.key === key || pendingEdit === key) return;
   const target = flipTarget(key);
   if (!hasBack(target)) return;
   const state = {
@@ -800,9 +804,13 @@ async function editCard(key) {
           return null;
         })
       : null;
-  if (editing) cancelEditing();
+  if (editing || pendingEdit) cancelEditing();
+  const generation = ++editGeneration;
+  pendingEdit = key;
   await turnCard(key, 1, async () => {
     state.schedule = await schedule;
+    if (generation !== editGeneration) return;
+    pendingEdit = null;
     if (pool === state.pool && !collapsed) editing = state;
   });
 }
@@ -819,6 +827,11 @@ async function finishEditing() {
 /// Turns the card back without saving its proxy; at once, when the page
 /// changes under it.
 function cancelEditing(animated = true) {
+  // A card still turning over turns back instead of showing its back.
+  if (pendingEdit) {
+    pendingEdit = null;
+    editGeneration++;
+  }
   const state = editing;
   if (!state) return;
   if (!animated) {
@@ -2955,7 +2968,7 @@ document.addEventListener("keydown", (event) => {
     // Back from a subpage first; on the accounts page, turn an edited card
     // back without saving, else dismiss like a menu.
     if (selectedPage !== "accounts") showPage("accounts");
-    else if (editing) cancelEditing();
+    else if (editing || pendingEdit) cancelEditing();
     else invoke("hide_panel").catch(() => {});
   } else if (back) {
     event.preventDefault();
