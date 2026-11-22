@@ -2339,7 +2339,9 @@ impl Application {
                         Ok::<_, String>((tokens, at))
                     }
                 };
-                if (forced && renewals == 0)
+                // Forced, once; not again for a login Claude Code renewed
+                // meanwhile, which serves as the renewal.
+                if (forced && renewals == 0 && reloads == 0)
                     || (expires_at(&oauth) != 0
                         && expires_at(&oauth) <= (now_unix_seconds() + 60) * 1000)
                 {
@@ -6029,6 +6031,33 @@ mod tests {
         assert_eq!(stored.accounts[0].oauth["refreshToken"], "code-refresh");
         assert_eq!(live_access(&location), "code");
         assert!(locks.iter().all(|lock| !lock.exists()));
+    }
+
+    #[tokio::test]
+    async fn renewing_now_takes_a_renewal_claude_code_made_meanwhile_instead() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake, id) = expired_live_login(&dir).await;
+        // Claude Code renews while Copool waits for its lock.
+        let locks = hold_claude_code_locks(&location);
+        let finish = {
+            let location = location.clone();
+            let locks = locks.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                external_update(location, "alice", "code")();
+                for lock in locks.iter().rev() {
+                    fs::remove_dir(lock).unwrap();
+                }
+            })
+        };
+        let error = app.renew_now(Pool::Claude, &id).await.unwrap_err();
+        finish.join().unwrap();
+        // Its renewal is kept and reported, not renewed again.
+        assert_eq!(error, CREDENTIALS_CHANGED);
+        assert!(refreshes(&fake).is_empty());
+        let stored = app.claude_load().unwrap();
+        assert_eq!(stored.accounts[0].oauth["refreshToken"], "code-refresh");
+        assert_eq!(live_access(&location), "code");
     }
 
     #[tokio::test]
