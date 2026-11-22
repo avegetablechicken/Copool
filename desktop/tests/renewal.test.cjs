@@ -230,6 +230,52 @@ test("both pools refresh immediately after a reply, then only until the window s
 });
 
 
+test("an Antigravity hi waits for both windows while another pool is shown", async () => {
+  const start = source.indexOf("const SAY_HI_LOOKS =");
+  const end = source.indexOf("/// The card turned over to edit it");
+  const idleStart = source.indexOf("function fiveHourIdle(");
+  const idleEnd = source.indexOf("\n}\n", idleStart);
+  assert(start >= 0 && end > start && idleStart >= 0 && idleEnd > idleStart, "sayHi found");
+  let clock = Date.now();
+  let refreshes = 0;
+  const notices = [];
+  // Gemini's window starts at once; the third-party one at the third refresh.
+  const card = { id: "a", usage: { fiveHour: { resetAt: null }, thirdPartyFiveHour: { resetAt: null } } };
+  const scope = {
+    Date: { now: () => clock },
+    Math,
+    Map,
+    Promise,
+    pool: "antigravity",
+    accountsController: {
+      accounts: [card],
+      onUpdate: () => {},
+      sayHi: async () => {
+        card.usage.fiveHour.resetAt = clock / 1000 + 600;
+        // The Codex pool is shown while the hi runs.
+        scope.pool = "codex";
+        return true;
+      },
+      refresh: async () => {
+        if (++refreshes === 3) card.usage.thirdPartyFiveHour.resetAt = clock / 1000 + 600;
+        return true;
+      },
+    },
+    refreshView: async () => {},
+    setTimeout: (resolve, ms) => ((clock += ms), resolve()),
+    tr: (key) => key,
+    notice: (message, error = false) => notices.push([message, error]),
+  };
+  vm.createContext(scope);
+  vm.runInContext(
+    `${source.slice(idleStart, idleEnd + 3)}${source.slice(start, end)}\nthis.run = sayHi;`,
+    scope,
+  );
+  await scope.run({ id: "a" });
+  assert.equal(refreshes, 3);
+  assert.deepEqual(notices, [["accounts.notice.said_hi", false]]);
+});
+
 test("Codex Plus greetings route to their own account command", async () => {
   const { model, calls } = fixture("codex");
   assert.equal(await model.sayHi("a"), true);

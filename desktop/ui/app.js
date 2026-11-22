@@ -670,12 +670,12 @@ function supportsSayHi(account) {
 }
 /// Known usage with no future reset indicates an idle window; Antigravity's
 /// third-party (Claude) pool has its own, idle as well when reported so.
-function fiveHourIdle(account) {
+function fiveHourIdle(account, cardPool = pool) {
   if (!account.usage) return false;
   const now = Date.now() / 1000;
   const idle = (window) => !(window?.resetAt > now);
   return idle(account.usage.fiveHour) ||
-    (pool === "antigravity" && !!account.usage.thirdPartyFiveHour &&
+    (cardPool === "antigravity" && !!account.usage.thirdPartyFiveHour &&
       idle(account.usage.thirdPartyFiveHour));
 }
 /// Both pools use the same delayed usage checks after the model replies.
@@ -693,7 +693,8 @@ async function sayHi(account) {
   const targetPool = pool;
   const shown = () => {
     const card = controller.accounts.find((a) => a.id === account.id);
-    return !card || (!!card.usage && !fiveHourIdle(card));
+    // The card's pool's windows, whichever pool is shown meanwhile.
+    return !card || (!!card.usage && !fiveHourIdle(card, targetPool));
   };
   if (sayingHi.has(account.id)) return;
   sayingHi.set(account.id, "sent");
