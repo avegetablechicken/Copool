@@ -439,11 +439,15 @@ impl TunnelState {
     fn get(&self, pool: Pool) -> &tokio::sync::Mutex<copool_core::tunnel::Tunnel> {
         &self.0[pool as usize]
     }
-    /// Stops every tunnel, for quitting.
+    /// Stops every tunnel, for quitting: all at once, so that one waiting
+    /// for its lock or for Cloudflare keeps no other running past the
+    /// time quitting allows.
     async fn stop_all(&self) {
-        for tunnel in &self.0 {
+        async fn stop(tunnel: &tokio::sync::Mutex<copool_core::tunnel::Tunnel>) {
             let _ = tunnel.lock().await.stop().await;
         }
+        let [codex, claude, antigravity] = &self.0;
+        tokio::join!(stop(codex), stop(claude), stop(antigravity));
     }
 }
 #[tauri::command]
