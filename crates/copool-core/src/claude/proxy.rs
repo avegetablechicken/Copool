@@ -249,12 +249,13 @@ impl Application {
     }
     /// The pool's official logins for a remote server's daemon, which
     /// renews them as allowed; Sub2api providers stay with the app, as the
-    /// Codex servers' do.
+    /// Codex servers' do, and a login not yet released by a manual refresh
+    /// with it, as the Antigravity servers' do.
     pub(crate) fn claude_remote_payload(&self) -> Result<Vec<u8>> {
         let mut accounts: Vec<StoredAccount> = self
             .claude_proxy_candidates()?
             .into_iter()
-            .filter(|a| a.auth_json.get("copoolProvider").is_none())
+            .filter(|a| a.auth_json.get("copoolProvider").is_none() && !a.awaiting_first_request())
             .collect();
         for account in &mut accounts {
             account.extra.remove("copoolCurrent");

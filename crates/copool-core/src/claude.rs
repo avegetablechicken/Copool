@@ -7536,6 +7536,13 @@ mod tests {
         let (app, location, _) = app(&dir).await;
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
+        // A login not yet released stays with the app.
+        let mut store = app.claude_load().unwrap();
+        store.accounts[0].first_request_pending = true;
+        app.claude_save(&store).unwrap();
+        assert!(app.claude_remote_payload().is_err());
+        store.accounts[0].first_request_pending = false;
+        app.claude_save(&store).unwrap();
         let payload: Value = serde_json::from_slice(&app.claude_remote_payload().unwrap()).unwrap();
         let accounts = payload["accounts"].as_array().unwrap();
         assert_eq!(accounts.len(), 1);
