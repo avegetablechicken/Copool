@@ -84,7 +84,10 @@ pub(crate) fn sign_in_of(value: &Value) -> Option<Value> {
 /// `auth.json` holding the sign-in in place of any other of its issuer;
 /// sign-ins of other issuers stay.
 pub(crate) fn encode(existing: Option<&[u8]>, document: &Value) -> Value {
+    // As `decode` reads it: a byte order mark first would lose the other
+    // sign-ins.
     let mut file = existing
+        .map(|bytes| bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes))
         .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
         .and_then(|value| match value {
             Value::Object(object) => Some(object),

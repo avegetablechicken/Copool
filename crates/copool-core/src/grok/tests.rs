@@ -307,6 +307,20 @@ async fn cards_read_while_a_switch_writes_keep_the_account_switched_to() {
     );
 }
 
+#[test]
+fn a_file_with_a_byte_order_mark_keeps_its_other_issuers() {
+    let alice = sign_in_of("alice", "access-alice", later());
+    let mut file = auth_file(&sign_in_of("carol", "access-carol", later()));
+    file["https://acme.okta.com::client"] = json!({"key": "okta", "refresh_token": "okta-r"});
+    let mut bytes = b"\xEF\xBB\xBF".to_vec();
+    bytes.extend(serde_json::to_vec(&file).unwrap());
+    assert!(login::decode(&bytes).is_some());
+    let written = login::encode(Some(&bytes), &alice);
+    assert_eq!(written[login::entry_key(&alice)], alice);
+    assert_eq!(written["https://acme.okta.com::client"]["key"], "okta");
+    assert_eq!(written.as_object().unwrap().len(), 2);
+}
+
 #[tokio::test]
 async fn switching_writes_the_sign_in_keeps_other_issuers_and_backs_up_a_stranger() {
     let h = harness(true).await;
