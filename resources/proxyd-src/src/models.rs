@@ -495,15 +495,18 @@ pub enum Pool {
     Codex,
     Claude,
     Antigravity,
+    /// Grok Build's logins (SuperGrok); the pool has no API proxy.
+    Grok,
 }
 impl Pool {
     #[allow(dead_code)]
-    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Antigravity];
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Antigravity, Self::Grok];
     pub fn name(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
         }
     }
     /// The path of a proxy's base URL, as its clients take it: OpenAI
@@ -514,6 +517,7 @@ impl Pool {
             Self::Codex => "/v1",
             Self::Antigravity => "/antigravity",
             Self::Claude => "/anthropic",
+            Self::Grok => "/grok",
         }
     }
 }

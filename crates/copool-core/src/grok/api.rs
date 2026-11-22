@@ -1,0 +1,195 @@
+//! xAI's API as Grok Build reads it: the plan's usage limit
+//! (`/billing?format=credits`, a share of the current period's allowance),
+//! the plan (`/settings`), and token renewal with Grok Build's OAuth client
+//! at `auth.x.ai`.
+use super::login::{CLIENT_ID, ISSUER};
+use crate::models::{UsageSnapshot, UsageWindow};
+use serde_json::Value;
+
+pub(crate) const API_BASE: &str = "https://cli-chat-proxy.grok.com/v1";
+pub(crate) const USAGE_PATH: &str = "/billing?format=credits";
+pub(crate) const SETTINGS_PATH: &str = "/settings";
+const AUTHORIZE_PATH: &str = "/oauth2/authorize";
+const TOKEN_PATH: &str = "/oauth2/token";
+/// What Grok Build's sign-in asks for.
+const SCOPES: &str = "openid profile email offline_access grok-cli:access api:access";
+/// The Grok Build release whose requests Copool's resemble.
+pub(crate) const CLIENT_VERSION: &str = "1.0.92";
+const ONE_WEEK: i64 = 7 * 24 * 60 * 60;
+const ONE_DAY: i64 = 24 * 60 * 60;
+
+type Response<'a, T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, String>> + Send + 'a>>;
+/// An HTTP status and its JSON body (null when it has none).
+pub(crate) type Reply = (u16, Value);
+
+/// Where the pool's requests go; tests stand in for xAI.
+pub(crate) trait Network: Send + Sync {
+    /// A GET of the Grok API with the access token.
+    fn api<'a>(&'a self, path: &'a str, token: &'a str, proxy: &'a str) -> Response<'a, Reply>;
+    /// Renews the access token with the refresh token.
+    fn renew<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Reply>;
+}
+
+pub(crate) struct Http;
+fn client(proxy: &str) -> Result<reqwest::Client, String> {
+    crate::utils::with_account_proxy(reqwest::Client::builder(), proxy)?
+        .user_agent(format!("grok-cli/{CLIENT_VERSION}"))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())
+}
+async fn reply(response: reqwest::Response) -> Reply {
+    let status = response.status().as_u16();
+    let body = response.json().await.unwrap_or(Value::Null);
+    (status, body)
+}
+impl Network for Http {
+    fn api<'a>(&'a self, path: &'a str, token: &'a str, proxy: &'a str) -> Response<'a, Reply> {
+        Box::pin(async move {
+            let response = client(proxy)?
+                .get(format!("{API_BASE}{path}"))
+                .bearer_auth(token)
+                .header("Accept", "application/json")
+                .header("x-grok-client-version", CLIENT_VERSION)
+                .send()
+                .await
+                .map_err(|e| crate::usage::format_reqwest_error(&e))?;
+            Ok(reply(response).await)
+        })
+    }
+    fn renew<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Reply> {
+        Box::pin(async move {
+            let response = client(proxy)?
+                .post(format!("{ISSUER}{TOKEN_PATH}"))
+                .form(&[
+                    ("grant_type", "refresh_token"),
+                    ("client_id", CLIENT_ID),
+                    ("refresh_token", refresh_token),
+                ])
+                .send()
+                .await
+                .map_err(|e| crate::usage::format_reqwest_error(&e))?;
+            Ok(reply(response).await)
+        })
+    }
+}
+
+/// Where the browser signs in to xAI with Grok Build's client.
+pub(crate) fn sign_in_url(redirect: &str, challenge: &str, state: &str) -> String {
+    let mut url = reqwest::Url::parse(&format!("{ISSUER}{AUTHORIZE_PATH}")).expect("valid URL");
+    url.query_pairs_mut().extend_pairs([
+        ("response_type", "code"),
+        ("client_id", CLIENT_ID),
+        ("redirect_uri", redirect),
+        ("scope", SCOPES),
+        ("code_challenge", challenge),
+        ("code_challenge_method", "S256"),
+        ("state", state),
+    ]);
+    url.into()
+}
+/// Exchanges a sign-in's code for its tokens, through the system proxy as
+/// the other sign-ins.
+pub(crate) async fn exchange(code: &str, verifier: &str, redirect: &str) -> Result<Value, String> {
+    let response = client("")?
+        .post(format!("{ISSUER}{TOKEN_PATH}"))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", CLIENT_ID),
+            ("code", code),
+            ("code_verifier", verifier),
+            ("redirect_uri", redirect),
+        ])
+        .send()
+        .await
+        .map_err(|e| crate::usage::format_reqwest_error(&e))?;
+    let (status, body) = reply(response).await;
+    if !(200..300).contains(&status) {
+        return Err(status_error("OAuth token exchange", status, &body));
+    }
+    Ok(body)
+}
+
+pub(crate) fn status_error(what: &str, status: u16, body: &Value) -> String {
+    let message = body
+        .pointer("/error/message")
+        .or_else(|| body.get("error_description"))
+        .or_else(|| body.get("message"))
+        .or_else(|| body.get("error"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!("{what} failed: HTTP {status} {message}")
+        .trim()
+        .to_owned()
+}
+
+fn number(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+}
+fn time(value: &Value) -> Option<i64> {
+    value
+        .as_str()
+        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text.trim()).ok())
+        .map(|date| date.timestamp())
+}
+/// The usage limit of `/billing?format=credits`: the share of the current
+/// period's allowance used, and when the period ends. A period of about a
+/// week is the card's weekly window; a longer one its monthly window. None
+/// for a reply without the share.
+pub(crate) fn usage(body: &Value, now: i64) -> Option<UsageSnapshot> {
+    let config = body.get("config").unwrap_or(body);
+    let used = config.get("creditUsagePercent").and_then(number)?;
+    let period = config.get("currentPeriod");
+    let start = period
+        .and_then(|p| p.get("start"))
+        .and_then(time)
+        .or_else(|| config.get("billingPeriodStart").and_then(time));
+    let end = period
+        .and_then(|p| p.get("end"))
+        .and_then(time)
+        .or_else(|| config.get("billingPeriodEnd").and_then(time));
+    let kind = period
+        .and_then(|p| p.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let seconds = match (start, end) {
+        (Some(start), Some(end)) if end > start => end - start,
+        _ if kind.ends_with("MONTHLY") => 30 * ONE_DAY,
+        _ => ONE_WEEK,
+    };
+    let window = UsageWindow {
+        clock_offset_seconds: None,
+        used_percent: used.clamp(0.0, 100.0),
+        window_seconds: seconds,
+        reset_at: end,
+    };
+    let monthly = seconds > 8 * ONE_DAY;
+    Some(UsageSnapshot {
+        remaining_reset_count: None,
+        resets_last_confirmed_at: None,
+        reset_expiries: Vec::new(),
+        reset_grants: Vec::new(),
+        fetched_at: now,
+        plan_type: None,
+        five_hour: None,
+        one_week: (!monthly).then(|| window.clone()),
+        one_month: monthly.then_some(window),
+        credits: None,
+        third_party_five_hour: None,
+        third_party_one_week: None,
+        fable_one_week: None,
+    })
+}
+/// The plan `/settings` names, as Grok Build shows it (`Free`, `SuperGrok`).
+pub(crate) fn plan(body: &Value) -> Option<String> {
+    let settings = body.get("settings").unwrap_or(body);
+    ["subscription_tier_display", "subscription_tier"]
+        .iter()
+        .find_map(|key| settings.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+        .map(str::to_owned)
+}

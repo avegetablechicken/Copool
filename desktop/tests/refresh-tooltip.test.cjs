@@ -78,11 +78,11 @@ test("Refreshing a provider's only account refreshes the entire provider", () =>
   ]);
 });
 
-test("Cmd+1 to Cmd+3 select the pool both pages share, in place on the proxy page", () => {
+test("Cmd+1 to Cmd+4 select the pool both pages share, in place on the proxy page but for Grok", () => {
   const app = fs
     .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
     .replace(/\r\n/g, "\n");
-  const start = app.indexOf('  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3"]');
+  const start = app.indexOf('  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3", "4"]');
   const end = app.indexOf('  } else if (mod && event.key === ",") {', start);
   assert(start >= 0 && end > start, "pool shortcut branch found");
   for (const [page, key, expected] of [
@@ -92,10 +92,14 @@ test("Cmd+1 to Cmd+3 select the pool both pages share, in place on the proxy pag
     ["settings", "1", [["page", "accounts"], ["pool", "codex"]]],
     ["proxy", "3", [["pool", "antigravity"]]],
     ["accounts", "3", [["pool", "antigravity"]]],
+    // Grok has no proxy page: its accounts are shown.
+    ["proxy", "4", [["page", "accounts"], ["pool", "grok"]]],
+    ["accounts", "4", [["pool", "grok"]]],
   ]) {
     const calls = [];
     const scope = {
-      ACCOUNT_POOLS: ["codex", "claude", "antigravity"],
+      ACCOUNT_POOLS: ["codex", "claude", "antigravity", "grok"],
+      PROXY_POOLS: ["codex", "claude", "antigravity"],
       selectedPage: page,
       showProxyPool: (target) => calls.push(["proxy only", target]),
       showAccountsPool: (target) => calls.push(["accounts only", target]),
@@ -112,7 +116,7 @@ test("Cmd+1 to Cmd+3 select the pool both pages share, in place on the proxy pag
   }
 });
 
-test("Selecting a pool on either page selects it on both", () => {
+test("Selecting a pool on either page selects it on both, but Grok only on the accounts page", () => {
   const app = fs
     .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
     .replace(/\r\n/g, "\n");
@@ -121,7 +125,8 @@ test("Selecting a pool on either page selects it on both", () => {
   assert(start >= 0 && end > start, "showPool found");
   const calls = [];
   const scope = {
-    ACCOUNT_POOLS: ["codex", "claude", "antigravity"],
+    ACCOUNT_POOLS: ["codex", "claude", "antigravity", "grok"],
+    PROXY_POOLS: ["codex", "claude", "antigravity"],
     showAccountsPool: (target) => calls.push(["accounts", target]),
     showProxyPool: (target) => calls.push(["proxy", target]),
   };
@@ -129,7 +134,8 @@ test("Selecting a pool on either page selects it on both", () => {
   vm.runInContext(app.slice(start, end + 2), scope);
   scope.showPool("claude");
   scope.showPool("unknown");
-  assert.deepEqual(calls, [["accounts", "claude"], ["proxy", "claude"]]);
+  scope.showPool("grok");
+  assert.deepEqual(calls, [["accounts", "claude"], ["proxy", "claude"], ["accounts", "grok"]]);
   assert.match(
     app,
     /copy\.onclick = \(\) => showPool\(target\);/,

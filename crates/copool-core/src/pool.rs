@@ -1,4 +1,4 @@
-//! The account pools, Codex, Claude Code and Antigravity, behind one set of
+//! The account pools, Codex, Claude Code, Antigravity and Grok, behind one set of
 //! operations.
 //! Each pool keeps only what is its own: where its logins are stored and
 //! which login its tool uses, how a login is renewed, and how usage is asked
@@ -75,6 +75,7 @@ impl Application {
             Pool::Codex => self.codex_accounts().await,
             Pool::Claude => self.claude_accounts().await,
             Pool::Antigravity => self.antigravity_accounts().await,
+            Pool::Grok => self.grok_accounts().await,
         }
     }
     /// Lets a user action ask for the Keychain access background work does
@@ -83,8 +84,9 @@ impl Application {
         match pool {
             Pool::Codex => self.authorize_keychain().await,
             Pool::Claude => self.claude_authorize().await,
-            // Antigravity's login is asked for only to import or switch.
-            Pool::Antigravity => Ok(()),
+            // Antigravity's login is asked for only to import or switch;
+            // Grok's is a file.
+            Pool::Antigravity | Pool::Grok => Ok(()),
         }
     }
     /// Imports the login the pool's tool uses; returns how many accounts.
@@ -93,6 +95,7 @@ impl Application {
             Pool::Codex => self.codex_import_current().await,
             Pool::Claude => self.claude_import_current().await.map(|_| 1),
             Pool::Antigravity => self.antigravity_import_current().await,
+            Pool::Grok => self.grok_import_current().await,
         }
     }
     /// Imports exported logins, the whole document validated before any is
@@ -105,6 +108,7 @@ impl Application {
             Pool::Codex => self.codex_import_json(content).await,
             Pool::Claude => self.claude_import_json(content).await,
             Pool::Antigravity => self.antigravity_import_json(content).await,
+            Pool::Grok => self.grok_import_json(content).await,
         }
     }
     /// Imports an exported login file.
@@ -151,6 +155,7 @@ impl Application {
             }
             Pool::Claude => self.claude_import_login(document).await.map(|_| 1),
             Pool::Antigravity => self.antigravity_import_login(document).await,
+            Pool::Grok => self.grok_import_login(document).await,
         }
     }
     /// Removes a card; a Sub2api card leaves its provider until a sync.
@@ -162,6 +167,7 @@ impl Application {
             Pool::Codex => self.codex_delete_account(id).await,
             Pool::Claude => self.claude_delete_account(id).await,
             Pool::Antigravity => self.antigravity_delete_account(id).await,
+            Pool::Grok => self.grok_delete_account(id).await,
         }
     }
     /// A card's proxy: blank for the shared account proxy, "direct://" for
@@ -221,6 +227,7 @@ impl Application {
             Pool::Codex => self.codex_edit_accounts(edit).await,
             Pool::Claude => self.claude_edit_accounts(edit).await,
             Pool::Antigravity => self.antigravity_edit_accounts(edit).await,
+            Pool::Grok => self.grok_edit_accounts(edit).await,
         }
     }
     /// Gives the pool's tool this card's login, or its provider.
@@ -238,6 +245,7 @@ impl Application {
             Pool::Codex => self.codex_switch_account(id).await,
             Pool::Claude => self.claude_switch_account(id, access).await,
             Pool::Antigravity => self.antigravity_switch_account(id, access).await,
+            Pool::Grok => self.grok_switch_account(id).await,
         }
     }
     /// As Swift's AccountsPageModel.smartSwitch: the account with the most
@@ -317,6 +325,7 @@ impl Application {
             Pool::Codex => self.codex_refresh_account(id, true, renew_now).await,
             Pool::Claude => self.claude_refresh_usage_scoped(id, renew_now).await,
             Pool::Antigravity => self.antigravity_refresh(id, renew_now).await,
+            Pool::Grok => self.grok_refresh(id, renew_now).await,
         }
     }
     /// Renews an account's tokens at once, whatever its renewal choice, which
@@ -331,6 +340,7 @@ impl Application {
             Pool::Codex => self.codex_login_failed(id).await?,
             Pool::Claude => self.claude_login_failed(id).await?,
             Pool::Antigravity => self.antigravity_login_failed(id).await?,
+            Pool::Grok => self.grok_login_failed(id).await?,
         };
         self.release_new_accounts(pool, Some(id)).await?;
         let mut renewed = false;
@@ -338,7 +348,7 @@ impl Application {
         if !renewed {
             result?;
             return Err(match pool {
-                Pool::Codex | Pool::Antigravity => "The token was not renewed",
+                Pool::Codex | Pool::Antigravity | Pool::Grok => "The token was not renewed",
                 // Claude Code renewed the login meanwhile.
                 Pool::Claude => crate::claude::CREDENTIALS_CHANGED,
             }
@@ -364,6 +374,7 @@ impl Application {
                 Pool::Codex => self.codex_hello(id).await?,
                 Pool::Claude => self.claude_hello(id).await?,
                 Pool::Antigravity => self.antigravity_hello(id).await?,
+                Pool::Grok => return self.grok_unavailable(),
             };
             match hello {
                 Hello::Said => return Ok(()),
@@ -445,7 +456,7 @@ impl Application {
                 self.refresh_pool(pool, ids.as_deref(), providers.as_deref())
                     .await
             }
-            Pool::Claude | Pool::Antigravity => {
+            Pool::Claude | Pool::Antigravity | Pool::Grok => {
                 let now = now_unix_seconds();
                 let interval = self.round_interval(pool).as_secs() as i64;
                 let full = refresh_policy::is_full_round(tick, full_every);
@@ -489,6 +500,7 @@ impl Application {
             self.background_pool(Pool::Codex),
             self.background_pool(Pool::Claude),
             self.background_pool(Pool::Antigravity),
+            self.background_pool(Pool::Grok),
             self.clone().background_greetings()
         );
     }

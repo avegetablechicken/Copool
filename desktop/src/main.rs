@@ -171,6 +171,8 @@ async fn start_proxy(
             Pool::Codex => preferences.proxy_port = port,
             Pool::Claude => preferences.claude_proxy_port = port,
             Pool::Antigravity => preferences.antigravity_proxy_port = port,
+            // Copool has no Grok proxy; starting it fails below.
+            Pool::Grok => return app.start_proxy(pool).await,
         }
         app.save_preferences(preferences).await?;
     }
@@ -458,8 +460,8 @@ impl TunnelState {
         async fn stop(tunnel: &tokio::sync::Mutex<copool_core::tunnel::Tunnel>) {
             let _ = tunnel.lock().await.stop().await;
         }
-        let [codex, claude, antigravity] = &self.0;
-        tokio::join!(stop(codex), stop(claude), stop(antigravity));
+        let [codex, claude, antigravity, grok] = &self.0;
+        tokio::join!(stop(codex), stop(claude), stop(antigravity), stop(grok));
     }
 }
 #[tauri::command]

@@ -17,17 +17,21 @@ let locale = "en";
 let noticeTimer;
 let nativeIcons = {};
 let iconFrame = 0;
-// The account pools, left to right as their buttons, for ⌘1–⌘3 and the way
+// The account pools, left to right as their buttons, for ⌘1–⌘4 and the way
 // the cards slide.
-const ACCOUNT_POOLS = ["codex", "claude", "antigravity"];
-// The pools with Sub2api providers: every account pool.
-const PROVIDER_POOLS = ACCOUNT_POOLS;
-// The account pool on the accounts page: Codex, Claude Code or Antigravity.
+const ACCOUNT_POOLS = ["codex", "claude", "antigravity", "grok"];
+// The pools with an API proxy: all but Grok.
+const PROXY_POOLS = ["codex", "claude", "antigravity"];
+// The pools with Sub2api providers: those with a proxy.
+const PROVIDER_POOLS = PROXY_POOLS;
+// The account pool on the accounts page: Codex, Claude Code, Antigravity or
+// Grok.
 let pool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.pool"))
   ? localStorage.getItem("copool.pool")
   : "codex";
-// The pool whose API proxy the proxy page shows: always the accounts page's.
-let proxyPool = pool;
+// The pool whose API proxy the proxy page shows: the accounts page's, or
+// the last one with a proxy while that is Grok.
+let proxyPool = PROXY_POOLS.includes(pool) ? pool : "codex";
 /// The preferences of each pool's proxy on the proxy page.
 const PROXY_PREFERENCES = {
   codex: { port: "proxyPort", autoStart: "autoStartProxy" },
@@ -663,6 +667,8 @@ function canSayHi(account) {
 }
 function supportsSayHi(account) {
   if (pool === "claude") return true;
+  // Grok has no five-hour window to start.
+  if (pool === "grok") return false;
   // An Antigravity provider's cards say no hi, as Codex's.
   if (pool === "antigravity") return account.sourceTag !== "SUB2API";
   const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
@@ -1750,6 +1756,7 @@ function renderAccounts(accounts) {
           {
             claude: "accounts.empty.message.no_claude_accounts",
             antigravity: "accounts.empty.message.no_antigravity_accounts",
+            grok: "accounts.empty.message.no_grok_accounts",
           }[pool] || "accounts.empty.message.no_accounts",
         ),
       ),
@@ -2361,12 +2368,12 @@ function slidePoolIn(direction) {
     if (animation) animation.id = "pool";
   }
 }
-/// Selects the pool on both pages: the accounts and proxy pages always show
-/// the same upstream.
+/// Selects the pool on both pages: the accounts and proxy pages show the
+/// same upstream, but for Grok, which has no proxy.
 function showPool(next) {
   if (!ACCOUNT_POOLS.includes(next)) return;
   showAccountsPool(next);
-  showProxyPool(next);
+  if (PROXY_POOLS.includes(next)) showProxyPool(next);
 }
 function showAccountsPool(next) {
   document
@@ -2400,6 +2407,7 @@ document
 /// The proxy page's pool switch: the header's pool icons, each copy with
 /// its own gradient, as `brandIcon` copies them.
 for (const original of document.querySelectorAll("#pool-switch .pool-btn")) {
+  if (!PROXY_POOLS.includes(original.dataset.pool)) continue;
   const copy = original.cloneNode(true);
   const target = copy.dataset.pool;
   delete copy.dataset.pool;
@@ -2935,11 +2943,15 @@ document.addEventListener("keydown", (event) => {
   } else if (mod && event.key === "q") {
     event.preventDefault();
     settingsController.quit().catch((error) => notice(error, true));
-  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3"].includes(event.key)) {
+  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3", "4"].includes(event.key)) {
     event.preventDefault();
     const target = ACCOUNT_POOLS[Number(event.key) - 1];
-    // The pool is shared, so the proxy page switches in place.
-    if (selectedPage !== "proxy" && selectedPage !== "accounts")
+    // The pool is shared, so the proxy page switches in place; Grok's
+    // accounts have no proxy page.
+    if (
+      (selectedPage !== "proxy" || !PROXY_POOLS.includes(target)) &&
+      selectedPage !== "accounts"
+    )
       showPage("accounts");
     showPool(target);
   } else if (mod && event.key === ",") {
@@ -2995,6 +3007,7 @@ function switchNotice(execution) {
           {
             claude: "accounts.notice.claude_switch_done",
             antigravity: "accounts.notice.antigravity_switch_done",
+            grok: "accounts.notice.grok_switch_done",
           }[pool] || "accounts.notice.switch_done",
         ),
   ];
@@ -3172,7 +3185,7 @@ document.addEventListener(
       ]);
       applyNativeIcons();
       showAccountsPool(pool);
-      showProxyPool(pool);
+      showProxyPool(proxyPool);
       locale = appLocale();
       translate();
       await initializeFeatures();

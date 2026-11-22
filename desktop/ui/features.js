@@ -30,9 +30,12 @@ const poolControllers = Object.fromEntries(
   ACCOUNT_POOLS.map((target) => [
     target,
     poolController(target, () =>
-      invoke("sync_remote_accounts", { pool: target }).catch((error) =>
-        notice(error, true),
-      ),
+      // Grok has no proxy, so no remote servers.
+      PROXY_POOLS.includes(target)
+        ? invoke("sync_remote_accounts", { pool: target }).catch((error) =>
+          notice(error, true),
+        )
+        : undefined,
     ),
   ]),
 );
@@ -40,7 +43,7 @@ let accountsController = poolControllers[pool];
 let lastProxyNotice;
 /// Each pool's API proxy page; only the shown one renders.
 const proxyControllers = Object.fromEntries(
-  ACCOUNT_POOLS.map((target) => {
+  PROXY_POOLS.map((target) => {
     const controller = new window.CopoolControllers.Proxy(
       poolInvoke(target),
       () => {
@@ -1052,7 +1055,7 @@ async function refreshFeatureState() {
     invoke("configuration"),
     invoke("current_provider"),
     invoke("refresh_activity"),
-    ...ACCOUNT_POOLS.map((target) =>
+    ...PROXY_POOLS.map((target) =>
       proxyControllers[target].invoke("tunnel_action", { action: "status", value: null }),
     ),
   ]);
@@ -1061,7 +1064,7 @@ async function refreshFeatureState() {
     controller.syncActivity(
       activity.filter((id) => controller.accounts.some((a) => a.id === id)),
     );
-  ACCOUNT_POOLS.forEach((target, index) => {
+  PROXY_POOLS.forEach((target, index) => {
     const controller = proxyControllers[target];
     controller.tunnelStatus = tunnels[index];
     controller.remoteServers = controller.ownServers(settings.remoteServers);

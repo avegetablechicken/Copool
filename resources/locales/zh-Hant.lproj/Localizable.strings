@@ -573,3 +573,9 @@
 "error.antigravity.api_key_variable_invalid" = "請填寫存放 API Key 的變數名稱，例如 GEMINI_API_KEY，而不是 Key 本身";
 "error.antigravity.gemini_env_not_loaded" = "Copool 已將 GOOGLE_GEMINI_BASE_URL 和 GEMINI_API_KEY 寫入 ~/.gemini/.env 並讓 ~/.zshrc 或 ~/.bashrc 載入它，但新 shell 中的值仍不同；請移除其他地方的匯出後重試";
 "error.antigravity.settings_invalid" = "agy 的 settings.json 不是 JSON 物件，請先修正 ~/.gemini/antigravity-cli/settings.json";
+"pool.grok" = "Grok";
+"accounts.empty.message.no_grok_accounts" = "尚無 Grok 帳號，請匯入 Grok Build 登入或 JSON 檔案";
+"accounts.notice.grok_switch_done" = "已切換 Grok 帳號，Grok Build 從下一次請求起生效";
+"error.grok.login_not_found" = "找不到 Grok Build 登入。請先執行 grok login 登入。";
+"error.grok.credentials_invalid" = "無效的 Grok 登入 JSON：需要包含非空 refresh_token 的 Grok Build 登入。";
+"error.grok.sign_in_expired" = "Grok 登入已過期。請執行 grok login 重新登入，然後匯入該登入。";

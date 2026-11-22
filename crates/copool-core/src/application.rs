@@ -91,6 +91,7 @@ pub struct AccountOrder {
     pub codex: Vec<String>,
     pub claude: Vec<String>,
     pub antigravity: Vec<String>,
+    pub grok: Vec<String>,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -245,8 +246,9 @@ pub struct Application {
     pub(crate) changes: Arc<std::sync::RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
     pub(crate) claude: crate::claude::State,
     pub(crate) antigravity: crate::antigravity::State,
+    pub(crate) grok: crate::grok::State,
     /// Each pool's background refresh rounds, by `Pool`.
-    pub(crate) rounds: [crate::pool::Rounds; 3],
+    pub(crate) rounds: [crate::pool::Rounds; Pool::ALL.len()],
     /// Itself, once shared (`into_shared`).
     this: std::sync::OnceLock<std::sync::Weak<Application>>,
 }
@@ -322,6 +324,7 @@ impl Application {
             changes: Arc::new(std::sync::RwLock::new(None)),
             claude: Default::default(),
             antigravity: Default::default(),
+            grok: Default::default(),
             rounds: Default::default(),
             this: Default::default(),
         };
@@ -557,7 +560,7 @@ impl Application {
         Self::project_preferences(&mut settings, &value);
         self.persist_configuration(&settings)?;
         // A pool's new refresh applies from now on, not after its next round.
-        for pool in [Pool::Codex, Pool::Claude, Pool::Antigravity] {
+        for pool in Pool::ALL {
             if before.is_none_or(|b| b.pool(pool) != value.refresh.pool(pool)) {
                 self.reschedule(pool, value.refresh.pool(pool));
             }
@@ -1229,6 +1232,19 @@ impl Application {
             Pool::Codex => self.storage(),
             Pool::Claude => self.claude_proxy_storage(),
             Pool::Antigravity => self.antigravity_proxy_storage(),
+            // Never started: Copool has no Grok proxy.
+            Pool::Grok => {
+                let mut storage = proxy_service::new_proxy_storage_context(
+                    self.paths.data_dir.clone(),
+                    Default::default(),
+                    false,
+                );
+                storage.pool = Pool::Grok;
+                storage.key_file = "grok-api-proxy.key";
+                storage.read_store = false;
+                storage.refresh_usage = false;
+                storage
+            }
         }
     }
     fn proxy_slot(&self, pool: Pool) -> &Mutex<Option<crate::state::ApiProxyRuntimeHandle>> {
@@ -1236,6 +1252,7 @@ impl Application {
             Pool::Codex => &self.state.api_proxy,
             Pool::Antigravity => &self.state.antigravity_api_proxy,
             Pool::Claude => &self.state.claude_api_proxy,
+            Pool::Grok => &self.state.grok_api_proxy,
         }
     }
     pub(crate) fn proxy_port(&self, pool: Pool) -> Result<u16> {
@@ -1244,9 +1261,22 @@ impl Application {
             Pool::Codex => preferences.proxy_port,
             Pool::Claude => preferences.claude_proxy_port,
             Pool::Antigravity => preferences.antigravity_proxy_port,
+            Pool::Grok => return self.grok_unavailable(),
         })
     }
     pub async fn proxy_status(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        if pool == Pool::Grok {
+            return Ok(ApiProxyStatus {
+                running: false,
+                port: None,
+                api_key: None,
+                base_url: None,
+                active_account_id: None,
+                active_account_label: None,
+                last_error: None,
+                available_accounts: 0,
+            });
+        }
         proxy_service::get_api_proxy_status_with_runtime(
             &self.proxy_storage(pool),
             self.proxy_slot(pool),
@@ -1254,6 +1284,9 @@ impl Application {
         .await
     }
     pub async fn start_proxy(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        if pool == Pool::Grok {
+            return self.grok_unavailable();
+        }
         let _op = self.proxy_operations.lock().await;
         proxy_service::start_api_proxy_with_runtime(
             &self.proxy_storage(pool),
@@ -1264,11 +1297,17 @@ impl Application {
         .await
     }
     pub async fn stop_proxy(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        if pool == Pool::Grok {
+            return self.proxy_status(pool).await;
+        }
         let _op = self.proxy_operations.lock().await;
         proxy_service::stop_api_proxy_with_runtime(&self.proxy_storage(pool), self.proxy_slot(pool))
             .await
     }
     pub async fn rotate_proxy_key(&self, pool: Pool) -> Result<ApiProxyStatus> {
+        if pool == Pool::Grok {
+            return self.grok_unavailable();
+        }
         let _op = self.proxy_operations.lock().await;
         proxy_service::refresh_api_proxy_key_with_runtime(
             &self.proxy_storage(pool),
@@ -1785,6 +1824,7 @@ mod tests {
             codex: vec!["sub2api:team".into(), "a".into()],
             claude: vec!["claude-1".into()],
             antigravity: vec!["antigravity-1".into()],
+            grok: vec!["grok-1".into()],
         };
         app.save_preferences(Preferences {
             account_order: order.clone(),

@@ -573,3 +573,9 @@
 "error.antigravity.api_key_variable_invalid" = "Escribe el nombre de la variable que contiene la clave API, como GEMINI_API_KEY, no la clave en sí";
 "error.antigravity.gemini_env_not_loaded" = "Un shell nuevo sigue teniendo otro GOOGLE_GEMINI_BASE_URL o GEMINI_API_KEY aunque Copool los escribió en ~/.gemini/.env y hace que ~/.zshrc o ~/.bashrc lo cargue; elimina la otra exportación e inténtalo de nuevo";
 "error.antigravity.settings_invalid" = "El settings.json de agy no es un objeto JSON; corrige primero ~/.gemini/antigravity-cli/settings.json";
+"pool.grok" = "Grok";
+"accounts.empty.message.no_grok_accounts" = "Aún no hay cuentas de Grok. Importa el inicio de sesión de Grok Build o un archivo JSON.";
+"accounts.notice.grok_switch_done" = "Cuenta de Grok cambiada; Grok Build la usará desde su próxima solicitud";
+"error.grok.login_not_found" = "No se encontró el inicio de sesión de Grok Build. Inicia sesión primero con grok login.";
+"error.grok.credentials_invalid" = "JSON de inicio de sesión de Grok no válido. Se espera un inicio de sesión de Grok Build con un refresh_token no vacío.";
+"error.grok.sign_in_expired" = "El inicio de sesión de Grok ha caducado. Vuelve a iniciar sesión con grok login y luego impórtalo.";

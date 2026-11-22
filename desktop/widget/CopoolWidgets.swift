@@ -20,7 +20,7 @@ struct CopoolAccountsWidget: Widget {
             AccountsWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("Copool Accounts")
-        .description("See the current Codex, Claude and Antigravity accounts and remaining quota at a glance.")
+        .description("See the current Codex, Claude, Antigravity and Grok accounts and remaining quota at a glance.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

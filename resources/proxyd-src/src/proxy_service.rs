@@ -441,6 +441,8 @@ pub(crate) async fn start_api_proxy_with_runtime(
                 Pool::Antigravity => antigravity::CLOUD_BASE.into(),
                 Pool::Codex => resolve_codex_upstream_base_url(),
                 Pool::Claude => crate::claude_api::API_ROOT.into(),
+                // Copool runs no proxy for Grok; nothing is forwarded there.
+                Pool::Grok => String::new(),
             }
         }),
         client,
@@ -467,6 +469,8 @@ pub(crate) async fn start_api_proxy_with_runtime(
                 "/anthropic/v1/messages/count_tokens",
                 post(claude_messages_handler),
             ),
+        // Never started: Copool has no Grok proxy.
+        Pool::Grok => router,
     };
     let router = router
         .fallback(any(unsupported_proxy_handler))
@@ -957,6 +961,7 @@ async fn unsupported_proxy_handler(
         }
         Pool::Codex => "GET /v1/models, POST /v1/chat/completions and POST /v1/responses",
         Pool::Claude => "POST /anthropic/v1/messages and POST /anthropic/v1/messages/count_tokens",
+        Pool::Grok => "no requests",
     };
     json_error_response(
         StatusCode::NOT_FOUND,
@@ -975,6 +980,7 @@ fn ensure_authorized(headers: &HeaderMap, context: &ProxyContext) -> Option<Resp
             .and_then(|v| v.to_str().ok())
             .is_some_and(|value| !key.is_empty() && constant_time_eq(value, &key)),
         Pool::Codex | Pool::Claude => is_authorized(headers, &key),
+        Pool::Grok => false,
     };
     if authorized {
         None
@@ -2460,6 +2466,8 @@ fn account_to_proxy_candidate(pool: Pool, account: StoredAccount) -> Option<Prox
             account_id: account.account_id.clone(),
             ..Default::default()
         },
+        // Copool serves no Grok proxy.
+        (Pool::Grok, _) => return None,
     };
     let renews = account.renews();
     Some(ProxyCandidate {
@@ -2595,7 +2603,7 @@ fn compare_runtime_proxy_candidates(
 async fn sleep_usage_refresh_interval(pool: Pool) {
     tokio::time::sleep(std::time::Duration::from_secs(match pool {
         Pool::Codex => ACTIVE_USAGE_REFRESH_INTERVAL_SECONDS,
-        Pool::Claude | Pool::Antigravity => CLAUDE_USAGE_REFRESH_INTERVAL_SECONDS,
+        Pool::Claude | Pool::Antigravity | Pool::Grok => CLAUDE_USAGE_REFRESH_INTERVAL_SECONDS,
     }))
     .await;
 }
@@ -2644,7 +2652,7 @@ async fn refresh_proxy_account_usage_for_tick(context: &ProxyContext, tick: u64)
         Pool::Codex => {
             usage_refresh_candidates_for_tick(tick, active_account_id.as_deref(), candidates)
         }
-        Pool::Claude | Pool::Antigravity => candidates,
+        Pool::Claude | Pool::Antigravity | Pool::Grok => candidates,
     };
     refresh_proxy_candidate_usage(&context.storage, refresh_candidates).await;
 }
@@ -2674,7 +2682,8 @@ async fn refresh_proxy_candidate_usage(
 ) {
     // The upstream the proxy forwards to is also where usage is read.
     let origin = match storage.pool {
-        Pool::Antigravity => String::new(), // The remote pool uses Cloud Code.
+        // The remote pool uses Cloud Code; Grok has no proxy.
+        Pool::Antigravity | Pool::Grok => String::new(),
         Pool::Codex => storage
             .upstream_base_url
             .as_deref()
@@ -2710,6 +2719,7 @@ async fn refresh_proxy_candidate_usage(
                 )
                 .await
             }
+            Pool::Grok => continue,
         };
         persist_candidate_usage_result(storage, &candidate.id, result).await;
     }
@@ -2863,6 +2873,7 @@ async fn refresh_proxy_candidate_auth(
                         .await?;
                     auth
                 }
+                Pool::Grok => return Err("Grok accounts have no API proxy".into()),
             };
             // A login renewed elsewhere in the meantime is the one to retry with.
             persist_refreshed_candidate_auth(
@@ -2896,6 +2907,7 @@ async fn refresh_proxy_candidate_auth(
             account_id: candidate.account_id.clone(),
             ..Default::default()
         },
+        Pool::Grok => return Err("Grok accounts have no API proxy".into()),
     };
 
     Ok(ProxyCandidate {
@@ -2942,6 +2954,7 @@ async fn persist_refreshed_candidate_auth(
                         &account.auth_json["claudeAiOauth"],
                     )
             }
+            Pool::Grok => false,
         };
         if !replaces {
             return Ok(account.auth_json.clone());

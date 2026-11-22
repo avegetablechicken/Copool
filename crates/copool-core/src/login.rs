@@ -51,7 +51,33 @@ impl Login {
             Pool::Codex => Self::begin_codex(workspace).await,
             Pool::Claude => Self::begin_claude().await,
             Pool::Antigravity => Self::begin_antigravity().await,
+            Pool::Grok => Self::begin_grok().await,
         }
+    }
+    /// An xAI sign-in with Grok Build's client, which comes back to a
+    /// loopback listener on any port, as Grok Build's own.
+    async fn begin_grok() -> Result<Arc<Self>, String> {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .map_err(|e| e.to_string())?;
+        let redirect = format!(
+            "http://127.0.0.1:{}/callback",
+            listener.local_addr().map_err(|e| e.to_string())?.port()
+        );
+        let verifier = nonce();
+        let state = nonce();
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let url = crate::grok::sign_in_url(&redirect, &challenge, &state);
+        Ok(Self::listen(
+            listener,
+            "/callback",
+            url,
+            verifier,
+            state,
+            redirect,
+            None,
+            Pool::Grok,
+        ))
     }
     /// A Google sign-in with Antigravity's client, which takes any loopback
     /// port.
@@ -264,6 +290,9 @@ impl Login {
             }
             if self.pool == Pool::Antigravity {
                 return crate::antigravity::sign_in(&code, &self.verifier, &self.redirect).await;
+            }
+            if self.pool == Pool::Grok {
+                return crate::grok::sign_in(&code, &self.verifier, &self.redirect).await;
             }
             let response = crate::utils::with_account_proxy(reqwest::Client::builder(), "")?
                 .build()

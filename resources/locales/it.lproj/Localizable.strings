@@ -573,3 +573,9 @@
 "error.antigravity.api_key_variable_invalid" = "Inserisci il nome della variabile che contiene la chiave API, ad esempio GEMINI_API_KEY, non la chiave stessa";
 "error.antigravity.gemini_env_not_loaded" = "Una nuova shell ha ancora un altro GOOGLE_GEMINI_BASE_URL o GEMINI_API_KEY, anche se Copool li ha scritti in ~/.gemini/.env e lo fa caricare da ~/.zshrc o ~/.bashrc; rimuovi l'altro export e riprova";
 "error.antigravity.settings_invalid" = "Il settings.json di agy non è un oggetto JSON; correggi prima ~/.gemini/antigravity-cli/settings.json";
+"pool.grok" = "Grok";
+"accounts.empty.message.no_grok_accounts" = "Nessun account Grok. Importa l’accesso di Grok Build o un file JSON.";
+"accounts.notice.grok_switch_done" = "Account Grok cambiato; Grok Build lo usa dalla prossima richiesta";
+"error.grok.login_not_found" = "Accesso di Grok Build non trovato. Accedi prima con grok login.";
+"error.grok.credentials_invalid" = "JSON di accesso Grok non valido. È previsto un accesso di Grok Build con refresh_token non vuoto.";
+"error.grok.sign_in_expired" = "L’accesso a Grok è scaduto. Accedi di nuovo con grok login, poi importa l’accesso.";

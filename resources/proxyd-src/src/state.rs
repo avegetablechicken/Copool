@@ -55,6 +55,8 @@ pub(crate) struct AppState {
     /// The Claude pool's API proxy, independent of the Codex one.
     pub(crate) claude_api_proxy: Mutex<Option<ApiProxyRuntimeHandle>>,
     pub(crate) antigravity_api_proxy: Mutex<Option<ApiProxyRuntimeHandle>>,
+    /// Never set: Copool has no Grok proxy.
+    pub(crate) grok_api_proxy: Mutex<Option<ApiProxyRuntimeHandle>>,
     pub(crate) cloudflared: Mutex<Option<CloudflaredRuntimeHandle>>,
 }
 
@@ -66,6 +68,7 @@ impl Default for AppState {
             api_proxy: Mutex::new(None),
             claude_api_proxy: Mutex::new(None),
             antigravity_api_proxy: Mutex::new(None),
+            grok_api_proxy: Mutex::new(None),
             cloudflared: Mutex::new(None),
         }
     }

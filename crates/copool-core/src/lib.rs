@@ -83,5 +83,7 @@ pub mod claude;
 
 mod antigravity;
 
+mod grok;
+
 mod greetings;
 pub use greetings::GreetingSchedule;

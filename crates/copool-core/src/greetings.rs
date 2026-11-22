@@ -45,6 +45,8 @@ fn eligible(account: &AccountSummary, pool: Pool) -> bool {
         && match pool {
             Pool::Claude => true,
             Pool::Antigravity => !crate::sub2api::is_card(pool, &account.id),
+            // Grok has no five-hour window to start.
+            Pool::Grok => false,
             Pool::Codex => {
                 !crate::sub2api::is_card(pool, &account.id)
                     && account

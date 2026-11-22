@@ -125,6 +125,7 @@ pub(crate) fn systemd_unit(server: &RemoteServerConfig, unit: &str) -> String {
         crate::models::Pool::Codex => "",
         crate::models::Pool::Claude => " --pool claude",
         crate::models::Pool::Antigravity => " --pool antigravity",
+        crate::models::Pool::Grok => " --pool grok",
     };
     format!("[Unit]\nDescription=Codex Tools Remote API Proxy ({unit})\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory={dir}\nEnvironment=\"COPOOL_SERVER_ID={}\"\nEnvironment=\"COPOOL_SERVER_LABEL={}\"\nExecStart=\"{dir}/codex-tools-proxyd\" serve --data-dir \"{dir}\" --host 0.0.0.0 --port {}{pool} --no-sync-current-auth\nRestart=always\nRestartSec=3\nEnvironment=RUST_LOG=info\n\n[Install]\nWantedBy=multi-user.target\n",systemd_string(&server.id),systemd_string(&server.label),server.listen_port)
 }

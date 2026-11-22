@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-22（Grok 账号池）：新增第四个账号池 Grok（Grok Build / SuperGrok，⌘4）。Grok Build 当前使用的登录取自 `~/.grok/auth.json`（设置了 `GROK_HOME` 时为 `$GROK_HOME/auth.json`，冒烟测试可用 `COPOOL_GROK_AUTH_FILE` 指定），该文件以 `<issuer>::<client id>` 为键保存登录（`key` 为 access token，另有 `refresh_token`、RFC 3339 的 `expires_at`、`user_id`、`email` 等）。池内账号存放在数据目录的 `grok-accounts.json`；同一账号按 `user_id` 与 `team_id` 识别，因为 xAI 续期会轮换 refresh token。用量取自 `https://cli-chat-proxy.grok.com/v1/billing?format=credits` 的 `creditUsagePercent` 与 `currentPeriod`（约一周的周期显示为每周窗口，更长的显示为月窗口），套餐取自 `/v1/settings` 的 `subscription_tier_display`；令牌以 Grok Build 的 OAuth 客户端在 `https://auth.x.ai/oauth2/token` 续期。切换时只替换文件中同一 issuer 的登录，其他 issuer 的登录保留，池外登录先备份到 `grok-before-switch.json`；Grok Build 正在使用的账号续期后（refresh token 仍为续期前的那个时）把新令牌写回该文件。Grok 池没有 API 代理、Sub2api 提供方、远程节点和打招呼，代理页不显示 Grok。接口字段已用真实账号经只读请求核对（额度、套餐、userinfo）；未用真实登录测试续期，也未在浏览器完成 auth.x.ai 登录（回调为 `http://127.0.0.1:<端口>/callback`，与 Grok Build 文档一致），两者需实机验证。核心单元测试通过；macOS、Windows、Linux 均未做界面实机验证。
+
 2026-11-22（移除“续期一次”）：界面自 11 月 18 日起只有“自动续期”开关（始终/永不），后端仍保留的“续期一次”（`Renewal::Once`）现已移除：三个号池与远程 daemon 续期后不再改写续期设置，远程同步也不再带回已消耗的状态。早先存下的 `"once"`（界面一直显示为自动续期关）按“永不续期”读取，不会导致存储无法读取。核心测试 593 项通过、2 项忽略；前端测试 205 项通过；独立 daemon 检查通过。
 
 2026-11-22（Antigravity 额度权限提示）：桌面端与远程 daemon 读取 Google 额度接口的错误状态、原因和消息。Google 返回 HTTP 403、`PERMISSION_DENIED`、`SUBSCRIPTION_REQUIRED` 时，账号卡片解释此次额度查询所需的许可，并保留 Google 的原文和错误编号。权限拒绝会保留上次的额度，且不会触发令牌续期。macOS 回归测试使用模拟响应覆盖汇总和逐模型查询；Windows、Linux 尚未实机验证。

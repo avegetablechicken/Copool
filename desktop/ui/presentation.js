@@ -215,6 +215,7 @@
     codex: [10, 30, 60, 300, 600],
     claude: [60, 120, 300, 600, 900, 1800, 3600],
     antigravity: [60, 120, 300, 600, 900, 1800, 3600],
+    grok: [60, 120, 300, 600, 900, 1800, 3600],
   };
   const FULL_EVERY = [1, 2, 3, 6, 12];
   /// A pool's refresh choices, the interval set among them.
@@ -687,6 +688,7 @@
       [
         "error.accounts.sign_in_expired",
         "error.antigravity.sign_in_expired",
+        "error.grok.sign_in_expired",
         translated,
       ].includes(account.usageError)
     );

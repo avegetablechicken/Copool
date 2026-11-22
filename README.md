@@ -4,9 +4,9 @@
   <img src="./Copool.png" alt="Copool Icon" width="160" />
 </p>
 
-Copool is a cross-platform desktop app (macOS, Windows, Linux) that manages Codex/ChatGPT, Claude Code and Antigravity (Google AI Pro) account pools, usage-based smart switching, and local/remote API proxy workflows. It is built with a Rust core and a Tauri 2 shell.
+Copool is a cross-platform desktop app (macOS, Windows, Linux) that manages Codex/ChatGPT, Claude Code, Antigravity (Google AI Pro) and Grok (SuperGrok) account pools, usage-based smart switching, and local/remote API proxy workflows. It is built with a Rust core and a Tauri 2 shell.
 
-Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管理 Codex/ChatGPT、Claude Code 与 Antigravity（Google AI Pro）账号池、按用量智能切换，以及本地/远程 API 代理工作流。采用 Rust 核心与 Tauri 2 外壳。
+Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管理 Codex/ChatGPT、Claude Code、Antigravity（Google AI Pro）与 Grok（SuperGrok）账号池、按用量智能切换，以及本地/远程 API 代理工作流。采用 Rust 核心与 Tauri 2 外壳。
 
 <p align="center">
   <img src="./docs/demo.gif" alt="Copool main panel in light and dark mode side by side: collapsing and expanding the cards, switching between the Codex and Claude pools, dragging a card to reorder it, and activating a Sub2api provider" width="800" />
@@ -14,14 +14,16 @@ Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管�
 
 ## Features / 功能
 
-- Three account pools, Codex, Claude Code and Antigravity, switched by the colored icons beside the app name (⌘1 / ⌘2 / ⌘3)
-- Codex、Claude Code 与 Antigravity 三个账号池，由应用名旁的有色图标切换显示（⌘1 / ⌘2 / ⌘3）
+- Four account pools, Codex, Claude Code, Antigravity and Grok, switched by the icons beside the app name (⌘1 / ⌘2 / ⌘3 / ⌘4)
+- Codex、Claude Code、Antigravity 与 Grok 四个账号池，由应用名旁的图标切换显示（⌘1 / ⌘2 / ⌘3 / ⌘4）
 - Account import/switch/delete and usage refresh (5h / 1week)
 - 账号导入/切换/删除与用量刷新（5h / 1week）
 - Claude Code accounts: import the Claude Code login or sign in on claude.ai; switching rewrites Claude Code's credentials (the macOS Keychain or `.credentials.json`) and `oauthAccount`, keeping everything else
 - Claude Code 账号：导入 Claude Code 当前登录或在 claude.ai 登录添加；切换时改写 Claude Code 的凭据（macOS 钥匙串或 `.credentials.json`）与 `oauthAccount`，其余内容保持不变
 - Antigravity accounts (Google AI Pro): import the Antigravity / `agy` login or a JSON file; cards show the Gemini and Claude 5h / weekly quotas; switching rewrites Antigravity's login (the `gemini` / `antigravity` credential item), and a token renewal of the login it uses is written back there; on macOS the item is read and written only through `/usr/bin/security`, as `agy` does, so its Keychain partition list stays `apple-tool:`
 - Antigravity 账号（Google AI Pro）：导入 Antigravity / `agy` 当前登录或 JSON 文件；卡片显示 Gemini 与 Claude 的 5h / 每周额度；切换时改写 Antigravity 的登录（凭据条目 `gemini` / `antigravity`），其当前登录续期后的令牌也写回该条目；macOS 上与 `agy` 一样只经 `/usr/bin/security` 读写该条目，使其钥匙串分区列表保持 `apple-tool:`
+- Grok accounts (Grok Build with SuperGrok): import the Grok Build login (`~/.grok/auth.json`, `$GROK_HOME/auth.json`), a JSON file, or sign in at auth.x.ai; cards show the plan and the share of the weekly usage limit used, as `/usage` in Grok Build shows it; switching rewrites Grok Build's sign-in in that file, which it picks up without a restart, and renewed tokens of the sign-in it uses are written back there. The Grok pool has no API proxy, Sub2api providers or say hi
+- Grok 账号（Grok Build / SuperGrok）：导入 Grok Build 当前登录（`~/.grok/auth.json`，或 `$GROK_HOME/auth.json`）、JSON 文件，或在 auth.x.ai 登录添加；卡片显示套餐和每周用量上限的已用比例（与 Grok Build 的 `/usage` 一致）；切换时改写该文件中 Grok Build 的登录，Grok Build 无需重启即生效，其当前登录续期后的令牌也写回该文件。Grok 池没有 API 代理、Sub2api 提供方和打招呼
 - Import and refresh Sub2api upstream accounts: OpenAI/Codex for the Codex pool, Claude for the Claude pool (switching points Claude Code at the Sub2api gateway through `~/.claude/settings.json`), and Antigravity for the Antigravity pool (switching sets `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json`, and in a block of Copool's own at the end of `~/.gemini/.env` sets `GOOGLE_GEMINI_BASE_URL` to the provider's Sub2api URL (through Coport, Coport's with Sub2api's in its path, such as `http://127.0.0.1:8787/antigravity/https://host:6060`, as for Claude's `ANTHROPIC_BASE_URL`; the admin API is still reached at Sub2api) and `GEMINI_API_KEY` to the variable the provider names, `GEMINI_API_KEY` by default, having `~/.zshrc` or `~/.bashrc` load that file if a new shell does not; Copool only names the key's variable, never stores the key; switching to an account removes the block and the `modelProvider`)
 - 导入并刷新 Sub2api 上游账号：Codex 池为 OpenAI/Codex 账号，Claude 池为 Claude 账号（切换时经 `~/.claude/settings.json` 让 Claude Code 使用 Sub2api 网关），Antigravity 池为 Antigravity 账号（切换时在 `~/.gemini/antigravity-cli/settings.json` 写入 `"modelProvider": "gemini"`，并在 `~/.gemini/.env` 末尾 Copool 自己的块中把 `GOOGLE_GEMINI_BASE_URL` 设为该提供方的 Sub2api 地址（经 Coport 时填 Coport 地址加 Sub2api 地址，如 `http://127.0.0.1:8787/antigravity/https://host:6060`，与 Claude 的 `ANTHROPIC_BASE_URL` 相同；管理 API 仍直连 Sub2api）、`GEMINI_API_KEY` 设为提供方指定的变量（默认 `GEMINI_API_KEY`）；新 shell 读不到时让 `~/.zshrc` 或 `~/.bashrc` 加载该文件；Copool 只记录 Key 的变量名，不保存 Key；切换回账号时移除该块与 `modelProvider`）
 - A proxy per account; new accounts wait for a manual refresh before contacting upstream, so their proxy can be set first (configurable)
@@ -62,7 +64,7 @@ See [docs/rust-cross-platform.md](docs/rust-cross-platform.md) for details, data
 
 ## Project Structure / 项目结构
 
-- `crates/copool-core`: accounts, usage, switching, proxy, tunnel, remote servers and settings; the Claude Code pool in `src/claude.rs` and its Sub2api in `src/claude/sub2api.rs`; the Antigravity pool in `src/antigravity.rs` and its Sub2api in `src/antigravity/sub2api.rs`
+- `crates/copool-core`: accounts, usage, switching, proxy, tunnel, remote servers and settings; the Claude Code pool in `src/claude.rs` and its Sub2api in `src/claude/sub2api.rs`; the Antigravity pool in `src/antigravity.rs` and its Sub2api in `src/antigravity/sub2api.rs`; the Grok pool in `src/grok.rs`
 - `desktop`: Tauri shell (`src`), web UI (`ui`), UI tests (`tests`), macOS widget (`widget`)
 - `resources/proxyd-src`: proxy engine shared by the core and the standalone remote daemon
 - `resources/proxyd-prebuilt*`: prebuilt Linux daemons for remote deployment

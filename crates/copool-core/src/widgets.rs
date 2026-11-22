@@ -15,6 +15,7 @@ fn pool_label(pool: Pool) -> &'static str {
         Pool::Codex => "CODEX",
         Pool::Claude => "CLAUDE",
         Pool::Antigravity => "ANTIGRAVITY",
+        Pool::Grok => "GROK",
     }
 }
 /// A widget the app publishes; each has its own WidgetKit kind and snapshot.
@@ -237,7 +238,7 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>) -> CardSnapsh
         }
         // As the app's plan tag: none until the plan is known. The windows
         // are Gemini's, as the app's collapsed rows show them.
-        Pool::Antigravity => (
+        Pool::Antigravity | Pool::Grok => (
             raw.unwrap_or_default(),
             None,
             account.email.as_deref().unwrap_or(&account.label),

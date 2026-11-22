@@ -142,6 +142,7 @@ impl Application {
     ) -> Result<Vec<u8>, String> {
         match pool {
             Pool::Antigravity => self.antigravity_remote_payload(snapshot).await,
+            Pool::Grok => self.grok_unavailable(),
             Pool::Claude => {
                 if let Some(rows) = snapshot {
                     self.claude_adopt_remote_logins(rows).await?;

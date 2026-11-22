@@ -44,10 +44,11 @@ pub struct RefreshPreferences {
     pub codex: PoolRefresh,
     pub claude: PoolRefresh,
     pub antigravity: PoolRefresh,
+    pub grok: PoolRefresh,
 }
 impl Default for RefreshPreferences {
     /// Codex: its card in use every 10 seconds, the whole pool every minute.
-    /// Claude and Antigravity: the whole pool every five minutes, Claude's
+    /// Claude, Antigravity and Grok: the whole pool every five minutes, Claude's
     /// every minute while its usage changes. Each slows down on HTTP 429.
     fn default() -> Self {
         Self {
@@ -69,6 +70,12 @@ impl Default for RefreshPreferences {
                 adaptive: false,
                 backoff: true,
             },
+            grok: PoolRefresh {
+                seconds: 300,
+                full_every: 1,
+                adaptive: false,
+                backoff: true,
+            },
         }
     }
 }
@@ -78,10 +85,11 @@ impl RefreshPreferences {
             Pool::Codex => self.codex,
             Pool::Claude => self.claude,
             Pool::Antigravity => self.antigravity,
+            Pool::Grok => self.grok,
         }
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
-        [self.codex, self.claude, self.antigravity]
+        [self.codex, self.claude, self.antigravity, self.grok]
             .into_iter()
             .try_for_each(PoolRefresh::validate)
     }
@@ -114,6 +122,7 @@ impl RefreshPreferences {
             codex: read("codex", defaults.codex),
             claude: read("claude", defaults.claude),
             antigravity: read("antigravity", defaults.antigravity),
+            grok: read("grok", defaults.grok),
         }
     }
 }
@@ -295,6 +304,7 @@ mod tests {
             (Pool::Codex, 10, 60),
             (Pool::Claude, 300, 300),
             (Pool::Antigravity, 300, 300),
+            (Pool::Grok, 300, 300),
         ] {
             let refresh = defaults.pool(pool);
             assert_eq!(refresh.seconds, seconds);

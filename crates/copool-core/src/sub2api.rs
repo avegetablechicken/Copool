@@ -95,6 +95,7 @@ fn platform(pool: Pool) -> &'static str {
         Pool::Codex => "openai",
         Pool::Claude => "anthropic",
         Pool::Antigravity => "antigravity",
+        Pool::Grok => "grok",
     }
 }
 /// A card's id: its pool, provider and account.
@@ -106,6 +107,7 @@ fn card_prefix(pool: Pool) -> &'static str {
         Pool::Codex => "sub2api-",
         Pool::Claude => "claude-sub2api-",
         Pool::Antigravity => "antigravity-sub2api-",
+        Pool::Grok => "grok-sub2api-",
     }
 }
 /// Whether a card of the pool is a Sub2api account's.
@@ -123,6 +125,7 @@ pub(crate) fn password_secret(pool: Pool, id: &str) -> String {
         Pool::Codex => id.to_owned(),
         Pool::Claude => format!("claude-sub2api-password:{id}"),
         Pool::Antigravity => format!("antigravity-sub2api-password:{id}"),
+        Pool::Grok => format!("grok-sub2api-password:{id}"),
     }
 }
 /// A provider's accounts in a pool: those imported, as last fetched.
@@ -188,7 +191,7 @@ impl Member {
                 self.cached.retain(|a| !gone.contains(&a.id));
                 self.imported.retain(|id| !gone.contains(id));
             }
-            Pool::Claude | Pool::Antigravity => {
+            Pool::Claude | Pool::Antigravity | Pool::Grok => {
                 for cached in self.cached.iter_mut().filter(|a| missing(a)) {
                     cached.status = "missing".into();
                     cached.usage = None;
@@ -529,7 +532,7 @@ impl Connection {
             }
             let quota_url = match pool {
                 Pool::Codex => format!("{}/admin/openai/accounts/{id}/quota", self.admin_base),
-                Pool::Claude | Pool::Antigravity => {
+                Pool::Claude | Pool::Antigravity | Pool::Grok => {
                     format!("{}/admin/accounts/{id}/usage", self.admin_base)
                 }
             };

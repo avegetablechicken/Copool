@@ -164,6 +164,7 @@ impl Tunnel {
             crate::Pool::Codex => "cloudflared.log",
             crate::Pool::Claude => "claude-cloudflared.log",
             crate::Pool::Antigravity => "antigravity-cloudflared.log",
+            crate::Pool::Grok => "grok-cloudflared.log",
         });
         std::fs::create_dir_all(data).map_err(|e| e.to_string())?;
         let file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
