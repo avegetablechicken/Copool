@@ -1767,3 +1767,22 @@ async fn a_remote_node_receives_only_released_logins_and_syncs_its_renewal_once(
     let kept = payload(h.app.antigravity_remote_payload(Some(&node)).await.unwrap());
     assert_eq!(kept["accounts"][0]["authJson"]["accessToken"], "new-login");
 }
+
+#[test]
+fn a_card_folded_into_its_google_account_brings_its_project() {
+    let card = |id: &str, project: Option<&str>| -> Stored {
+        serde_json::from_value(json!({
+            "id": id, "label": id, "googleId": "g-1", "document": login_of("alice", id, later()),
+            "addedAt": 1, "updatedAt": 1, "project": project,
+        }))
+        .unwrap()
+    };
+    let mut store = Store {
+        accounts: vec![card("old", None), card("new", Some("project-1"))],
+        ..Default::default()
+    };
+    merge_identified(&mut store, "new");
+    assert_eq!(store.accounts.len(), 1);
+    assert_eq!(store.accounts[0].id, "old");
+    assert_eq!(store.accounts[0].project.as_deref(), Some("project-1"));
+}

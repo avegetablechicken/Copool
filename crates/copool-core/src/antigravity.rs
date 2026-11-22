@@ -295,6 +295,7 @@ fn merge_identified(store: &mut Store, id: &str) {
     existing.usage = merged.usage;
     existing.usage_error = merged.usage_error;
     existing.plan = merged.plan.or(existing.plan.take());
+    existing.project = merged.project.or(existing.project.take());
     existing.updated_at = merged.updated_at;
     if existing.proxy_url.is_empty() {
         existing.proxy_url = merged.proxy_url;
