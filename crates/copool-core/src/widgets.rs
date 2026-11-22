@@ -221,23 +221,35 @@ fn claude_plan(raw: Option<String>) -> String {
 }
 /// A plan's color, by tier so that providers' comparable plans match, as
 /// the app's `planAccent`: the entry subscription (Codex Plus, Claude Pro,
-/// Google AI Pro, SuperGrok) and the top one (Codex Pro, Claude Max, Google
-/// AI Ultra, SuperGrok Heavy) share their colors.
+/// Google AI Pro, SuperGrok) is pink, the one near $100 (Claude Max 5x,
+/// SuperGrok Plus) orange, and the top one (Codex Pro, Claude Max 20x,
+/// Google AI Ultra, SuperGrok Heavy) purple.
 pub fn plan_accent(pool: Pool, plan: &str) -> &'static str {
     if pool == Pool::Grok {
-        // Also The X Subscription's names, which may replace SuperGrok's.
-        match plan {
-            "SUPERGROK LITE" | "SUPERGROK" | "PLUS" | "PREMIUM" => return "pink",
-            "SUPERGROK PLUS" | "SUPERGROK HEAVY" | "SUPER" | "ULTRA" => return "orange",
+        // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
+        // Subscription's names, which may replace SuperGrok's.
+        match plan.replace(' ', "").as_str() {
+            "SUPERGROKLITE" | "SUPERGROK" | "PLUS" | "PREMIUM" => return "pink",
+            "SUPERGROKPLUS" | "SUPER" => return "orange",
+            "SUPERGROKHEAVY" | "ULTRA" => return "purple",
             "FREE" | "BUSINESS" | "ENTERPRISE" => {}
             _ => return "teal",
         }
     }
+    // Claude's Max is 5x unless it names more.
+    if let Some(rest) = plan.strip_prefix("MAX") {
+        let times = match rest.strip_prefix(' ').and_then(|r| r.strip_suffix('X')) {
+            Some(n) => n.parse::<u32>().ok(),
+            None => rest.is_empty().then_some(5),
+        };
+        if let Some(times) = times {
+            return if times >= 20 { "purple" } else { "orange" };
+        }
+    }
     match plan {
-        "PRO" if pool != Pool::Codex => "pink",
-        "ULTRA" => "orange",
-        max if max.starts_with("MAX") => "orange",
-        "PRO" => "orange",
+        "PRO" if pool == Pool::Codex => "purple",
+        "PRO" => "pink",
+        "ULTRA" => "purple",
         "PLUS" => "pink",
         "FREE" => "gray",
         "BUSINESS" | "ENTERPRISE" => "indigo",
@@ -415,6 +427,8 @@ pub fn plan_palette(accent: &str, dark: bool, monochrome: bool) -> Palette {
     let (fill, text) = match (accent, dark) {
         ("orange", true) => ([0.46, 0.30, 0.15, 1.], [1., 0.73, 0.28, 1.]),
         ("orange", false) => ([0.98, 0.82, 0.63, 1.], [0.78, 0.42, 0.03, 1.]),
+        ("purple", true) => ([0.33, 0.20, 0.44, 1.], [0.85, 0.64, 1., 1.]),
+        ("purple", false) => ([0.90, 0.80, 0.97, 1.], [0.56, 0.25, 0.72, 1.]),
         ("pink", true) => ([0.39, 0.19, 0.31, 1.], [0.98, 0.58, 0.82, 1.]),
         ("pink", false) => ([0.97, 0.78, 0.88, 1.], [0.70, 0.19, 0.44, 1.]),
         ("gray", true) => ([0.24, 0.28, 0.37, 1.], [0.84, 0.88, 0.95, 1.]),

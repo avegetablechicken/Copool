@@ -42,18 +42,23 @@ test("Comparable plans share a color across providers", () => {
   assert.equal(accent("plus", "codex"), "pink");
   assert.equal(accent("pro", "claude"), "pink");
   assert.equal(accent("pro", "antigravity"), "pink");
-  // The top subscription.
-  assert.equal(accent("pro", "codex"), "orange");
-  assert.equal(accent("max 5x", "claude"), "orange");
-  assert.equal(accent("max 20x", "claude"), "orange");
-  assert.equal(accent("ultra", "antigravity"), "orange");
-  assert.equal(accent("free", "claude"), "gray");
+  assert.equal(accent("SuperGrok Lite", "grok"), "pink");
   assert.equal(accent("SuperGrok", "grok"), "pink");
-  assert.equal(accent("SuperGrok Heavy", "grok"), "orange");
+  // The one near $100.
+  assert.equal(accent("max 5x", "claude"), "orange");
+  assert.equal(accent("max", "claude"), "orange");
+  assert.equal(accent("SuperGrok Plus", "grok"), "orange");
+  // The top subscription.
+  assert.equal(accent("pro", "codex"), "purple");
+  assert.equal(accent("max 20x", "claude"), "purple");
+  assert.equal(accent("ultra", "antigravity"), "purple");
+  assert.equal(accent("SuperGrok Heavy", "grok"), "purple");
+  assert.equal(accent("SUPER GROK HEAVY", "grok"), "purple");
+  assert.equal(accent("free", "claude"), "gray");
   assert.equal(accent("Free", "grok"), "gray");
   assert.equal(accent("Something New", "grok"), "teal");
   // Without a pool, Codex's colors.
-  assert.equal(P.card({ planType: "pro", usage: null }).accent, "orange");
+  assert.equal(P.card({ planType: "pro", usage: null }).accent, "purple");
 });
 test("Claude Max plans keep their multiplier", () => {
   assert.equal(P.normalizedPlan("max 20x"), "MAX 20X");
@@ -100,7 +105,8 @@ legacy(
   "testCurrentAccountPaletteUsesOwnAccentForSelectionHighlight",
   () => {
     const c = P.card({ ...a, planType: "pro", usage: null });
-    assert.equal(c.accent, "orange");
+    // Purple rather than SwiftUI's orange: Codex Pro is of the top tier.
+    assert.equal(c.accent, "purple");
     assert.equal(c.selectionAccent, "PRO");
   },
 );

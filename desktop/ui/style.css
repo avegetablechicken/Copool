@@ -30,6 +30,7 @@
   --blue: #007aff;
   --text-red: #d70015;
   --pink: #ff2d55;
+  --purple: #af52de;
   --teal: #30b0c7;
   --indigo: #5856d6;
   --gray: #8e8e93;
@@ -67,6 +68,7 @@
   --blue: #0a84ff;
   --text-red: #ff6961;
   --pink: #ff375f;
+  --purple: #bf5af2;
   --teal: #40c8e0;
   --indigo: #5e5ce6;
   --gray: #98989d;
@@ -96,6 +98,7 @@
     --blue: #0a84ff;
     --text-red: #ff6961;
     --pink: #ff375f;
+    --purple: #bf5af2;
     --teal: #40c8e0;
     --indigo: #5e5ce6;
     --gray: #98989d;
@@ -122,6 +125,12 @@
 @supports (color: -apple-system-pink) {
   :root {
     --pink: -apple-system-pink;
+  }
+}
+
+@supports (color: -apple-system-purple) {
+  :root {
+    --purple: -apple-system-purple;
   }
 }
 
@@ -1781,6 +1790,10 @@ html.linux.composited:where([data-theme="dark"]) .tooltip {
 /* A plan's tier color (presentation.js planAccent). */
 [data-accent="orange"] .tag.plan {
   --tag: var(--orange);
+}
+
+[data-accent="purple"] .tag.plan {
+  --tag: var(--purple);
 }
 
 [data-accent="pink"] .tag.plan {

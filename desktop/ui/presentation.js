@@ -296,20 +296,26 @@
   }
   /// A plan's color, by tier so that providers' comparable plans match:
   /// the entry subscription (Codex Plus, Claude Pro, Google AI Pro,
-  /// SuperGrok) and the top one (Codex Pro, Claude Max, Google AI Ultra,
-  /// SuperGrok Heavy) share their colors.
+  /// SuperGrok) is pink, the one near $100 (Claude Max 5x, SuperGrok Plus)
+  /// orange, and the top one (Codex Pro, Claude Max 20x, Google AI Ultra,
+  /// SuperGrok Heavy) purple.
   function planAccent(plan, pool = "codex") {
     if (pool === "grok") {
-      // Also The X Subscription's names, which may replace SuperGrok's.
-      if (["SUPERGROK LITE", "SUPERGROK", "PLUS", "PREMIUM"].includes(plan)) return "pink";
-      if (["SUPERGROK PLUS", "SUPERGROK HEAVY", "SUPER", "ULTRA"].includes(plan)) return "orange";
+      // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
+      // Subscription's names, which may replace SuperGrok's.
+      const name = plan.replace(/ /g, "");
+      if (["SUPERGROKLITE", "SUPERGROK", "PLUS", "PREMIUM"].includes(name)) return "pink";
+      if (["SUPERGROKPLUS", "SUPER"].includes(name)) return "orange";
+      if (["SUPERGROKHEAVY", "ULTRA"].includes(name)) return "purple";
       if (!["FREE", "BUSINESS", "ENTERPRISE"].includes(plan)) return "teal";
     }
-    if (plan === "PRO" && pool !== "codex") return "pink";
-    if (plan === "ULTRA" || plan.startsWith("MAX")) return "orange";
+    if (plan === "PRO") return pool === "codex" ? "purple" : "pink";
+    if (plan === "ULTRA") return "purple";
+    // Claude's Max is 5x unless it names more.
+    const max = /^MAX(?: (\d+)X)?$/.exec(plan);
+    if (max) return Number(max[1] || 5) >= 20 ? "purple" : "orange";
     return (
       {
-        PRO: "orange",
         PLUS: "pink",
         FREE: "gray",
         BUSINESS: "indigo",

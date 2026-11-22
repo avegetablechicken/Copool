@@ -138,6 +138,16 @@ enum AccountsWidgetTagPaletteResolver {
                 fill: AccountsWidgetResolvedColor(red: 0.98, green: 0.82, blue: 0.63, opacity: 1),
                 text: AccountsWidgetResolvedColor(red: 0.78, green: 0.42, blue: 0.03, opacity: 1)
             )
+        case ("purple", .dark):
+            return AccountsWidgetTagPalette(
+                fill: AccountsWidgetResolvedColor(red: 0.33, green: 0.20, blue: 0.44, opacity: 1),
+                text: AccountsWidgetResolvedColor(red: 0.85, green: 0.64, blue: 1.00, opacity: 1)
+            )
+        case ("purple", _):
+            return AccountsWidgetTagPalette(
+                fill: AccountsWidgetResolvedColor(red: 0.90, green: 0.80, blue: 0.97, opacity: 1),
+                text: AccountsWidgetResolvedColor(red: 0.56, green: 0.25, blue: 0.72, opacity: 1)
+            )
         case ("pink", .dark):
             return AccountsWidgetTagPalette(
                 fill: AccountsWidgetResolvedColor(red: 0.39, green: 0.19, blue: 0.31, opacity: 1),
