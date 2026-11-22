@@ -309,6 +309,9 @@ pub(crate) fn retain_known_resets(latest: &mut UsageSnapshot, previous: Option<&
 /// the account, so it is unknown rather than zero. With the count come when
 /// its resets expire, earliest first: each reset a grant has left ends with
 /// it. Grant ids, which spend a reset, are never read.
+/// The most resets counted, far more than an account is given: a larger
+/// count is no account's.
+const MAX_RESETS: f64 = 1000.0;
 pub(crate) fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>, Vec<ResetGrant>)> {
     if block["eligible"].as_bool() != Some(true) {
         return None;
@@ -320,7 +323,10 @@ pub(crate) fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>, V
         if ends.is_some_and(|end| end <= now) {
             continue;
         }
-        let Some(left) = number(&grant["resets_left"]).map(|left| left.max(0.0) as i64) else {
+        // Bounded in all: each reset left is one expiry listed.
+        let Some(left) = number(&grant["resets_left"])
+            .map(|left| (left.clamp(0.0, MAX_RESETS) as i64).min(MAX_RESETS as i64 - count))
+        else {
             continue;
         };
         if left == 0 {

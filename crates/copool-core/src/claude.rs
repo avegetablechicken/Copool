@@ -2983,6 +2983,15 @@ mod tests {
             banked_resets(&refund, 100).unwrap().2[0].kind,
             ResetKind::Fable
         );
+        // No count beyond reason is listed reset by reset.
+        let mut huge = grant(1, 300, json!(["five_hour", "seven_day"]), false);
+        huge["resets_left"] = 1e18.into();
+        let (count, expiries, _) = banked_resets(
+            &json!({"eligible": true, "grants": [huge.clone(), huge]}),
+            100,
+        )
+        .unwrap();
+        assert_eq!((count, expiries.len()), (1000, 1000));
     }
 
     #[test]
