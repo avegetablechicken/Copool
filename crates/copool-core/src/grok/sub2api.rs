@@ -558,6 +558,16 @@ impl Application {
         let path = self.grok_config_path();
         let _lock = self.grok.lock.lock().await;
         let mut store = self.grok_load()?;
+        // The key and models were checked outside the lock, for the provider
+        // as it was.
+        let now = store
+            .providers
+            .iter()
+            .find(|p| p.id == provider.id)
+            .ok_or("Account not found")?;
+        if (self::gateway(now)?.as_str(), key_variable(now)) != (gateway.as_str(), variable) {
+            return Err("The Grok provider changed during the switch; switch again".into());
+        }
         let text = read_text(&path)?;
         let mut doc = parse(text.as_deref())?;
         let mut models = catalog_models(&self.grok_models_cache_path());

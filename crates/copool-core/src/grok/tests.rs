@@ -809,7 +809,18 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
     // A key Sub2api refuses is refused before Grok Build is changed.
     let key = Arc::new(Mutex::new("wrong"));
     let exported = key.clone();
+    // The provider's address, edited while the shell is asked.
+    let moved = Arc::new(Mutex::new(None::<String>));
+    let (edit, store_file) = (
+        moved.clone(),
+        h.app.paths.data_dir.join("grok-accounts.json"),
+    );
     h.app.set_grok_environment(Arc::new(move |name: &str| {
+        if let Some(url) = edit.lock().unwrap().as_deref() {
+            let mut store: Value = serde_json::from_slice(&fs::read(&store_file).unwrap()).unwrap();
+            store["providers"][0]["baseURL"] = url.into();
+            fs::write(&store_file, store.to_string()).unwrap();
+        }
         (name == "GROK_SUB2API_API_KEY").then(|| (*exported.lock().unwrap()).to_owned())
     }));
     assert!(h
@@ -821,6 +832,25 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
     assert_eq!(fs::read_to_string(&config).unwrap(), original);
 
     *key.lock().unwrap() = "sub2api-key";
+    // A provider edited during its switch leaves Grok Build as it was.
+    *moved.lock().unwrap() = Some("https://moved.invalid".into());
+    assert_eq!(
+        h.app
+            .switch_account(Pool::Grok, &card.id)
+            .await
+            .unwrap_err(),
+        "The Grok provider changed during the switch; switch again"
+    );
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+    *moved.lock().unwrap() = None;
+    h.app
+        .save_provider(
+            Pool::Grok,
+            json!({"id": id, "name": "Relay", "baseURL": base,
+                   "username": "admin@example.com"}),
+        )
+        .await
+        .unwrap();
     let execution = h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
     assert_eq!(execution.provider.as_deref(), Some("Relay"));
     let switched: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
