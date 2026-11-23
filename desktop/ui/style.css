@@ -971,10 +971,20 @@ main > section.page-leaving {
 :where(:root:not(.is-reordering) #accounts) :is([data-reorder-id], [data-card-id]):not(.reorder-raised) {
   scale: 1;
   translate: 0 0;
-  transition: scale 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    translate 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    background-color 180ms ease;
+  /* A damped spring (ratio 0.72) rather than an ease-out: cards start from
+     rest, gather speed, overshoot slightly and settle, as a pushed object
+     would, instead of jumping most of the way in the first frames. */
+  transition-property: scale, translate, box-shadow, background-color;
+  transition-duration: 500ms, 500ms, 300ms, 180ms;
+  transition-timing-function: cubic-bezier(0.45, 0, 0.15, 1), cubic-bezier(0.45, 0, 0.15, 1),
+    ease-out, ease;
+  transition-timing-function: linear(0, 0.042, 0.143, 0.274, 0.414, 0.549, 0.67, 0.773, 0.856,
+      0.921, 0.968, 1.001, 1.021, 1.033, 1.038, 1.038, 1.035, 1.031, 1.025, 1.02, 1.015,
+      1.011, 1.007, 1.004, 1),
+    linear(0, 0.042, 0.143, 0.274, 0.414, 0.549, 0.67, 0.773, 0.856,
+      0.921, 0.968, 1.001, 1.021, 1.033, 1.038, 1.038, 1.035, 1.031, 1.025, 1.02, 1.015,
+      1.011, 1.007, 1.004, 1),
+    ease-out, ease;
 
   /* The rotating face can briefly move out from under the pointer, and a
      re-render replaces the hovered DOM node before :hover settles again. */
@@ -1002,47 +1012,60 @@ main > section.page-leaving {
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  /* Dock-like repulsion: nearby cards gently yield away from a lifted card,
-     with displacement decaying over distance. */
+  /* Dock-like repulsion: nearby cards yield away from a lifted card, with
+     displacement decaying over distance and each one set moving a moment
+     after the card nearer the lift, so the push ripples outward. */
   :where(:root:not(.is-reordering) #accounts:not(.compact)) {
     & > [data-reorder-id]:not(.reorder-raised):has(+ * + * + :is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold), :hover, :has(:focus-visible))) {
-      translate: 0 -0.5px;
+      translate: 0 -1px;
+      transition-delay: 90ms;
     }
     & > :is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold), :hover, :has(:focus-visible)) + * + * + [data-reorder-id]:not(.reorder-raised) {
-      translate: 0 0.5px;
+      translate: 0 1px;
+      transition-delay: 90ms;
     }
     & > [data-reorder-id]:not(.reorder-raised):has(+ * + :is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold), :hover, :has(:focus-visible))) {
-      translate: 0 -1.5px;
+      translate: 0 -2px;
+      transition-delay: 45ms;
     }
     & > :is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold), :hover, :has(:focus-visible)) + * + [data-reorder-id]:not(.reorder-raised) {
-      translate: 0 1.5px;
+      translate: 0 2px;
+      transition-delay: 45ms;
     }
     & > [data-reorder-id]:not(.reorder-raised):has(+ :is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold), :hover, :has(:focus-visible))) {
-      translate: 0 -3px;
+      translate: 0 -4px;
+      transition-delay: 15ms;
     }
     & > :is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold), :hover, :has(:focus-visible)) + [data-reorder-id]:not(.reorder-raised) {
-      translate: 0 3px;
+      translate: 0 4px;
+      transition-delay: 15ms;
     }
     & > [data-reorder-id]:not(.reorder-raised):is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold), :hover, :has(:focus-visible)) {
       translate: 0 0;
+      transition-delay: 0ms;
     }
   }
 
   :where(:root:not(.is-reordering) #accounts:not(.compact) .account-group-members) {
     & > .account-member:not(.reorder-raised):has(+ * + :is(.flip-raised, .hover-hold, :hover, :has(:focus-visible))) {
-      translate: 0 -0.5px;
+      translate: 0 -1px;
+      transition-delay: 45ms;
     }
     & > :is(.flip-raised, .hover-hold, :hover, :has(:focus-visible)) + * + .account-member:not(.reorder-raised) {
-      translate: 0 0.5px;
+      translate: 0 1px;
+      transition-delay: 45ms;
     }
     & > .account-member:not(.reorder-raised):has(+ :is(.flip-raised, .hover-hold, :hover, :has(:focus-visible))) {
-      translate: 0 -1.5px;
+      translate: 0 -2px;
+      transition-delay: 15ms;
     }
     & > :is(.flip-raised, .hover-hold, :hover, :has(:focus-visible)) + .account-member:not(.reorder-raised) {
-      translate: 0 1.5px;
+      translate: 0 2px;
+      transition-delay: 15ms;
     }
     & > .account-member:not(.reorder-raised):is(.flip-raised, .hover-hold, :hover, :has(:focus-visible)) {
       translate: 0 0;
+      transition-delay: 0ms;
     }
   }
 }
