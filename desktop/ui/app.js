@@ -1773,6 +1773,17 @@ function renderAccounts(accounts) {
     ? [document.activeElement.selectionStart, document.activeElement.selectionEnd]
     : null;
   list.className = collapsed ? "account-list compact block flush" : "account-list";
+  // Preserve hover elevation across DOM replacement until :hover re-settles.
+  const hoveredEntries = new Set(
+    [...list.querySelectorAll("[data-reorder-id]:is(:hover, .hover-hold)")].map(
+      (n) => n.dataset.reorderId,
+    ),
+  );
+  const hoveredCards = new Set(
+    [...list.querySelectorAll("[data-card-id]:is(:hover, .hover-hold)")].map(
+      (n) => n.dataset.cardId,
+    ),
+  );
   // Switching between full and collapsed, the cards' parts are measured too.
   const before = captureLayout(
     list,
@@ -1817,6 +1828,26 @@ function renderAccounts(accounts) {
     }
     list.append(node);
   }
+  const held = [];
+  if (hoveredEntries.size || hoveredCards.size) {
+    for (const node of list.querySelectorAll("[data-reorder-id]")) {
+      const key = node.dataset.reorderId;
+      if (key !== turningEntry && hoveredEntries.has(key)) {
+        node.classList.add("hover-hold");
+        held.push(node);
+      }
+    }
+    for (const node of list.querySelectorAll("[data-card-id]")) {
+      const id = node.dataset.cardId;
+      if (
+        node.closest("[data-reorder-id]")?.dataset.reorderId !== turningEntry &&
+        hoveredCards.has(id)
+      ) {
+        node.classList.add("hover-hold");
+        held.push(node);
+      }
+    }
+  }
   alignMeters(list);
   if (focused) {
     const field = list.querySelector(`[data-back-field="${focused}"]`);
@@ -1825,6 +1856,13 @@ function renderAccounts(accounts) {
   }
   const current = entries.find(entryIsCurrent);
   animateLayout(list, before, current ? entryKey(current) : null);
+  if (held.length) {
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        for (const node of held) node.classList.remove("hover-hold");
+      }),
+    );
+  }
 }
 /// Where each card was before a render: entries by key, every card id and,
 /// for a change of mode, each card's shared parts and the list's rect.
@@ -1834,7 +1872,7 @@ function captureLayout(list, withParts = false) {
     if (node.dataset.reorderId)
       entries.set(node.dataset.reorderId, {
         node,
-        rect: node.getBoundingClientRect(),
+        rect: window.CopoolReorder?.unscaledRect?.(node) ?? node.getBoundingClientRect(),
         measure: withParts ? window.CopoolMorph.measure(node) : null,
       });
   const cards = new Set(

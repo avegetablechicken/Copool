@@ -949,14 +949,14 @@ main > section.page-leaving {
   right: 5px;
 }
 
-.account:hover > .card-edit,
-.account-member:hover > .card-edit,
+.account:is(:hover, .hover-hold) > .card-edit,
+.account-member:is(:hover, .hover-hold) > .card-edit,
 .card-edit:focus-visible {
   opacity: 1;
   pointer-events: auto;
 }
 
-.account-group:has(.account-member:hover) > .card-edit {
+.account-group:has(.account-member:is(:hover, .hover-hold)) > .card-edit {
   opacity: 0;
   pointer-events: none;
 }
@@ -965,12 +965,13 @@ main > section.page-leaving {
 :where(:root:not(.is-reordering) #accounts) :is([data-reorder-id], [data-card-id]):not(.reorder-raised) {
   transition: scale 150ms ease-out, box-shadow 150ms ease-out, background-color 150ms ease;
 
-  /* The rotating face can briefly move out from under the pointer. */
-  &:is(.flip-raised, :has(.flip-raised)) {
+  /* The rotating face can briefly move out from under the pointer, and a
+     re-render replaces the hovered DOM node before :hover settles again. */
+  &:is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold)) {
     transition: none;
   }
 
-  &:is(.flip-raised, :has(.flip-raised)),
+  &:is(.flip-raised, :has(.flip-raised), .hover-hold, :has(.hover-hold)),
   &:hover,
   &:has(:focus-visible) {
     position: relative;

@@ -51,6 +51,28 @@
       ...options,
     });
   }
+  /// `node`'s viewport rect without its standalone CSS `scale` (hover/focus
+  /// lift), so layout diffs and slides do not mistake lift for motion.
+  function unscaledRect(node) {
+    const rect = node.getBoundingClientRect();
+    const s =
+      typeof getComputedStyle === "function"
+        ? parseFloat(getComputedStyle(node).scale) || 1
+        : 1;
+    if (s === 1) return rect;
+    const width = rect.width / s;
+    const height = rect.height / s;
+    const insetX = (rect.width - width) / 2;
+    const insetY = (rect.height - height) / 2;
+    return {
+      left: rect.left + insetX,
+      top: rect.top + insetY,
+      width,
+      height,
+      right: rect.right - insetX,
+      bottom: rect.bottom - insetY,
+    };
+  }
   /// Slides `node` with the reorder spring from `from`, its rect before the
   /// DOM changed, scaled from that width when it differs (a card caught
   /// growing out of a button). A raised node passes over the others.
@@ -58,11 +80,11 @@
     if (reducedMotion()) return;
     for (const running of node.getAnimations())
       if (running.id !== "pool") running.cancel();
-    const to = node.getBoundingClientRect();
+    const to = unscaledRect(node);
     const dx = from.left - to.left;
     const dy = from.top - to.top;
     const scale = from.width && to.width ? from.width / to.width : 1;
-    if (!dx && !dy && Math.abs(scale - 1) < 0.001) return;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(scale - 1) < 0.001) return;
     const animation = springAnimate(node, [
       {
         transform: `translate(${dx}px, ${dy}px) scale(${scale})`,
@@ -371,5 +393,5 @@
     return { get active() { return !!gesture?.dragging; } };
   }
 
-  return { attach, slide, springAnimate, raiseDuring, targetAt, movedToward, edgeScrollDelta, spring, springEasing };
+  return { attach, slide, unscaledRect, springAnimate, raiseDuring, targetAt, movedToward, edgeScrollDelta, spring, springEasing };
 });

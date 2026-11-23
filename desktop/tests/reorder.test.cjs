@@ -81,3 +81,51 @@ test("A tall neighbour does not swap back while the pointer keeps going", () => 
   // Moving back up returns it.
   assert.deepEqual(drag([100, 300, 100], [...down, ...steps(200, 10)]), [0, 1, 2]);
 });
+test("Hover lift scale is stripped from layout rects so stationary cards do not slide on re-render", () => {
+  const prevGetComputedStyle = global.getComputedStyle;
+  const prevWindow = global.window;
+  try {
+    global.window = { matchMedia: () => ({ matches: false }) };
+    const s = 1.012;
+    const hoveredNode = {
+      getBoundingClientRect: () => ({
+        left: 10 - (320 * (s - 1)) / 2,
+        top: 100 - (100 * (s - 1)) / 2,
+        width: 320 * s,
+        height: 100 * s,
+        right: 330 + (320 * (s - 1)) / 2,
+        bottom: 200 + (100 * (s - 1)) / 2,
+      }),
+    };
+    const animated = [];
+    const replacementNode = {
+      getBoundingClientRect: () => ({
+        left: 10,
+        top: 100,
+        width: 320,
+        height: 100,
+        right: 330,
+        bottom: 200,
+      }),
+      getAnimations: () => [],
+      animate: (...args) => animated.push(args),
+    };
+    global.getComputedStyle = (node) => ({
+      scale: node === hoveredNode ? String(s) : "none",
+    });
+
+    const before = R.unscaledRect(hoveredNode);
+    assert.ok(Math.abs(before.left - 10) < 1e-9);
+    assert.ok(Math.abs(before.top - 100) < 1e-9);
+    assert.ok(Math.abs(before.width - 320) < 1e-9);
+    assert.ok(Math.abs(before.height - 100) < 1e-9);
+
+    R.slide(replacementNode, before, false);
+    assert.equal(animated.length, 0);
+  } finally {
+    if (prevGetComputedStyle === undefined) delete global.getComputedStyle;
+    else global.getComputedStyle = prevGetComputedStyle;
+    if (prevWindow === undefined) delete global.window;
+    else global.window = prevWindow;
+  }
+});
