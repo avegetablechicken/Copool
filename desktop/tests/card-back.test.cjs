@@ -597,3 +597,23 @@ test("what the greeting times do shows on their name, a failed greeting under it
     [["back-note error", "Greeting failed"]],
   );
 });
+
+test("daily greeting times and Add time flow inline after the label and wrap when full", () => {
+  const css = fs
+    .readFileSync(path.join(__dirname, "../ui/style.css"), "utf8")
+    .replace(/\r\n/g, "\n");
+  const rule = (selector) => {
+    const start = css.indexOf(`${selector} {\n`);
+    assert(start >= 0, `${selector} rule found`);
+    const end = css.indexOf("\n}", start);
+    assert(end > start, `${selector} rule closed`);
+    return css.slice(start, end);
+  };
+  const stack = rule(".back-stack");
+  assert.match(stack, /flex-wrap:\s*wrap;/);
+  assert.doesNotMatch(stack, /flex-direction:\s*column;/);
+  assert.match(rule(".back-stack > .back-label"), /flex:\s*0 1 auto;/);
+  assert.match(rule(".back-stack > .back-label:has(.back-note)"), /flex-basis:\s*100%;/);
+  assert.match(rule(".back-times"), /display:\s*contents;/);
+  assert.match(rule(".back-time"), /white-space:\s*nowrap;/);
+});

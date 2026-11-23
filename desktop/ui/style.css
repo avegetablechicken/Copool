@@ -1185,10 +1185,21 @@ main > section.page-leaving {
 }
 
 .back-stack {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  padding-bottom: 7px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.back-stack > .back-label {
+  flex: 0 1 auto;
+  margin-right: 4px;
+}
+
+.back-stack > .back-label:has(.back-note) {
+  flex-basis: 100%;
+  margin-right: 0;
 }
 
 /* A choice is its value against its arrows, as a pop-up button in a
@@ -1225,9 +1236,7 @@ main > section.page-leaving {
 }
 
 .back-times {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  display: contents;
 }
 
 .back-time {
@@ -1240,6 +1249,7 @@ main > section.page-leaving {
   background: var(--control);
   box-shadow: 0 0 0 0.5px var(--control-border);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .back-time.add {
