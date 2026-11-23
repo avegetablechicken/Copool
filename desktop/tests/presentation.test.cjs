@@ -601,3 +601,20 @@ test("Used percent floors and remaining percent ceils across cards and compact m
     args: [],
   });
 });
+test("an unused five-hour window shows its 0% as not started", () => {
+  const view = (usage) => P.card({ ...a, usage: { ...a.usage, ...usage } }, false, "used");
+  const idle = view({ fiveHour: { usedPercent: 0, resetAt: null, windowSeconds: 18000 } });
+  assert.equal(idle.fiveHour.notStarted, true);
+  assert.equal(idle.fiveHour.available, true);
+  assert.equal(idle.fiveHour.primaryPercent, 0);
+  // A started window, any usage, a missing window or a weekly window is not.
+  for (const fiveHour of [
+    { usedPercent: 0, resetAt: 1763216000 },
+    { usedPercent: 1, resetAt: null },
+    undefined,
+  ])
+    assert.equal(view({ fiveHour }).fiveHour.notStarted, false);
+  assert.equal(view({ oneWeek: { usedPercent: 0, resetAt: null } }).oneWeek.notStarted, false);
+  const antigravity = view({ thirdPartyFiveHour: { usedPercent: 0, resetAt: null } });
+  assert.equal(antigravity.thirdPartyFiveHour.notStarted, true);
+});

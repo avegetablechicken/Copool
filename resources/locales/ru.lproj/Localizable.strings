@@ -144,6 +144,7 @@
 "accounts.window.sub2api_weekly_unavailable_format" = "Sub2api %@ не сообщает недельное использование.";
 "accounts.window.sub2api_weekly_upgrade" = "Обновите Sub2api до версии 0.2.20 или новее, чтобы его увидеть.";
 "accounts.window.reset_unavailable" = "Время сброса недоступно";
+"accounts.window.not_started" = "Не начато";
 "accounts.window.resets_in_format" = "Сброс через %@";
 "accounts.window.resets_soon" = "Скоро сброс";
 "accounts.compact.used" = "ИСПОЛЬЗОВАНО";

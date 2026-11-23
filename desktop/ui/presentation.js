@@ -313,11 +313,15 @@
     window,
     mode = "used",
     formatDate = (value) => formatReset(value),
+    startsOnUse = false,
   ) {
     const used = Math.floor(displayPercent(window, "used", 100));
     return {
       // A missing window (e.g. no five-hour limit) has no data to show.
       available: displayPercent(window) !== null,
+      // A five-hour window starts on first use. Unused, it has a real 0% but no
+      // reset; a countdown would read as an open window, as in OpenQuota.
+      notStarted: startsOnUse && displayPercent(window) === 0 && window?.resetAt == null,
       tone: usageTone(window),
       paceWindow: window,
       progressPercent: mode === "remaining" ? 100 - used : used,
@@ -389,14 +393,19 @@
           : Number.isFinite(Number(credits.balance))
             ? String(Math.round(Number(credits.balance)))
             : credits.balance,
-      fiveHour: windowPresentation(account.usage?.fiveHour, mode, formatDate),
+      fiveHour: windowPresentation(account.usage?.fiveHour, mode, formatDate, true),
       oneWeek: windowPresentation(account.usage?.oneWeek, mode, formatDate),
       // Codex Free's 30-day monthly window, shown only when reported.
       oneMonth: windowPresentation(account.usage?.oneMonth, mode, formatDate),
       // Claude's weekly Fable window, shown only on accounts that report it.
       fableOneWeek: windowPresentation(account.usage?.fableOneWeek, mode, formatDate),
       // Antigravity's third-party (Claude) pool.
-      thirdPartyFiveHour: windowPresentation(account.usage?.thirdPartyFiveHour, mode, formatDate),
+      thirdPartyFiveHour: windowPresentation(
+        account.usage?.thirdPartyFiveHour,
+        mode,
+        formatDate,
+        true,
+      ),
       thirdPartyOneWeek: windowPresentation(account.usage?.thirdPartyOneWeek, mode, formatDate),
       // The Sub2api version too old to report the card's weekly usage.
       outdatedSub2api: clean(account.outdatedSub2apiVersion) || null,

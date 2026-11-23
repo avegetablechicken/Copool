@@ -144,6 +144,7 @@
 "accounts.window.sub2api_weekly_unavailable_format" = "Sub2api %@ meldet keine Wochennutzung.";
 "accounts.window.sub2api_weekly_upgrade" = "Aktualisieren Sie Sub2api auf 0.2.20 oder neuer, um sie anzuzeigen.";
 "accounts.window.reset_unavailable" = "Zurücksetzung nicht verfügbar";
+"accounts.window.not_started" = "Nicht gestartet";
 "accounts.window.resets_in_format" = "Zurücksetzung in %@";
 "accounts.window.resets_soon" = "Zurücksetzung in Kürze";
 "accounts.compact.used" = "VERBRAUCHT";

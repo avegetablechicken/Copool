@@ -371,6 +371,7 @@ function usageMode() {
 }
 /// A window's reset time in `mode`: the date and time, or the time left.
 function resetLabel(view, mode) {
+  if (view.notStarted) return tr("accounts.window.not_started");
   if (!view.available || view.resetAt == null)
     return tr("accounts.window.reset_unavailable");
   if (mode === "exact")

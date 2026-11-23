@@ -144,6 +144,7 @@
 "accounts.window.sub2api_weekly_unavailable_format" = "Sub2api %@ 不提供週用量。";
 "accounts.window.sub2api_weekly_upgrade" = "將 Sub2api 升級至 0.2.20 或更新版本後即可顯示。";
 "accounts.window.reset_unavailable" = "重置時間無法取得";
+"accounts.window.not_started" = "未開始";
 "accounts.window.resets_in_format" = "%@後重置";
 "accounts.window.resets_soon" = "即將重置";
 "accounts.compact.used" = "已用";

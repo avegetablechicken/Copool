@@ -144,6 +144,7 @@
 "accounts.window.sub2api_weekly_unavailable_format" = "Sub2api %@ meldt geen weekgebruik.";
 "accounts.window.sub2api_weekly_upgrade" = "Werk Sub2api bij naar 0.2.20 of later om het te zien.";
 "accounts.window.reset_unavailable" = "Reset niet beschikbaar";
+"accounts.window.not_started" = "Niet gestart";
 "accounts.window.resets_in_format" = "Reset over %@";
 "accounts.window.resets_soon" = "Reset binnenkort";
 "accounts.compact.used" = "GEBRUIKT";
