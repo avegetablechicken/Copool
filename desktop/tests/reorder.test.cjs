@@ -86,7 +86,7 @@ test("Hover lift scale is stripped from layout rects so stationary cards do not 
   const prevWindow = global.window;
   try {
     global.window = { matchMedia: () => ({ matches: false }) };
-    const s = 1.012;
+    const s = 1.006;
     const hoveredNode = {
       getBoundingClientRect: () => ({
         left: 10 - (320 * (s - 1)) / 2,
@@ -110,8 +110,31 @@ test("Hover lift scale is stripped from layout rects so stationary cards do not 
       getAnimations: () => [],
       animate: (...args) => animated.push(args),
     };
+    const pushedNeighbor = {
+      getBoundingClientRect: () => ({
+        left: 10,
+        top: 203,
+        width: 320,
+        height: 100,
+        right: 330,
+        bottom: 303,
+      }),
+    };
+    const neighborReplacement = {
+      getBoundingClientRect: () => ({
+        left: 10,
+        top: 200,
+        width: 320,
+        height: 100,
+        right: 330,
+        bottom: 300,
+      }),
+      getAnimations: () => [],
+      animate: (...args) => animated.push(args),
+    };
     global.getComputedStyle = (node) => ({
       scale: node === hoveredNode ? String(s) : "none",
+      translate: node === pushedNeighbor ? "0px 3px" : "none",
     });
 
     const before = R.unscaledRect(hoveredNode);
@@ -121,6 +144,9 @@ test("Hover lift scale is stripped from layout rects so stationary cards do not 
     assert.ok(Math.abs(before.height - 100) < 1e-9);
 
     R.slide(replacementNode, before, false);
+    const neighborBefore = R.unscaledRect(pushedNeighbor);
+    assert.equal(neighborBefore.top, 200);
+    R.slide(neighborReplacement, neighborBefore, false);
     assert.equal(animated.length, 0);
   } finally {
     if (prevGetComputedStyle === undefined) delete global.getComputedStyle;

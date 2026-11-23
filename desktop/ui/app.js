@@ -888,7 +888,7 @@ async function turnCard(key, direction, change) {
   const before = entry?.offsetHeight;
   const keyboardFocus = node?.contains(document.activeElement) &&
     document.activeElement.matches(":focus-visible");
-  const raised = !still && node?.matches(":hover, :has(:focus-visible), .flip-raised");
+  const raised = !still && node?.matches(":hover, :has(:focus-visible), .flip-raised, .hover-hold");
   if (node && !still) {
     if (raised) node.classList.add("flip-raised");
     await node
@@ -1722,6 +1722,23 @@ function entryIsCurrent(entry) {
     ? entry.account.isCurrent
     : entry.accounts.some((a) => a.isCurrent);
 }
+let heldHoverNodes = [];
+function clearHoverHold() {
+  if (!heldHoverNodes.length) return;
+  const nodes = heldHoverNodes;
+  heldHoverNodes = [];
+  for (const node of nodes) node.classList.remove("hover-hold");
+}
+for (const type of ["pointermove", "wheel", "blur"])
+  window.addEventListener(type, clearHoverHold, { passive: true });
+document.documentElement.addEventListener("pointerleave", clearHoverHold, { passive: true });
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (event.key === "Tab") clearHoverHold();
+  },
+  { capture: true, passive: true },
+);
 function renderAccounts(accounts) {
   if (reorderingAccounts) return;
   const renderState = [
@@ -1848,6 +1865,7 @@ function renderAccounts(accounts) {
       }
     }
   }
+  heldHoverNodes = held;
   alignMeters(list);
   if (focused) {
     const field = list.querySelector(`[data-back-field="${focused}"]`);
@@ -1856,13 +1874,6 @@ function renderAccounts(accounts) {
   }
   const current = entries.find(entryIsCurrent);
   animateLayout(list, before, current ? entryKey(current) : null);
-  if (held.length) {
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        for (const node of held) node.classList.remove("hover-hold");
-      }),
-    );
-  }
 }
 /// Where each card was before a render: entries by key, every card id and,
 /// for a change of mode, each card's shared parts and the list's rect.
@@ -2987,7 +2998,7 @@ function hoveredEditableCard() {
   if (typeof reorderingAccounts !== "undefined" && reorderingAccounts) return null;
   const list = document.getElementById?.("accounts");
   if (!list) return null;
-  const hovered = [...list.querySelectorAll("[data-flip-key]:hover")];
+  const hovered = [...list.querySelectorAll("[data-flip-key]:is(:hover, .hover-hold)")];
   // Innermost first: a grouped account with its own back wins over its group,
   // while one without a back falls through to its group (as contextmenu does).
   for (let i = hovered.length - 1; i >= 0; i--) {
@@ -3382,6 +3393,7 @@ window.__TAURI__.event
   .listen("panel-hidden", () => {
     menuBarNavigation = false;
     panelHiddenAt = Date.now();
+    clearHoverHold();
     closeMenu();
   })
   .catch((error) => notice(error, true));

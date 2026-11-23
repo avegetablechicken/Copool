@@ -196,7 +196,7 @@ test("Return flips the hovered account card to edit, unless a focused UI element
   document.querySelector = () => null;
   document.getElementById = (id) =>
     id === "accounts"
-      ? { querySelectorAll: (sel) => (sel === "[data-flip-key]:hover" ? hovered : []) }
+      ? { querySelectorAll: (sel) => (sel === "[data-flip-key]:is(:hover, .hover-hold)" ? hovered : []) }
       : null;
 
   const accounts = [

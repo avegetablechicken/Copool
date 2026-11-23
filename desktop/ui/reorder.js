@@ -51,26 +51,32 @@
       ...options,
     });
   }
-  /// `node`'s viewport rect without its standalone CSS `scale` (hover/focus
-  /// lift), so layout diffs and slides do not mistake lift for motion.
+  /// `node`'s viewport rect without its standalone CSS `scale` and `translate`
+  /// (hover/focus lift and neighbor push), so layout diffs and slides do not
+  /// mistake lift or push for motion.
   function unscaledRect(node) {
     const rect = node.getBoundingClientRect();
-    const s =
-      typeof getComputedStyle === "function"
-        ? parseFloat(getComputedStyle(node).scale) || 1
-        : 1;
-    if (s === 1) return rect;
+    const style = typeof getComputedStyle === "function" ? getComputedStyle(node) : null;
+    const s = (style && parseFloat(style.scale)) || 1;
+    let tx = 0;
+    let ty = 0;
+    if (style?.translate && style.translate !== "none") {
+      const parts = style.translate.trim().split(/\s+/);
+      tx = parseFloat(parts[0]) || 0;
+      ty = parseFloat(parts[1]) || 0;
+    }
+    if (s === 1 && !tx && !ty) return rect;
     const width = rect.width / s;
     const height = rect.height / s;
     const insetX = (rect.width - width) / 2;
     const insetY = (rect.height - height) / 2;
     return {
-      left: rect.left + insetX,
-      top: rect.top + insetY,
+      left: rect.left + insetX - tx,
+      top: rect.top + insetY - ty,
       width,
       height,
-      right: rect.right - insetX,
-      bottom: rect.bottom - insetY,
+      right: rect.right - insetX - tx,
+      bottom: rect.bottom - insetY - ty,
     };
   }
   /// Slides `node` with the reorder spring from `from`, its rect before the
