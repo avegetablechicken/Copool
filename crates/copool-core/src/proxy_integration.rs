@@ -53,14 +53,22 @@ pub(crate) fn environment_key(name: &str, shell: Shell) -> Option<String> {
 /// which is what the tools started from it get: asked again, not this
 /// process's. Elsewhere than Unix, where no shell is asked, this process's.
 pub(crate) fn new_shell_keys(names: &[&str], shell: Shell) -> Vec<Option<String>> {
+    new_shell_keys_filtered(names, shell, false)
+}
+/// Like `new_shell_keys`, but ignoring any `.env` block Copool loads from the
+/// user's shell startup file (`OWN_EXPORTS_ONLY`).
+pub(crate) fn new_shell_own_keys(names: &[&str], shell: Shell) -> Vec<Option<String>> {
+    new_shell_keys_filtered(names, shell, true)
+}
+fn new_shell_keys_filtered(names: &[&str], shell: Shell, own_only: bool) -> Vec<Option<String>> {
     #[cfg(unix)]
     if names.iter().all(|name| is_variable(name)) {
         let program = std::env::var("SHELL").unwrap_or("/bin/sh".into());
         let (flags, timeout) = shell_flags(shell);
-        return login_shell_keys(&program, flags, names, timeout, false);
+        return login_shell_keys(&program, flags, names, timeout, own_only);
     }
     #[cfg(not(unix))]
-    let _ = shell;
+    let _ = (shell, own_only);
     names
         .iter()
         .map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()))

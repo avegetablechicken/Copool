@@ -598,6 +598,7 @@
 "error.grok.sub2api_api_key_missing" = "提供者的 API Key 變數未匯出；請先在 shell 中匯出它，再切換到 Sub2api 卡片";
 "error.grok.api_key_variable_invalid" = "請填寫存放 API Key 的變數名稱，例如 GROK_SUB2API_API_KEY，而不是 Key 本身";
 "error.grok.config_invalid" = "Grok Build 的 config.toml 不是有效的 TOML，請先修正 ~/.grok/config.toml";
+"error.grok.xai_env_not_loaded" = "Copool 已將 XAI_API_KEY 寫入 ~/.grok/.env 並讓 ~/.zshrc 或 ~/.bashrc 載入它，但新 shell 中的值仍不同；請移除其他地方的匯出或直接使用 XAI_API_KEY 後重試";
 "error.grok.sub2api_no_models" = "沒有可送往 Sub2api 的 Grok 模型：Grok Build 的模型清單和 Sub2api 閘道都沒有列出";
 "error.grok.sub2api_models_taken" = "~/.grok/config.toml 裡每個 Grok 模型都已指向你自己設定的位址；Copool 不更動它們，未切換到 Sub2api";
 "accounts.window.sub2api_grok_weekly_upgrade" = "將 Sub2api 升級至 0.1.155 或更新版本後即可顯示。";

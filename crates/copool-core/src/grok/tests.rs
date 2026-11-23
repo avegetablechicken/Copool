@@ -914,14 +914,21 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
         moved.clone(),
         h.app.paths.data_dir.join("grok-accounts.json"),
     );
-    h.app.set_grok_environment(Arc::new(move |name: &str| {
-        if let Some(url) = edit.lock().unwrap().as_deref() {
-            let mut store: Value = serde_json::from_slice(&fs::read(&store_file).unwrap()).unwrap();
-            store["providers"][0]["baseURL"] = url.into();
-            fs::write(&store_file, store.to_string()).unwrap();
-        }
-        (name == "XAI_API_KEY").then(|| (*exported.lock().unwrap()).to_owned())
-    }));
+    h.app
+        .set_grok_environment(Arc::new(move |names: &[&str], _now: bool| {
+            if let Some(url) = edit.lock().unwrap().as_deref() {
+                let mut store: Value =
+                    serde_json::from_slice(&fs::read(&store_file).unwrap()).unwrap();
+                store["providers"][0]["baseURL"] = url.into();
+                fs::write(&store_file, store.to_string()).unwrap();
+            }
+            names
+                .iter()
+                .map(|name| {
+                    (*name == "XAI_API_KEY").then(|| (*exported.lock().unwrap()).to_owned())
+                })
+                .collect()
+        }));
     assert!(h
         .app
         .switch_account(Pool::Grok, &card.id)
@@ -950,39 +957,24 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
         )
         .await
         .unwrap();
-    // Every model it would route names an endpoint of the user's own: the
-    // switch is refused, and Grok Build left as it was.
-    let mut taken = "[models]\nweb_search = \"grok-4.5\"\n".to_owned();
-    for model in ["grok-4.7", "grok-4.5", "grok-4.6", "grok-3-mini"] {
-        taken += &format!("\n[model.\"{model}\"]\nbase_url = \"http://localhost:11434/v1\"\n");
-    }
-    fs::write(&config, &taken).unwrap();
-    assert_eq!(
-        h.app
-            .switch_account(Pool::Grok, &card.id)
-            .await
-            .unwrap_err(),
-        sub2api::MODELS_TAKEN
-    );
-    assert_eq!(fs::read_to_string(&config).unwrap(), taken);
-    assert!(h.app.grok_load().unwrap().config_record.is_none());
-    fs::write(&config, original).unwrap();
     let execution = h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
     assert_eq!(execution.provider.as_deref(), Some("Relay"));
     let switched: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
     assert_eq!(
-        switched["endpoints"]["models_base_url"].as_str(),
+        switched["endpoints"]["cli_chat_proxy_base_url"].as_str(),
         Some(format!("{base}/v1").as_str())
     );
     assert_eq!(
-        switched["endpoints"]["models_list_url"].as_str(),
-        Some(format!("{base}/v1/models").as_str())
+        switched["endpoints"]["xai_api_base_url"].as_str(),
+        Some(format!("{base}/v1").as_str())
     );
+    assert!(switched["endpoints"].get("models_base_url").is_none());
+    assert!(switched["endpoints"].get("models_list_url").is_none());
     assert_eq!(
         switched["auth"]["preferred_method"].as_str(),
         Some("api_key")
     );
-    // Global model discovery needs no overrides, including for existing roles.
+    // Session-level endpoints leave the user's `[model]` and `[models]` tables intact.
     let before: toml_edit::DocumentMut = original.parse().unwrap();
     assert_eq!(switched["model"].to_string(), before["model"].to_string());
     assert_eq!(switched["models"].to_string(), before["models"].to_string());
@@ -1045,7 +1037,11 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
     h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
     let applied: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
     assert_eq!(
-        applied["endpoints"]["models_base_url"].as_str(),
+        applied["endpoints"]["cli_chat_proxy_base_url"].as_str(),
+        Some(coport)
+    );
+    assert_eq!(
+        applied["endpoints"]["xai_api_base_url"].as_str(),
         Some(coport)
     );
     assert!(cards(&h.app)
@@ -1080,6 +1076,8 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
     h.app.import_current(Pool::Grok).await.unwrap();
     let subscription = cards(&h.app).await.remove(0);
     let config = h.auth.with_file_name("config.toml");
+    let env_file = sub2api::env_path(&config);
+    let rc_file = h.auth.with_file_name(".zshrc");
     let listener = "http://127.0.0.1:8787/grok/v1";
     let original = format!(
         "[endpoints]\ncli_chat_proxy_base_url = '{listener}'\nxai_api_base_url = '{listener}' # Coport\n"
@@ -1095,9 +1093,32 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
     let gateway = "http://127.0.0.1:8787/grok/https://relay.example:6060/v1";
     *h.fake.gateway.lock().unwrap() = Some(json!({"data": [{"id":"grok-test"}]}));
     for variable in ["XAI_API_KEY", "SUB2API_KEY"] {
-        h.app.set_grok_environment(Arc::new(move |name| {
-            (name == variable).then(|| "sub2api-key".into())
-        }));
+        let rc_for_env = rc_file.clone();
+        let env_for_env = env_file.clone();
+        h.app.set_grok_shell_rc(rc_file.clone());
+        h.app
+            .set_grok_environment(Arc::new(move |names: &[&str], now: bool| {
+                // Emulate a new shell loading `.zshrc` -> `~/.grok/.env` when `now == true`.
+                let rc_loads_env = now
+                    && fs::read_to_string(&rc_for_env)
+                        .is_ok_and(|t| t.contains(&env_for_env.display().to_string()));
+                let bridged = rc_loads_env
+                    && fs::read_to_string(&env_for_env)
+                        .ok()
+                        .is_some_and(|t| sub2api::env_bridges_variable(Some(&t), variable));
+                names
+                    .iter()
+                    .map(|name| {
+                        if *name == variable {
+                            Some("sub2api-key".into())
+                        } else if *name == "XAI_API_KEY" && bridged {
+                            Some("sub2api-key".into())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            }));
         h.app
             .save_provider(
                 Pool::Grok,
@@ -1120,26 +1141,18 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
             .any(|call| call.starts_with(&format!("models {gateway}/models "))));
         let doc: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
         let endpoints = &doc["endpoints"];
-        assert_eq!(
-            endpoints["cli_chat_proxy_base_url"].as_str(),
-            Some(listener)
-        );
+        // Both key modes control the entire session through `[endpoints]` + `[auth]`.
+        assert_eq!(endpoints["cli_chat_proxy_base_url"].as_str(), Some(gateway));
+        assert_eq!(endpoints["xai_api_base_url"].as_str(), Some(gateway));
+        assert!(endpoints.get("models_base_url").is_none());
+        assert!(endpoints.get("models_list_url").is_none());
+        assert_eq!(doc["auth"]["preferred_method"].as_str(), Some("api_key"));
+        assert!(doc.get("model").is_none());
         if variable == "XAI_API_KEY" {
-            assert_eq!(endpoints["models_base_url"].as_str(), Some(gateway));
-            assert_eq!(
-                endpoints["models_list_url"].as_str(),
-                Some(format!("{gateway}/models").as_str())
-            );
-            assert_eq!(endpoints["xai_api_base_url"].as_str(), Some(gateway));
-            assert_eq!(doc["auth"]["preferred_method"].as_str(), Some("api_key"));
-            assert!(doc.get("model").is_none());
+            assert!(!env_file.exists());
         } else {
-            assert_eq!(endpoints["xai_api_base_url"].as_str(), Some(listener));
-            assert!(endpoints.get("models_base_url").is_none());
-            let model = &doc["model"]["grok-test"];
-            assert_eq!(model["env_key"].as_str(), Some(variable));
-            assert_eq!(model["base_url"].as_str(), Some(gateway));
-            assert_eq!(model["api_backend"].as_str(), Some("responses"));
+            let env_text = fs::read_to_string(&env_file).unwrap();
+            assert!(sub2api::env_bridges_variable(Some(&env_text), variable));
         }
         assert!(cards(&h.app)
             .await
@@ -1150,9 +1163,35 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
             .await
             .unwrap();
         assert_eq!(fs::read_to_string(&config).unwrap(), original);
+        assert!(!env_file.exists());
         assert!(cards(&h.app)
             .await
             .iter()
             .any(|c| c.id == subscription.id && c.is_current));
     }
+
+    // When another export overrides XAI_API_KEY in a new shell, the switch
+    // rolls back `.env` and `.zshrc` and refuses to modify `config.toml`.
+    let rc_before = fs::read_to_string(&rc_file).unwrap();
+    h.app
+        .set_grok_environment(Arc::new(|names: &[&str], now: bool| {
+            names
+                .iter()
+                .map(|name| match (*name, now) {
+                    ("SUB2API_KEY", _) => Some("sub2api-key".into()),
+                    ("XAI_API_KEY", true) => Some("different-key".into()),
+                    _ => None,
+                })
+                .collect()
+        }));
+    assert_eq!(
+        h.app
+            .switch_account(Pool::Grok, &card.id)
+            .await
+            .unwrap_err(),
+        sub2api::ENV_NOT_LOADED
+    );
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+    assert!(!env_file.exists());
+    assert_eq!(fs::read_to_string(&rc_file).unwrap(), rc_before);
 }

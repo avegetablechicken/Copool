@@ -1,9 +1,13 @@
 //! Sub2api in the Grok pool: its Grok OAuth accounts as cards, and Grok
 //! Build pointed at its OpenAI-compatible gateway (`<Sub2api>/v1`).
 //!
-//! The gateway is shared by the template's Grok models. A switch records
-//! just the TOML fields it changed, so the next provider or the official
-//! account can restore them, including configs written by older Copool.
+//! A switch sets Grok Build's session endpoints (`cli_chat_proxy_base_url` and
+//! `xai_api_base_url`) and `[auth] preferred_method = "api_key"` in
+//! `config.toml`, recording just the TOML fields it changed or removed so the
+//! next provider or the official account can restore them, including configs
+//! written by older Copool. When the provider uses a variable other than
+//! `XAI_API_KEY`, Copool bridges `XAI_API_KEY="${<variable>}"` in `~/.grok/.env`
+//! (loaded from `~/.zshrc` or `~/.bashrc`), and removes that block on leaving.
 mod config;
 use super::{api, Result, Store};
 use crate::{
@@ -12,25 +16,16 @@ use crate::{
     pool::Pool,
     sub2api::{self, Account, Member},
 };
-use config::Layout;
+use config::{Layout, XAI_KEY};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table};
 
 pub(crate) const API_KEY_MISSING: &str = "error.grok.sub2api_api_key_missing";
 pub(crate) const API_KEY_VARIABLE_INVALID: &str = "error.grok.api_key_variable_invalid";
+pub(crate) const ENV_NOT_LOADED: &str = "error.grok.xai_env_not_loaded";
 pub(crate) const CONFIG_INVALID: &str = "error.grok.config_invalid";
-pub(crate) const NO_MODELS: &str = "error.grok.sub2api_no_models";
-pub(crate) const MODELS_TAKEN: &str = "error.grok.sub2api_models_taken";
 const CONFIGURATION_INCOMPLETE: &str = "error.sub2api.configuration_incomplete";
-/// The roles `[models]` gives a model besides the default.
-const ROLES: [&str; 4] = [
-    "default",
-    "web_search",
-    "session_summary",
-    "image_description",
-];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -112,7 +107,7 @@ fn member(p: &Provider) -> Member {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub(super) struct ConfigRecord {
-    /// The gateway the models were last given.
+    /// The gateway the session was last pointed at.
     gateway: String,
     /// Whether there was no `config.toml` before.
     created: bool,
@@ -121,8 +116,8 @@ pub(super) struct ConfigRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     layout: Option<Layout>,
 }
-/// A model the switch gave the gateway: the TOML values the switch
-/// replaced and whether the table was new.
+/// Legacy per-model record from earlier Copool versions, kept so switching
+/// away cleanly restores older configs.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 struct ModelRecord {
@@ -186,60 +181,175 @@ fn put_value(table: &mut Table, key: &str, text: Option<&str>) {
         }
     }
 }
-/// The models Grok Build may use that `config.toml` names: those its
-/// `[models]` gives a role.
-fn configured_models(doc: &DocumentMut) -> Vec<String> {
-    ROLES
-        .iter()
-        .filter_map(|role| doc.get("models")?.get(role)?.as_str())
-        .map(str::to_owned)
-        .collect()
+
+/// Grok's `.env`, beside `config.toml` (`~/.grok/.env`).
+pub(super) fn env_path(config: &Path) -> PathBuf {
+    config.with_file_name(".env")
 }
-/// The Grok text models in a gateway's `/v1/models`: neither images nor
-/// videos.
-pub(super) fn gateway_models(body: &Value) -> Vec<String> {
-    body["data"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|model| model["id"].as_str())
-        .map(str::trim)
-        .filter(|id| {
-            let id = id.to_ascii_lowercase();
-            id.starts_with("grok") && !["imagine", "image", "video"].iter().any(|m| id.contains(m))
-        })
-        .map(str::to_owned)
-        .collect()
+/// Copool's block in `~/.grok/.env`: bridges a provider's custom variable to
+/// `XAI_API_KEY` for Grok Build's session-wide API-key mode.
+const BLOCK_START: &str =
+    "# >>> Copool: Grok Build's Sub2api provider (rewritten on each switch) >>>";
+const BLOCK_END: &str = "# <<< Copool <<<";
+fn has_block(text: &str) -> bool {
+    text.lines().any(|line| line.trim_end() == BLOCK_START)
 }
+pub(super) fn env_has_block(text: Option<&str>) -> bool {
+    text.is_some_and(has_block)
+}
+pub(super) fn env_bridges_variable(text: Option<&str>, variable: &str) -> bool {
+    let Some(text) = text else {
+        return false;
+    };
+    let expected = format!("{XAI_KEY}=\"${{{variable}}}\"");
+    let mut inside = false;
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed == BLOCK_START {
+            inside = true;
+            continue;
+        }
+        if trimmed == BLOCK_END {
+            inside = false;
+            continue;
+        }
+        if inside && trimmed == expected {
+            return true;
+        }
+    }
+    false
+}
+/// The text without Copool's block and the blank line `with_block` put
+/// before it, its other lines as they were.
+fn without_block(text: &str) -> String {
+    let mut inside = false;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        if trimmed == BLOCK_START {
+            inside = true;
+            if kept.last().is_some_and(|l| l.trim().is_empty()) {
+                kept.pop();
+            }
+        }
+        if !inside {
+            kept.push(line);
+        }
+        if trimmed == BLOCK_END {
+            inside = false;
+        }
+    }
+    kept.concat()
+}
+/// `.env` with Copool's block at its end, assigning `XAI_API_KEY` from the
+/// provider's variable, in the file's newlines.
+fn with_block(text: Option<&str>, variable: &str) -> Result<String> {
+    if !crate::proxy_integration::is_variable(variable) {
+        return Err(API_KEY_VARIABLE_INVALID.into());
+    }
+    let lines = [
+        BLOCK_START.to_owned(),
+        format!("{XAI_KEY}=\"${{{variable}}}\""),
+        BLOCK_END.to_owned(),
+    ];
+    let text = without_block(text.unwrap_or(""));
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let separator = if text.is_empty() {
+        String::new()
+    } else if text.ends_with('\n') {
+        newline.to_owned()
+    } else {
+        newline.repeat(2)
+    };
+    Ok(format!("{text}{separator}{}{newline}", lines.join(newline)))
+}
+/// The lines a shell's startup file loads Grok's `.env` with, exporting
+/// `XAI_API_KEY` from the provider's variable; skipped under `OWN_EXPORTS_ONLY`.
+fn rc_lines(env: &Path) -> Result<String> {
+    let env = env
+        .to_str()
+        .filter(|p| env.is_absolute() && !p.contains('\'') && !p.contains(char::is_control))
+        .ok_or("Invalid .env path")?;
+    let own = crate::proxy_integration::OWN_EXPORTS_ONLY;
+    Ok(format!(
+        "# Copool: Grok Build's Sub2api key, from Grok's .env.\n\
+         [ -z \"${{{own}:-}}\" ] && [ -f '{env}' ] && {{ set -a; . '{env}'; set +a; }}\n"
+    ))
+}
+#[derive(Debug, PartialEq)]
+struct Appended {
+    before: Option<u64>,
+    text: String,
+}
+fn load_env_in(rc: &Path, env: &Path) -> Result<Option<Appended>> {
+    use std::io::Write;
+    let lines = rc_lines(env)?;
+    let text = read_text(rc)?;
+    if text.as_deref().is_some_and(|t| t.ends_with(&lines)) {
+        return Ok(None);
+    }
+    let before = text.as_ref().map(|t| t.len() as u64);
+    let separator = match text.as_deref() {
+        None | Some("") => "",
+        Some(t) if t.ends_with('\n') => "\n",
+        Some(_) => "\n\n",
+    };
+    let text = format!("{separator}{lines}");
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(rc)
+        .and_then(|mut file| file.write_all(text.as_bytes()))
+        .map_err(|e| e.to_string())?;
+    Ok(Some(Appended { before, text }))
+}
+fn unload_env_in(rc: &Path, appended: &Appended) {
+    let Ok(Some(now)) = read_text(rc) else {
+        return;
+    };
+    let before = appended.before.unwrap_or(0);
+    if now.len() as u64 != before + appended.text.len() as u64 || !now.ends_with(&appended.text) {
+        return;
+    }
+    let _ = match appended.before {
+        None => std::fs::remove_file(rc),
+        Some(len) => std::fs::OpenOptions::new()
+            .write(true)
+            .open(rc)
+            .and_then(|file| file.set_len(len)),
+    };
+}
+/// What a provider's switch changed outside `config.toml`, to take back
+/// when a later step fails.
+struct EnvChanges {
+    env: Option<(PathBuf, Option<String>)>,
+    rc: Option<(PathBuf, Appended)>,
+}
+impl EnvChanges {
+    fn undo(&self) {
+        if let Some((rc, appended)) = &self.rc {
+            unload_env_in(rc, appended);
+        }
+        if let Some((env, previous)) = &self.env {
+            let _ = put_text(env, previous.as_deref());
+        }
+    }
+}
+
 fn apply(
     doc: &mut DocumentMut,
     record: &mut ConfigRecord,
-    listed: &[String],
     gateway: &str,
     variable: &str,
 ) -> Result<()> {
-    let previous_default = doc
-        .get("models")
-        .and_then(|t| t.get("default"))
-        .and_then(Item::as_str)
-        .map(str::to_owned);
     restore(doc, record)?;
-    record.layout = Some(Layout::apply(
-        doc,
-        listed,
-        gateway,
-        variable,
-        previous_default.as_deref(),
-    )?);
+    record.layout = Some(Layout::apply(doc, gateway, variable)?);
     record.models.clear();
     record.gateway = gateway.into();
     Ok(())
 }
 
-/// Puts back what the switch replaced: a model's earlier `base_url` and
-/// `env_key`, and no table where there was none (with what the user added
-/// to it since kept). A model the user has taken off the gateway since is
-/// theirs.
+/// Puts back what the switch replaced, including older per-model layouts.
 fn restore(doc: &mut DocumentMut, record: &ConfigRecord) -> Result<()> {
     if let Some(layout) = &record.layout {
         return layout.restore(doc);
@@ -275,7 +385,7 @@ fn restore(doc: &mut DocumentMut, record: &ConfigRecord) -> Result<()> {
     }
     Ok(())
 }
-/// Whether the model's `base_url` is the gateway.
+/// Whether a legacy model's `base_url` is the gateway.
 fn on_gateway(doc: &DocumentMut, gateway: &str, id: &str) -> bool {
     doc.get("model")
         .and_then(|t| t.get(id))
@@ -283,8 +393,7 @@ fn on_gateway(doc: &DocumentMut, gateway: &str, id: &str) -> bool {
         .and_then(Item::as_str)
         == Some(gateway)
 }
-/// Whether Grok Build still uses the recorded gateway: some recorded model
-/// has it as `base_url`.
+/// Whether Grok Build still uses the recorded gateway.
 fn uses_gateway(doc: &DocumentMut, record: &ConfigRecord) -> bool {
     if let Some(layout) = &record.layout {
         return layout.active(doc, &record.gateway);
@@ -326,8 +435,11 @@ pub(super) fn current_route<'a>(path: &Path, store: &'a Store) -> CurrentRoute<'
     let Ok(variable) = key_variable(provider) else {
         return CurrentRoute::Unmatched;
     };
+    let env_text = read_text(&env_path(path)).ok().flatten();
     let matches_key = match &record.layout {
-        Some(layout) => layout.matches_provider(&doc, &record.gateway, variable),
+        Some(layout) => {
+            layout.matches_provider(&doc, env_text.as_deref(), &record.gateway, variable)
+        }
         None => record.models.iter().any(|m| {
             on_gateway(&doc, &record.gateway, &m.id)
                 && doc["model"][&m.id].get("env_key").and_then(Item::as_str) == Some(variable)
@@ -342,15 +454,28 @@ pub(super) fn current_route<'a>(path: &Path, store: &'a Store) -> CurrentRoute<'
 /// What leaving the gateway changed, to be undone on a failed switch.
 pub(super) struct Left {
     text: Option<String>,
+    env: Option<(PathBuf, Option<String>)>,
     record: Option<ConfigRecord>,
     provider: Option<String>,
 }
 /// Takes Grok Build off the gateway before an account's switch: what the
-/// provider replaced goes back, and the record with it.
+/// provider replaced goes back, Copool's block in `~/.grok/.env` is removed,
+/// and the record is cleared.
 pub(super) fn leave_gateway(path: &Path, store: &mut Store) -> Result<Left> {
     let text = read_text(path)?;
+    let env = env_path(path);
+    let env_changed = match read_text(&env) {
+        Ok(Some(env_text)) if has_block(&env_text) => {
+            let left = without_block(&env_text);
+            put_text(&env, (!left.trim().is_empty()).then_some(&*left))
+                .ok()
+                .map(|()| (env, Some(env_text)))
+        }
+        _ => None,
+    };
     let left = Left {
         text: text.clone(),
+        env: env_changed,
         record: store.config_record.take(),
         provider: store.config_provider.take(),
     };
@@ -373,6 +498,9 @@ pub(super) fn leave_gateway(path: &Path, store: &mut Store) -> Result<Left> {
 pub(super) fn restore_left(path: &Path, store: &mut Store, left: Left) {
     if left.record.is_some() {
         let _ = put_text(path, left.text.as_deref());
+    }
+    if let Some((env, previous)) = left.env {
+        let _ = put_text(&env, previous.as_deref());
     }
     store.config_record = left.record;
     store.config_provider = left.provider;
@@ -518,21 +646,78 @@ impl Application {
             },
         })
     }
-    /// A variable's value as a terminal opened now exports it, which Grok
-    /// Build started there has. Asked off the runtime, for the shell may
-    /// take seconds.
-    async fn grok_exported(&self, name: &str) -> Result<Option<String>> {
+    /// Variables in Grok Build's environment: with `now`, as a new shell
+    /// exports them (including `~/.grok/.env`); otherwise the user's own
+    /// exports alone (`OWN_EXPORTS_ONLY`). Asked off the runtime, for the
+    /// shell may take seconds.
+    async fn grok_exported(&self, names: &[&str], now: bool) -> Result<Vec<Option<String>>> {
         let environment = self.grok.environment.read().unwrap().clone();
-        let name = name.to_owned();
-        tokio::task::spawn_blocking(move || environment(&name))
-            .await
-            .map_err(|e| e.to_string())
+        let names: Vec<String> = names.iter().map(|&name| name.to_owned()).collect();
+        tokio::task::spawn_blocking(move || {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            let mut values = environment(&names, now);
+            values.resize(names.len(), None);
+            values
+        })
+        .await
+        .map_err(|e| e.to_string())
     }
-    /// Puts Grok Build on the provider's gateway: each model it may use
-    /// sends the provider's variable there, as `config.toml` gives it,
-    /// recording what that replaced; the login in `auth.json` stays, for an
-    /// account's switch to return to. Called under the pool's operations
-    /// lock.
+    /// Whether a new shell exports `XAI_API_KEY` with the provider variable's
+    /// value.
+    async fn grok_env_loaded(&self, variable: &str) -> Result<bool> {
+        let values = self.grok_exported(&[XAI_KEY, variable], true).await?;
+        Ok(values[0].is_some() && values[0] == values[1])
+    }
+    /// Bridges a custom provider variable to `XAI_API_KEY` in `~/.grok/.env`
+    /// (loading it from `~/.zshrc` or `~/.bashrc` when needed), or clears any
+    /// previous bridge when the provider uses `XAI_API_KEY` directly.
+    async fn grok_put_env(&self, config: &Path, variable: &str) -> Result<EnvChanges> {
+        let env = env_path(config);
+        let env_before = read_text(&env)?;
+        if variable == XAI_KEY {
+            if env_before.as_deref().is_some_and(has_block) {
+                let left = without_block(env_before.as_deref().unwrap_or(""));
+                put_text(&env, (!left.trim().is_empty()).then_some(&*left))?;
+                return Ok(EnvChanges {
+                    env: Some((env, env_before)),
+                    rc: None,
+                });
+            }
+            return Ok(EnvChanges {
+                env: None,
+                rc: None,
+            });
+        }
+        put_text(&env, Some(&with_block(env_before.as_deref(), variable)?))?;
+        let mut changes = EnvChanges {
+            env: Some((env.clone(), env_before)),
+            rc: None,
+        };
+        let mut loaded = self.grok_env_loaded(variable).await;
+        if let (Ok(false), Some(rc)) = (&loaded, self.grok_shell_rc()) {
+            loaded = match load_env_in(&rc, &env) {
+                Ok(Some(before)) => {
+                    changes.rc = Some((rc, before));
+                    self.grok_env_loaded(variable).await
+                }
+                Ok(None) => Ok(false),
+                Err(error) => Err(error),
+            };
+        }
+        match loaded {
+            Ok(true) => Ok(changes),
+            other => {
+                changes.undo();
+                Err(other.err().unwrap_or_else(|| ENV_NOT_LOADED.into()))
+            }
+        }
+    }
+    /// Puts Grok Build's session on the provider's gateway: sets
+    /// `cli_chat_proxy_base_url` and `xai_api_base_url` and pins
+    /// `[auth] preferred_method = "api_key"` in `config.toml`, bridging any
+    /// custom key variable to `XAI_API_KEY` in `~/.grok/.env`; the login in
+    /// `auth.json` stays, for an account's switch to return to. Called under
+    /// the pool's operations lock.
     pub(super) async fn grok_switch_sub2api(&self, id: &str) -> Result<SwitchExecution> {
         let (member, account) = self.card(Pool::Grok, id)?;
         if !account.status.eq_ignore_ascii_case("active") {
@@ -547,13 +732,16 @@ impl Application {
         let variable = key_variable(&provider)?;
         // A variable nothing exports would leave Grok Build without a key.
         let key = self
-            .grok_exported(variable)
+            .grok_exported(&[variable], false)
             .await?
+            .into_iter()
+            .next()
+            .flatten()
             .filter(|key| !key.trim().is_empty())
             .ok_or(API_KEY_MISSING)?;
         let gateway = gateway(&provider)?;
-        // The gateway's models, with the key Grok Build will send: a key
-        // Sub2api refuses is refused here, before Grok Build is changed.
+        // Check the gateway with the key Grok Build will send: a key Sub2api
+        // refuses is refused here, before Grok Build is changed.
         let (status, body) = self
             .grok_network()
             .gateway_models(
@@ -567,54 +755,61 @@ impl Application {
             return Err(api::status_error("Sub2api models request", status, &body));
         }
         let path = self.grok_config_path();
-        let _lock = self.grok.lock.lock().await;
-        let mut store = self.grok_load()?;
-        // The key and models were checked outside the lock, for the provider
-        // as it was.
-        let now = store
-            .providers
-            .iter()
-            .find(|p| p.id == provider.id)
-            .ok_or("Account not found")?;
-        if (self::gateway(now)?.as_str(), key_variable(now)?) != (gateway.as_str(), variable) {
-            return Err("The Grok provider changed during the switch; switch again".into());
+        // Outside the store's lock: probing a new shell may take seconds.
+        let env_changes = self.grok_put_env(&path, variable).await?;
+        let applied = self
+            .grok_apply_config(&path, &provider.id, &member.key, &gateway, variable)
+            .await;
+        if applied.is_err() {
+            env_changes.undo();
         }
-        let text = read_text(&path)?;
-        let mut doc = parse(text.as_deref())?;
-        let models = gateway_models(&body);
-        // Between providers, the record of the login's configuration stays.
-        let mut record = store.config_record.clone().unwrap_or(ConfigRecord {
-            created: text.is_none(),
-            ..Default::default()
-        });
-        apply(&mut doc, &mut record, &models, &gateway, variable)?;
-        // Every model names an endpoint of the user's own: Grok Build would
-        // not use the gateway.
-        if !uses_gateway(&doc, &record) {
-            return Err(MODELS_TAKEN.into());
-        }
-        put_text(&path, Some(&doc.to_string()))?;
-        store.config_record = Some(record);
-        store.config_provider = Some(member.key);
-        if let Err(error) = self.grok_save(&store) {
-            let _ = put_text(&path, text.as_deref());
-            return Err(error);
-        }
+        applied?;
         Ok(SwitchExecution {
             provider: Some(provider.name),
             ..Default::default()
         })
     }
+    async fn grok_apply_config(
+        &self,
+        path: &Path,
+        provider_id: &str,
+        member_key: &str,
+        gateway: &str,
+        variable: &str,
+    ) -> Result<()> {
+        let _lock = self.grok.lock.lock().await;
+        let mut store = self.grok_load()?;
+        // The key, gateway and `.env` were prepared outside the lock.
+        let now = store
+            .providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .ok_or("Account not found")?;
+        if (self::gateway(now)?.as_str(), key_variable(now)?) != (gateway, variable) {
+            return Err("The Grok provider changed during the switch; switch again".into());
+        }
+        let text = read_text(path)?;
+        let mut doc = parse(text.as_deref())?;
+        // Between providers, the record of the login's configuration stays.
+        let mut record = store.config_record.clone().unwrap_or(ConfigRecord {
+            created: text.is_none(),
+            ..Default::default()
+        });
+        apply(&mut doc, &mut record, gateway, variable)?;
+        put_text(path, Some(&doc.to_string()))?;
+        store.config_record = Some(record);
+        store.config_provider = Some(member_key.to_owned());
+        if let Err(error) = self.grok_save(&store) {
+            let _ = put_text(path, text.as_deref());
+            return Err(error);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::config::XAI_KEY;
     use super::*;
-
-    fn models(ids: &[&str]) -> Vec<String> {
-        ids.iter().map(|id| (*id).to_owned()).collect()
-    }
 
     #[test]
     fn the_gateway_is_the_root_with_v1_and_admin_is_the_sub2api_in_it() {
@@ -651,24 +846,13 @@ mod tests {
     }
 
     #[test]
-    fn models_come_from_roles_and_the_gateway() {
-        let doc: DocumentMut = "[models]\ndefault = \"grok-4.6\"\nweb_search = \"grok-4.5\"\n"
-            .parse()
-            .unwrap();
-        assert_eq!(configured_models(&doc), ["grok-4.6", "grok-4.5"]);
-        let listed = serde_json::json!({"object": "list", "data": [
-            {"id": "grok-4.6"}, {"id": "grok-imagine-image"}, {"id": "grok-imagine-video-1.5"},
-            {"id": "grok-3-mini"}, {"id": "gpt-5"}
-        ]});
-        assert_eq!(gateway_models(&listed), ["grok-4.6", "grok-3-mini"]);
-    }
-
-    #[test]
-    fn a_switch_gives_each_model_the_gateway_and_leaving_puts_back_what_it_had() {
+    fn a_switch_sets_session_endpoints_and_leaving_puts_back_what_it_had() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
+        let env = env_path(&path);
         let before = "# the user's\n[features]\ntelemetry = false\n\n\
-            [model.\"grok-4.6\"]\ntemperature = 0.5\nenv_key = [\"A\", \"B\"]\napi_backend = \"messages\"\n\n\
+            [endpoints]\ncli_chat_proxy_base_url = 'http://127.0.0.1:8787/grok/v1'\nxai_api_base_url = 'http://127.0.0.1:8787/grok/v1' # Coport\n\n\
+            [model.\"grok-4.6\"]\ntemperature = 0.5\n\n\
             [model.mine]\nmodel = \"local\"\nbase_url = \"http://localhost:11434/v1\"\n";
         put_text(&path, Some(before)).unwrap();
         let mut store = Store::default();
@@ -677,20 +861,26 @@ mod tests {
         apply(
             &mut doc,
             &mut record,
-            &models(&["grok-4.6", "grok-4.7", "mine"]),
             "https://relay.example.com/v1",
             "GROK_SUB2API_API_KEY",
         )
         .unwrap();
         let text = doc.to_string();
         let switched: DocumentMut = text.parse().unwrap();
-        let managed = &switched["model"]["grok-4.6"];
         assert_eq!(
-            managed["base_url"].as_str(),
+            switched["endpoints"]["cli_chat_proxy_base_url"].as_str(),
             Some("https://relay.example.com/v1")
         );
-        assert_eq!(managed["env_key"].as_str(), Some("GROK_SUB2API_API_KEY"));
-        // The user's own endpoint stays theirs.
+        assert_eq!(
+            switched["endpoints"]["xai_api_base_url"].as_str(),
+            Some("https://relay.example.com/v1")
+        );
+        assert!(switched["endpoints"].get("models_base_url").is_none());
+        assert_eq!(
+            switched["auth"]["preferred_method"].as_str(),
+            Some("api_key")
+        );
+        // The user's own model tables stay untouched.
         assert_eq!(
             switched["model"]["mine"]["base_url"].as_str(),
             Some("http://localhost:11434/v1")
@@ -699,8 +889,14 @@ mod tests {
             switched["model"]["grok-4.6"]["temperature"].as_float(),
             Some(0.5)
         );
+        assert!(switched["model"]["grok-4.6"].get("base_url").is_none());
         assert!(text.starts_with("# the user's\n[features]"));
         put_text(&path, Some(&text)).unwrap();
+        put_text(
+            &env,
+            Some(&with_block(None, "GROK_SUB2API_API_KEY").unwrap()),
+        )
+        .unwrap();
         store.config_record = Some(record.clone());
         store.config_provider = Some("p".into());
         store.providers.push(Provider {
@@ -713,69 +909,65 @@ mod tests {
         store.providers[0].api_key_variable = "DIFFERENT".into();
         assert_eq!(current_route(&path, &store), CurrentRoute::Unmatched);
 
-        // Another provider keeps the record of the login's configuration;
-        // a model it does not serve goes back as it was.
+        // Another provider keeps the record of the login's configuration.
         apply(
             &mut doc,
             &mut record,
-            &models(&["grok-4.5", "grok-4.7"]),
             "https://other.example.com/v1",
-            "OTHER",
+            XAI_KEY,
         )
         .unwrap();
-        assert!(record.models.is_empty());
         let other: DocumentMut = doc.to_string().parse().unwrap();
-        assert!(other["model"]["grok-4.6"].get("base_url").is_none());
         assert_eq!(
-            other["model"]["grok-4.6"]["api_backend"].as_str(),
-            Some("messages")
+            other["endpoints"]["cli_chat_proxy_base_url"].as_str(),
+            Some("https://other.example.com/v1")
         );
         assert_eq!(
-            other["model"]["grok-4.6"]["env_key"]
-                .as_array()
-                .map(|a| a.len()),
-            Some(2)
-        );
-        assert!(other["model"].get("grok-4.7").is_none());
-        assert_eq!(
-            other["model"]["grok-4.5"]["base_url"].as_str(),
+            other["endpoints"]["xai_api_base_url"].as_str(),
             Some("https://other.example.com/v1")
         );
         put_text(&path, Some(&doc.to_string())).unwrap();
+        put_text(&env, None).unwrap();
         store.config_record = Some(record);
         store.providers[0].base_url = "https://other.example.com".into();
-        store.providers[0].api_key_variable = "OTHER".into();
+        store.providers[0].api_key_variable = XAI_KEY.into();
         assert_eq!(current_route(&path, &store), CurrentRoute::Provider("p"));
 
+        // Put a custom-var .env block back to verify leave_gateway cleans it up too.
+        put_text(
+            &env,
+            Some(&with_block(Some("KEEP=1\n"), "OTHER_KEY").unwrap()),
+        )
+        .unwrap();
         let left = leave_gateway(&path, &mut store).unwrap();
         assert_eq!(read_text(&path).unwrap().as_deref(), Some(before));
+        assert_eq!(read_text(&env).unwrap().as_deref(), Some("KEEP=1\n"));
         assert!(store.config_record.is_none() && store.config_provider.is_none());
         assert_eq!(current_route(&path, &store), CurrentRoute::Login);
         // A failed account switch takes Grok Build back to the gateway.
         restore_left(&path, &mut store, left);
-        assert_eq!(current_route(&path, &store), CurrentRoute::Provider("p"));
+        assert!(env_bridges_variable(
+            read_text(&env).unwrap().as_deref(),
+            "OTHER_KEY"
+        ));
     }
 
     #[test]
-    fn migrating_a_legacy_catalog_writes_at_most_one_model_and_restores_user_settings() {
+    fn migrating_legacy_per_model_and_models_base_url_layouts_restores_user_settings() {
         let before = "# custom endpoints\n[endpoints]\nmodels_base_url = 'https://example.invalid' # keep this\n";
         let mut file = before.to_owned();
         let gateway = "https://relay.example/v1";
-        let mut listed = models(&[
-            "grok-4.5",
-            "grok-build-0.1",
-            "grok-4.20-multi-agent-0309",
-            "grok-4.3",
-        ]);
-        listed.extend((0..42).map(|n| format!("grok-alias-{n}")));
+        let listed = ["grok-4.5", "grok-build-0.1", "grok-4.3"];
         let mut record = ConfigRecord {
             gateway: gateway.to_owned(),
             ..Default::default()
         };
-        for id in &listed {
-            file.push_str(&format!("\n[model.\"{id}\"]\nbase_url = \"{gateway}\"\nenv_key = \"K\"\napi_backend = \"responses\"\n"));
+        for id in listed {
+            file.push_str(&format!(
+                "\n[model.\"{id}\"]\nbase_url = \"{gateway}\"\nenv_key = \"K\"\napi_backend = \"responses\"\n"
+            ));
             record.models.push(ModelRecord {
-                id: id.clone(),
+                id: id.into(),
                 created: true,
                 backend: Some(BackendOverride { previous: None }),
                 ..Default::default()
@@ -783,29 +975,19 @@ mod tests {
         }
         let mut doc = parse(Some(&file)).unwrap();
         for variable in [XAI_KEY, "MY_GROK_KEY", XAI_KEY] {
-            apply(&mut doc, &mut record, &listed, gateway, variable).unwrap();
+            apply(&mut doc, &mut record, gateway, variable).unwrap();
             assert!(record.models.is_empty());
             assert!(uses_gateway(&doc, &record));
-            assert!(doc["endpoints"].get("cli_chat_proxy_base_url").is_none());
-            if variable == XAI_KEY {
-                assert!(doc.get("model").is_none());
-                assert!(doc.get("models").is_none());
-                assert_eq!(doc["endpoints"]["models_base_url"].as_str(), Some(gateway));
-                assert_eq!(doc["endpoints"]["xai_api_base_url"].as_str(), Some(gateway));
-                assert_eq!(doc["auth"]["preferred_method"].as_str(), Some("api_key"));
-            } else {
-                assert_eq!(
-                    doc["endpoints"]["models_base_url"].as_str(),
-                    Some("https://example.invalid")
-                );
-                let models = doc["model"].as_table().unwrap();
-                assert_eq!(models.len(), 1);
-                let chosen = &models[&listed[0]];
-                assert_eq!(chosen["base_url"].as_str(), Some(gateway));
-                assert_eq!(chosen["env_key"].as_str(), Some(variable));
-                assert_eq!(chosen["api_backend"].as_str(), Some("responses"));
-                assert_eq!(chosen.as_table().unwrap().len(), 3);
-            }
+            assert!(doc.get("model").is_none());
+            assert!(doc.get("models").is_none());
+            assert!(doc["endpoints"].get("models_base_url").is_none());
+            assert!(doc["endpoints"].get("models_list_url").is_none());
+            assert_eq!(
+                doc["endpoints"]["cli_chat_proxy_base_url"].as_str(),
+                Some(gateway)
+            );
+            assert_eq!(doc["endpoints"]["xai_api_base_url"].as_str(), Some(gateway));
+            assert_eq!(doc["auth"]["preferred_method"].as_str(), Some("api_key"));
             // Read both files back as the next switch does.
             doc = parse(Some(&doc.to_string())).unwrap();
             record = serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
@@ -815,107 +997,65 @@ mod tests {
     }
 
     #[test]
-    fn reapplying_the_four_model_layout_keeps_the_previous_default_and_user_edits() {
+    fn reapplying_the_four_model_layout_removes_model_blocks_and_keeps_user_edits() {
         let relay = "https://relay.invalid/v1";
-        let mut template = format!("[model_providers.copool-sub2api]\nbase_url = '{relay}'\n[models]\ndefault = 'grok-c'\nweb_search = 'grok-c'\n[session]\nauto_compact_threshold_percent = 80\n");
-        let listed = models(&["grok-a", "grok-b", "grok-c", "grok-d"]);
-        for id in &listed {
-            template += &format!("[model.'{id}']\nmodel_provider = 'copool-sub2api'\nenv_key = 'TEAM_KEY'\napi_backend = 'responses'\n");
+        let mut template = format!(
+            "[model_providers.copool-sub2api]\nbase_url = '{relay}'\n\
+             [models]\ndefault = 'grok-c'\nweb_search = 'grok-c'\n\
+             [session]\nauto_compact_threshold_percent = 80\n"
+        );
+        for id in ["grok-a", "grok-b", "grok-c", "grok-d"] {
+            template += &format!(
+                "[model.'{id}']\nmodel_provider = 'copool-sub2api'\nenv_key = 'TEAM_KEY'\napi_backend = 'responses'\n"
+            );
         }
         let old: ConfigRecord = serde_json::from_value(serde_json::json!({
             "gateway": relay, "layout": {"provider":"copool-sub2api","applied":template,"previous":""}
-        })).unwrap();
+        }))
+        .unwrap();
         for variable in ["TEAM_KEY", XAI_KEY] {
             let mut doc = parse(Some(&template)).unwrap();
             doc["model"]["grok-a"]["temperature"] = toml_edit::value(0.3);
             let mut record = old.clone();
-            apply(&mut doc, &mut record, &listed, relay, variable).unwrap();
+            apply(&mut doc, &mut record, relay, variable).unwrap();
             assert!(doc.get("session").is_none());
             assert!(doc.get("model_providers").is_none());
+            assert!(doc.get("models").is_none());
             let tables = doc["model"].as_table().unwrap();
+            assert_eq!(tables.len(), 1); // only the user's temperature
             assert_eq!(tables["grok-a"].as_table().unwrap().len(), 1);
-            if variable == XAI_KEY {
-                assert_eq!(tables.len(), 1); // only the user's temperature
-                assert!(doc.get("models").is_none());
-            } else {
-                assert_eq!(tables.len(), 2);
-                assert_eq!(doc["models"]["default"].as_str(), Some("grok-c"));
-                assert_eq!(tables["grok-c"]["env_key"].as_str(), Some(variable));
-            }
+            assert_eq!(
+                doc["endpoints"]["cli_chat_proxy_base_url"].as_str(),
+                Some(relay)
+            );
+            assert_eq!(doc["endpoints"]["xai_api_base_url"].as_str(), Some(relay));
+            assert_eq!(doc["auth"]["preferred_method"].as_str(), Some("api_key"));
             restore(&mut doc, &record).unwrap();
             assert_eq!(doc["model"]["grok-a"]["temperature"].as_float(), Some(0.3));
+            assert!(doc.get("endpoints").is_none());
+            assert!(doc.get("auth").is_none());
         }
     }
 
     #[test]
-    fn a_switch_upgrades_legacy_model_records_only_when_it_sets_the_backend() {
-        let relay = "https://relay.example/v1";
-        let old: ConfigRecord = serde_json::from_value(serde_json::json!({
-            "gateway": relay, "models": [{"id": "grok-test", "created": false}]
-        }))
-        .unwrap();
-        for prior in [None, Some("chat_completions"), Some("responses")] {
-            let mut doc = parse(Some("[model.grok-test]\n")).unwrap();
-            let model = &mut doc["model"]["grok-test"];
-            model["base_url"] = toml_edit::value(relay);
-            model["env_key"] = toml_edit::value("K");
-            if let Some(prior) = prior {
-                model["api_backend"] = toml_edit::value(prior);
-            }
-            let mut expected = doc.clone();
-            restore(&mut expected, &old).unwrap();
-            assert_eq!(
-                expected["model"]["grok-test"]
-                    .get("api_backend")
-                    .and_then(Item::as_str),
-                prior
-            );
+    fn env_block_and_shell_rc_loader_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join(".env");
+        let rc = dir.path().join(".zshrc");
+        let existing = "FOO=bar\n";
+        let written = with_block(Some(existing), "GROK_SUB2API_API_KEY").unwrap();
+        assert!(env_bridges_variable(Some(&written), "GROK_SUB2API_API_KEY"));
+        assert!(!env_bridges_variable(Some(&written), "OTHER_KEY"));
+        assert_eq!(without_block(&written), existing);
 
-            let mut record = old.clone();
-            apply(&mut doc, &mut record, &models(&["grok-test"]), relay, "K").unwrap();
-            assert_eq!(
-                doc["model"]["grok-test"]["api_backend"].as_str(),
-                Some("responses")
-            );
-            restore(&mut doc, &record).unwrap();
-            assert_eq!(doc.to_string(), expected.to_string());
-        }
-    }
-
-    #[test]
-    fn a_model_the_user_took_off_the_gateway_stays_theirs() {
-        let mut doc = parse(None).unwrap();
-        let mut record = ConfigRecord::default();
-        let selected = models(&["grok-4.5", "grok-4.3"]);
-        apply(
-            &mut doc,
-            &mut record,
-            &selected,
-            "https://relay.example/v1",
-            "K",
-        )
-        .unwrap();
-        let mine = "http://localhost:11434/v1";
-        for id in &selected {
-            doc["model"][id]["base_url"] = toml_edit::value(mine);
-        }
-        assert!(!uses_gateway(&doc, &record));
-        let mut draft = doc.clone();
+        put_text(&rc, Some("export GROK_SUB2API_API_KEY=secret\n")).unwrap();
+        let appended = load_env_in(&rc, &env).unwrap().unwrap();
+        assert!(load_env_in(&rc, &env).unwrap().is_none());
+        unload_env_in(&rc, &appended);
         assert_eq!(
-            apply(
-                &mut draft,
-                &mut record.clone(),
-                &selected,
-                "https://other.example/v1",
-                "OTHER"
-            )
-            .unwrap_err(),
-            MODELS_TAKEN
+            read_text(&rc).unwrap().as_deref(),
+            Some("export GROK_SUB2API_API_KEY=secret\n")
         );
-        restore(&mut doc, &record).unwrap();
-        for id in selected {
-            assert_eq!(doc["model"][&id]["base_url"].as_str(), Some(mine));
-        }
     }
 
     #[test]
@@ -927,14 +1067,7 @@ mod tests {
             created: true,
             ..Default::default()
         };
-        apply(
-            &mut doc,
-            &mut record,
-            &models(&["grok-4.7"]),
-            "https://r/v1",
-            "K",
-        )
-        .unwrap();
+        apply(&mut doc, &mut record, "https://r/v1", XAI_KEY).unwrap();
         put_text(&path, Some(&doc.to_string())).unwrap();
         let mut store = Store {
             config_record: Some(record.clone()),
@@ -943,15 +1076,8 @@ mod tests {
         leave_gateway(&path, &mut store).unwrap();
         assert!(!path.exists());
 
-        // The user tuned the model meanwhile: that stays.
-        apply(
-            &mut doc,
-            &mut record,
-            &models(&["grok-4.7"]),
-            "https://r/v1",
-            "K",
-        )
-        .unwrap();
+        // The user tuned a model meanwhile: that stays.
+        apply(&mut doc, &mut record, "https://r/v1", XAI_KEY).unwrap();
         doc["model"]["grok-4.7"]["temperature"] = toml_edit::value(0.2);
         put_text(&path, Some(&doc.to_string())).unwrap();
         store.config_record = Some(record);
@@ -961,7 +1087,8 @@ mod tests {
             left["model"]["grok-4.7"]["temperature"].as_float(),
             Some(0.2)
         );
-        assert!(left["model"]["grok-4.7"].get("base_url").is_none());
+        assert!(left.get("endpoints").is_none());
+        assert!(left.get("auth").is_none());
         // A configuration the user broke is left as it is.
         put_text(&path, Some("[model\n")).unwrap();
         store.config_record = Some(ConfigRecord {

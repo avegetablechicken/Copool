@@ -618,6 +618,7 @@
 "error.grok.sub2api_api_key_missing" = "プロバイダーの API キー変数がエクスポートされていません。Sub2api のカードに切り替える前に、シェルでエクスポートしてください";
 "error.grok.api_key_variable_invalid" = "API キーそのものではなく、API キーを保持する変数名（例: GROK_SUB2API_API_KEY）を入力してください";
 "error.grok.config_invalid" = "Grok Build の config.toml が有効な TOML ではありません。先に ~/.grok/config.toml を修正してください";
+"error.grok.xai_env_not_loaded" = "Copool は XAI_API_KEY を ~/.grok/.env に書き込み、~/.zshrc または ~/.bashrc で読み込むようにしましたが、新しいシェルでは別の値のままです。ほかの export を削除するか XAI_API_KEY を直接指定してやり直してください";
 "error.grok.sub2api_no_models" = "Sub2api に送る Grok モデルがありません。Grok Build のモデル一覧にも Sub2api ゲートウェイにも見つかりません";
 "error.grok.sub2api_models_taken" = "~/.grok/config.toml のすべての Grok モデルが独自に設定されたアドレスを指しています。Copool はそれらを変更せず、Sub2api に切り替えませんでした";
 "accounts.window.sub2api_grok_weekly_upgrade" = "Sub2api を 0.1.155 以降に更新すると表示されます。";

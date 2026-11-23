@@ -21,9 +21,10 @@ mod sub2api;
 
 pub(crate) use api::{sign_in_url, sub2api_usage, Network};
 
-/// A variable's value as Grok Build started from a terminal opened now has
-/// it.
-type Environment = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// Variables as Grok Build started from a terminal has them: with `now`, as a
+/// new shell exports them (including `~/.grok/.env`); otherwise the user's own
+/// exports alone (`OWN_EXPORTS_ONLY`).
+type Environment = Arc<dyn Fn(&[&str], bool) -> Vec<Option<String>> + Send + Sync>;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -50,8 +51,12 @@ pub(crate) struct State {
     /// Grok Build's `auth.json`; its `config.toml` and model catalog are
     /// beside it.
     auth_file: std::sync::RwLock<PathBuf>,
-    /// Grok Build's environment, where a provider's card finds its key.
+    /// Grok Build's environment, where a provider's card checks its key and
+    /// bridged `XAI_API_KEY`.
     environment: std::sync::RwLock<Environment>,
+    /// The startup file of the user's shell that a provider's card has load
+    /// `~/.grok/.env` when bridging a custom variable to `XAI_API_KEY`.
+    shell_rc: std::sync::RwLock<Option<PathBuf>>,
     /// Held across a load and save of the store.
     lock: tokio::sync::Mutex<()>,
     /// Serializes imports, switches and refreshes.
@@ -61,7 +66,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             network: std::sync::RwLock::new(Arc::new(api::Http)),
-            // Tests never reach the user's own login.
+            // Tests never reach the user's own login or shell.
             #[cfg(not(test))]
             auth_file: std::sync::RwLock::new(auth_file_path()),
             #[cfg(test)]
@@ -71,15 +76,22 @@ impl Default for State {
                     .join("auth.json"),
             ),
             #[cfg(not(test))]
-            environment: std::sync::RwLock::new(Arc::new(|name: &str| {
-                use crate::proxy_integration::{new_shell_keys, Shell};
-                new_shell_keys(&[name], Shell::Interactive)
-                    .into_iter()
-                    .next()
-                    .flatten()
+            environment: std::sync::RwLock::new(Arc::new(|names: &[&str], now: bool| {
+                use crate::proxy_integration::{new_shell_keys, new_shell_own_keys, Shell};
+                if now {
+                    new_shell_keys(names, Shell::Interactive)
+                } else {
+                    new_shell_own_keys(names, Shell::Interactive)
+                }
             })),
             #[cfg(test)]
-            environment: std::sync::RwLock::new(Arc::new(|_: &str| None)),
+            environment: std::sync::RwLock::new(Arc::new(|names: &[&str], _: bool| {
+                vec![None; names.len()]
+            })),
+            #[cfg(not(test))]
+            shell_rc: std::sync::RwLock::new(shell_rc()),
+            #[cfg(test)]
+            shell_rc: Default::default(),
             lock: Default::default(),
             operations: Default::default(),
         }
@@ -98,6 +110,30 @@ fn auth_file_path() -> PathBuf {
         .or_else(|| dirs::home_dir().map(|home| home.join(".grok")))
         .unwrap_or_default()
         .join("auth.json")
+}
+/// The interactive startup file of the user's `$SHELL`, zsh's or bash's;
+/// none for another shell, or where Copool asks no shell. A smoke test
+/// names its own in `COPOOL_GROK_SHELL_RC`.
+#[cfg(not(test))]
+fn shell_rc() -> Option<PathBuf> {
+    if let Some(rc) = std::env::var_os("COPOOL_GROK_SHELL_RC").filter(|v| !v.is_empty()) {
+        return Some(rc.into());
+    }
+    if !cfg!(unix) {
+        return None;
+    }
+    let shell = PathBuf::from(std::env::var_os("SHELL")?);
+    let home = dirs::home_dir()?;
+    match shell.file_name()?.to_str()? {
+        "zsh" => Some(
+            std::env::var_os("ZDOTDIR")
+                .filter(|v| !v.is_empty())
+                .map_or(home, PathBuf::from)
+                .join(".zshrc"),
+        ),
+        "bash" => Some(home.join(".bashrc")),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -352,6 +388,13 @@ impl Application {
     #[cfg(test)]
     fn set_grok_environment(&self, environment: Environment) {
         *self.grok.environment.write().unwrap() = environment;
+    }
+    fn grok_shell_rc(&self) -> Option<PathBuf> {
+        self.grok.shell_rc.read().unwrap().clone()
+    }
+    #[cfg(test)]
+    fn set_grok_shell_rc(&self, rc: PathBuf) {
+        *self.grok.shell_rc.write().unwrap() = Some(rc);
     }
     /// Grok Build's `config.toml`, beside its `auth.json`.
     fn grok_config_path(&self) -> PathBuf {
