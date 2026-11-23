@@ -1207,35 +1207,28 @@ fn testBackgroundRefreshIntervalAdaptsAsOpenQuota() {
     use std::time::Duration;
     let (five, one) = (Duration::from_secs(300), Duration::from_secs(60));
     assert_eq!(fast_interval(five), one);
-    let mut unchanged = 0;
-    // Without a change the interval stays at five minutes.
+    let mut fast = std::collections::BTreeMap::new();
+    // Without a change the card does not speed up.
     for _ in 0..3 {
-        assert_eq!(
-            refresh_interval_for(five, five, false, &mut unchanged),
-            five
-        );
-        assert_eq!(unchanged, 0);
+        track_speed_up(&mut fast, "acct", true, false, true);
+        assert!(fast.is_empty());
     }
-    // A change speeds it up, from either interval.
-    assert_eq!(refresh_interval_for(five, five, true, &mut unchanged), one);
-    assert_eq!(refresh_interval_for(five, one, true, &mut unchanged), one);
-    // Two unchanged one-minute rounds slow it down again...
-    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), one);
-    assert_eq!(unchanged, 1);
-    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), five);
-    assert_eq!(unchanged, 0);
-    // ...counted anew after each change.
-    assert_eq!(refresh_interval_for(five, five, true, &mut unchanged), one);
-    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), one);
-    assert_eq!(refresh_interval_for(five, one, true, &mut unchanged), one);
-    assert_eq!(unchanged, 0);
-    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), one);
-    assert_eq!(refresh_interval_for(five, one, false, &mut unchanged), five);
-    // An interval other than one minute (a fresh start) counts as five.
-    assert_eq!(
-        refresh_interval_for(five, Duration::from_secs(10), false, &mut unchanged),
-        five
-    );
+    // A change speeds it up; changes keep it so.
+    track_speed_up(&mut fast, "acct", true, true, false);
+    track_speed_up(&mut fast, "acct", true, true, true);
+    assert_eq!(fast.get("acct"), Some(&0));
+    // Two unchanged refreshes in a row slow it down again...
+    track_speed_up(&mut fast, "acct", true, false, true);
+    assert_eq!(fast.get("acct"), Some(&1));
+    track_speed_up(&mut fast, "acct", true, false, true);
+    assert!(fast.is_empty());
+    // ...but a change in between starts the count over.
+    track_speed_up(&mut fast, "acct", true, true, true);
+    track_speed_up(&mut fast, "acct", true, false, true);
+    track_speed_up(&mut fast, "acct", true, true, true);
+    assert_eq!(fast.get("acct"), Some(&0));
+    track_speed_up(&mut fast, "acct", true, false, true);
+    assert_eq!(fast.get("acct"), Some(&1));
 }
 #[test]
 fn testBackgroundRefreshComparesUsageWithoutFetchTimes() {
@@ -1246,6 +1239,11 @@ fn testBackgroundRefreshComparesUsageWithoutFetchTimes() {
         b.usage = None;
         usage_values(&[a, b])
     };
+    let usage_changed =
+        |before: &std::collections::BTreeMap<String, Value>,
+         after: &std::collections::BTreeMap<String, Value>| {
+            changed_cards(before, after).next().is_some()
+        };
     let before = cards(25., 1);
     assert_eq!(before.len(), 1);
     assert!(before["acct"].get("fetchedAt").is_none());

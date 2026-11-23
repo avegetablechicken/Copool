@@ -54,6 +54,11 @@ impl PoolAccount for StoredAccount {
     }
 }
 
+/// The sooner of a card's next round and its next ask while speeding up.
+pub(crate) fn sooner(next: i64, fast: Option<i64>) -> i64 {
+    fast.map_or(next, |fast| next.min(fast))
+}
+
 /// One pool's background refresh rounds.
 #[derive(Default)]
 pub(crate) struct Rounds {
@@ -61,8 +66,13 @@ pub(crate) struct Rounds {
     schedule: std::sync::Mutex<Option<Schedule>>,
     /// Its wait, started over by refreshing the whole pool.
     deferred: tokio::sync::Notify,
-    /// Rounds in a row whose usage did not change.
-    unchanged: std::sync::Mutex<u8>,
+    /// The cards speeding up, by card key, with their unchanged refreshes in
+    /// a row since.
+    fast: std::sync::Mutex<std::collections::BTreeMap<String, u8>>,
+    /// When the cards speeding up are next asked for.
+    fast_at: std::sync::Mutex<Option<i64>>,
+    /// Wakes the speed-up loop when a card starts speeding up.
+    sped_up: tokio::sync::Notify,
 }
 
 impl Application {
@@ -501,6 +511,10 @@ impl Application {
             self.background_pool(Pool::Claude),
             self.background_pool(Pool::Antigravity),
             self.background_pool(Pool::Grok),
+            self.background_fast(Pool::Codex),
+            self.background_fast(Pool::Claude),
+            self.background_fast(Pool::Antigravity),
+            self.background_fast(Pool::Grok),
             self.clone().background_greetings()
         );
     }
@@ -518,6 +532,111 @@ impl Application {
             tick = tick.wrapping_add(1);
         }
     }
+    /// Between rounds, the cards speeding up are asked for on their own,
+    /// sooner, until their usage stops changing.
+    async fn background_fast(&self, pool: Pool) {
+        loop {
+            let wait = self.fast_wait(pool);
+            match wait {
+                Some(wait) => {
+                    tokio::time::sleep(wait).await;
+                    self.fast_round(pool).await;
+                }
+                None => self.rounds(pool).sped_up.notified().await,
+            }
+        }
+    }
+    /// The wait for the next ask for the cards speeding up, from now; none
+    /// while none does.
+    pub(crate) fn fast_wait(&self, pool: Pool) -> Option<Duration> {
+        let rounds = self.rounds(pool);
+        let wait = (!rounds.fast.lock().unwrap().is_empty())
+            .then(|| refresh_policy::fast_interval(self.pool_refresh(pool).interval()));
+        *rounds.fast_at.lock().unwrap() =
+            wait.map(|wait| now_unix_seconds() + wait.as_secs() as i64);
+        self.publish();
+        wait
+    }
+    /// Asks for the cards speeding up that were not asked for within the
+    /// sooner interval, then notes which changed. Each such ask counts
+    /// toward the unchanged refreshes that end a card's speed-up.
+    pub(crate) async fn fast_round(&self, pool: Pool) {
+        let refresh = self.preferences().map(|p| p.refresh).unwrap_or_default();
+        let keys: Vec<String> = {
+            let mut fast = self.rounds(pool).fast.lock().unwrap();
+            fast.retain(|key, _| refresh.card(pool, key).adaptive);
+            fast.keys().cloned().collect()
+        };
+        *self.rounds(pool).fast_at.lock().unwrap() = None;
+        if keys.is_empty() {
+            return;
+        }
+        let soon = refresh_policy::fast_interval(refresh.pool(pool).interval()).as_secs() as i64;
+        let now = now_unix_seconds();
+        let ids: Vec<String> = self
+            .accounts(pool)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|a| {
+                !sub2api::is_card(pool, &a.id) && keys.contains(&a.id) && now - a.updated_at >= soon
+            })
+            .map(|a| a.id.clone())
+            .collect();
+        let providers: Vec<String> = keys
+            .iter()
+            .filter_map(|key| key.strip_prefix("sub2api:"))
+            .map(str::to_owned)
+            .collect();
+        let before = self.card_usage(pool).await;
+        if !ids.is_empty() || !providers.is_empty() {
+            let _ = self.refresh_pool(pool, Some(&ids), Some(&providers)).await;
+        }
+        let changed = self.changed_cards(pool, &before).await;
+        let mut fast = self.rounds(pool).fast.lock().unwrap();
+        for key in &keys {
+            refresh_policy::track_speed_up(&mut fast, key, true, changed.contains(key), true);
+        }
+    }
+    /// Starts a card's speed-up for each changed card whose own is on, and
+    /// ends those turned off.
+    fn note_changes(
+        &self,
+        pool: Pool,
+        refresh: &refresh_policy::RefreshPreferences,
+        changed: &std::collections::BTreeSet<String>,
+    ) {
+        let rounds = self.rounds(pool);
+        let mut fast = rounds.fast.lock().unwrap();
+        let was_empty = fast.is_empty();
+        let keys: std::collections::BTreeSet<String> =
+            fast.keys().chain(changed).cloned().collect();
+        for key in keys {
+            let adaptive = refresh.card(pool, &key).adaptive;
+            refresh_policy::track_speed_up(
+                &mut fast,
+                &key,
+                adaptive,
+                changed.contains(&key),
+                false,
+            );
+        }
+        if was_empty && !fast.is_empty() {
+            rounds.sped_up.notify_one();
+        }
+    }
+    /// When a card speeding up is next asked for on its own; none for one
+    /// that is not.
+    pub(crate) fn fast_refresh_at(&self, pool: Pool, id: &str) -> Option<i64> {
+        let rounds = self.rounds(pool);
+        rounds
+            .fast
+            .lock()
+            .unwrap()
+            .contains_key(&refresh_policy::card_key(pool, id))
+            .then(|| *rounds.fast_at.lock().unwrap())
+            .flatten()
+    }
     /// The pool's background refresh, as set for all its cards.
     pub(crate) fn pool_refresh(&self, pool: Pool) -> refresh_policy::PoolRefresh {
         self.preferences()
@@ -525,20 +644,22 @@ impl Application {
             .unwrap_or_default()
             .pool(pool)
     }
-    /// The interval of the pool's rounds: as set, or sooner for now while
-    /// an adaptive pool's usage changes.
+    /// A card's refresh: its pool's, with the card's own switches.
+    pub(crate) fn card_refresh(&self, pool: Pool, id: &str) -> refresh_policy::PoolRefresh {
+        self.preferences()
+            .map(|p| p.refresh)
+            .unwrap_or_default()
+            .card(pool, &refresh_policy::card_key(pool, id))
+    }
+    /// The interval of the pool's rounds, as set; a card speeding up is
+    /// asked for between them.
     pub(crate) fn round_interval(&self, pool: Pool) -> Duration {
-        let refresh = self.pool_refresh(pool);
-        self.schedule(pool)
-            .filter(|_| refresh.adaptive)
-            .map(|s| Duration::from_secs(s.interval as u64))
-            .unwrap_or(refresh.interval())
+        self.pool_refresh(pool).interval()
     }
     /// Applies a pool's new refresh to its next round, which waits the new
     /// interval from now.
     pub(crate) fn reschedule(&self, pool: Pool, refresh: refresh_policy::PoolRefresh) {
         let rounds = self.rounds(pool);
-        *rounds.unchanged.lock().unwrap() = 0;
         let now = now_unix_seconds();
         let waiting = {
             let mut schedule = rounds.schedule.lock().unwrap();
@@ -581,7 +702,7 @@ impl Application {
     }
     pub(crate) async fn background_round(&self, tick: u64, pool: Pool) -> Duration {
         let refresh = self.pool_refresh(pool);
-        let interval = self.round_interval(pool);
+        let interval = refresh.interval();
         let set_schedule = |at, tick, interval: Duration, full_every| {
             *self.rounds(pool).schedule.lock().unwrap() = Some(Schedule {
                 at,
@@ -591,11 +712,7 @@ impl Application {
             });
         };
         set_schedule(now_unix_seconds(), tick, interval, refresh.full_every);
-        let before = if refresh.adaptive {
-            Some(self.usage_values(pool).await)
-        } else {
-            None
-        };
+        let before = self.card_usage(pool).await;
         // Access to the Claude pool is asked for once, before its first round.
         if pool == Pool::Claude && tick == 0 {
             let _ = self.claude_authorize_at_startup().await;
@@ -603,21 +720,11 @@ impl Application {
         let _ = self.refresh_recurring(pool, tick).await;
         // A refresh set while the round ran applies from the next round:
         // `reschedule` leaves a round under way to schedule it.
-        let latest = self.pool_refresh(pool);
-        let interval = match before {
-            _ if latest != refresh => latest.interval(),
-            Some(before) => {
-                let changed =
-                    refresh_policy::usage_changed(&before, &self.usage_values(pool).await);
-                refresh_policy::refresh_interval_for(
-                    refresh.interval(),
-                    interval,
-                    changed,
-                    &mut self.rounds(pool).unchanged.lock().unwrap(),
-                )
-            }
-            None => refresh.interval(),
-        };
+        let changed = self.changed_cards(pool, &before).await;
+        let preferences = self.preferences().map(|p| p.refresh).unwrap_or_default();
+        self.note_changes(pool, &preferences, &changed);
+        let latest = preferences.pool(pool);
+        let interval = latest.interval();
         set_schedule(
             now_unix_seconds() + interval.as_secs() as i64,
             tick.wrapping_add(1),
@@ -627,15 +734,26 @@ impl Application {
         self.publish();
         interval
     }
-    /// Each card's usage, to tell whether a round changed it. Claude's
+    /// Each account's usage, to tell whether a refresh changed it. Claude's
     /// cards are read without the login Claude Code uses, which is in the
     /// Keychain.
-    async fn usage_values(&self, pool: Pool) -> std::collections::BTreeMap<String, Value> {
+    async fn card_usage(&self, pool: Pool) -> std::collections::BTreeMap<String, Value> {
         let cards = match pool {
             Pool::Claude => self.claude_usage_cards(),
             _ => self.accounts(pool).await,
         };
         refresh_policy::usage_values(&cards.unwrap_or_default())
+    }
+    /// The keys of the cards whose usage changed since `before`.
+    async fn changed_cards(
+        &self,
+        pool: Pool,
+        before: &std::collections::BTreeMap<String, Value>,
+    ) -> std::collections::BTreeSet<String> {
+        let after = self.card_usage(pool).await;
+        refresh_policy::changed_cards(before, &after)
+            .map(|id| refresh_policy::card_key(pool, id))
+            .collect()
     }
     /// The pool's next background round; none before the first starts.
     pub(crate) fn schedule(&self, pool: Pool) -> Option<Schedule> {

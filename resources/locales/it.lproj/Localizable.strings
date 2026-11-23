@@ -542,7 +542,7 @@
 "accounts.refresh.every_round_format" = "%@ (ogni giro)";
 "accounts.refresh.multiple_format" = "%1$@ (×%2$@)";
 "accounts.refresh.adaptive" = "Accelerazione adattiva";
-"accounts.refresh.adaptive_help_format" = "Mentre l’utilizzo cambia, l’account in uso si aggiorna ogni %@, finché due giri passano senza cambiamenti.";
+"accounts.refresh.adaptive_help_format" = "Mentre l’utilizzo di questa scheda cambia, si aggiorna ogni %@, finché due aggiornamenti passano senza cambiamenti.";
 "accounts.refresh.backoff" = "Rallenta con limiti di frequenza";
 "accounts.refresh.backoff_help" = "Dopo un HTTP 429, le richieste dell’account si fermano per 5 minuti, il doppio a ogni 429 consecutivo fino a un’ora, o quanto chiede il server, fino a 6 ore.";
 "accounts.renewal.expires_format" = "Scade tra %@";

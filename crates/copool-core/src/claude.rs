@@ -1531,11 +1531,11 @@ impl Application {
         }
     }
     /// Until when an account's requests pause after HTTP 429; turning the
-    /// pool's slow-down off lifts a pause under way.
+    /// card's slow-down off lifts a pause under way.
     fn claude_pause(&self, account: &Stored) -> Option<i64> {
         account
             .usage_retry_at
-            .filter(|_| self.pool_refresh(Pool::Claude).backoff)
+            .filter(|_| self.card_refresh(Pool::Claude, &account.id).backoff)
     }
     /// Lets a user action ask for the vault's Keychain item when background
     /// work could not read it, as after a build changed Copool's signature.
@@ -1743,24 +1743,23 @@ impl Application {
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.schedule(Pool::Claude) {
-            let backoff = self.pool_refresh(Pool::Claude).backoff;
             for card in &mut summaries {
                 // Every round asks for the card in use, full rounds for all,
                 // subject to freshness and rate limit pauses for official
-                // accounts.
+                // accounts; a card speeding up sooner.
                 let every = card.is_current;
+                let fast = self.fast_refresh_at(Pool::Claude, &card.id);
                 card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
-                    None => Some(schedule.next_refresh_at(every, 0)),
+                    None => Some(crate::pool::sooner(
+                        schedule.next_refresh_at(every, 0),
+                        fast,
+                    )),
                     Some(account) if account.first_request_pending => None,
                     Some(account) => {
                         let due = account.updated_at + schedule.interval;
-                        let not_before = due.max(
-                            account
-                                .usage_retry_at
-                                .filter(|_| backoff)
-                                .unwrap_or_default(),
-                        );
-                        Some(schedule.next_refresh_at(every, not_before))
+                        let paused = self.claude_pause(account).unwrap_or_default();
+                        let next = schedule.next_refresh_at(every, due.max(paused));
+                        Some(crate::pool::sooner(next, fast.map(|fast| fast.max(paused))))
                     }
                 };
             }
@@ -2650,8 +2649,8 @@ impl Application {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
         // Each HTTP 429 in a row pauses longer; any other answer starts over.
-        // Without the slow-down, none pauses or counts.
-        let backoff = self.pool_refresh(Pool::Claude).backoff;
+        // Without the card's slow-down, none pauses or counts.
+        let backoff = self.card_refresh(Pool::Claude, id).backoff;
         let rate_limited = rate_limited && backoff;
         let rate_limits = match (rate_limited, &result) {
             (false, _) if !backoff => 0,
@@ -3446,12 +3445,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_rounds_adapt_their_interval_to_usage_changes() {
+    async fn a_card_whose_usage_changes_speeds_up_alone_between_rounds() {
         use std::time::Duration;
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
         sign_in(&location, "alice", LATER);
         app.claude_import_current().await.unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
         assert_eq!(usages(&fake).len(), 1);
         let (five, one) = (Duration::from_secs(300), Duration::from_secs(60));
         let usage = |hour: u32| (200, json!({"five_hour": {"utilization": hour}}));
@@ -3461,38 +3461,114 @@ mod tests {
         // Asked at import: the first round waits, and nothing changed.
         assert_eq!(app.background_round(0, Pool::Claude).await, five);
         assert_eq!(usages(&fake).len(), 1);
-        fake.usage.lock().unwrap().push(usage(25));
-        age(&app, 300);
-        assert_eq!(app.background_round(1, Pool::Claude).await, one);
-        assert_eq!(app.round_interval(Pool::Claude), one);
-        assert_eq!(usages(&fake).len(), 2);
-        // At one minute, an account asked under a minute ago waits...
-        age(&app, 45);
-        assert_eq!(app.background_round(2, Pool::Claude).await, one);
-        assert_eq!(usages(&fake).len(), 2);
-        // ...and the second unchanged round slows down again.
-        fake.usage.lock().unwrap().push(usage(25));
-        age(&app, 60);
-        assert_eq!(app.background_round(3, Pool::Claude).await, five);
-        assert_eq!(usages(&fake).len(), 3);
-        assert_eq!(app.round_interval(Pool::Claude), five);
-        // At five minutes, a minute-old request is not due.
-        age(&app, 60);
-        assert_eq!(app.background_round(4, Pool::Claude).await, five);
-        assert_eq!(usages(&fake).len(), 3);
-        // A change while slow speeds up at once.
+        assert_eq!(app.fast_wait(Pool::Claude), None);
+        // A change leaves the rounds at five minutes and speeds the card up.
         fake.usage.lock().unwrap().push(usage(30));
         age(&app, 300);
-        assert_eq!(app.background_round(6, Pool::Claude).await, one);
+        assert_eq!(app.background_round(1, Pool::Claude).await, five);
+        assert_eq!(app.round_interval(Pool::Claude), five);
+        assert_eq!(usages(&fake).len(), 2);
+        assert_eq!(app.fast_wait(Pool::Claude), Some(one));
+        let next = app.accounts(Pool::Claude).await.unwrap()[0]
+            .next_refresh_at
+            .unwrap();
+        let now = now_unix_seconds();
+        assert!((now + 59..=now + 60).contains(&next), "{next} {now}");
+        // Asked a minute later, unchanged: one unchanged refresh...
+        fake.usage.lock().unwrap().push(usage(30));
+        age(&app, 60);
+        app.fast_round(Pool::Claude).await;
+        assert_eq!(usages(&fake).len(), 3);
+        assert_eq!(app.fast_wait(Pool::Claude), Some(one));
+        // ...a change starts the count over...
+        fake.usage.lock().unwrap().push(usage(35));
+        age(&app, 60);
+        app.fast_round(Pool::Claude).await;
         assert_eq!(usages(&fake).len(), 4);
+        // ...an account asked under a minute ago waits, which counts...
+        age(&app, 45);
+        app.fast_round(Pool::Claude).await;
+        assert_eq!(usages(&fake).len(), 4);
+        assert_eq!(app.fast_wait(Pool::Claude), Some(one));
+        // ...and the second unchanged refresh ends the speed-up.
+        fake.usage.lock().unwrap().push(usage(35));
+        age(&app, 60);
+        app.fast_round(Pool::Claude).await;
+        assert_eq!(usages(&fake).len(), 5);
+        assert_eq!(app.fast_wait(Pool::Claude), None);
+        assert_eq!(app.fast_refresh_at(Pool::Claude, &id), None);
         // A rate limit is no change in usage.
         queue_usage_rate_limit(&fake, Value::Null);
-        age(&app, 60);
-        assert_eq!(app.background_round(7, Pool::Claude).await, one);
+        age(&app, 300);
+        assert_eq!(app.background_round(2, Pool::Claude).await, five);
+        assert_eq!(app.fast_wait(Pool::Claude), None);
         assert_eq!(app.schedule(Pool::Codex), Some(codex));
         assert_eq!(app.background_round(1, Pool::Codex).await.as_secs(), 10);
-        assert_eq!(app.round_interval(Pool::Claude), one);
-        assert_eq!(usages(&fake).len(), 6);
+        assert_eq!(usages(&fake).len(), 7);
+    }
+
+    #[tokio::test]
+    async fn a_card_without_its_own_speed_up_keeps_to_the_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        // Alice, signed in last, is in use.
+        let accounts = app.accounts(Pool::Claude).await.unwrap();
+        let id = |current: bool| {
+            accounts
+                .iter()
+                .find(|a| a.is_current == current)
+                .map(|a| a.id.clone())
+                .unwrap()
+        };
+        let (alice, bob) = (id(true), id(false));
+        let mut preferences = app.preferences().unwrap();
+        preferences.refresh.cards.claude.insert(
+            bob.clone(),
+            crate::refresh_policy::CardRefresh {
+                adaptive: Some(false),
+                backoff: None,
+            },
+        );
+        app.save_preferences(preferences).await.unwrap();
+        assert!(
+            app.preferences()
+                .unwrap()
+                .refresh
+                .card(Pool::Claude, &alice)
+                .adaptive
+        );
+        assert!(!app.card_refresh(Pool::Claude, &bob).adaptive);
+        // Both change in a full round; only Alice speeds up.
+        let usage = (200, json!({"five_hour": {"utilization": 30}}));
+        fake.usage.lock().unwrap().extend([usage.clone(), usage]);
+        age(&app, 300);
+        app.background_round(1, Pool::Claude).await;
+        assert_eq!(usages(&fake).len(), 4);
+        // As the speed-up loop, woken, schedules its next ask.
+        assert!(app.fast_wait(Pool::Claude).is_some());
+        assert!(app.fast_refresh_at(Pool::Claude, &alice).is_some());
+        assert_eq!(app.fast_refresh_at(Pool::Claude, &bob), None);
+        age(&app, 60);
+        app.fast_round(Pool::Claude).await;
+        assert_eq!(usages(&fake)[4..], ["alice-access"]);
+        // Turning Alice's off ends hers at the next ask, without a request.
+        let mut preferences = app.preferences().unwrap();
+        preferences.refresh.cards.claude.insert(
+            alice.clone(),
+            crate::refresh_policy::CardRefresh {
+                adaptive: Some(false),
+                backoff: None,
+            },
+        );
+        app.save_preferences(preferences).await.unwrap();
+        age(&app, 60);
+        app.fast_round(Pool::Claude).await;
+        assert_eq!(usages(&fake).len(), 5);
+        assert_eq!(app.fast_wait(Pool::Claude), None);
     }
 
     #[tokio::test]
@@ -3797,6 +3873,51 @@ mod tests {
             .push((200, json!({"five_hour":{"utilization":42}})));
         app.refresh_usage(Pool::Claude, &id).await.unwrap();
         assert!(fake.usage.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_cards_own_slow_down_applies_to_it_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let ids: Vec<String> = app
+            .claude_load()
+            .unwrap()
+            .accounts
+            .iter()
+            .map(|a| a.id.clone())
+            .collect();
+        let (off, on) = (&ids[0], &ids[1]);
+        let mut preferences = app.preferences().unwrap();
+        preferences.refresh.cards.claude.insert(
+            off.clone(),
+            crate::refresh_policy::CardRefresh {
+                adaptive: None,
+                backoff: Some(false),
+            },
+        );
+        app.save_preferences(preferences).await.unwrap();
+        for id in [off, on] {
+            queue_usage_rate_limit(&fake, json!({"error":{"message":"Rate limited"}}));
+            app.refresh_usage(Pool::Claude, id).await.unwrap_err();
+        }
+        let store = app.claude_load().unwrap();
+        let stored = |id: &String| store.accounts.iter().find(|a| &a.id == id).unwrap();
+        assert_eq!(
+            (stored(off).usage_retry_at, stored(off).rate_limits),
+            (None, 0)
+        );
+        assert!(stored(on).usage_retry_at.is_some());
+        assert_eq!(stored(on).rate_limits, 1);
+        // The paused card waits without a request; the other asks at once.
+        let asked = usages(&fake).len();
+        app.refresh_usage(Pool::Claude, on).await.unwrap_err();
+        assert_eq!(usages(&fake).len(), asked);
+        app.refresh_usage(Pool::Claude, off).await.unwrap();
+        assert_eq!(usages(&fake).len(), asked + 1);
     }
 
     #[tokio::test]

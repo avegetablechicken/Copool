@@ -562,7 +562,7 @@
 "accounts.refresh.every_round_format" = "%@（毎回）";
 "accounts.refresh.multiple_format" = "%1$@（×%2$@）";
 "accounts.refresh.adaptive" = "自動で間隔を短縮";
-"accounts.refresh.adaptive_help_format" = "使用量が変化している間は使用中のアカウントを %@ ごとに更新し、2 回続けて変化がなければ元に戻します。";
+"accounts.refresh.adaptive_help_format" = "このカードの使用量が変化している間はこのカードを %@ ごとに更新し、2 回続けて変化がなければ元に戻します。";
 "accounts.refresh.backoff" = "レート制限時に減速";
 "accounts.refresh.backoff_help" = "HTTP 429 を受けるとそのアカウントのリクエストを 5 分間停止し、続けて受けるたびに倍にして最長 1 時間、サーバーがより長く求めた場合は最長 6 時間停止します。";
 "accounts.renewal.expires_format" = "残り %@";

@@ -572,7 +572,7 @@
 "accounts.refresh.every_round_format" = "%@（每轮）";
 "accounts.refresh.multiple_format" = "%1$@（×%2$@）";
 "accounts.refresh.adaptive" = "自适应加速";
-"accounts.refresh.adaptive_help_format" = "用量变化时当前账号临时改为每%@刷新，连续两轮无变化后恢复。";
+"accounts.refresh.adaptive_help_format" = "此卡片用量变化时临时改为每%@刷新，连续两次无变化后恢复。";
 "accounts.refresh.backoff" = "限流时减速";
 "accounts.refresh.backoff_help" = "遇到 HTTP 429 时该账号暂停请求 5 分钟，连续遇到则逐次翻倍，最长 1 小时；服务器要求更久时照办，最长 6 小时。";
 "accounts.renewal.expires_format" = "%@后过期";

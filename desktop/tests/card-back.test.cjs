@@ -289,7 +289,7 @@ test("a card turning over is turned back by Escape or by another card's edit", a
   assert.equal(turns.length, 0);
 });
 
-const greeting = between("/// The times with a new one, in order;", "/// The pool's background refresh");
+const greeting = between("/// The times with a new one, in order;", "/// The key a card's own refresh switches are saved under");
 test("greeting times are added in order once and removed by value", async () => {
   const saves = [];
   const scope = {
@@ -418,15 +418,15 @@ test("refresh intervals offer the one set and speed up to a fifth, no sooner tha
   assert.equal(P.formatInterval(300, "zh-Hans"), "5分钟");
 });
 
-const refreshSection = between("/// The pool's background refresh, which all", "/// Removal, confirmed by a second click.");
-/// A pool's refresh section on its card in use: each row's label, field,
+const refreshSection = between("/// A card's background refresh: the pool's intervals", "/// Removal, confirmed by a second click.");
+/// A pool's refresh section on a card in use: each row's label, field,
 /// line under it and tooltip, and the refresh each control saves.
-function refreshRows(pool, refresh) {
+function refreshRows(pool, refresh, key = "acct", cards) {
   const saved = [];
   const scope = {
     pool,
     locale: "en",
-    preferences: { refresh: { [pool]: refresh } },
+    preferences: { refresh: { [pool]: refresh, ...(cards ? { cards } : {}) } },
     P: {
       refreshChoices: () => ({ seconds: [refresh.seconds], fullEvery: [1] }),
       formatInterval: (seconds) => `${seconds}s`,
@@ -448,7 +448,7 @@ function refreshRows(pool, refresh) {
   };
   vm.createContext(scope);
   vm.runInContext(refreshSection, scope);
-  const rows = scope.refreshSection(true).group.rows;
+  const rows = scope.refreshSection(true, key).group.rows;
   return {
     rows,
     saved,
@@ -457,20 +457,58 @@ function refreshRows(pool, refresh) {
   };
 }
 
-test("two refresh changes made before the card renders again both stay", async () => {
+test("two refresh changes made before the card renders again both stay, on the card alone", async () => {
   const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
-  const { field, scope } = refreshRows("claude", refresh);
+  const other = { other: { adaptive: true } };
+  const { field, scope } = refreshRows("claude", refresh, "acct", { claude: other });
   field("refresh-backoff").control.onchange(false);
   field("refresh-adaptive").control.onchange(false);
+  const fullEvery = field("refresh-full-every").control;
+  fullEvery.value = "2";
+  fullEvery.onchange();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(JSON.parse(JSON.stringify(scope.preferences.refresh.claude)), {
-    ...refresh,
-    adaptive: false,
-    backoff: false,
+  assert.deepEqual(JSON.parse(JSON.stringify(scope.preferences.refresh)), {
+    // The pool's interval saves on the pool; its switches, those of cards
+    // without their own, stay.
+    claude: { ...refresh, fullEvery: 2 },
+    cards: { claude: { ...other, acct: { adaptive: false, backoff: false } } },
   });
 });
 
-test("only Claude's refresh offers the slow-down after HTTP 429, on by default", async () => {
+test("a card's switches follow its pool's until it sets its own", () => {
+  const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
+  const cards = { claude: { acct: { adaptive: false } }, codex: { other: { backoff: false } } };
+  const own = refreshRows("claude", refresh, "acct", cards);
+  assert.equal(own.field("refresh-adaptive").control.on, false);
+  assert.equal(own.field("refresh-backoff").control.on, true);
+  // Another card, or the same key in another pool, has the pool's.
+  assert.equal(refreshRows("claude", refresh, "other", cards).field("refresh-adaptive").control.on, true);
+  assert.equal(refreshRows("codex", refresh, "acct", cards).field("refresh-adaptive").control.on, true);
+  assert.equal(refreshRows("claude", { ...refresh, adaptive: false }).field("refresh-adaptive").control.on, false);
+});
+
+test("a Sub2api provider's cards share their speed-up and have no slow-down", async () => {
+  const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
+  const { field, scope } = refreshRows("claude", refresh, "sub2api:p");
+  assert.equal(field("refresh-backoff"), undefined);
+  field("refresh-adaptive").control.onchange(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(scope.preferences.refresh.cards)), {
+    claude: { "sub2api:p": { adaptive: false } },
+  });
+  const refreshKey = vm.runInNewContext(
+    `${between("/// The key a card's own refresh switches are saved under", "/// A card's background refresh: the pool's intervals")}; refreshKey`,
+    {
+      providerKey: (a) =>
+        a.sourceTag === "SUB2API" ? /^(?:claude-)?sub2api-(.+)-\d+$/.exec(a.id)?.[1] ?? null : null,
+    },
+  );
+  assert.equal(refreshKey({ group: { key: "p" } }), "sub2api:p");
+  assert.equal(refreshKey({ account: { id: "claude-sub2api-p-3", sourceTag: "SUB2API" } }), "sub2api:p");
+  assert.equal(refreshKey({ account: { id: "acct" } }), "acct");
+});
+
+test("only Claude's own accounts offer the slow-down after HTTP 429, on by default", async () => {
   const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
   for (const pool of ["codex", "antigravity"])
     assert.equal(refreshRows(pool, refresh).field("refresh-backoff"), undefined, pool);
@@ -484,11 +522,11 @@ test("only Claude's refresh offers the slow-down after HTTP 429, on by default",
     [field("refresh-adaptive").note, field("refresh-adaptive").tip],
     [null, "accounts.refresh.adaptive_help_format 60s"],
   );
-  // Turned off, it saves with the pool's other settings.
+  // Turned off, it saves on the card.
   backoff.control.onchange(false);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(JSON.parse(JSON.stringify(saved)), [
-    { refresh: { claude: { ...refresh, backoff: false } } },
+    { refresh: { claude: refresh, cards: { claude: { acct: { backoff: false } } } } },
   ]);
   assert.equal(
     refreshRows("claude", { ...refresh, backoff: false }).field("refresh-backoff").tip,

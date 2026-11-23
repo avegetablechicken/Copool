@@ -542,7 +542,7 @@
 "accounts.refresh.every_round_format" = "%@ (cada ronda)";
 "accounts.refresh.multiple_format" = "%1$@ (×%2$@)";
 "accounts.refresh.adaptive" = "Aceleración adaptativa";
-"accounts.refresh.adaptive_help_format" = "Mientras el uso cambia, la cuenta en uso se actualiza cada %@, hasta que pasen dos rondas sin cambios.";
+"accounts.refresh.adaptive_help_format" = "Mientras el uso de esta tarjeta cambia, se actualiza cada %@, hasta que pasen dos actualizaciones sin cambios.";
 "accounts.refresh.backoff" = "Ralentizar ante límites de tasa";
 "accounts.refresh.backoff_help" = "Tras un HTTP 429, las solicitudes de la cuenta se pausan 5 minutos, el doble con cada 429 seguido hasta una hora, o lo que pida el servidor, hasta 6 horas.";
 "accounts.renewal.expires_format" = "Caduca en %@";

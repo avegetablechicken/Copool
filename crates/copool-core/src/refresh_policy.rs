@@ -3,19 +3,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, time::Duration};
 
-/// The quickest a changing usage brings a pool's rounds to.
+/// The quickest a changing usage brings a card's refreshes to.
 const FASTEST_ADAPTIVE_SECONDS: u64 = 30;
-const FAST_REFRESH_UNCHANGED_ROUNDS: u8 = 2;
+/// Refreshes in a row without a change that end a card's speed-up.
+pub(crate) const FAST_REFRESH_UNCHANGED_ROUNDS: u8 = 2;
 /// The longest round interval, and the most rounds to a full one.
 pub(crate) const MAX_ROUND_SECONDS: u64 = 3600;
 pub(crate) const MAX_FULL_EVERY: u64 = 12;
 pub(crate) const MIN_ROUND_SECONDS: u64 = 10;
 
-/// One pool's background refresh, shared by all its cards: the card in use
-/// every `seconds`, the whole pool every `full_every` rounds, and, when
-/// `adaptive`, sooner rounds while its usage changes. With `backoff`, an
-/// account answered with HTTP 429 pauses its requests for a while; only
-/// Claude's accounts do so for now.
+/// One pool's background refresh: the card in use every `seconds`, the whole
+/// pool every `full_every` rounds, shared by all its cards. `adaptive` and
+/// `backoff` are those of cards without their own (`CardRefresh`): with
+/// `adaptive`, a card refreshes sooner while its usage changes; with
+/// `backoff`, an account answered with HTTP 429 pauses its requests for a
+/// while, which only Claude's accounts do for now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PoolRefresh {
@@ -37,14 +39,53 @@ impl PoolRefresh {
         Ok(())
     }
 }
-/// Each pool's background refresh.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A card's own speed-up and slow-down; one it has not set follows its
+/// pool's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardRefresh {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backoff: Option<bool>,
+}
+/// Each pool's cards' own refresh switches, by card key: an account's id, or
+/// `sub2api:<provider>` for all of a Sub2api provider's cards.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardRefreshes {
+    pub codex: BTreeMap<String, CardRefresh>,
+    pub claude: BTreeMap<String, CardRefresh>,
+    pub antigravity: BTreeMap<String, CardRefresh>,
+    pub grok: BTreeMap<String, CardRefresh>,
+}
+impl CardRefreshes {
+    pub fn pool(&self, pool: Pool) -> &BTreeMap<String, CardRefresh> {
+        match pool {
+            Pool::Codex => &self.codex,
+            Pool::Claude => &self.claude,
+            Pool::Antigravity => &self.antigravity,
+            Pool::Grok => &self.grok,
+        }
+    }
+    fn pool_mut(&mut self, pool: Pool) -> &mut BTreeMap<String, CardRefresh> {
+        match pool {
+            Pool::Codex => &mut self.codex,
+            Pool::Claude => &mut self.claude,
+            Pool::Antigravity => &mut self.antigravity,
+            Pool::Grok => &mut self.grok,
+        }
+    }
+}
+/// Each pool's background refresh, and its cards' own switches.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct RefreshPreferences {
     pub codex: PoolRefresh,
     pub claude: PoolRefresh,
     pub antigravity: PoolRefresh,
     pub grok: PoolRefresh,
+    pub cards: CardRefreshes,
 }
 impl Default for RefreshPreferences {
     /// Codex: its card in use every 10 seconds, the whole pool every minute.
@@ -76,6 +117,7 @@ impl Default for RefreshPreferences {
                 adaptive: false,
                 backoff: true,
             },
+            cards: CardRefreshes::default(),
         }
     }
 }
@@ -87,6 +129,15 @@ impl RefreshPreferences {
             Pool::Antigravity => self.antigravity,
             Pool::Grok => self.grok,
         }
+    }
+    /// A card's refresh: its pool's, with the card's own switches.
+    pub fn card(&self, pool: Pool, key: &str) -> PoolRefresh {
+        let mut refresh = self.pool(pool);
+        if let Some(card) = self.cards.pool(pool).get(key) {
+            refresh.adaptive = card.adaptive.unwrap_or(refresh.adaptive);
+            refresh.backoff = card.backoff.unwrap_or(refresh.backoff);
+        }
+        refresh
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
         [self.codex, self.claude, self.antigravity, self.grok]
@@ -118,12 +169,34 @@ impl RefreshPreferences {
                     default
                 })
         };
+        // A card's switches that cannot be read follow its pool's.
+        let mut cards = CardRefreshes::default();
+        for pool in Pool::ALL {
+            let Some(saved) = saved["cards"][pool_name(pool)].as_object() else {
+                continue;
+            };
+            cards
+                .pool_mut(pool)
+                .extend(saved.iter().filter_map(|(key, card)| {
+                    let card = serde_json::from_value::<CardRefresh>(card.clone()).ok()?;
+                    (card != CardRefresh::default()).then(|| (key.clone(), card))
+                }));
+        }
         Self {
             codex: read("codex", defaults.codex),
             claude: read("claude", defaults.claude),
             antigravity: read("antigravity", defaults.antigravity),
             grok: read("grok", defaults.grok),
+            cards,
         }
+    }
+}
+fn pool_name(pool: Pool) -> &'static str {
+    match pool {
+        Pool::Codex => "codex",
+        Pool::Claude => "claude",
+        Pool::Antigravity => "antigravity",
+        Pool::Grok => "grok",
     }
 }
 
@@ -166,29 +239,36 @@ pub(crate) fn fast_interval(base: Duration) -> Duration {
         .max(Duration::from_secs(FASTEST_ADAPTIVE_SECONDS))
         .min(base)
 }
-/// The interval after a round at `current_interval`: the fast one once
-/// usage changed, back to `base` after two rounds in a row without a change.
-pub(crate) fn refresh_interval_for(
-    base: Duration,
-    current_interval: Duration,
-    data_changed: bool,
-    unchanged_refreshes: &mut u8,
-) -> Duration {
-    let fast = fast_interval(base);
-    if data_changed {
-        *unchanged_refreshes = 0;
-        fast
-    } else if current_interval != fast {
-        *unchanged_refreshes = 0;
-        base
-    } else {
-        *unchanged_refreshes = unchanged_refreshes.saturating_add(1);
-        if *unchanged_refreshes >= FAST_REFRESH_UNCHANGED_ROUNDS {
-            *unchanged_refreshes = 0;
-            base
-        } else {
-            fast
+/// A card's speed-up after a refresh: a change starts it over; a refresh
+/// of a card speeding up without one (`counted`) adds to its unchanged
+/// refreshes, and enough of them in a row end it. A card without `adaptive`
+/// never speeds up.
+pub(crate) fn track_speed_up(
+    fast: &mut BTreeMap<String, u8>,
+    key: &str,
+    adaptive: bool,
+    changed: bool,
+    counted: bool,
+) {
+    if !adaptive {
+        fast.remove(key);
+    } else if changed {
+        fast.insert(key.to_owned(), 0);
+    } else if counted {
+        if let Some(unchanged) = fast.get_mut(key) {
+            *unchanged = unchanged.saturating_add(1);
+            if *unchanged >= FAST_REFRESH_UNCHANGED_ROUNDS {
+                fast.remove(key);
+            }
         }
+    }
+}
+/// The key of the card an account shows on: its id, or `sub2api:<provider>`
+/// for a Sub2api provider's, which refresh together.
+pub(crate) fn card_key(pool: Pool, id: &str) -> String {
+    match crate::sub2api::card_provider(pool, id) {
+        Some(provider) => format!("sub2api:{provider}"),
+        None => id.to_owned(),
     }
 }
 /// Each card's usage, without when it was fetched.
@@ -202,13 +282,19 @@ pub(crate) fn usage_values(accounts: &[AccountSummary]) -> BTreeMap<String, Valu
         })
         .collect()
 }
-/// Usage changed: a card's values differ, or a card has usage for the first
-/// time. A card losing its usage is no change.
-pub(crate) fn usage_changed(
-    previous: &BTreeMap<String, Value>,
-    current: &BTreeMap<String, Value>,
-) -> bool {
-    current.iter().any(|(id, usage)| match previous.get(id) {
+/// The cards whose usage changed: their values differ, or they have usage
+/// for the first time. A card losing its usage is no change.
+pub(crate) fn changed_cards<'a>(
+    previous: &'a BTreeMap<String, Value>,
+    current: &'a BTreeMap<String, Value>,
+) -> impl Iterator<Item = &'a str> {
+    current
+        .iter()
+        .filter(|(id, usage)| usage_changed(previous.get(*id), usage))
+        .map(|(id, _)| id.as_str())
+}
+fn usage_changed(previous: Option<&Value>, usage: &Value) -> bool {
+    match previous {
         Some(previous) => previous != usage,
         None => [
             "fiveHour",
@@ -221,7 +307,7 @@ pub(crate) fn usage_changed(
         ]
         .iter()
         .any(|key| !usage[*key].is_null()),
-    })
+    }
 }
 
 pub(crate) fn snapshot_is_fresh(synced_at: Option<i64>, now: i64, window: i64) -> bool {
@@ -291,10 +377,23 @@ mod tests {
         let window = serde_json::json!({"usedPercent": 1, "windowSeconds": 18000});
         for key in ["fiveHour", "thirdPartyFiveHour", "thirdPartyOneWeek"] {
             let current = BTreeMap::from([("a".to_owned(), serde_json::json!({ key: window }))]);
-            assert!(usage_changed(&BTreeMap::new(), &current), "{key}");
+            assert!(changed_cards(&BTreeMap::new(), &current).eq(["a"]), "{key}");
         }
         let empty = BTreeMap::from([("a".to_owned(), serde_json::json!({}))]);
-        assert!(!usage_changed(&BTreeMap::new(), &empty));
+        assert_eq!(changed_cards(&BTreeMap::new(), &empty).count(), 0);
+        // Only the card whose usage differs; one losing its usage is none.
+        let before = BTreeMap::from([
+            ("a".to_owned(), serde_json::json!({"fiveHour": window})),
+            ("b".to_owned(), serde_json::json!({"fiveHour": window})),
+            ("c".to_owned(), serde_json::json!({"fiveHour": window})),
+        ]);
+        let mut after = before.clone();
+        after.insert(
+            "b".into(),
+            serde_json::json!({"fiveHour": {"usedPercent": 2}}),
+        );
+        after.remove("c");
+        assert!(changed_cards(&before, &after).eq(["b"]));
     }
 
     #[test]
@@ -355,20 +454,65 @@ mod tests {
         assert_eq!(fast_interval(secs(60)), secs(30));
         // Never slower than the interval itself.
         assert_eq!(fast_interval(secs(10)), secs(10));
-        let mut unchanged = 0;
-        let ten = secs(600);
-        assert_eq!(
-            refresh_interval_for(ten, ten, true, &mut unchanged),
-            secs(120)
+    }
+
+    #[test]
+    fn a_card_speeds_up_on_a_change_until_two_refreshes_pass_unchanged() {
+        let mut fast = BTreeMap::new();
+        // Unchanged, a card not speeding up stays so.
+        track_speed_up(&mut fast, "a", true, false, true);
+        assert!(fast.is_empty());
+        // Without its own speed-up, a change is ignored.
+        track_speed_up(&mut fast, "b", false, true, true);
+        assert!(fast.is_empty());
+        track_speed_up(&mut fast, "a", true, true, false);
+        assert_eq!(fast.get("a"), Some(&0));
+        // A round that did not ask for it counts nothing...
+        track_speed_up(&mut fast, "a", true, false, false);
+        assert_eq!(fast.get("a"), Some(&0));
+        // ...a change starts it over...
+        track_speed_up(&mut fast, "a", true, false, true);
+        track_speed_up(&mut fast, "a", true, true, true);
+        assert_eq!(fast.get("a"), Some(&0));
+        // ...and the second unchanged refresh in a row ends it.
+        track_speed_up(&mut fast, "a", true, false, true);
+        assert_eq!(fast.get("a"), Some(&1));
+        track_speed_up(&mut fast, "a", true, false, true);
+        assert!(fast.is_empty());
+        // Turning the card's speed-up off ends it at once.
+        track_speed_up(&mut fast, "a", true, true, true);
+        track_speed_up(&mut fast, "a", false, false, false);
+        assert!(fast.is_empty());
+    }
+
+    #[test]
+    fn a_card_follows_its_pools_switches_but_those_it_set() {
+        let mut refresh = RefreshPreferences::default();
+        refresh.cards.claude.insert(
+            "a".into(),
+            CardRefresh {
+                adaptive: Some(false),
+                backoff: None,
+            },
         );
-        assert_eq!(
-            refresh_interval_for(ten, secs(120), false, &mut unchanged),
-            secs(120)
+        refresh.cards.claude.insert(
+            "sub2api:p".into(),
+            CardRefresh {
+                adaptive: None,
+                backoff: Some(false),
+            },
         );
-        assert_eq!(
-            refresh_interval_for(ten, secs(120), false, &mut unchanged),
-            ten
-        );
+        let card = refresh.card(Pool::Claude, "a");
+        assert_eq!((card.adaptive, card.backoff), (false, true));
+        assert_eq!(card.seconds, refresh.claude.seconds);
+        let group = refresh.card(Pool::Claude, "sub2api:p");
+        assert_eq!((group.adaptive, group.backoff), (true, false));
+        assert_eq!(refresh.card(Pool::Claude, "other"), refresh.claude);
+        // Another pool's card of the same key keeps its own pool's.
+        assert_eq!(refresh.card(Pool::Codex, "a"), refresh.codex);
+        assert_eq!(card_key(Pool::Claude, "claude-sub2api-p-3"), "sub2api:p");
+        assert_eq!(card_key(Pool::Codex, "sub2api-p-3"), "sub2api:p");
+        assert_eq!(card_key(Pool::Claude, "a"), "a");
     }
 
     #[test]
@@ -419,5 +563,33 @@ mod tests {
         assert_eq!(read.claude, defaults.claude);
         assert_eq!(read.antigravity, defaults.antigravity);
         assert_eq!(RefreshPreferences::from_saved(&"none".into()), defaults);
+        // A card's switches are kept; those that cannot be read, or set
+        // nothing, follow the pool's.
+        let saved = serde_json::json!({
+            "claude": {"adaptive": true},
+            "cards": {
+                "claude": {
+                    "a": {"adaptive": false},
+                    "b": {"adaptive": "no"},
+                    "c": {},
+                    "d": {"backoff": false, "later": 1},
+                },
+                "codex": "none",
+                "later": {"a": {"adaptive": true}},
+            },
+        });
+        let read = RefreshPreferences::from_saved(&saved);
+        assert_eq!(
+            read.cards.claude.keys().collect::<Vec<_>>(),
+            [&"a".to_owned()]
+        );
+        assert!(!read.card(Pool::Claude, "a").adaptive);
+        assert!(read.card(Pool::Claude, "b").adaptive);
+        assert!(read.cards.codex.is_empty());
+        // As saved, a card's unset switch is left out.
+        assert_eq!(
+            serde_json::to_value(&read.cards).unwrap()["claude"],
+            serde_json::json!({"a": {"adaptive": false}})
+        );
     }
 }

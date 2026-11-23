@@ -557,7 +557,7 @@ impl Application {
         );
         s.extra.insert(
             "refresh".into(),
-            serde_json::to_value(p.refresh).unwrap_or_default(),
+            serde_json::to_value(&p.refresh).unwrap_or_default(),
         );
         s.extra
             .insert("rustPreferencesMigrated".into(), true.into());
@@ -573,7 +573,10 @@ impl Application {
         self.persist_configuration(&settings)?;
         // A pool's new refresh applies from now on, not after its next round.
         for pool in Pool::ALL {
-            if before.is_none_or(|b| b.pool(pool) != value.refresh.pool(pool)) {
+            if before
+                .as_ref()
+                .is_none_or(|b| b.pool(pool) != value.refresh.pool(pool))
+            {
                 self.reschedule(pool, value.refresh.pool(pool));
             }
         }
@@ -701,7 +704,9 @@ impl Application {
                 } else {
                     let every = every_round.as_deref() == Some(card.id.as_str());
                     Some(schedule.next_refresh_at(every, 0))
-                };
+                }
+                // A card speeding up sooner.
+                .map(|next| crate::pool::sooner(next, self.fast_refresh_at(Pool::Codex, &card.id)));
             }
         }
         Ok(summaries)

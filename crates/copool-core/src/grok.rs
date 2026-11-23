@@ -413,15 +413,18 @@ impl Application {
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.schedule(Pool::Grok) {
             for card in &mut summaries {
-                // Every round asks for the card in use, full rounds for all.
+                // Every round asks for the card in use, full rounds for all;
+                // a card speeding up sooner.
                 let every = card.is_current;
+                let fast = self.fast_refresh_at(Pool::Grok, &card.id);
                 card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
                     None => Some(schedule.next_refresh_at(every, 0)),
                     Some(a) if a.first_request_pending => None,
                     Some(a) => {
                         Some(schedule.next_refresh_at(every, a.updated_at + schedule.interval))
                     }
-                };
+                }
+                .map(|next| crate::pool::sooner(next, fast));
             }
         }
         Ok(summaries)

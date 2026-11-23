@@ -963,7 +963,7 @@ function cardBack(target) {
   if (account && !grouped && account.renewal) node.append(renewalSection(account));
   if (account && supportsSayHi(account) && state.schedule)
     node.append(greetingSection(account, state));
-  if (!grouped) node.append(refreshSection(current));
+  if (!grouped) node.append(refreshSection(current, refreshKey(target)));
   if (!grouped) node.append(removalSection(state, cards, !!group));
   return node;
 }
@@ -1184,22 +1184,40 @@ async function saveGreeting(id, state, auto, times) {
   }
   if (editing === state) renderEditing();
 }
-/// The pool's background refresh, which all its cards share: the card in
-/// use's interval only on its own card.
-function refreshSection(current) {
+/// The key a card's own refresh switches are saved under: an account's id,
+/// or `sub2api:<provider>` for a Sub2api provider's cards, which refresh
+/// together.
+function refreshKey(target) {
+  if (target.group) return `sub2api:${target.group.key}`;
+  const provider = providerKey(target.account);
+  return provider === null ? target.account.id : `sub2api:${provider}`;
+}
+/// A card's background refresh: the pool's intervals, which all its cards
+/// share (the card in use's only on its own card), and the card's own
+/// speed-up and slow-down, which follow the pool's until set.
+function refreshSection(current, key) {
   const refresh = preferences.refresh[pool];
+  const own = preferences.refresh.cards?.[pool]?.[key] ?? {};
+  const adaptive = own.adaptive ?? refresh.adaptive;
+  const backoff = own.backoff ?? refresh.backoff;
   const cardPool = pool;
   // On the refresh as saved by then: another change made before this
   // one is saved stays.
-  const save = (patch) =>
-    queuePreferenceSave((latest) => ({
-      refresh: {
-        ...latest.refresh,
-        [cardPool]: { ...latest.refresh[cardPool], ...patch },
-      },
-    }))
+  const saved = (change) =>
+    queuePreferenceSave((latest) => ({ refresh: change(latest.refresh) }))
       .catch((error) => notice(error, true))
       .finally(renderEditing);
+  const save = (patch) =>
+    saved((latest) => ({ ...latest, [cardPool]: { ...latest[cardPool], ...patch } }));
+  const saveCard = (patch) =>
+    saved((latest) => {
+      const cards = latest.cards ?? {};
+      const pooled = cards[cardPool] ?? {};
+      return {
+        ...latest,
+        cards: { ...cards, [cardPool]: { ...pooled, [key]: { ...pooled[key], ...patch } } },
+      };
+    });
   // Its rows name what each interval is for; all the pool's cards share them.
   const section = backSection(tr("accounts.refresh.title"));
   const choices = P.refreshChoices(pool, refresh.seconds);
@@ -1245,20 +1263,20 @@ function refreshSection(current) {
     ),
     backRow(
       tr("accounts.refresh.adaptive"),
-      backSwitch("refresh-adaptive", refresh.adaptive, tr("accounts.refresh.adaptive"), (adaptive) =>
-        save({ adaptive }),
+      backSwitch("refresh-adaptive", adaptive, tr("accounts.refresh.adaptive"), (adaptive) =>
+        saveCard({ adaptive }),
       ),
       null,
       tr("accounts.refresh.adaptive_help_format", interval(P.fastRefreshSeconds(refresh.seconds))),
     ),
   );
-  // Only Claude's accounts pause after HTTP 429 for now.
-  if (pool === "claude")
+  // Only Claude's own accounts pause after HTTP 429 for now.
+  if (pool === "claude" && !key.startsWith("sub2api:"))
     section.group.append(
       backRow(
         tr("accounts.refresh.backoff"),
-        backSwitch("refresh-backoff", refresh.backoff, tr("accounts.refresh.backoff"), (backoff) =>
-          save({ backoff }),
+        backSwitch("refresh-backoff", backoff, tr("accounts.refresh.backoff"), (backoff) =>
+          saveCard({ backoff }),
         ),
         null,
         tr("accounts.refresh.backoff_help"),
