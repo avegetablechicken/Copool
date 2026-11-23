@@ -971,19 +971,22 @@ main > section.page-leaving {
 :where(:root:not(.is-reordering) #accounts) :is([data-reorder-id], [data-card-id]):not(.reorder-raised) {
   scale: 1;
   translate: 0 0;
-  /* A damped spring (ratio 0.72) rather than an ease-out: cards start from
+  /* A damped spring (ratio 0.7) rather than an ease-out: cards start from
      rest, gather speed, overshoot slightly and settle, as a pushed object
-     would, instead of jumping most of the way in the first frames. */
+     would, instead of jumping most of the way in the first frames. The
+     main travel takes about 250ms; the rest lets the spring settle fully. */
   transition-property: scale, translate, box-shadow, background-color;
-  transition-duration: 500ms, 500ms, 300ms, 180ms;
+  transition-duration: 900ms, 900ms, 300ms, 180ms;
   transition-timing-function: cubic-bezier(0.45, 0, 0.15, 1), cubic-bezier(0.45, 0, 0.15, 1),
     ease-out, ease;
-  transition-timing-function: linear(0, 0.042, 0.143, 0.274, 0.414, 0.549, 0.67, 0.773, 0.856,
-      0.921, 0.968, 1.001, 1.021, 1.033, 1.038, 1.038, 1.035, 1.031, 1.025, 1.02, 1.015,
-      1.011, 1.007, 1.004, 1),
-    linear(0, 0.042, 0.143, 0.274, 0.414, 0.549, 0.67, 0.773, 0.856,
-      0.921, 0.968, 1.001, 1.021, 1.033, 1.038, 1.038, 1.035, 1.031, 1.025, 1.02, 1.015,
-      1.011, 1.007, 1.004, 1),
+  transition-timing-function: linear(0, 0.043, 0.146, 0.28, 0.423, 0.561, 0.685, 0.79, 0.874, 0.938, 0.984,
+      1.015, 1.034, 1.043, 1.046, 1.044, 1.039, 1.033, 1.027, 1.02, 1.014, 1.01, 1.006,
+      1.003, 1.001, 0.999, 0.998, 0.998, 0.998, 0.998, 0.998, 0.998, 0.999, 0.999, 0.999,
+      1, 1),
+    linear(0, 0.043, 0.146, 0.28, 0.423, 0.561, 0.685, 0.79, 0.874, 0.938, 0.984,
+      1.015, 1.034, 1.043, 1.046, 1.044, 1.039, 1.033, 1.027, 1.02, 1.014, 1.01, 1.006,
+      1.003, 1.001, 0.999, 0.998, 0.998, 0.998, 0.998, 0.998, 0.998, 0.999, 0.999, 0.999,
+      1, 1),
     ease-out, ease;
 
   /* The rotating face can briefly move out from under the pointer, and a
