@@ -158,6 +158,7 @@ test("Escape cancels card editing and only a fresh press can hide the panel", ()
     document,
     selectedPage: "accounts",
     openMenu: null,
+    TOOLBAR_SHORTCUTS: {},
     navigator: { userAgent: "Mac" },
     invoke: async (command) => commands.push(command),
   });
@@ -178,6 +179,90 @@ test("Escape cancels card editing and only a fresh press can hide the panel", ()
   assert.deepEqual(commands, []);
   escape();
   assert.deepEqual(commands, ["hide_panel"]);
+});
+
+test("Return flips the hovered account card to edit, unless a focused UI element owns Return", async () => {
+  const body = { closest: () => null };
+  const button = { closest: (sel) => (sel.includes("button") ? button : null) };
+  const cardNode = (key, classes = []) => ({
+    dataset: { flipKey: key },
+    classList: { contains: (name) => classes.includes(name) },
+  });
+  let hovered = [];
+  const document = new EventTarget();
+  document.body = body;
+  document.documentElement = {};
+  document.activeElement = body;
+  document.querySelector = () => null;
+  document.getElementById = (id) =>
+    id === "accounts"
+      ? { querySelectorAll: (sel) => (sel === "[data-flip-key]:hover" ? hovered : []) }
+      : null;
+
+  const accounts = [
+    { id: "solo", proxyUrl: "" },
+    { id: "sub2api-team-1", sourceTag: "SUB2API", proxyUrl: "" },
+    { id: "sub2api-team-2", sourceTag: "SUB2API", proxyUrl: "" },
+  ];
+  const { scope } = editor(accounts, {
+    document,
+    selectedPage: "accounts",
+    reorderingAccounts: false,
+    openMenu: null,
+    TOOLBAR_SHORTCUTS: {},
+    navigator: { userAgent: "Mac" },
+    invoke: async () => null,
+  });
+  scope.P.menuBarStep = require("../ui/presentation.js").menuBarStep;
+  scope.turnCard = (_key, _direction, change) => change();
+  vm.runInContext(between("let menuBarNavigation", "/// Refreshes one account"), scope);
+
+  function pressEnter(extra = {}) {
+    const event = Object.assign(new Event("keydown", { cancelable: true }), {
+      key: "Enter",
+      ...extra,
+    });
+    document.dispatchEvent(event);
+    return event;
+  }
+
+  // Focused interactive control (e.g. Tab on a button) keeps Return even while hovering a card.
+  hovered = [cardNode("solo")];
+  document.activeElement = button;
+  assert.equal(pressEnter().defaultPrevented, false);
+  assert.equal(scope.editing, null);
+
+  // Repeat, modifiers, IME composition, collapsed mode, reordering, and other pages do not flip.
+  document.activeElement = body;
+  assert.equal(pressEnter({ repeat: true }).defaultPrevented, false);
+  assert.equal(pressEnter({ metaKey: true }).defaultPrevented, false);
+  assert.equal(pressEnter({ isComposing: true }).defaultPrevented, false);
+  assert.equal(pressEnter({ keyCode: 229 }).defaultPrevented, false);
+  scope.collapsed = true;
+  assert.equal(pressEnter().defaultPrevented, false);
+  scope.collapsed = false;
+  scope.reorderingAccounts = true;
+  assert.equal(pressEnter().defaultPrevented, false);
+  scope.reorderingAccounts = false;
+  scope.selectedPage = "settings";
+  assert.equal(pressEnter().defaultPrevented, false);
+  scope.selectedPage = "accounts";
+  assert.equal(scope.editing, null);
+
+  // Plain Return on a hovered card flips it into edit mode.
+  assert.equal(pressEnter().defaultPrevented, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(scope.editing?.key, "solo");
+
+  // Hovering an already-flipped card back does nothing.
+  hovered = [cardNode("solo", ["account-back"])];
+  assert.equal(pressEnter().defaultPrevented, false);
+
+  // Hovering a grouped Sub2api member without its own back flips its provider group.
+  hovered = [cardNode("sub2api:team"), cardNode("sub2api-team-1")];
+  assert.equal(pressEnter().defaultPrevented, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(scope.editing?.key, "sub2api:team");
 });
 
 test("a card turning over is turned back by Escape or by another card's edit", async () => {

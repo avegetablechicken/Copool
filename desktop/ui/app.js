@@ -2927,6 +2927,41 @@ let menuBarNavigation = false;
 // Where ←/→ move the caret.
 const TEXT_ENTRY =
   'textarea, [contenteditable]:not([contenteditable="false"]), input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"])';
+// Interactive controls that own Return when focused (e.g. via Tab).
+const INTERACTIVE_ELEMENT =
+  'a[href], button, input, select, textarea, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="combobox"], [role="option"], [role="textbox"], [tabindex]:not([tabindex="-1"])';
+/// Whether Return should act on a focused UI element rather than a hovered card.
+function focusOwnsEnter(event) {
+  if (event.target?.closest?.(INTERACTIVE_ELEMENT)) return true;
+  const active = document.activeElement;
+  return Boolean(
+    active &&
+      active !== document.body &&
+      active !== document.documentElement &&
+      active.closest?.(INTERACTIVE_ELEMENT),
+  );
+}
+/// The hovered account card (or provider group) that Return can turn over to
+/// edit, or null when none is hovered, collapsed, already turned over, or has
+/// no settings side.
+function hoveredEditableCard() {
+  if (selectedPage !== "accounts" || collapsed) return null;
+  if (typeof reorderingAccounts !== "undefined" && reorderingAccounts) return null;
+  const list = document.getElementById?.("accounts");
+  if (!list) return null;
+  const hovered = [...list.querySelectorAll("[data-flip-key]:hover")];
+  // Innermost first: a grouped account with its own back wins over its group,
+  // while one without a back falls through to its group (as contextmenu does).
+  for (let i = hovered.length - 1; i >= 0; i--) {
+    const node = hovered[i];
+    const key = node.dataset.flipKey;
+    if (node.classList?.contains("account-back") || editing?.key === key || pendingEdit === key) {
+      return null;
+    }
+    if (hasBack(flipTarget(key))) return key;
+  }
+  return null;
+}
 // Coport's panel shortcuts. An open dialog keeps Escape and Return for
 // cancel and submit, as the SwiftUI dialogs did.
 document.addEventListener("keydown", (event) => {
@@ -2982,6 +3017,23 @@ document.addEventListener("keydown", (event) => {
     if (selectedPage !== "accounts") showPage("accounts");
     else if (editing || pendingEdit) cancelEditing();
     else invoke("hide_panel").catch(() => {});
+  } else if (
+    event.key === "Enter" &&
+    !event.defaultPrevented &&
+    !event.isComposing &&
+    event.keyCode !== 229 &&
+    !event.repeat &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    !focusOwnsEnter(event)
+  ) {
+    const key = hoveredEditableCard();
+    if (key) {
+      event.preventDefault();
+      editCard(key);
+    }
   } else if (back) {
     event.preventDefault();
     if (selectedPage !== "accounts") showPage("accounts");
