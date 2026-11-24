@@ -327,6 +327,99 @@ test("Cards show their own windows, or their third-party pool's when switched to
   assert.match(body("renderAccounts"), /\[\.\.\.thirdPartyShown\]/);
 });
 
+test("A render slides each card's meters from the levels they showed, changing color as they go", () => {
+  // A fill on a 200px track, drawn at its width unless an animation holds it.
+  const fill = (width, hidden = false, background = "gray", opacity = "0.55", drawn = width) => ({
+    hidden, background, opacity, style: { width }, animations: [],
+    parentElement: { getBoundingClientRect: () => ({ width: 200 }) },
+    getBoundingClientRect: () => ({ width: hidden ? 0 : parseFloat(drawn) * 2 }),
+    animate(frames, options) {
+      const animation = { frames, options };
+      this.animations.push(animation);
+      return animation;
+    },
+  });
+  const card = (id, fills) => ({
+    dataset: { cardId: id },
+    querySelectorAll: (selector) => {
+      assert.equal(selector, ":scope > .usage .meter-fill");
+      return fills;
+    },
+  });
+  const list = (...cards) => ({
+    querySelectorAll: (selector) => {
+      assert.equal(selector, "[data-card-id]");
+      return cards;
+    },
+  });
+  const context = vm.createContext({
+    reduced: false,
+    getComputedStyle: (node) => ({ backgroundColor: node.background, opacity: node.opacity }),
+  });
+  context.window = { matchMedia: () => ({ matches: context.reduced }) };
+  vm.runInContext(body("meterStates") + body("cardMeters") + body("slideMeters"), context);
+  const frames = (node) => JSON.parse(JSON.stringify(node.animations.map((a) => a.frames)));
+
+  // Levels are what the meters show, partway through a slide too; a card
+  // without usage rows, as one turned to its back, has none.
+  const before = context.cardMeters(list(
+    card("a", [fill("2%"), fill("18%", false, "gray", "0.55", "30%"), fill("40%")]),
+    card("b", [fill("0%", true)]),
+    card("c", []),
+  ));
+  assert.deepEqual([...before.keys()], ["a", "b"]);
+  assert.deepEqual([...before.get("a")].map(({ level }) => level), [2, 30, 40]);
+  assert.deepEqual([...before.get("b")].map(({ level }) => level), [0]);
+  // Card a's Session fills up into the warning color, its Weekly empties
+  // out, a row new to it rises from empty and a row left as it was stays
+  // still; b's meter fills from empty; c, which showed no usage rows, and
+  // d, new, appear as they are.
+  const a = [fill("92%", false, "orange", "0.9"), fill("0%", true), fill("40%"), fill("5%")];
+  const b = [fill("10%")];
+  const c = [fill("50%")];
+  const d = [fill("60%")];
+  context.slideMeters(list(card("a", a), card("b", b), card("c", c), card("d", d)), before);
+  assert.deepEqual(frames(a[0]), [[
+    { width: "2%", backgroundColor: "gray", opacity: "0.55" },
+    { width: "92%", backgroundColor: "orange", opacity: "0.9" },
+  ]]);
+  assert.deepEqual(frames(a[1]), [[
+    { width: "30%", backgroundColor: "gray", opacity: "0.55" },
+    { width: "0%", backgroundColor: "gray", opacity: "0.55" },
+  ]]);
+  // An emptied meter shows while it drains, and hides once it has.
+  assert.equal(a[1].hidden, false);
+  a[1].animations[0].onfinish();
+  assert.equal(a[1].hidden, true);
+  assert.equal(a[2].animations.length, 0);
+  assert.deepEqual(frames(a[3]), [[
+    { width: "0%", backgroundColor: "gray", opacity: "0.55" },
+    { width: "5%", backgroundColor: "gray", opacity: "0.55" },
+  ]]);
+  assert.deepEqual(frames(b[0]), [[
+    { width: "0%", backgroundColor: "gray", opacity: "0.55" },
+    { width: "10%", backgroundColor: "gray", opacity: "0.55" },
+  ]]);
+  assert.equal(c[0].animations.length + d[0].animations.length, 0);
+
+  // Reduced motion changes them at once.
+  context.reduced = true;
+  const still = [fill("60%")];
+  context.slideMeters(list(card("a", still)), before);
+  assert.equal(still[0].animations.length, 0);
+
+  // Every render of the same pool's cards slides them, the model switch's
+  // and a usage refresh's alike; another pool's cards appear as they are.
+  const render = body("renderAccounts");
+  const captured = render.indexOf("const meters = renderedLayout?.pool === pool ? cardMeters(list) : new Map();");
+  const cleared = render.indexOf("list.replaceChildren();");
+  const aligned = render.indexOf("alignMeters(list);");
+  const slid = render.indexOf("slideMeters(list, meters);");
+  assert(captured >= 0 && captured < cleared, "meters captured before the cards are replaced");
+  assert(aligned >= 0 && aligned < slid, "meters slide once aligned");
+  assert(!body("modelSwitch").includes("slideMeters"));
+});
+
 test("A weekly row of an outdated Sub2api opens a notice naming its version and the pool's upgrade", () => {
   const opened = [];
   const node = () => ({

@@ -1690,6 +1690,59 @@ function modelSwitch(view, accountId) {
   control.append(modelBrand(label));
   return control;
 }
+/// The fills of a card's usage rows, in order, as they look now (partway
+/// through a slide too): their levels in percent and their colors.
+function meterStates(card) {
+  return [...card.querySelectorAll(":scope > .usage .meter-fill")].map((fill) => {
+    const style = getComputedStyle(fill);
+    const track = fill.parentElement.getBoundingClientRect().width;
+    return {
+      fill,
+      level: fill.hidden || !track ? 0 : (fill.getBoundingClientRect().width / track) * 100,
+      background: style.backgroundColor,
+      opacity: style.opacity,
+    };
+  });
+}
+/// The meters of the list's cards that show usage rows, by card.
+function cardMeters(list) {
+  const meters = new Map();
+  for (const card of list.querySelectorAll("[data-card-id]")) {
+    const states = meterStates(card);
+    if (states.length) meters.set(card.dataset.cardId, states);
+  }
+  return meters;
+}
+/// After a render, the meters of cards that showed usage rows before (their
+/// usage refreshed, or switched to another pool's) slide from the levels
+/// they showed to their own, and change color as they go, as a progress bar
+/// does. A row new to its card rises from empty.
+function slideMeters(list, before) {
+  if (!before.size || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  for (const card of list.querySelectorAll("[data-card-id]")) {
+    const shown = before.get(card.dataset.cardId);
+    if (!shown) continue;
+    meterStates(card).forEach(({ fill, background, opacity }, index) => {
+      const level = fill.hidden ? 0 : parseFloat(fill.style.width) || 0;
+      const from = shown[index] ?? { level: 0, background, opacity };
+      if (
+        Math.abs(from.level - level) < 0.5 &&
+        from.background === background &&
+        from.opacity === opacity
+      )
+        return;
+      const empty = fill.hidden;
+      fill.hidden = false;
+      fill.animate(
+        [
+          { width: `${from.level}%`, backgroundColor: from.background, opacity: from.opacity },
+          { width: `${level}%`, backgroundColor: background, opacity },
+        ],
+        { duration: 420, easing: "cubic-bezier(0.25, 1, 0.5, 1)" },
+      ).onfinish = () => { fill.hidden = empty; };
+    });
+  }
+}
 /// A card's usage rows: five hours and the week. Codex Free cards that report
 /// a 30-day monthly quota show Monthly (omitting empty Session/Weekly rows).
 /// Claude cards that report Fable quota add its weekly row beneath them. An
@@ -1900,6 +1953,8 @@ function renderAccounts(accounts) {
     list,
     renderedLayout?.pool === pool && renderedLayout.collapsed !== collapsed,
   );
+  // The meters slide from what they showed to their new levels.
+  const meters = renderedLayout?.pool === pool ? cardMeters(list) : new Map();
   list.replaceChildren();
   if (!accounts.length) {
     list.className = "account-list block";
@@ -1961,6 +2016,7 @@ function renderAccounts(accounts) {
   }
   heldHoverNodes = held;
   alignMeters(list);
+  slideMeters(list, meters);
   if (focused) {
     const field = list.querySelector(`[data-back-field="${focused}"]`);
     field?.focus({ preventScroll: true });
