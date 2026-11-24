@@ -1,3 +1,4 @@
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -14,8 +15,9 @@ struct CopoolWidgets: WidgetBundle {
 
 struct CopoolAccountsWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(
+        AppIntentConfiguration(
             kind: AccountsWidgetVariant.all.kind,
+            intent: AccountsWidgetConfigurationIntent.self,
             provider: AccountsWidgetTimelineProvider(variant: .all)
         ) { entry in
             AccountsWidgetEntryView(entry: entry)
@@ -28,8 +30,9 @@ struct CopoolAccountsWidget: Widget {
 
 struct CopoolCodexAccountsWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(
+        AppIntentConfiguration(
             kind: AccountsWidgetVariant.codex.kind,
+            intent: AccountsWidgetConfigurationIntent.self,
             provider: AccountsWidgetTimelineProvider(variant: .codex)
         ) { entry in
             AccountsWidgetEntryView(entry: entry)
@@ -42,8 +45,9 @@ struct CopoolCodexAccountsWidget: Widget {
 
 struct CopoolClaudeAccountsWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(
+        AppIntentConfiguration(
             kind: AccountsWidgetVariant.claude.kind,
+            intent: AccountsWidgetConfigurationIntent.self,
             provider: AccountsWidgetTimelineProvider(variant: .claude)
         ) { entry in
             AccountsWidgetEntryView(entry: entry)
@@ -56,8 +60,9 @@ struct CopoolClaudeAccountsWidget: Widget {
 
 struct CopoolAntigravityAccountsWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(
+        AppIntentConfiguration(
             kind: AccountsWidgetVariant.antigravity.kind,
+            intent: AccountsWidgetConfigurationIntent.self,
             provider: AccountsWidgetTimelineProvider(variant: .antigravity)
         ) { entry in
             AccountsWidgetEntryView(entry: entry)
@@ -70,8 +75,9 @@ struct CopoolAntigravityAccountsWidget: Widget {
 
 struct CopoolGrokAccountsWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(
+        AppIntentConfiguration(
             kind: AccountsWidgetVariant.grok.kind,
+            intent: AccountsWidgetConfigurationIntent.self,
             provider: AccountsWidgetTimelineProvider(variant: .grok)
         ) { entry in
             AccountsWidgetEntryView(entry: entry)
@@ -87,7 +93,38 @@ struct AccountsWidgetEntry: TimelineEntry {
     let snapshot: AccountsWidgetSnapshot
 }
 
-struct AccountsWidgetTimelineProvider: TimelineProvider {
+/// A widget's own options, set in Edit Widget.
+struct AccountsWidgetConfigurationIntent: WidgetConfigurationIntent {
+    static let title: LocalizedStringResource = "Copool Accounts"
+    static let description = IntentDescription("Choose how the widget shows accounts.")
+
+    @Parameter(title: "Mask Emails", default: false)
+    var masksEmails: Bool
+}
+
+extension AccountsWidgetSnapshot {
+    /// The snapshot with every account name masked.
+    func maskingAccountLabels() -> AccountsWidgetSnapshot {
+        var masked = self
+        masked.currentCard?.accountLabel = Self.mask(accountLabel: currentCard?.accountLabel ?? "")
+        masked.secondaryCard?.accountLabel = Self.mask(accountLabel: secondaryCard?.accountLabel ?? "")
+        for index in masked.rows.indices {
+            masked.rows[index].accountLabel = Self.mask(accountLabel: rows[index].accountLabel)
+        }
+        return masked
+    }
+
+    /// An email's name with all but its first characters hidden, as dots of
+    /// a fixed count that do not reveal its length.
+    static func mask(accountLabel: String) -> String {
+        let name = accountLabel.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return name }
+        let shown = name.count > 4 ? 2 : name.count > 2 ? 1 : 0
+        return String(name.prefix(shown)) + String(repeating: "\u{2022}", count: 4)
+    }
+}
+
+struct AccountsWidgetTimelineProvider: AppIntentTimelineProvider {
     let variant: AccountsWidgetVariant
     private let store: AccountsWidgetSnapshotStore
 
@@ -100,28 +137,28 @@ struct AccountsWidgetTimelineProvider: TimelineProvider {
         AccountsWidgetEntry(date: .now, snapshot: sampleSnapshot)
     }
 
-    func getSnapshot(in context: Context, completion: @escaping (AccountsWidgetEntry) -> Void) {
-        let snapshot = store.load()
-        completion(
-            AccountsWidgetEntry(
-                date: .now,
-                snapshot: snapshot
-            )
+    func snapshot(
+        for configuration: AccountsWidgetConfigurationIntent,
+        in context: Context
+    ) async -> AccountsWidgetEntry {
+        entry(for: configuration)
+    }
+
+    func timeline(
+        for configuration: AccountsWidgetConfigurationIntent,
+        in context: Context
+    ) async -> Timeline<AccountsWidgetEntry> {
+        Timeline(
+            entries: [entry(for: configuration)],
+            policy: .after(.now.addingTimeInterval(60 * 15))
         )
     }
 
-    func getTimeline(in context: Context, completion: @escaping (Timeline<AccountsWidgetEntry>) -> Void) {
-        _ = context
+    private func entry(for configuration: AccountsWidgetConfigurationIntent) -> AccountsWidgetEntry {
         let snapshot = store.load()
-        let entry = AccountsWidgetEntry(
+        return AccountsWidgetEntry(
             date: .now,
-            snapshot: snapshot
-        )
-        completion(
-            Timeline(
-                entries: [entry],
-                policy: .after(.now.addingTimeInterval(60 * 15))
-            )
+            snapshot: configuration.masksEmails ? snapshot.maskingAccountLabels() : snapshot
         )
     }
 
