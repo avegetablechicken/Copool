@@ -665,7 +665,16 @@ function accountControls(account, full, view, grouped = false) {
 }
 /// Claude subscriptions and official Codex Plus cards can start an idle window.
 function canSayHi(account) {
-  return fiveHourIdle(account) && supportsSayHi(account);
+  return fiveHourIdle(account, pool, helloTarget(account)) && supportsSayHi(account);
+}
+/// The one pool a hi greets on a card with a model switch: the third party's
+/// when chosen (true), else its own (false); null on a card without one,
+/// whose hi greets each idle pool.
+function helloTarget(account) {
+  const usage = account.usage;
+  if (!usage?.thirdPartyFiveHour && !usage?.thirdPartyOneWeek) return null;
+  const view = P.card(account, false, "used", String);
+  return hasThirdParty(view) ? showsThirdParty(view, account.id) : null;
 }
 function supportsSayHi(account) {
   if (pool === "claude") return true;
@@ -678,13 +687,16 @@ function supportsSayHi(account) {
 }
 /// Known usage with no future reset indicates an idle window; Antigravity's
 /// third-party (Claude) pool has its own, idle as well when reported so.
-function fiveHourIdle(account, cardPool = pool) {
+/// A hi to one pool alone (`target`, as helloTarget) looks at its window.
+function fiveHourIdle(account, cardPool = pool, target = null) {
   if (!account.usage) return false;
   const now = Date.now() / 1000;
   const idle = (window) => !(window?.resetAt > now);
+  const third = account.usage.thirdPartyFiveHour;
+  if (target === true) return !!third && idle(third);
+  if (target === false) return idle(account.usage.fiveHour);
   return idle(account.usage.fiveHour) ||
-    (cardPool === "antigravity" && !!account.usage.thirdPartyFiveHour &&
-      idle(account.usage.thirdPartyFiveHour));
+    (cardPool === "antigravity" && !!third && idle(third));
 }
 /// Both pools use the same delayed usage checks after the model replies.
 const SAY_HI_LOOKS = [10, 30, 90, 180];
@@ -699,15 +711,17 @@ const sayingHi = new Map();
 async function sayHi(account) {
   const controller = accountsController;
   const targetPool = pool;
+  // The model the card's switch shows, if it has one, alone.
+  const target = helloTarget(account);
   const shown = () => {
     const card = controller.accounts.find((a) => a.id === account.id);
     // The card's pool's windows, whichever pool is shown meanwhile.
-    return !card || (!!card.usage && !fiveHourIdle(card, targetPool));
+    return !card || (!!card.usage && !fiveHourIdle(card, targetPool, target));
   };
   if (sayingHi.has(account.id)) return;
   sayingHi.set(account.id, "sent");
   try {
-    if (!(await controller.sayHi(account.id))) return;
+    if (!(await controller.sayHi(account.id, target))) return;
     sayingHi.set(account.id, "received");
     controller.onUpdate();
     const replied = Date.now();
@@ -913,7 +927,7 @@ async function turnCard(key, direction, change) {
   const next = find();
   if (!next) return;
   if (keyboardFocus && document.activeElement === document.body)
-    next.querySelector(":scope > .card-edit, :scope > .back-head > .back-done")?.focus({ preventScroll: true });
+    next.querySelector(":scope > :first-child > .card-edit, :scope > .back-head > .back-done")?.focus({ preventScroll: true });
   if (still) return;
   if (raised) next.classList.add("flip-raised");
   const turn = next.animate(
@@ -1592,6 +1606,14 @@ function accountCard(account, grouped = false) {
   name.append(title);
   const tags = accountTags(account, view, grouped);
   head.append(tags);
+  const models = modelSwitch(view, account.id);
+  // A provider's account without a plan tag or switch has no tag row; its
+  // name's line is then its first.
+  const headed = !(grouped && !tags.childElementCount && !models);
+  // The edit button takes the free end of the first line, before the switch.
+  if (hasBack({ account, grouped }))
+    (headed ? head : name).append(editButton(account.id, full));
+  if (models) head.append(models);
   // A card is dragged by its tags and name, as OpenQuota by its header.
   if (!grouped) head.dataset.reorderHandle = name.dataset.reorderHandle = "";
   // A negative reset count is unavailable, as in AccountCardPresentation.
@@ -1604,32 +1626,89 @@ function accountCard(account, grouped = false) {
   const footerText = accountBalanceText(account.usage, credits, inventory, pool !== "antigravity");
   footer.append(footerText, accountControls(account, full, view, grouped));
   card.append(
-    // A provider's account without a plan tag has no tag row to show.
-    ...(grouped && !tags.childElementCount ? [] : [head]),
+    ...(headed ? [head] : []),
     name,
-    ...usageWindows(view),
+    ...usageWindows(view, account.id),
     footer,
   );
-  if (hasBack({ account, grouped })) card.append(editButton(account.id, full));
   return card;
+}
+/// Accounts whose usage rows show their third-party pool rather than their
+/// own.
+const thirdPartyShown = new Set();
+/// The third-party pool's model: Antigravity's other than Gemini, Claude.
+const THIRD_PARTY_MODEL = "Claude";
+/// The model of a pool's own windows.
+function ownModel() {
+  return { codex: "Codex", claude: "Claude", antigravity: "Gemini", grok: "Grok" }[pool];
+}
+/// Whether a card reports a third-party pool beside its own.
+function hasThirdParty(view) {
+  return view.thirdPartyFiveHour.available || view.thirdPartyOneWeek.available;
+}
+function showsThirdParty(view, accountId) {
+  return hasThirdParty(view) && thirdPartyShown.has(accountId);
+}
+/// A model's mark for the model switch: its pool's from the pool switch, and
+/// Gemini's spark (Simple Icons, CC0) in its gradient.
+function modelBrand(model) {
+  if (model !== "Gemini") {
+    const mark = document.querySelector(`.pool-btn[data-pool="${model.toLowerCase()}"] .brand`);
+    if (mark) return mark.cloneNode(true);
+  }
+  const mark = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  mark.setAttribute("class", "brand");
+  mark.setAttribute("viewBox", "0 0 24 24");
+  mark.setAttribute("aria-hidden", "true");
+  mark.innerHTML =
+    '<defs><linearGradient id="gemini-tint" x1="0" y1="1" x2="1" y2="0">' +
+    '<stop offset="0" stop-color="#4285f4"/><stop offset="0.7" stop-color="#9b72cb"/>' +
+    '<stop offset="1" stop-color="#d96570"/></linearGradient></defs>' +
+    '<path fill="url(#gemini-tint)" d="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 ' +
+    "2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 " +
+    "0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 " +
+    '2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81"/>';
+  return mark;
+}
+/// A card reporting a third-party pool chooses whose windows its usage rows
+/// show, its own or the third party's, with one icon button at the end of its
+/// tag row: the mark of the model shown, which a click switches to the other.
+function modelSwitch(view, accountId) {
+  if (!hasThirdParty(view)) return null;
+  const third = showsThirdParty(view, accountId);
+  const label = third ? THIRD_PARTY_MODEL : ownModel();
+  const control = button("", null, "model-switch", () => {
+    if (third) thirdPartyShown.delete(accountId);
+    else thirdPartyShown.add(accountId);
+    renderAccounts(accountsCache);
+  });
+  control.type = "button";
+  control.title = label;
+  control.setAttribute("aria-label", label);
+  control.setAttribute("aria-pressed", String(third));
+  control.dataset.modelSwitch = accountId;
+  control.append(modelBrand(label));
+  return control;
 }
 /// A card's usage rows: five hours and the week. Codex Free cards that report
 /// a 30-day monthly quota show Monthly (omitting empty Session/Weekly rows).
 /// Claude cards that report Fable quota add its weekly row beneath them. An
-/// Antigravity card's are Gemini's; its third-party (Claude) pool, once
-/// reported, follows in an inset of its own, as a Sub2api provider's accounts.
+/// Antigravity card's are Gemini's. A card's third-party pool, once reported
+/// and chosen (modelSwitch), shows instead.
 /// The weekly rows of a Sub2api too old to report them say so when clicked.
 /// Whether the pool's accounts may have a monthly window: Codex Free, and a
 /// Grok plan whose allowance lasts a month.
 function hasMonthlyWindow() {
   return pool === "codex" || pool === "grok";
 }
-function usageWindows(view) {
+function usageWindows(view, accountId) {
   const five = tr("accounts.window.five_hour"), week = tr("accounts.window.one_week");
   const rows = (fiveHour, oneWeek) => [
     usageWindow(fiveHour, five, "five-hour"),
     weeklyNotice(usageWindow(oneWeek, week, "one-week"), view.outdatedSub2api),
   ];
+  if (showsThirdParty(view, accountId))
+    return rows(view.thirdPartyFiveHour, view.thirdPartyOneWeek);
   const shown = rows(view.fiveHour, view.oneWeek);
   if (hasMonthlyWindow() && view.oneMonth.available) {
     const month = usageWindow(view.oneMonth, tr("accounts.window.one_month"), "one-month");
@@ -1642,16 +1721,6 @@ function usageWindows(view) {
   }
   if (pool === "claude" && view.fableOneWeek.available) {
     shown.push(usageWindow(view.fableOneWeek, tr("accounts.window.fable"), "fable"));
-  }
-  if (
-    pool === "antigravity" &&
-    (view.thirdPartyFiveHour.available || view.thirdPartyOneWeek.available)
-  ) {
-    const inset = el("div", "account-member");
-    const name = el("div", "account-name");
-    name.append(el("span", "block-title", "Claude"));
-    inset.append(name, ...rows(view.thirdPartyFiveHour, view.thirdPartyOneWeek));
-    shown.push(inset);
   }
   return shown;
 }
@@ -1728,7 +1797,8 @@ function providerGroup(group) {
     el("span", "account-footer-text"),
     providerControls(group, title, current),
   );
-  block.append(head, list, footer, editButton(flipKey, title));
+  head.append(editButton(flipKey, title));
+  block.append(head, list, footer);
   return block;
 }
 /// A card's key in the saved order: a Sub2api provider's cards share one.
@@ -1780,6 +1850,7 @@ function renderAccounts(accounts) {
         );
       }),
     collapsed,
+    [...thirdPartyShown],
     locale,
     preferences?.usageDisplay,
     accounts.map(accountProxy),
@@ -1808,6 +1879,10 @@ function renderAccounts(accounts) {
   const selection = focused && document.activeElement.selectionStart != null
     ? [document.activeElement.selectionStart, document.activeElement.selectionEnd]
     : null;
+  // A model switch used from the keyboard keeps its focus.
+  const models = list.contains(document.activeElement)
+    ? document.activeElement.dataset.modelSwitch
+    : undefined;
   list.className = collapsed ? "account-list compact block flush" : "account-list";
   // Preserve hover elevation across DOM replacement until :hover re-settles.
   const hoveredEntries = new Set(
@@ -1890,6 +1965,10 @@ function renderAccounts(accounts) {
     const field = list.querySelector(`[data-back-field="${focused}"]`);
     field?.focus({ preventScroll: true });
     if (field && selection) field.setSelectionRange?.(...selection);
+  } else if (models) {
+    [...list.querySelectorAll("[data-model-switch]")]
+      .find((node) => node.dataset.modelSwitch === models)
+      ?.focus({ preventScroll: true });
   }
   const current = entries.find(entryIsCurrent);
   animateLayout(list, before, current ? entryKey(current) : null);

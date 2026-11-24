@@ -109,10 +109,17 @@ fn next_full_refresh_at(app: State<'_, App>, pool: Pool) -> Option<i64> {
     app.next_full_refresh_at(pool)
 }
 #[tauri::command]
-async fn say_hi(app: State<'_, App>, pool: Pool, id: String) -> Result<(), String> {
+/// Says hi with a card; `third_party`, when its model switch chose, names
+/// the one pool to greet: the third party's, or the card's own.
+async fn say_hi(
+    app: State<'_, App>,
+    pool: Pool,
+    id: String,
+    third_party: Option<bool>,
+) -> Result<(), String> {
     let _ = app.authorize(pool).await;
     app.release_new_accounts(pool, Some(&id)).await?;
-    app.say_hi(pool, &id).await
+    app.say_hi_to(pool, &id, third_party).await
 }
 #[tauri::command]
 async fn renew_now(app: State<'_, App>, pool: Pool, id: String) -> Result<(), String> {

@@ -374,6 +374,15 @@ impl Application {
     /// A login refused as expired is renewed by a refresh, as its renewal
     /// allows, and says hi once more. A Sub2api card says hi through Sub2api.
     pub async fn say_hi(&self, pool: Pool, id: &str) -> Result<()> {
+        self.say_hi_to(pool, id, None).await
+    }
+    /// Says hi as `say_hi` does, to the card's own pool alone, or with
+    /// `third_party` to its third-party pool alone, as the card's model
+    /// switch has chosen; only an Antigravity account has the latter.
+    pub async fn say_hi_to(&self, pool: Pool, id: &str, third_party: Option<bool>) -> Result<()> {
+        if third_party == Some(true) && (pool != Pool::Antigravity || sub2api::is_card(pool, id)) {
+            return Err("This card has no third-party pool to say hi to".into());
+        }
         let _greeting = self.begin_greeting(pool, id)?;
         if sub2api::is_card(pool, id) {
             return self.say_hi_through_provider(pool, id).await;
@@ -383,7 +392,7 @@ impl Application {
             let hello = match pool {
                 Pool::Codex => self.codex_hello(id).await?,
                 Pool::Claude => self.claude_hello(id).await?,
-                Pool::Antigravity => self.antigravity_hello(id).await?,
+                Pool::Antigravity => self.antigravity_hello(id, third_party).await?,
                 Pool::Grok => return self.grok_unavailable(),
             };
             match hello {

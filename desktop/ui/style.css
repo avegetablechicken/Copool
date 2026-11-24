@@ -934,35 +934,35 @@ main > section.page-leaving {
   color: var(--label);
 }
 
-/* A card's edit button sits at its top right, as a widget's info button,
-   shown on the focused card; it takes no room from the tags. */
+/* A card's edit button ends its first line, as a widget's info button, in
+   whatever room that line leaves at its right: after the tags, or the name
+   when there are none, and before a model switch. Shown on the focused
+   card, its mark lines up with the card's right edge, or the switch's. */
 .account,
 .account-member {
   position: relative;
 }
 
 .icon-btn.card-edit {
-  position: absolute;
-  top: 7px;
-  right: 9px;
+  margin-left: auto;
+  margin-right: -3px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 150ms ease;
 }
 
-.account-member > .icon-btn.card-edit {
-  top: 3px;
-  right: 5px;
+.icon-btn.card-edit:has(+ .model-switch) {
+  margin-right: -7px;
 }
 
-.account:is(:hover, .hover-hold) > .card-edit,
-.account-member:is(:hover, .hover-hold) > .card-edit,
+.account:is(:hover, .hover-hold) > :first-child > .card-edit,
+.account-member:is(:hover, .hover-hold) > :first-child > .card-edit,
 .card-edit:focus-visible {
   opacity: 1;
   pointer-events: auto;
 }
 
-.account-group:has(.account-member:is(:hover, .hover-hold)) > .card-edit {
+.account-group:has(.account-member:is(:hover, .hover-hold)) > :first-child > .card-edit {
   opacity: 0;
   pointer-events: none;
 }
@@ -1071,11 +1071,6 @@ main > section.page-leaving {
       transition-delay: 0ms;
     }
   }
-}
-
-.account > .block-head,
-.account-member:has(> .card-edit) > :first-child {
-  padding-right: 18px;
 }
 
 /* A hi or renewal in the refresh button's place: under way, then done. */
@@ -2050,6 +2045,29 @@ button.usage-reset:hover {
 .account-footer .block-aside {
   gap: 2px;
   font-size: 11px;
+}
+
+/* A card's choice of its own or its third-party pool's windows: the shown
+   model's mark as an icon button at the end of the tag row, beside the edit
+   button and spaced as it is. */
+.model-switch {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  margin-right: -4px;
+  border-radius: 4px;
+}
+
+.model-switch .brand {
+  width: 12px;
+  height: 12px;
+}
+
+.card-edit + .model-switch {
+  margin-left: 0;
 }
 
 /* A Sub2api provider's cards in one block, its controls where a single

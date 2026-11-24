@@ -213,6 +213,7 @@ test("both pools refresh immediately after a reply, then only until the window s
         accountsController,
         pool: target,
         refreshView: async () => phases.push(scope.pending.get("a")),
+        helloTarget: () => null,
         setTimeout: (resolve, ms) => ((clock += ms), show(), resolve()),
         tr: (key) => key,
         notice: (message, error = false) => notices.push([message, error]),
@@ -266,6 +267,7 @@ test("an Antigravity hi waits for both windows while another pool is shown", asy
       },
     },
     refreshView: async () => {},
+    helloTarget: () => null,
     setTimeout: (resolve, ms) => ((clock += ms), resolve()),
     tr: (key) => key,
     notice: (message, error = false) => notices.push([message, error]),
@@ -278,6 +280,72 @@ test("an Antigravity hi waits for both windows while another pool is shown", asy
   await scope.run({ id: "a" });
   assert.equal(refreshes, 3);
   assert.deepEqual(notices, [["accounts.notice.said_hi", false]]);
+});
+
+test("A card's model switch sends its hi to the chosen pool alone, and waits for its window", async () => {
+  const start = source.indexOf("const SAY_HI_LOOKS =");
+  const end = source.indexOf("/// The card turned over to edit it");
+  const idleStart = source.indexOf("function fiveHourIdle(");
+  const idleEnd = source.indexOf("\n}\n", idleStart);
+  assert(start >= 0 && end > start && idleStart >= 0 && idleEnd > idleStart, "sayHi found");
+  for (const target of [true, false]) {
+    let clock = Date.now();
+    let refreshes = 0;
+    const sent = [];
+    const notices = [];
+    // Only the chosen pool's window starts, at the first refresh.
+    const card = { id: "a", usage: { fiveHour: { resetAt: null }, thirdPartyFiveHour: { resetAt: null } } };
+    const scope = {
+      Date: { now: () => clock },
+      Math,
+      Map,
+      Promise,
+      pool: "antigravity",
+      accountsController: {
+        accounts: [card],
+        onUpdate: () => {},
+        sayHi: async (id, thirdParty) => (sent.push([id, thirdParty]), true),
+        refresh: async () => {
+          refreshes++;
+          card.usage[target ? "thirdPartyFiveHour" : "fiveHour"].resetAt = clock / 1000 + 600;
+          return true;
+        },
+      },
+      refreshView: async () => {},
+      helloTarget: () => target,
+      setTimeout: (resolve, ms) => ((clock += ms), resolve()),
+      tr: (key) => key,
+      notice: (message, error = false) => notices.push([message, error]),
+    };
+    vm.createContext(scope);
+    vm.runInContext(
+      `${source.slice(idleStart, idleEnd + 3)}${source.slice(start, end)}\nthis.run = sayHi;`,
+      scope,
+    );
+    await scope.run({ id: "a" });
+    assert.deepEqual(sent, [["a", target]]);
+    assert.equal(refreshes, 1, "the other pool's idle window is not awaited");
+    assert.deepEqual(notices, [["accounts.notice.said_hi", false]]);
+  }
+});
+
+test("A chosen pool's hi goes to say_hi with it, and its window alone decides idleness", async () => {
+  const { model, calls } = fixture("antigravity");
+  assert.equal(await model.sayHi("a", true), true);
+  assert.deepEqual(calls.find(([name]) => name === "say_hi"), ["say_hi", { id: "a", thirdParty: true, pool: "antigravity" }]);
+  const start = source.indexOf("function fiveHourIdle(");
+  const end = source.indexOf("\n}\n", start);
+  assert(start >= 0 && end > start, "fiveHourIdle found");
+  const idle = vm.runInNewContext(`(${source.slice(start, end + 2)})`, { Date, pool: "antigravity" });
+  const now = Date.now() / 1000;
+  const started = { usedPercent: 3, resetAt: now + 60 };
+  const quiet = { usedPercent: 0, resetAt: null };
+  const card = (fiveHour, thirdPartyFiveHour) => ({ usage: { fiveHour, thirdPartyFiveHour } });
+  assert.equal(idle(card(started, quiet), "antigravity", true), true);
+  assert.equal(idle(card(started, quiet), "antigravity", false), false);
+  assert.equal(idle(card(quiet, started), "antigravity", true), false);
+  assert.equal(idle(card(quiet, started), "antigravity", false), true);
+  assert.equal(idle(card(quiet, undefined), "antigravity", true), false, "no third-party pool");
 });
 
 test("Codex Plus greetings route to their own account command", async () => {

@@ -885,6 +885,31 @@ async fn a_hi_starts_each_idle_five_hour_window() {
         .map(|m| m.1.clone())
         .collect();
     assert_eq!(models, ["gemini-3.8-flash-low", "gpt-oss-120b-medium"]);
+    // The card's model switch chooses one pool alone, idle or not.
+    for (third_party, model) in [
+        (true, "gpt-oss-120b-medium"),
+        (false, "gemini-3.8-flash-low"),
+    ] {
+        for (gemini, claude) in [(None, None), (Some(later_reset), Some(later_reset))] {
+            h.fake.messages.lock().unwrap().clear();
+            set_usage(gemini, claude);
+            h.app
+                .say_hi_to(Pool::Antigravity, &id, Some(third_party))
+                .await
+                .unwrap();
+            let models: Vec<String> = h
+                .fake
+                .messages
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|m| m.1.clone())
+                .collect();
+            assert_eq!(models, [model]);
+        }
+    }
+    // Other pools have no third-party pool to greet.
+    assert!(h.app.say_hi_to(Pool::Codex, &id, Some(true)).await.is_err());
 }
 
 fn stored_document(app: &Application, id: &str) -> Value {

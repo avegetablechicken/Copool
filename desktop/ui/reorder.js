@@ -173,8 +173,8 @@
     function surface(source, target, geometry) {
       const { backgroundColor, boxShadow } = getComputedStyle(source);
       target.animate([{ backgroundColor, boxShadow, ...geometry }, {}], timing);
-      const oldButton = source.querySelector(":scope > .card-edit");
-      const newButton = target.querySelector(":scope > .card-edit");
+      const oldButton = source.querySelector(":scope > :first-child > .card-edit");
+      const newButton = target.querySelector(":scope > :first-child > .card-edit");
       if (oldButton && newButton)
         newButton.animate([{ opacity: getComputedStyle(oldButton).opacity }, {}], timing);
     }

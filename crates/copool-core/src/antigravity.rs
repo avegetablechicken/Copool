@@ -952,8 +952,13 @@ impl Application {
     }
     /// Says hi with an account through its proxy, without switching to it:
     /// one short message to each pool whose five-hour window is idle (to
-    /// Gemini's when none is), which starts it.
-    pub(crate) async fn antigravity_hello(&self, id: &str) -> Result<Hello> {
+    /// Gemini's when none is), which starts it; or, with `third_party`, to
+    /// that pool alone (Gemini's, or the third party's), idle or not.
+    pub(crate) async fn antigravity_hello(
+        &self,
+        id: &str,
+        third_party_only: Option<bool>,
+    ) -> Result<Hello> {
         let account = self
             .antigravity_load()?
             .accounts
@@ -1005,22 +1010,29 @@ impl Application {
             account.usage.is_none() || window.is_some_and(|w| w.reset_at.is_none_or(|r| r <= now))
         };
         let usage = account.usage.as_ref();
-        let mut targets: Vec<String> = [
-            (
-                gemini.clone(),
-                idle(usage.and_then(|u| u.five_hour.as_ref())),
-            ),
-            (
-                third_party,
-                idle(usage.and_then(|u| u.third_party_five_hour.as_ref())),
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(model, idle)| model.filter(|_| idle))
-        .collect();
-        if targets.is_empty() {
-            targets.extend(gemini);
-        }
+        let targets: Vec<String> = match third_party_only {
+            Some(true) => third_party.into_iter().collect(),
+            Some(false) => gemini.into_iter().collect(),
+            None => {
+                let mut targets: Vec<String> = [
+                    (
+                        gemini.clone(),
+                        idle(usage.and_then(|u| u.five_hour.as_ref())),
+                    ),
+                    (
+                        third_party,
+                        idle(usage.and_then(|u| u.third_party_five_hour.as_ref())),
+                    ),
+                ]
+                .into_iter()
+                .filter_map(|(model, idle)| model.filter(|_| idle))
+                .collect();
+                if targets.is_empty() {
+                    targets.extend(gemini);
+                }
+                targets
+            }
+        };
         if targets.is_empty() {
             return Err("Antigravity lists no model to say hi to".into());
         }

@@ -167,35 +167,70 @@ test("A visible meter changes from red to amber without a data refresh", () => {
   assert.equal(track.title, "accounts.window.pace_spare 1");
 });
 
-test("Antigravity cards show Gemini's windows as the others, and Claude's in an inset", () => {
-  const rows = (pool, usage, account = {}) => {
-    const el = (tag, className, text) => ({
-      className, text, children: [],
-      append(...nodes) { this.children.push(...nodes); },
-    });
-    const context = vm.createContext({
-      pool, el,
-      tr: (key) => ({
-        "accounts.window.five_hour": "Session",
-        "accounts.window.one_week": "Weekly",
-        "accounts.window.one_month": "Monthly",
-        "accounts.window.fable": "Fable",
-      })[key],
-      usageWindow: (view, title, tone) => [title, tone, view.available],
-      // The weekly rows carry the outdated Sub2api version they warn about.
-      weeklyNotice: (row, version) => (version ? [...row, version] : row),
-    });
-    vm.runInContext(body("hasMonthlyWindow") + body("usageWindows"), context);
-    // The inset as its title and its rows; arrays from the context's realm
-    // compare as plain values.
-    const plain = (node) => Array.isArray(node)
-      ? node
-      : { [node.className]: node.children.map((child) =>
-          Array.isArray(child) ? child : child.children.map((title) => title.text)[0]) };
-    return JSON.parse(JSON.stringify(
-      context.usageWindows(P.card({ usage, ...account }, false, "used", String)).map(plain),
-    ));
+test("Cards show their own windows, or their third-party pool's when switched to", () => {
+  const declaration = "const thirdPartyShown = new Set();\n";
+  assert(source.includes(declaration), "thirdPartyShown");
+  const model = 'const THIRD_PARTY_MODEL = "Claude";\n';
+  assert(source.includes(model), "THIRD_PARTY_MODEL");
+  const node = (className, text) => ({
+    className, text, children: [], dataset: {}, attributes: {}, listeners: {},
+    append(...nodes) { this.children.push(...nodes); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener(name, handler) { this.listeners[name] = handler; },
+  });
+  const context = vm.createContext({
+    pool: "codex",
+    accountsCache: [],
+    renders: 0,
+    el: (tag, className, text) => node(className, text),
+    button: (label, glyph, className, handler) => {
+      const option = node(className, label);
+      option.addEventListener("click", handler);
+      return option;
+    },
+    tr: (key) => ({
+      "accounts.window.five_hour": "Session",
+      "accounts.window.one_week": "Weekly",
+      "accounts.window.one_month": "Monthly",
+      "accounts.window.fable": "Fable",
+    })[key],
+    usageWindow: (view, title, tone) => [title, tone, view.available],
+    // The weekly rows carry the outdated Sub2api version they warn about.
+    weeklyNotice: (row, version) => (version ? [...row, version] : row),
+    modelBrand: (model) => `${model} mark`,
+  });
+  vm.runInContext(
+    declaration +
+      model +
+      "function renderAccounts() { renders++; }\n" +
+      body("ownModel") +
+      body("hasThirdParty") +
+      body("showsThirdParty") +
+      body("modelSwitch") +
+      body("hasMonthlyWindow") +
+      body("usageWindows"),
+    context,
+  );
+  const view = (pool, usage, account = {}) => {
+    context.pool = pool;
+    return P.card({ usage, ...account }, false, "used", String);
   };
+  // Rows from the context's realm compare as plain values.
+  const rows = (pool, usage, account = {}) => JSON.parse(JSON.stringify(
+    context.usageWindows(view(pool, usage, account), account.id ?? "a"),
+  ));
+  // The switch as the name of the model it shows, bracketed when that is the
+  // third party's.
+  const models = (pool, usage, id = "a") => {
+    const control = context.modelSwitch(view(pool, usage), id);
+    if (!control) return control;
+    assert.deepEqual(control.children, [`${control.title} mark`]);
+    assert.equal(control.attributes["aria-label"], control.title);
+    assert.equal(control.dataset.modelSwitch, id);
+    return control.attributes["aria-pressed"] === "true" ? `[${control.title}]` : control.title;
+  };
+  const click = (pool, usage, id = "a") =>
+    context.modelSwitch(view(pool, usage), id).listeners.click();
   const window = (usedPercent, windowSeconds) => ({ usedPercent, windowSeconds, resetAt: null });
   const gemini = { fiveHour: window(20, 18000), oneWeek: window(5, 604800) };
   const own = [
@@ -204,8 +239,14 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
   ];
   assert.deepEqual(rows("codex", gemini), own);
   assert.deepEqual(rows("antigravity", gemini), own);
-  // Codex and Claude have no third-party pool.
-  assert.deepEqual(rows("claude", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), own);
+  // Any pool's card reporting a third-party pool switches between its own
+  // model and the third party's, its own by default.
+  for (const [other, name] of [["codex", "Codex"], ["claude", "Claude"], ["grok", "Grok"]]) {
+    const usage = { ...gemini, thirdPartyFiveHour: window(50, 18000) };
+    assert.deepEqual(rows(other, usage), own);
+    assert.equal(models(other, usage, "x"), name);
+    assert.equal(models(other, gemini), null);
+  }
   // Claude shows a Fable row only when the account reports Fable usage.
   assert.deepEqual(rows("claude", { ...gemini, fableOneWeek: window(35, 604800) }), [
     ...own,
@@ -235,29 +276,38 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
     ["Session", "five-hour", false],
     ["Weekly", "one-week", true],
   ]);
-  assert.deepEqual(rows("antigravity", { ...gemini, thirdPartyFiveHour: window(50, 18000) }), [
-    ...own,
-    { "account-member": ["Claude", ["Session", "five-hour", true], ["Weekly", "one-week", false]] },
-  ]);
-  // A Google AI Pro account: Gemini's five hours, and the third-party pool.
-  assert.deepEqual(
-    rows("antigravity", {
-      fiveHour: window(2, 18000),
-      thirdPartyFiveHour: window(0, 18000),
-      thirdPartyOneWeek: window(0, 604800),
-    }),
-    [
-      ["Session", "five-hour", true],
-      ["Weekly", "one-week", false],
-      { "account-member": ["Claude", ["Session", "five-hour", true], ["Weekly", "one-week", true]] },
-    ],
-  );
-  // A card without usage keeps both rows, without data, and no inset.
+  // A card without usage keeps both rows, without data, and no switch.
   assert.deepEqual(rows("antigravity", null), [
     ["Session", "five-hour", false],
     ["Weekly", "one-week", false],
   ]);
-  // A Sub2api too old for weekly usage: every weekly row says so.
+  assert.equal(models("antigravity", null), null);
+
+  // A Google AI Pro account reporting a third-party pool shows Gemini's by default.
+  const pro = {
+    fiveHour: window(2, 18000),
+    thirdPartyFiveHour: window(12, 18000),
+    thirdPartyOneWeek: window(3, 604800),
+  };
+  const geminiRows = [
+    ["Session", "five-hour", true],
+    ["Weekly", "one-week", false],
+  ];
+  assert.equal(models("antigravity", pro), "Gemini");
+  assert.deepEqual(rows("antigravity", pro), geminiRows);
+  // A click switches to Claude, showing that card's third-party pool alone.
+  click("antigravity", pro);
+  assert.equal(context.renders, 1);
+  assert.equal(models("antigravity", pro), "[Claude]");
+  assert.deepEqual(rows("antigravity", pro), [
+    ["Session", "five-hour", true],
+    ["Weekly", "one-week", true],
+  ]);
+  assert.equal(models("antigravity", pro, "b"), "Gemini");
+  assert.deepEqual(rows("antigravity", pro, { id: "b" }), geminiRows);
+  // A card no longer reporting its third-party pool falls back to its own.
+  assert.deepEqual(rows("antigravity", { fiveHour: window(2, 18000) }), geminiRows);
+  // A Sub2api too old for weekly usage: Claude's weekly row says so too.
   assert.deepEqual(
     rows(
       "antigravity",
@@ -267,9 +317,14 @@ test("Antigravity cards show Gemini's windows as the others, and Claude's in an 
     [
       ["Session", "five-hour", true],
       ["Weekly", "one-week", false, "0.1.177"],
-      { "account-member": ["Claude", ["Session", "five-hour", true], ["Weekly", "one-week", false, "0.1.177"]] },
     ],
   );
+  // Another click switches back to Gemini.
+  click("antigravity", pro);
+  assert.equal(context.renders, 2);
+  assert.deepEqual(rows("antigravity", pro), geminiRows);
+  // A switched card renders again.
+  assert.match(body("renderAccounts"), /\[\.\.\.thirdPartyShown\]/);
 });
 
 test("A weekly row of an outdated Sub2api opens a notice naming its version and the pool's upgrade", () => {

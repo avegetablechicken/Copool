@@ -371,7 +371,9 @@
       }
     }
     /// Says hi with an account; refresh waits until the model replies.
-    async sayHi(id) {
+    /// `thirdParty`, when the card's model switch chose, names the one pool
+    /// to greet: the third party's, or the card's own.
+    async sayHi(id, thirdParty = null) {
       if (
         this.manualRefreshing ||
         this.refreshingIds.has(id) ||
@@ -383,7 +385,7 @@
       this.sayingHiIds.add(id);
       this.onUpdate();
       try {
-        await this.invoke("say_hi", { id });
+        await this.invoke("say_hi", thirdParty === null ? { id } : { id, thirdParty });
         return true;
       } finally {
         await this.load().catch(() => {});
