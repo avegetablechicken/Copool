@@ -9,6 +9,7 @@ use serde_json::Value;
 pub(crate) const API_BASE: &str = "https://cli-chat-proxy.grok.com/v1";
 pub(crate) const USAGE_PATH: &str = "/billing?format=credits";
 pub(crate) const SETTINGS_PATH: &str = "/settings";
+pub(crate) const MODELS_PATH: &str = "/models";
 const AUTHORIZE_PATH: &str = "/oauth2/authorize";
 const TOKEN_PATH: &str = "/oauth2/token";
 /// What Grok Build's sign-in asks for.
@@ -290,4 +291,50 @@ pub(crate) fn plan(body: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|plan| !plan.is_empty())
         .map(str::to_owned)
+}
+
+/// Whether `id` is a selectable Grok text model (not image, video, or router).
+pub(crate) fn is_grok_text_model(id: &str) -> bool {
+    let lower = id.trim().to_ascii_lowercase();
+    lower.starts_with("grok-")
+        && !["imagine", "image", "video", "auto"]
+            .iter()
+            .any(|skip| lower.contains(skip))
+}
+
+fn selectable(entry: &Value) -> bool {
+    let info = entry.get("info").unwrap_or(entry);
+    info["hidden"].as_bool() != Some(true) && info["user_selectable"].as_bool() != Some(false)
+}
+
+/// Selectable Grok text models from xAI's `/models` response or Grok Build's
+/// `models_cache.json` (`data` array, `models` array, or `models` object map).
+pub(crate) fn models(body: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |id: &str| {
+        let id = id.trim();
+        if is_grok_text_model(id) && !out.iter().any(|m: &String| m.eq_ignore_ascii_case(id)) {
+            out.push(id.to_owned());
+        }
+    };
+    for key in ["data", "models"] {
+        if let Some(items) = body.get(key).and_then(Value::as_array) {
+            for item in items {
+                if !selectable(item) {
+                    continue;
+                }
+                if let Some(id) = item["id"].as_str().or_else(|| item["info"]["id"].as_str()) {
+                    push(id);
+                }
+            }
+        }
+    }
+    if let Some(map) = body.get("models").and_then(Value::as_object) {
+        for (id, entry) in map {
+            if selectable(entry) {
+                push(id);
+            }
+        }
+    }
+    out
 }

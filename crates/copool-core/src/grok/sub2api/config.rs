@@ -112,7 +112,12 @@ fn restore_removed(doc: &mut Table, removed: &Table) {
 }
 
 impl Layout {
-    pub(super) fn apply(doc: &mut DocumentMut, gateway: &str, variable: &str) -> Result<Self> {
+    pub(super) fn apply(
+        doc: &mut DocumentMut,
+        gateway: &str,
+        variable: &str,
+        extra_models: &[String],
+    ) -> Result<Self> {
         let mut template = DocumentMut::new();
         {
             let endpoints = table_at(template.as_table_mut(), "endpoints")?;
@@ -128,6 +133,22 @@ impl Layout {
         {
             table_at(template.as_table_mut(), "grok_com_config")?
                 .insert("preferred_method", value("api_key"));
+        }
+        // Expose Grok text models that Sub2API forwards upstream even when its
+        // `/v1/models` catalog omits them (e.g. `grok-4.7`), inheriting the
+        // session's `[endpoints]` and `XAI_API_KEY` without per-model `base_url`.
+        for id in extra_models {
+            let own_endpoint = doc.get("model").and_then(|t| t.get(id)).is_some_and(|m| {
+                ["base_url", "api_base_url", "model_provider"]
+                    .iter()
+                    .any(|k| m.get(k).is_some())
+            });
+            if own_endpoint {
+                continue;
+            }
+            let models = table_at(template.as_table_mut(), "model")?;
+            models.set_implicit(true);
+            table_at(models, id)?.insert("api_backend", value("responses"));
         }
 
         // Remove endpoint keys that would override `xai_api_base_url` or
@@ -301,7 +322,13 @@ mod tests {
     fn session_layout_sets_both_endpoints_preserves_user_models_and_restores_verbatim() {
         let before = "[endpoints]\ncli_chat_proxy_base_url = 'http://127.0.0.1:8787/grok/v1'\nxai_api_base_url = 'http://127.0.0.1:8787/grok/v1' # Coport\nmodels_base_url = 'https://old.invalid/v1' # custom\n\n[model.mine]\napi_key = 'fixture'\n[model_providers.copool-sub2api]\nbase_url = 'https://mine.invalid'\n";
         let mut doc = super::super::parse(Some(before)).unwrap();
-        let layout = Layout::apply(&mut doc, "https://relay.invalid/v1", "MY_SUB2API_KEY").unwrap();
+        let layout = Layout::apply(
+            &mut doc,
+            "https://relay.invalid/v1",
+            "MY_SUB2API_KEY",
+            &["grok-4.7".into()],
+        )
+        .unwrap();
         assert_eq!(
             doc["endpoints"]["cli_chat_proxy_base_url"].as_str(),
             Some("https://relay.invalid/v1")
@@ -312,6 +339,12 @@ mod tests {
         );
         assert!(doc["endpoints"].get("models_base_url").is_none());
         assert_eq!(doc["auth"]["preferred_method"].as_str(), Some("api_key"));
+        assert_eq!(
+            doc["model"]["grok-4.7"]["api_backend"].as_str(),
+            Some("responses")
+        );
+        assert!(doc["model"]["grok-4.7"].get("base_url").is_none());
+        assert!(doc["model"]["grok-4.7"].get("env_key").is_none());
         assert_eq!(doc["model"]["mine"]["api_key"].as_str(), Some("fixture"));
         assert!(!layout.previous.contains("fixture"));
         layout.restore(&mut doc).unwrap();
@@ -322,7 +355,7 @@ mod tests {
     fn grok_com_config_preferred_method_is_updated_and_restored() {
         let before = "[grok_com_config]\npreferred_method = \"oidc\"\n";
         let mut doc = super::super::parse(Some(before)).unwrap();
-        let layout = Layout::apply(&mut doc, "https://relay.invalid/v1", XAI_KEY).unwrap();
+        let layout = Layout::apply(&mut doc, "https://relay.invalid/v1", XAI_KEY, &[]).unwrap();
         assert_eq!(
             doc["grok_com_config"]["preferred_method"].as_str(),
             Some("api_key")

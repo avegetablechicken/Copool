@@ -15,6 +15,8 @@ struct Fake {
     used: Mutex<f64>,
     /// The settings fail, as a server error.
     settings_down: std::sync::atomic::AtomicBool,
+    /// Official xAI `/v1/models` list returned for subscription accounts.
+    official_models: Mutex<Option<Value>>,
     /// A file Grok Build writes while a renewal is under way.
     meanwhile: Mutex<Option<(PathBuf, Value)>>,
     /// The Sub2api gateway's `/v1/models`, for the key `sub2api-key`.
@@ -46,6 +48,7 @@ impl Network for Fake {
         let settings_down = self
             .settings_down
             .load(std::sync::atomic::Ordering::Relaxed);
+        let official_models = self.official_models.lock().unwrap().clone();
         Box::pin(async move {
             if token.starts_with("expired") {
                 return Ok((401, json!({"error": "unauthorized"})));
@@ -72,6 +75,10 @@ impl Network for Fake {
                     200,
                     json!({"subscription_tier": null, "subscription_tier_display": "SuperGrok"}),
                 ),
+                api::MODELS_PATH => match official_models {
+                    Some(body) => (200, body),
+                    None => (200, json!({"data": []})),
+                },
                 _ => (404, Value::Null),
             })
         })
@@ -265,6 +272,7 @@ async fn an_imported_login_waits_then_shows_its_weekly_usage_and_plan() {
         [
             format!("{} access-alice socks5://127.0.0.1:7", api::USAGE_PATH),
             format!("{} access-alice socks5://127.0.0.1:7", api::SETTINGS_PATH),
+            format!("{} access-alice socks5://127.0.0.1:7", api::MODELS_PATH),
         ]
     );
     // A failed settings request keeps the plan the card had.
@@ -974,10 +982,28 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
         switched["auth"]["preferred_method"].as_str(),
         Some("api_key")
     );
-    // Session-level endpoints leave the user's `[model]` and `[models]` tables intact.
+    // Unlisted Grok text models (e.g. `grok-4.7` omitted by Sub2API 0.1.177)
+    // are exposed with `api_backend = "responses"` only (no `base_url` or
+    // `env_key`), preserving the user's `[models]` roles and model settings.
     let before: toml_edit::DocumentMut = original.parse().unwrap();
-    assert_eq!(switched["model"].to_string(), before["model"].to_string());
     assert_eq!(switched["models"].to_string(), before["models"].to_string());
+    assert_eq!(
+        switched["model"]["grok-4.7"]["temperature"].as_float(),
+        Some(0.3)
+    );
+    assert_eq!(
+        switched["model"]["grok-4.7"]["api_backend"].as_str(),
+        Some("responses")
+    );
+    assert!(switched["model"]["grok-4.7"].get("base_url").is_none());
+    assert!(switched["model"]["grok-4.7"].get("env_key").is_none());
+    assert_eq!(
+        switched["model"]["grok-4.5"]["api_backend"].as_str(),
+        Some("responses")
+    );
+    assert!(switched["model"]["grok-4.5"].get("base_url").is_none());
+    // Models already returned by `/v1/models` need no `[model.*]` entry.
+    assert!(switched["model"].get("grok-4.6").is_none());
     // The login stays for an account's switch; the provider's card is the
     // one in use.
     assert_eq!(
@@ -1091,7 +1117,49 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
         .find(|c| c.available)
         .unwrap();
     let gateway = "http://127.0.0.1:8787/grok/https://relay.example:6060/v1";
-    *h.fake.gateway.lock().unwrap() = Some(json!({"data": [{"id":"grok-test"}]}));
+    *h.fake.gateway.lock().unwrap() = Some(json!({"data": [{"id":"grok-4.6"}, {"id":"grok-4.5"}]}));
+    // Before learning any official catalog (no refresh models, no cache, no roles),
+    // nothing is hardcoded into `[model]`.
+    h.app
+        .set_grok_environment(Arc::new(|names: &[&str], _now: bool| {
+            names
+                .iter()
+                .map(|name| (*name == "XAI_API_KEY").then(|| "sub2api-key".into()))
+                .collect()
+        }));
+    h.app
+        .save_provider(
+            Pool::Grok,
+            json!({
+                "id":id, "name":"Relay", "baseURL":gateway.trim_end_matches("/v1"),
+                "apiKeyVariable":"XAI_API_KEY", "username":"admin@example.com"
+            }),
+        )
+        .await
+        .unwrap();
+    h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
+    let doc: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
+    assert!(doc.get("model").is_none());
+    h.app
+        .switch_account(Pool::Grok, &subscription.id)
+        .await
+        .unwrap();
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+
+    // Refreshing the subscription account learns official xAI models dynamically
+    // (including future models such as `grok-4.7` or `grok-5.0`, with no hardcoded IDs).
+    *h.fake.official_models.lock().unwrap() = Some(json!({"data": [
+        {"id": "grok-5.0"},
+        {"id": "grok-4.7"},
+        {"id": "grok-4.6"},
+        {"id": "grok-4.5"},
+        {"id": "grok-imagine-image"},
+        {"id": "grok-hidden", "hidden": true}
+    ]}));
+    h.app
+        .refresh_usage(Pool::Grok, &subscription.id)
+        .await
+        .unwrap();
     for variable in ["XAI_API_KEY", "SUB2API_KEY"] {
         let rc_for_env = rc_file.clone();
         let env_for_env = env_file.clone();
@@ -1147,7 +1215,16 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
         assert!(endpoints.get("models_base_url").is_none());
         assert!(endpoints.get("models_list_url").is_none());
         assert_eq!(doc["auth"]["preferred_method"].as_str(), Some("api_key"));
-        assert!(doc.get("model").is_none());
+        // Official selectable Grok text models omitted by `/v1/models` are exposed
+        // with `api_backend` only (no `base_url` or `env_key`); hidden/media models are skipped.
+        for id in ["grok-5.0", "grok-4.7"] {
+            assert_eq!(doc["model"][id]["api_backend"].as_str(), Some("responses"));
+            assert!(doc["model"][id].get("base_url").is_none());
+            assert!(doc["model"][id].get("env_key").is_none());
+        }
+        assert!(doc["model"].get("grok-4.6").is_none());
+        assert!(doc["model"].get("grok-imagine-image").is_none());
+        assert!(doc["model"].get("grok-hidden").is_none());
         if variable == "XAI_API_KEY" {
             assert!(!env_file.exists());
         } else {
@@ -1169,6 +1246,48 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
             .iter()
             .any(|c| c.id == subscription.id && c.is_current));
     }
+
+    // Once Sub2API itself lists all known official models in `/v1/models`, no `[model]` table is written.
+    *h.fake.gateway.lock().unwrap() = Some(json!({"data": [
+        {"id":"grok-5.0"}, {"id":"grok-4.7"}, {"id":"grok-4.6"}, {"id":"grok-4.5"}
+    ]}));
+    h.app
+        .set_grok_environment(Arc::new(|names: &[&str], _now: bool| {
+            names
+                .iter()
+                .map(|name| (*name == "XAI_API_KEY").then(|| "sub2api-key".into()))
+                .collect()
+        }));
+    h.app
+        .save_provider(
+            Pool::Grok,
+            json!({
+                "id":id, "name":"Relay", "baseURL":gateway.trim_end_matches("/v1"),
+                "apiKeyVariable":"XAI_API_KEY", "username":"admin@example.com"
+            }),
+        )
+        .await
+        .unwrap();
+    h.app.switch_account(Pool::Grok, &card.id).await.unwrap();
+    let doc: toml_edit::DocumentMut = fs::read_to_string(&config).unwrap().parse().unwrap();
+    assert!(doc.get("model").is_none());
+    h.app
+        .switch_account(Pool::Grok, &subscription.id)
+        .await
+        .unwrap();
+    assert_eq!(fs::read_to_string(&config).unwrap(), original);
+
+    // Restore custom variable for the ENV_NOT_LOADED rollback check below.
+    h.app
+        .save_provider(
+            Pool::Grok,
+            json!({
+                "id":id, "name":"Relay", "baseURL":gateway.trim_end_matches("/v1"),
+                "apiKeyVariable":"SUB2API_KEY", "username":"admin@example.com"
+            }),
+        )
+        .await
+        .unwrap();
 
     // When another export overrides XAI_API_KEY in a new shell, the switch
     // rolls back `.env` and `.zshrc` and refuses to modify `config.toml`.

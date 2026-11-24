@@ -18,6 +18,7 @@ use crate::{
 };
 use config::{Layout, XAI_KEY};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table};
 
@@ -26,6 +27,14 @@ pub(crate) const API_KEY_VARIABLE_INVALID: &str = "error.grok.api_key_variable_i
 pub(crate) const ENV_NOT_LOADED: &str = "error.grok.xai_env_not_loaded";
 pub(crate) const CONFIG_INVALID: &str = "error.grok.config_invalid";
 const CONFIGURATION_INCOMPLETE: &str = "error.sub2api.configuration_incomplete";
+/// Role keys under `[models]` whose configured Grok text model should stay
+/// selectable even if Sub2API's `/v1/models` omits it.
+const ROLES: [&str; 4] = [
+    "default",
+    "web_search",
+    "session_summary",
+    "image_description",
+];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -336,14 +345,81 @@ impl EnvChanges {
     }
 }
 
+fn gateway_models(body: &Value) -> Vec<String> {
+    body["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|model| model["id"].as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+pub(super) fn catalog_models(cache: &Path) -> Vec<String> {
+    let Ok(bytes) = std::fs::read(cache) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Vec::new();
+    };
+    api::models(&value)
+}
+
+fn configured_models(doc: &DocumentMut) -> Vec<String> {
+    ROLES
+        .iter()
+        .filter_map(|role| doc.get("models")?.get(role)?.as_str())
+        .map(str::trim)
+        .filter(|id| api::is_grok_text_model(id))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Grok text models Grok Build knows (from `[models]` roles, previously
+/// observed official xAI `/models`, or `models_cache.json`) that the gateway's
+/// `/v1/models` omitted. Exposing them via `[model."<id>"] api_backend = "responses"`
+/// (without `base_url` or `env_key`) makes them selectable while inheriting the
+/// session's `[endpoints]` and `XAI_API_KEY`.
+fn unlisted_models(
+    doc: &DocumentMut,
+    cache: &Path,
+    known_models: &[String],
+    listed: &[String],
+) -> Vec<String> {
+    let fallback_cache = if known_models.is_empty() {
+        catalog_models(cache)
+    } else {
+        Vec::new()
+    };
+    let mut extra = Vec::new();
+    for id in configured_models(doc)
+        .into_iter()
+        .chain(known_models.iter().cloned())
+        .chain(fallback_cache)
+    {
+        if !api::is_grok_text_model(&id) {
+            continue;
+        }
+        let already_listed = listed.iter().any(|m| m.eq_ignore_ascii_case(&id));
+        let already_added = extra.iter().any(|m: &String| m.eq_ignore_ascii_case(&id));
+        if !already_listed && !already_added {
+            extra.push(id);
+        }
+    }
+    extra
+}
+
 fn apply(
     doc: &mut DocumentMut,
     record: &mut ConfigRecord,
     gateway: &str,
     variable: &str,
+    extra_models: &[String],
 ) -> Result<()> {
     restore(doc, record)?;
-    record.layout = Some(Layout::apply(doc, gateway, variable)?);
+    record.layout = Some(Layout::apply(doc, gateway, variable, extra_models)?);
     record.models.clear();
     record.gateway = gateway.into();
     Ok(())
@@ -754,11 +830,19 @@ impl Application {
         if !(200..300).contains(&status) {
             return Err(api::status_error("Sub2api models request", status, &body));
         }
+        let listed = gateway_models(&body);
         let path = self.grok_config_path();
         // Outside the store's lock: probing a new shell may take seconds.
         let env_changes = self.grok_put_env(&path, variable).await?;
         let applied = self
-            .grok_apply_config(&path, &provider.id, &member.key, &gateway, variable)
+            .grok_apply_config(
+                &path,
+                &provider.id,
+                &member.key,
+                &gateway,
+                variable,
+                &listed,
+            )
             .await;
         if applied.is_err() {
             env_changes.undo();
@@ -776,6 +860,7 @@ impl Application {
         member_key: &str,
         gateway: &str,
         variable: &str,
+        listed: &[String],
     ) -> Result<()> {
         let _lock = self.grok.lock.lock().await;
         let mut store = self.grok_load()?;
@@ -795,7 +880,31 @@ impl Application {
             created: text.is_none(),
             ..Default::default()
         });
-        apply(&mut doc, &mut record, gateway, variable)?;
+        let cache = path.with_file_name("models_cache.json");
+        // Snapshot the official `models_cache.json` before entering Sub2API so
+        // subsequent switches keep knowing official xAI models even if Grok
+        // Build overwrites `models_cache.json` with a smaller Sub2API catalog.
+        if store.config_record.is_none() {
+            let cached = catalog_models(&cache);
+            if !cached.is_empty() {
+                for id in cached {
+                    if !store
+                        .known_models
+                        .iter()
+                        .any(|m| m.eq_ignore_ascii_case(&id))
+                    {
+                        store.known_models.push(id);
+                    }
+                }
+            }
+        }
+        // Restore first so `unlisted_models` reads the user's `[models]` roles,
+        // not anything an older Copool layout wrote.
+        restore(&mut doc, &record)?;
+        let extra = unlisted_models(&doc, &cache, &store.known_models, listed);
+        record.layout = Some(Layout::apply(&mut doc, gateway, variable, &extra)?);
+        record.models.clear();
+        record.gateway = gateway.into();
         put_text(path, Some(&doc.to_string()))?;
         store.config_record = Some(record);
         store.config_provider = Some(member_key.to_owned());
@@ -863,6 +972,7 @@ mod tests {
             &mut record,
             "https://relay.example.com/v1",
             "GROK_SUB2API_API_KEY",
+            &["grok-4.7".into()],
         )
         .unwrap();
         let text = doc.to_string();
@@ -880,6 +990,12 @@ mod tests {
             switched["auth"]["preferred_method"].as_str(),
             Some("api_key")
         );
+        assert_eq!(
+            switched["model"]["grok-4.7"]["api_backend"].as_str(),
+            Some("responses")
+        );
+        assert!(switched["model"]["grok-4.7"].get("base_url").is_none());
+        assert!(switched["model"]["grok-4.7"].get("env_key").is_none());
         // The user's own model tables stay untouched.
         assert_eq!(
             switched["model"]["mine"]["base_url"].as_str(),
@@ -915,6 +1031,7 @@ mod tests {
             &mut record,
             "https://other.example.com/v1",
             XAI_KEY,
+            &[],
         )
         .unwrap();
         let other: DocumentMut = doc.to_string().parse().unwrap();
@@ -975,7 +1092,7 @@ mod tests {
         }
         let mut doc = parse(Some(&file)).unwrap();
         for variable in [XAI_KEY, "MY_GROK_KEY", XAI_KEY] {
-            apply(&mut doc, &mut record, gateway, variable).unwrap();
+            apply(&mut doc, &mut record, gateway, variable, &[]).unwrap();
             assert!(record.models.is_empty());
             assert!(uses_gateway(&doc, &record));
             assert!(doc.get("model").is_none());
@@ -1017,7 +1134,7 @@ mod tests {
             let mut doc = parse(Some(&template)).unwrap();
             doc["model"]["grok-a"]["temperature"] = toml_edit::value(0.3);
             let mut record = old.clone();
-            apply(&mut doc, &mut record, relay, variable).unwrap();
+            apply(&mut doc, &mut record, relay, variable, &[]).unwrap();
             assert!(doc.get("session").is_none());
             assert!(doc.get("model_providers").is_none());
             assert!(doc.get("models").is_none());
@@ -1067,7 +1184,7 @@ mod tests {
             created: true,
             ..Default::default()
         };
-        apply(&mut doc, &mut record, "https://r/v1", XAI_KEY).unwrap();
+        apply(&mut doc, &mut record, "https://r/v1", XAI_KEY, &[]).unwrap();
         put_text(&path, Some(&doc.to_string())).unwrap();
         let mut store = Store {
             config_record: Some(record.clone()),
@@ -1077,7 +1194,7 @@ mod tests {
         assert!(!path.exists());
 
         // The user tuned a model meanwhile: that stays.
-        apply(&mut doc, &mut record, "https://r/v1", XAI_KEY).unwrap();
+        apply(&mut doc, &mut record, "https://r/v1", XAI_KEY, &[]).unwrap();
         doc["model"]["grok-4.7"]["temperature"] = toml_edit::value(0.2);
         put_text(&path, Some(&doc.to_string())).unwrap();
         store.config_record = Some(record);

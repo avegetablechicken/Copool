@@ -151,6 +151,11 @@ struct Store {
     /// switch puts it back.
     #[serde(skip_serializing_if = "Option::is_none")]
     config_record: Option<sub2api::ConfigRecord>,
+    /// Official Grok text models last observed from xAI `/models` or
+    /// `models_cache.json` while not on a Sub2API gateway, so models omitted
+    /// by a gateway's `/v1/models` stay selectable across switches.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    known_models: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -771,9 +776,10 @@ impl Application {
             }
         }
         .await;
-        // The plan, with the token that worked; when it fails, the card
-        // keeps the plan it had.
+        // The plan and official model catalog, with the token that worked; when
+        // either fails, the card keeps what it had.
         let mut plan = None;
+        let mut models = None;
         if matches!(outcome, Ok(Some(_))) {
             let token = login::access_token(&document).unwrap_or_default();
             plan = network
@@ -782,9 +788,19 @@ impl Application {
                 .ok()
                 .filter(|(status, _)| (200..300).contains(status))
                 .and_then(|(_, body)| api::plan(&body));
+            models = network
+                .api(api::MODELS_PATH, &token, &proxy)
+                .await
+                .ok()
+                .filter(|(status, _)| (200..300).contains(status))
+                .map(|(_, body)| api::models(&body))
+                .filter(|list| !list.is_empty());
         }
         let _lock = self.grok.lock.lock().await;
         let mut store = self.grok_load()?;
+        if let Some(models) = models {
+            store.known_models = models;
+        }
         let Some(stored) = store.accounts.iter_mut().find(|a| a.id == id) else {
             return outcome.map(|_| ());
         };
