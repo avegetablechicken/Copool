@@ -736,6 +736,14 @@ mod tests {
             .filter(|uri| uri.starts_with("/api/v1/auth/login"))
             .count()
     }
+    fn listings(requests: &std::sync::Arc<Mutex<Vec<String>>>) -> usize {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|uri| uri.starts_with("/api/v1/admin/accounts?"))
+            .count()
+    }
 
     #[tokio::test]
     async fn a_card_sub2api_stops_serving_says_why_instead_of_its_last_error() {
@@ -843,11 +851,9 @@ mod tests {
         let (app, _, _, _, card, _, _, requests) = pool_recording(dir.path()).await;
         requests.lock().unwrap().clear();
         app.say_hi(Pool::Claude, &card).await.unwrap();
-        // The usage, which shows the window only later, is left to the card.
-        assert_eq!(
-            *requests.lock().unwrap(),
-            ["/api/v1/auth/login", "/api/v1/admin/accounts/7/test"]
-        );
+        // The usage, which shows the window only later, is left to the card;
+        // the login of the earlier sync is reused.
+        assert_eq!(*requests.lock().unwrap(), ["/api/v1/admin/accounts/7/test"]);
     }
 
     #[tokio::test]
@@ -1388,7 +1394,8 @@ mod tests {
             secrets.reads(),
             [crate::sub2api::password_secret(Pool::Claude, &provider)]
         );
-        assert_eq!(logins(&requests), 1);
+        // The round reaches the provider with the login of the earlier sync.
+        assert_eq!((logins(&requests), listings(&requests)), (0, 1));
         // Its card shows the very next round.
         app.set_schedule(
             Pool::Claude,
@@ -1430,7 +1437,8 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(reads, expected);
-        assert_eq!((logins(&requests), logins(&other_requests)), (1, 1));
+        assert_eq!((logins(&requests), logins(&other_requests)), (0, 0));
+        assert_eq!((listings(&requests), listings(&other_requests)), (1, 1));
     }
 
     #[tokio::test]
@@ -1451,7 +1459,8 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(reads, expected);
-        assert_eq!((logins(&requests), logins(&other_requests)), (1, 1));
+        assert_eq!((logins(&requests), logins(&other_requests)), (0, 0));
+        assert_eq!((listings(&requests), listings(&other_requests)), (1, 1));
     }
 
     #[tokio::test]

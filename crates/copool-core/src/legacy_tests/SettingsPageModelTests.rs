@@ -700,12 +700,13 @@ async fn sub2api_requests_go_through_the_provider_proxy() {
     calls.lock().unwrap().clear();
     app.refresh_all(Pool::Codex).await.unwrap();
     let requests = calls.lock().unwrap().clone();
+    // The first refresh's login through the same proxy is reused.
     assert_eq!(
         requests
             .iter()
             .filter(|p| p.ends_with("/auth/login"))
             .count(),
-        1
+        0
     );
     assert_eq!(
         requests

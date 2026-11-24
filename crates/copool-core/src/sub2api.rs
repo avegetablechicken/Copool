@@ -11,7 +11,32 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{LazyLock, Mutex},
+    time::{Duration, Instant},
+};
+/// How long a login without `expires_in` is reused.
+const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_secs(15 * 60);
+/// Logs in again this long before a token expires.
+const TOKEN_EXPIRY_MARGIN: Duration = Duration::from_secs(60);
+/// Administrator tokens by admin API root, login and route, so each refresh
+/// round reuses one login instead of signing in again.
+static ADMIN_TOKENS: LazyLock<Mutex<HashMap<TokenKey, CachedToken>>> =
+    LazyLock::new(Default::default);
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TokenKey {
+    admin_base: String,
+    username: String,
+    proxy_url: String,
+    insecure: bool,
+}
+struct CachedToken {
+    password: String,
+    token: String,
+    expires: Instant,
+}
 pub const PROVIDER_NOT_FOUND: &str =
     "The provider was not found in Codex config or Sub2api settings.";
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -412,28 +437,80 @@ impl Connection {
             .filter(|a| ids.is_none_or(|ids| ids.contains(&a.id)))
             .collect())
     }
+    fn token_key(&self) -> TokenKey {
+        TokenKey {
+            admin_base: self.admin_base.clone(),
+            username: self.configuration.username.clone(),
+            proxy_url: self.configuration.proxy_url.trim().to_owned(),
+            insecure: self.configuration.allow_insecure_tls,
+        }
+    }
+    /// A cached administrator token, or a new login when none is valid.
     async fn admin_token(&self, client: &reqwest::Client) -> Result<String, String> {
+        let key = self.token_key();
+        if let Ok(tokens) = ADMIN_TOKENS.lock() {
+            if let Some(cached) = tokens.get(&key).filter(|cached| {
+                cached.password == self.configuration.password && cached.expires > Instant::now()
+            }) {
+                return Ok(cached.token.clone());
+            }
+        }
         let login=payload(client.post(format!("{}/auth/login",self.admin_base)).json(&json!({"email":self.configuration.username,"password":self.configuration.password})).send().await.map_err(|e|usage::format_reqwest_error(&e))?).await?;
-        login
+        let token = login
             .get("access_token")
             .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| {
-                "The Sub2api login response did not include an administrator token.".into()
-            })
+                "The Sub2api login response did not include an administrator token.".to_owned()
+            })?;
+        let lifetime = login
+            .get("expires_in")
+            .and_then(Value::as_u64)
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_TOKEN_LIFETIME)
+            .saturating_sub(TOKEN_EXPIRY_MARGIN);
+        if let Ok(mut tokens) = ADMIN_TOKENS.lock() {
+            tokens.insert(
+                key,
+                CachedToken {
+                    password: self.configuration.password.clone(),
+                    token: token.clone(),
+                    expires: Instant::now() + lifetime,
+                },
+            );
+        }
+        Ok(token)
+    }
+    /// Drops a token the server rejected, so the next call logs in again.
+    fn forget_token(&self, token: &str) {
+        if let Ok(mut tokens) = ADMIN_TOKENS.lock() {
+            let key = self.token_key();
+            if tokens.get(&key).is_some_and(|cached| cached.token == token) {
+                tokens.remove(&key);
+            }
+        }
     }
     /// Sub2api's connection test of an account: a "hi" to `model` through
     /// the account, answered as server-sent events.
     pub async fn test_account(&self, id: i64, model: &str) -> Result<(), String> {
         let client = self.client()?;
-        let token = self.admin_token(&client).await?;
-        let response = client
-            .post(format!("{}/admin/accounts/{id}/test", self.admin_base))
-            .bearer_auth(token)
-            .json(&json!({"model_id": model}))
-            .send()
-            .await
-            .map_err(|e| usage::format_reqwest_error(&e))?;
+        let mut token = self.admin_token(&client).await?;
+        let mut retried = false;
+        let response = loop {
+            let response = client
+                .post(format!("{}/admin/accounts/{id}/test", self.admin_base))
+                .bearer_auth(&token)
+                .json(&json!({"model_id": model}))
+                .send()
+                .await
+                .map_err(|e| usage::format_reqwest_error(&e))?;
+            if response.status() != reqwest::StatusCode::UNAUTHORIZED || retried {
+                break response;
+            }
+            self.forget_token(&token);
+            token = self.admin_token(&client).await?;
+            retried = true;
+        };
         if !response.status().is_success() {
             return payload(response).await.map(|_| ());
         }
@@ -474,7 +551,8 @@ impl Connection {
         now: i64,
     ) -> Result<Vec<Account>, String> {
         let client = self.client()?;
-        let token = &self.admin_token(&client).await?;
+        let mut token = self.admin_token(&client).await?;
+        let mut retried = false;
         // A Claude or Antigravity card Sub2api stopped serving, such as one
         // whose token expired, says why; the Codex pool drops it.
         let inactive_shown = |id: i64| {
@@ -500,16 +578,21 @@ impl Connection {
             {
                 query.push(("status", "active".into()));
             }
-            let data = payload(
-                client
-                    .get(format!("{}/admin/accounts", self.admin_base))
-                    .bearer_auth(token)
-                    .query(&query)
-                    .send()
-                    .await
-                    .map_err(|e| usage::format_reqwest_error(&e))?,
-            )
-            .await?;
+            let response = client
+                .get(format!("{}/admin/accounts", self.admin_base))
+                .bearer_auth(&token)
+                .query(&query)
+                .send()
+                .await
+                .map_err(|e| usage::format_reqwest_error(&e))?;
+            // A cached token the server no longer accepts gets one fresh login.
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && !retried {
+                self.forget_token(&token);
+                token = self.admin_token(&client).await?;
+                retried = true;
+                continue;
+            }
+            let data = payload(response).await?;
             items.extend(
                 data.get("items")
                     .and_then(Value::as_array)
@@ -596,7 +679,7 @@ impl Connection {
             let quota = async {
                 let response = client
                     .get(quota_url)
-                    .bearer_auth(token)
+                    .bearer_auth(&token)
                     .send()
                     .await
                     .map_err(|e| usage::format_reqwest_error(&e))?;
@@ -660,7 +743,7 @@ impl Connection {
         }
         // Without a version, each account keeps the one last seen.
         if let Some(since) = weekly_since(pool) {
-            let version = self.version(&client, token).await;
+            let version = self.version(&client, &token).await;
             for account in &mut accounts {
                 account.outdated_version = match &version {
                     Some(v) => Some(v.clone()).filter(|v| predates(v, since)),
@@ -732,6 +815,82 @@ mod tests {
             "usage": {"fetchedAt": 0, "fiveHour": {"usedPercent": used, "windowSeconds": 18000}},
         }))
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn rounds_reuse_one_login_until_the_server_rejects_it_or_the_password_changes() {
+        use axum::{extract::Request, http::StatusCode, response::IntoResponse, routing::any};
+        use std::sync::{Arc, Mutex};
+        // Each login issues the next token; the server accepts only the newest one.
+        let issued = Arc::new(Mutex::new(0_u32));
+        let logins = Arc::new(Mutex::new(0_u32));
+        let (server_issued, server_logins) = (issued.clone(), logins.clone());
+        let router = axum::Router::new().fallback(any(move |request: Request| {
+            let (issued, logins) = (server_issued.clone(), server_logins.clone());
+            async move {
+                let uri = request.uri().path().to_owned();
+                if uri == "/api/v1/auth/login" {
+                    *logins.lock().unwrap() += 1;
+                    let mut issued = issued.lock().unwrap();
+                    *issued += 1;
+                    let token = format!("t{}", *issued);
+                    return axum::Json(serde_json::json!({"code":0,"data":{
+                        "access_token": token, "expires_in": 3600}}))
+                    .into_response();
+                }
+                let current = format!("Bearer t{}", *issued.lock().unwrap());
+                if request
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    != Some(current.as_str())
+                {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                axum::Json(serde_json::json!({"code":0,"data":{"items":[],"pages":1}}))
+                    .into_response()
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/api/v1", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let connection = |password: &str| super::Connection {
+            configuration: crate::settings::Provider {
+                provider_id: "p".into(),
+                username: "admin@example.com".into(),
+                password: password.into(),
+                ..Default::default()
+            },
+            definition: crate::codex_config::Definition {
+                id: "p".into(),
+                base_url: None,
+                wire_api: None,
+                env_key: None,
+                requires_openai_auth: None,
+            },
+            admin_base: base.clone(),
+        };
+        let rounds = |password: &'static str| {
+            let connection = connection(password);
+            async move {
+                connection
+                    .fetch_accounts(Pool::Codex, None, 0)
+                    .await
+                    .unwrap()
+            }
+        };
+        rounds("one").await;
+        rounds("one").await;
+        assert_eq!(*logins.lock().unwrap(), 1);
+        // Another login elsewhere invalidates the cached token: one retry with a new login.
+        *issued.lock().unwrap() += 1;
+        rounds("one").await;
+        assert_eq!(*logins.lock().unwrap(), 2);
+        rounds("one").await;
+        assert_eq!(*logins.lock().unwrap(), 2);
+        // A changed password never reuses the old login.
+        rounds("two").await;
+        assert_eq!(*logins.lock().unwrap(), 3);
     }
 
     #[test]
