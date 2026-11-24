@@ -9,7 +9,7 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// The tag naming a pool on a card of the widget showing every pool.
+/// The tag naming a card's pool.
 fn pool_label(pool: Pool) -> &'static str {
     match pool {
         Pool::Codex => "CODEX",
@@ -108,7 +108,7 @@ pub struct WindowSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct CardSnapshot {
     pub id: String,
-    /// The card's pool, on the widget showing both.
+    /// The tag naming the card's pool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool_label: Option<String>,
     pub plan_label: String,
@@ -352,7 +352,7 @@ fn card(pool: Pool, account: &AccountSummary, offset: Option<i32>, now: i64) -> 
     };
     CardSnapshot {
         id: account.id.clone(),
-        pool_label: None,
+        pool_label: Some(pool_label(pool).into()),
         plan_accent: plan_accent(pool, &plan).into(),
         plan_label: plan,
         workspace_label: workspace,
@@ -421,10 +421,7 @@ pub fn build_all(
     let cards = leading
         .into_iter()
         .chain(others)
-        .map(|(pool, a)| CardSnapshot {
-            pool_label: Some(pool_label(pool).into()),
-            ..card(pool, &a, offset_seconds, now)
-        })
+        .map(|(pool, a)| card(pool, &a, offset_seconds, now))
         .collect();
     snapshot(cards, mode, now)
 }

@@ -278,9 +278,12 @@ fn everyPoolsWidgetLeadsWithAntigravitysCurrentAccountAfterTheOthers() {
     assert_eq!(agy.five_hour.used_text, "20%");
     // A plan not yet known shows no tag.
     assert_eq!(s.rows[2].plan_label, "");
-    // Its own widget carries no pool tag.
+    // Its own widget names the pool too.
     let own = Widget::Antigravity.build(&[(Pool::Antigravity, &antigravity)], "used", Some(0), 100);
-    assert_eq!(own.current_card.unwrap().pool_label, None);
+    assert_eq!(
+        own.current_card.unwrap().pool_label.as_deref(),
+        Some("ANTIGRAVITY")
+    );
     assert_eq!(
         Widget::Antigravity.kind(),
         "CopoolAntigravityAccountsWidget"
@@ -299,7 +302,7 @@ fn grokHasItsOwnWidgetAndJoinsEveryPoolsWidget() {
     grok[0].plan_type = Some("SuperGrok".into());
     let own = Widget::Grok.build(&[(Pool::Grok, &grok)], "used", Some(0), 100);
     let current = own.current_card.unwrap();
-    assert_eq!(current.pool_label, None);
+    assert_eq!(current.pool_label.as_deref(), Some("GROK"));
     assert_eq!(current.plan_label, "SUPERGROK");
     assert_eq!(current.plan_accent, "pink");
     assert_eq!(current.account_label, "grok");
@@ -354,17 +357,24 @@ fn bothPoolsWidgetShowsTheOtherPoolWhenOneIsEmpty() {
     );
 }
 #[test]
-fn singlePoolWidgetsCarryNoPoolTag() {
+fn singlePoolWidgetsNameTheirPoolOnEveryCard() {
     let s = Widget::Codex.build(
         &[(
             Pool::Codex,
-            &[account("current", true, "current@example.com", 10., 20.)],
+            &[
+                account("current", true, "current@example.com", 10., 20.),
+                account("spare", false, "spare@example.com", 30., 40.),
+            ],
         )],
         "used",
         Some(0),
         100,
     );
-    assert_eq!(s.current_card.unwrap().pool_label, None);
+    assert_eq!(s.current_card.unwrap().pool_label.as_deref(), Some("CODEX"));
+    assert!(s
+        .rows
+        .iter()
+        .all(|row| row.pool_label.as_deref() == Some("CODEX")));
 }
 #[test]
 fn aWindowWithoutUsageShowsNoDataRatherThanExhausted() {

@@ -239,7 +239,7 @@ enum AccountsWidgetTagPaletteResolver {
 
 struct AccountsWidgetCardSnapshot: Codable, Equatable, Sendable, Identifiable {
     var id: String
-    /// The card's pool, on the widget showing both.
+    /// The tag naming the card's pool.
     var poolLabel: String?
     var planLabel: String
     /// The plan's tier color (`planAccent`); absent from older snapshots.

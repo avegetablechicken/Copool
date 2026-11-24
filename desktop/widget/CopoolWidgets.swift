@@ -164,7 +164,13 @@ struct AccountsWidgetTimelineProvider: AppIntentTimelineProvider {
 
     /// The sample's pool and plan tags for the current card, the next and the two rows.
     private var samplePools: [String?] {
-        variant == .all ? ["CODEX", "CLAUDE", "CLAUDE", "CODEX"] : [nil, nil, nil, nil]
+        switch variant {
+        case .codex: Array(repeating: "CODEX", count: 4)
+        case .claude: Array(repeating: "CLAUDE", count: 4)
+        case .antigravity: Array(repeating: "ANTIGRAVITY", count: 4)
+        case .grok: Array(repeating: "GROK", count: 4)
+        case .all: ["CODEX", "CLAUDE", "CLAUDE", "CODEX"]
+        }
     }
 
     private var samplePlans: [String] {
