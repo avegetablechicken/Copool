@@ -8,12 +8,14 @@ use crate::models::{CreditSnapshot, UsageSnapshot};
 use serde_json::{json, Value};
 
 const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
-/// What Antigravity's sign-in asks for.
+/// What Antigravity's sign-in asks for; agy asks a login without `aicode` to
+/// sign in again.
 const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform \
 https://www.googleapis.com/auth/userinfo.email \
 https://www.googleapis.com/auth/userinfo.profile \
 https://www.googleapis.com/auth/cclog \
-https://www.googleapis.com/auth/experimentsandconfigs openid";
+https://www.googleapis.com/auth/experimentsandconfigs \
+https://www.googleapis.com/auth/aicode openid";
 pub(crate) use crate::antigravity_cloud::{
     agent, credits, empty, Http, Network, Reply, FETCH_MODELS_PATH, GENERATE_PATH,
     LOAD_CODE_ASSIST_PATH,
@@ -306,6 +308,29 @@ pub(super) fn plan(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sign_in_asks_for_the_scopes_agy_requires() {
+        let url = reqwest::Url::parse(&sign_in_url("http://localhost:5/oauth-callback", "c", "s"))
+            .unwrap();
+        let scope = url
+            .query_pairs()
+            .find(|(key, _)| key == "scope")
+            .map(|(_, value)| value.into_owned())
+            .unwrap();
+        let scopes: Vec<&str> = scope.split(' ').collect();
+        for required in [
+            "https://www.googleapis.com/auth/cloud-platform",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "https://www.googleapis.com/auth/userinfo.profile",
+            "https://www.googleapis.com/auth/cclog",
+            "https://www.googleapis.com/auth/experimentsandconfigs",
+            "https://www.googleapis.com/auth/aicode",
+            "openid",
+        ] {
+            assert!(scopes.contains(&required), "{required} in {scope}");
+        }
+    }
 
     #[test]
     fn the_agent_names_a_versioned_antigravity_on_this_system() {
