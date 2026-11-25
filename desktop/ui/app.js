@@ -1645,6 +1645,8 @@ function accountCard(account, grouped = false) {
 /// Accounts whose usage rows show their third-party pool rather than their
 /// own.
 const thirdPartyShown = new Set();
+/// The account whose model switch was just clicked, while its card renders.
+let modelsSwapped = null;
 /// The third-party pool's model: Antigravity's other than Gemini, Claude.
 const THIRD_PARTY_MODEL = "Claude";
 /// The model of a pool's own windows.
@@ -1681,22 +1683,36 @@ function modelBrand(model) {
 }
 /// A card reporting a third-party pool chooses whose windows its usage rows
 /// show, its own or the third party's, with one icon button at the end of its
-/// tag row: the mark of the model shown, which a click switches to the other.
+/// tag row: both models' marks stacked, the shown model's in front and the
+/// other's faded behind it, which a click brings to the front.
 function modelSwitch(view, accountId) {
   if (!hasThirdParty(view)) return null;
   const third = showsThirdParty(view, accountId);
-  const label = third ? THIRD_PARTY_MODEL : ownModel();
-  const control = button("", null, "model-switch", () => {
+  const [label, other] = third
+    ? [THIRD_PARTY_MODEL, ownModel()]
+    : [ownModel(), THIRD_PARTY_MODEL];
+  const swapped = modelsSwapped === accountId;
+  const control = button("", null, `model-switch${swapped ? " swapped" : ""}`, () => {
     if (third) thirdPartyShown.delete(accountId);
     else thirdPartyShown.add(accountId);
-    renderAccounts(accountsCache);
+    // The switch rendered anew trades its marks' places as it appears.
+    modelsSwapped = accountId;
+    try {
+      renderAccounts(accountsCache);
+    } finally {
+      modelsSwapped = null;
+    }
   });
   control.type = "button";
   control.title = label;
   control.setAttribute("aria-label", label);
   control.setAttribute("aria-pressed", String(third));
   control.dataset.modelSwitch = accountId;
-  control.append(modelBrand(label));
+  const behind = el("span", "model-mark behind");
+  behind.append(modelBrand(other));
+  const front = el("span", "model-mark front");
+  front.append(modelBrand(label));
+  control.append(behind, front);
   return control;
 }
 /// The fills of a card's usage rows, in order, as they look now (partway

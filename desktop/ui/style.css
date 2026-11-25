@@ -2061,13 +2061,72 @@ button.usage-reset:hover {
   border-radius: 4px;
 }
 
-.model-switch .brand {
-  width: 12px;
-  height: 12px;
+/* Both models' marks stacked, alike in size: the shown model's in front, the
+   other's behind it, set off up and to the right and turned, faded and grey.
+   The front mark covers it where they overlap; neither is cut. */
+.model-switch {
+  position: relative;
 }
 
-.card-edit + .model-switch {
-  margin-left: 0;
+.model-mark {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 11px;
+  height: 11px;
+  transition: opacity 150ms ease, filter 150ms ease;
+}
+
+.model-mark .brand {
+  width: 100%;
+  height: 100%;
+}
+
+.model-mark.front {
+  left: 2.5px;
+  top: 6.5px;
+}
+
+.model-mark.behind {
+  left: 6.5px;
+  top: 2.5px;
+  rotate: 15deg;
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+
+.model-switch:is(:hover, :focus-visible) .model-mark.behind {
+  opacity: 0.75;
+  filter: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .model-switch.swapped .model-mark.front {
+    animation: model-mark-forward 260ms cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .model-switch.swapped .model-mark.behind {
+    animation: model-mark-back 260ms cubic-bezier(0.25, 1, 0.5, 1);
+  }
+}
+
+/* A switch's marks trade places: each starts where the other was. */
+@keyframes model-mark-forward {
+  from {
+    translate: 4px -4px;
+    rotate: 15deg;
+    opacity: 0.45;
+    filter: grayscale(1);
+  }
+}
+
+@keyframes model-mark-back {
+  from {
+    translate: -4px 4px;
+    rotate: 0deg;
+    opacity: 1;
+    filter: none;
+  }
 }
 
 /* A Sub2api provider's cards in one block, its controls where a single

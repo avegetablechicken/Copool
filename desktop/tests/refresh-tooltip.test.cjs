@@ -170,6 +170,8 @@ test("A visible meter changes from red to amber without a data refresh", () => {
 test("Cards show their own windows, or their third-party pool's when switched to", () => {
   const declaration = "const thirdPartyShown = new Set();\n";
   assert(source.includes(declaration), "thirdPartyShown");
+  const swapped = "let modelsSwapped = null;\n";
+  assert(source.includes(swapped), "modelsSwapped");
   const model = 'const THIRD_PARTY_MODEL = "Claude";\n';
   assert(source.includes(model), "THIRD_PARTY_MODEL");
   const node = (className, text) => ({
@@ -201,6 +203,7 @@ test("Cards show their own windows, or their third-party pool's when switched to
   });
   vm.runInContext(
     declaration +
+      swapped +
       model +
       "function renderAccounts() { renders++; }\n" +
       body("ownModel") +
@@ -221,10 +224,20 @@ test("Cards show their own windows, or their third-party pool's when switched to
   ));
   // The switch as the name of the model it shows, bracketed when that is the
   // third party's.
+  // The other model's mark sits behind the shown one's.
   const models = (pool, usage, id = "a") => {
     const control = context.modelSwitch(view(pool, usage), id);
     if (!control) return control;
-    assert.deepEqual(control.children, [`${control.title} mark`]);
+    const [behind, front] = control.children;
+    assert.equal(control.children.length, 2);
+    assert.equal(behind.className, "model-mark behind");
+    assert.equal(front.className, "model-mark front");
+    assert.deepEqual(front.children, [`${control.title} mark`]);
+    const other = control.title === "Claude" && pool !== "claude"
+      ? { codex: "Codex", antigravity: "Gemini", grok: "Grok" }[pool]
+      : "Claude";
+    assert.deepEqual(behind.children, [`${other} mark`]);
+    assert.equal(control.className, "model-switch");
     assert.equal(control.attributes["aria-label"], control.title);
     assert.equal(control.dataset.modelSwitch, id);
     return control.attributes["aria-pressed"] === "true" ? `[${control.title}]` : control.title;
@@ -296,6 +309,12 @@ test("Cards show their own windows, or their third-party pool's when switched to
   assert.equal(models("antigravity", pro), "Gemini");
   assert.deepEqual(rows("antigravity", pro), geminiRows);
   // A click switches to Claude, showing that card's third-party pool alone.
+  // The switch rendered by its own click trades its marks' places.
+  context.renderAccounts = () => {
+    context.renders++;
+    assert.equal(context.modelSwitch(view("antigravity", pro), "a").className, "model-switch swapped");
+    assert.equal(context.modelSwitch(view("antigravity", pro), "b").className, "model-switch");
+  };
   click("antigravity", pro);
   assert.equal(context.renders, 1);
   assert.equal(models("antigravity", pro), "[Claude]");
