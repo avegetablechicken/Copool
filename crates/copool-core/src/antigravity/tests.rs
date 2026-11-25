@@ -1913,3 +1913,45 @@ fn a_card_folded_into_its_google_account_brings_its_project() {
     assert_eq!(store.accounts[0].id, "old");
     assert_eq!(store.accounts[0].project.as_deref(), Some("project-1"));
 }
+
+#[tokio::test]
+async fn switching_hands_the_login_and_identity_to_the_switch_effects() {
+    let h = harness(false).await;
+    h.live.sign_in(&login_of("alice", "access-alice", later()));
+    h.app.import_current(Pool::Antigravity).await.unwrap();
+    h.live.sign_in(&login_of("bob", "access-bob", later()));
+    h.app.import_current(Pool::Antigravity).await.unwrap();
+    let mut store = h.app.antigravity_load().unwrap();
+    let alice_id = store
+        .accounts
+        .iter_mut()
+        .find(|a| login::access_token(&a.document).as_deref() == Some("access-alice"))
+        .map(|a| {
+            a.email = Some("alice@gmail.com".into());
+            a.google_id = Some("google-sub-alice".into());
+            a.id.clone()
+        })
+        .unwrap();
+    h.app.antigravity_save(&store).unwrap();
+
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    let observed = seen.clone();
+    h.app.on_switch_effects(Arc::new(move |pool, _, auth| {
+        let observed = observed.clone();
+        Box::pin(async move {
+            *observed.lock().unwrap() = Some((pool, auth));
+            Ok(SwitchExecution::default())
+        })
+    }));
+
+    h.app
+        .switch_account(Pool::Antigravity, &alice_id)
+        .await
+        .unwrap();
+    let (pool, auth) = seen.lock().unwrap().take().unwrap();
+    assert_eq!(pool, Pool::Antigravity);
+    let auth = auth.unwrap();
+    assert_eq!(login::access_token(&auth).as_deref(), Some("access-alice"));
+    assert_eq!(auth["email"], "alice@gmail.com");
+    assert_eq!(auth["account_id"], "google-sub-alice");
+}

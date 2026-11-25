@@ -58,6 +58,8 @@ pub fn open_url(url: &str) -> Result<(), String> {
     cmd.arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 const OPENAI_CODEX_PROVIDER: &str = "openai-codex";
+const ANTHROPIC_PROVIDER: &str = "anthropic";
+const ANTIGRAVITY_CLI_PROVIDER: &str = "antigravity-cli";
 const OMP_REPLACED_CAUSE: &str = "replaced by newer credential";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +71,7 @@ struct OAuthCredential {
     org_id: Option<String>,
     email: Option<String>,
     org_name: Option<String>,
+    scope: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,7 +87,13 @@ impl SyncAgent {
             (Self::Opencode, Pool::Codex) => Some("openai"),
             (Self::Opencode, Pool::Grok) => Some("xai"),
             (Self::Pi, Pool::Codex) => Some(OPENAI_CODEX_PROVIDER),
+            (Self::Pi, Pool::Grok) => Some("xai"),
+            (Self::Pi, Pool::Claude) => Some(ANTHROPIC_PROVIDER),
             (Self::Omp, Pool::Codex) => Some(OPENAI_CODEX_PROVIDER),
+            (Self::Omp, Pool::Grok) => Some("xai-oauth"),
+            (Self::Omp, Pool::Claude) => Some(ANTHROPIC_PROVIDER),
+            (Self::Omp, Pool::Antigravity) => Some(ANTIGRAVITY_CLI_PROVIDER),
+            // Antigravity has no built-in provider in OpenCode or pi.
             _ => None,
         }
     }
@@ -98,6 +107,7 @@ impl SyncAgent {
         let provider_key = self
             .provider_key(pool)
             .ok_or_else(|| format!("Unsupported sync target: {self:?} for {pool:?}"))?;
+        let include_account_id = pool == Pool::Codex;
         match self {
             Self::Opencode => sync_oauth_json(
                 credential,
@@ -106,6 +116,7 @@ impl SyncAgent {
                 "",
                 "Invalid OpenCode auth document",
                 false,
+                include_account_id,
             ),
             Self::Pi => sync_oauth_json(
                 credential,
@@ -114,6 +125,7 @@ impl SyncAgent {
                 "Unable to locate pi auth file path",
                 "Invalid pi auth document",
                 true,
+                include_account_id,
             ),
             Self::Omp => sync_omp_credential(credential, provider_key, targets),
         }
@@ -152,6 +164,7 @@ fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCreden
                 account_id: oauth.account_id,
                 email: oauth.email,
                 org_name: oauth.plan_type,
+                scope: None,
             })
         }
         Pool::Grok => {
@@ -159,27 +172,92 @@ fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCreden
             let doc = sign_in.as_ref().unwrap_or(auth_json);
             let access = crate::grok::login::access_token(doc).ok_or("Missing access token")?;
             let refresh = crate::grok::login::refresh_token(doc).ok_or("Missing refresh token")?;
+            let access_claims = crate::grok::login::claims(&access);
             let expires_ms = crate::grok::login::expiry(doc)
-                .or_else(|| {
-                    crate::grok::login::claims(&access)
-                        .get("exp")
-                        .and_then(Value::as_i64)
-                })
+                .or_else(|| access_claims.get("exp").and_then(Value::as_i64))
                 .map(|seconds| seconds.saturating_mul(1000).max(0))
                 .unwrap_or_else(default_expires_ms);
-            let org_id = non_empty_trimmed(doc.get("team_id").and_then(Value::as_str));
-            let email = crate::grok::login::email(doc).map(|e| e.to_ascii_lowercase());
+            // The xAI subject, as omp's `xai-oauth` keeps it in `accountId`.
+            let account_id = crate::grok::login::user_id(doc)
+                .or_else(|| non_empty_trimmed(access_claims.get("sub").and_then(Value::as_str)));
+            let email = crate::grok::login::email(doc)
+                .or_else(|| {
+                    non_empty_trimmed(access_claims.get("email").and_then(Value::as_str))
+                        .filter(|email| email.contains('@'))
+                })
+                .map(|e| e.to_ascii_lowercase());
             Ok(OAuthCredential {
                 access,
                 refresh,
                 expires_ms,
-                account_id: None,
-                org_id,
+                account_id,
+                org_id: None,
                 email,
                 org_name: None,
+                scope: None,
             })
         }
-        Pool::Claude | Pool::Antigravity => Err(format!("Unsupported OAuth sync pool: {pool:?}")),
+        Pool::Claude => {
+            // `{"claudeAiOauth": …, "oauthAccount": …}`, or the OAuth entry alone.
+            let oauth = auth_json
+                .get("claudeAiOauth")
+                .filter(|v| v.is_object())
+                .unwrap_or(auth_json);
+            let account = auth_json.get("oauthAccount").unwrap_or(&Value::Null);
+            let text = |v: &Value, key: &str| non_empty_trimmed(v.get(key).and_then(Value::as_str));
+            let access = text(oauth, "accessToken").ok_or("Missing access token")?;
+            let refresh = text(oauth, "refreshToken").ok_or("Missing refresh token")?;
+            let expires_ms = crate::claude_api::expires_at_ms(oauth)
+                .filter(|ms| *ms > 0)
+                .unwrap_or_else(default_expires_ms);
+            let scope = crate::claude_api::granted_scope(oauth).or_else(|| text(oauth, "scope"));
+            Ok(OAuthCredential {
+                access,
+                refresh,
+                expires_ms,
+                account_id: text(account, "accountUuid"),
+                org_id: text(account, "organizationUuid"),
+                email: text(account, "emailAddress").map(|e| e.to_ascii_lowercase()),
+                org_name: text(account, "organizationName"),
+                scope,
+            })
+        }
+        Pool::Antigravity => {
+            let access =
+                crate::antigravity::login::access_token(auth_json).ok_or("Missing access token")?;
+            let refresh = crate::antigravity::login::refresh_token(auth_json)
+                .ok_or("Missing refresh token")?;
+            let expires_ms = crate::antigravity::login::expiry(auth_json)
+                .map(|seconds| seconds.saturating_mul(1000).max(0))
+                .unwrap_or_else(default_expires_ms);
+            let email = crate::antigravity::login::email(auth_json).map(|e| e.to_ascii_lowercase());
+            let account_id = non_empty_trimmed(
+                auth_json
+                    .get("account_id")
+                    .or_else(|| auth_json.get("accountId"))
+                    .or_else(|| auth_json.get("googleId"))
+                    .and_then(Value::as_str),
+            )
+            .or_else(|| {
+                let id_token = auth_json.get("id_token").and_then(Value::as_str)?;
+                let claims = auth::decode_jwt_payload(id_token).ok()?;
+                non_empty_trimmed(claims.get("sub").and_then(Value::as_str))
+            });
+            // omp's `antigravity-cli` requires email or subject to isolate its per-account dir.
+            if email.is_none() && account_id.is_none() {
+                return Err("Missing Antigravity account identity".into());
+            }
+            Ok(OAuthCredential {
+                access,
+                refresh,
+                expires_ms,
+                account_id,
+                org_id: None,
+                email,
+                org_name: None,
+                scope: None,
+            })
+        }
     }
 }
 
@@ -234,6 +312,7 @@ fn sync_oauth_json(
     empty_error: &str,
     invalid_doc_error: &str,
     replace_entry: bool,
+    include_account_id: bool,
 ) -> Result<(), String> {
     sync_targets(targets, empty_error, |path| {
         let mut root: Value = if path.exists() {
@@ -260,8 +339,10 @@ fn sync_oauth_json(
         entry.insert("access".into(), credential.access.clone().into());
         entry.insert("refresh".into(), credential.refresh.clone().into());
         entry.insert("expires".into(), credential.expires_ms.into());
-        if let Some(id) = &credential.account_id {
-            entry.insert("accountId".into(), id.clone().into());
+        if include_account_id {
+            if let Some(id) = &credential.account_id {
+                entry.insert("accountId".into(), id.clone().into());
+            }
         }
         root_obj.insert(provider_key.into(), Value::Object(entry));
         write_json(path, &root)
@@ -407,14 +488,26 @@ pub fn omp_paths() -> Vec<PathBuf> {
     )
 }
 
+/// Providers whose auth rule sets `org-scoped-identity` in oh-my-pi: one
+/// email may hold several workspaces, each its own credential.
+fn omp_org_scoped(provider: &str) -> bool {
+    matches!(provider, OPENAI_CODEX_PROVIDER | ANTHROPIC_PROVIDER)
+}
+
+/// Mirrors `resolveProviderCredentialIdentityKey` in oh-my-pi's
+/// `SqliteAuthCredentialStore`.
 fn format_omp_identity_key(
+    org_scoped: bool,
     email: Option<&str>,
     account_id: Option<&str>,
     org_id: Option<&str>,
 ) -> Option<String> {
-    let base = email
-        .map(|email| format!("email:{email}"))
-        .or_else(|| account_id.map(|id| format!("account:{id}")));
+    let email = email.map(|email| format!("email:{email}"));
+    let account = account_id.map(|id| format!("account:{id}"));
+    if !org_scoped {
+        return account.or(email);
+    }
+    let base = email.or(account);
     let org = org_id.map(|id| format!("org:{id}"));
     match (base, org) {
         (Some(base), Some(org)) => Some(format!("{base}|{org}")),
@@ -424,8 +517,9 @@ fn format_omp_identity_key(
     }
 }
 
-fn omp_identity_key(credential: &OAuthCredential) -> Option<String> {
+fn omp_identity_key(credential: &OAuthCredential, org_scoped: bool) -> Option<String> {
     format_omp_identity_key(
+        org_scoped,
         credential.email.as_deref(),
         credential.account_id.as_deref(),
         credential.org_id.as_deref(),
@@ -449,6 +543,9 @@ fn omp_data_json(credential: &OAuthCredential) -> Result<String, String> {
     if let Some(org_name) = &credential.org_name {
         map.insert("orgName".into(), org_name.clone().into());
     }
+    if let Some(scope) = &credential.scope {
+        map.insert("scope".into(), scope.clone().into());
+    }
     serde_json::to_string(&Value::Object(map)).map_err(|e| e.to_string())
 }
 
@@ -462,15 +559,22 @@ fn omp_extract_row_email(data: &Value) -> Option<String> {
         .map(|email| email.to_ascii_lowercase())
 }
 
+/// The stored `accountId`, else the access token's account claim in the
+/// order oh-my-pi reads it (`account_id`, `accountId`, `user_id`, `sub`,
+/// then ChatGPT's account id).
 fn omp_extract_row_account_id(data: &Value) -> Option<String> {
     non_empty_trimmed(data.get("accountId").and_then(Value::as_str)).or_else(|| {
         let access = data.get("access").and_then(Value::as_str)?;
         let claims = auth::decode_jwt_payload(access).ok()?;
-        auth::jwt_chatgpt_account_id(&claims)
+        ["account_id", "accountId", "user_id", "sub"]
+            .into_iter()
+            .find_map(|key| non_empty_trimmed(claims.get(key).and_then(Value::as_str)))
+            .or_else(|| auth::jwt_chatgpt_account_id(&claims))
     })
 }
 
 fn omp_resolve_row_identity_key(
+    org_scoped: bool,
     stored_identity_key: Option<&str>,
     data: Option<&Value>,
 ) -> Option<String> {
@@ -481,13 +585,19 @@ fn omp_resolve_row_identity_key(
     let email = omp_extract_row_email(data);
     let account_id = omp_extract_row_account_id(data);
     let org_id = non_empty_trimmed(data.get("orgId").and_then(Value::as_str));
-    format_omp_identity_key(email.as_deref(), account_id.as_deref(), org_id.as_deref())
+    format_omp_identity_key(
+        org_scoped,
+        email.as_deref(),
+        account_id.as_deref(),
+        org_id.as_deref(),
+    )
 }
 
 /// Mirrors `matchesReplacementCredential` in oh-my-pi's
 /// `SqliteAuthCredentialStore`, preserving workspace isolation between distinct
 /// users who share a workspace `orgId`.
 fn omp_matches_replacement(
+    org_scoped: bool,
     existing_type: &str,
     existing_data_raw: &str,
     existing_identity_key: Option<&str>,
@@ -501,12 +611,17 @@ fn omp_matches_replacement(
         return false;
     };
     let existing_data = serde_json::from_str::<Value>(existing_data_raw).ok();
-    let existing_key = omp_resolve_row_identity_key(existing_identity_key, existing_data.as_ref());
+    let existing_key =
+        omp_resolve_row_identity_key(org_scoped, existing_identity_key, existing_data.as_ref());
     let Some(existing_key) = existing_key else {
         return false;
     };
     if existing_key == incoming_key {
         return true;
+    }
+    // Only org-qualified keys upgrade a row keyed otherwise.
+    if !org_scoped {
+        return false;
     }
     let Some(org_id) = incoming.org_id.as_deref() else {
         return false;
@@ -518,24 +633,35 @@ fn omp_matches_replacement(
     if existing_key == org_identifier {
         return true;
     }
-    // Only use per-user email as a claimable base (accountId equals orgId for
-    // openai-codex and is shared by all members of a Team workspace).
-    if let Some(email) = incoming.email.as_deref() {
-        let email_identifier = format!("email:{email}");
-        if existing_key == email_identifier
-            || existing_key == format!("{email_identifier}|{org_identifier}")
-        {
-            return true;
-        }
-        if existing_key.ends_with(&format!("|{org_identifier}")) {
-            if let Some(data) = existing_data.as_ref() {
-                if omp_extract_row_email(data).as_deref() == Some(email) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    // A base repeating the org's id is no per-user identity (openai-codex
+    // stores the Team workspace id as both accountId and orgId).
+    let bases = [
+        incoming
+            .email
+            .as_deref()
+            .map(|email| format!("email:{email}")),
+        incoming
+            .account_id
+            .as_deref()
+            .filter(|id| *id != org_id)
+            .map(|id| format!("account:{id}")),
+    ];
+    // A same-org row's credential may carry identifiers its key does not use.
+    let existing_identifiers: Vec<String> = match existing_data.as_ref() {
+        Some(data) if existing_key.ends_with(&format!("|{org_identifier}")) => [
+            omp_extract_row_email(data).map(|email| format!("email:{email}")),
+            omp_extract_row_account_id(data).map(|id| format!("account:{id}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        _ => vec![],
+    };
+    bases.into_iter().flatten().any(|base| {
+        existing_key == base
+            || existing_key == format!("{base}|{org_identifier}")
+            || existing_identifiers.contains(&base)
+    })
 }
 
 fn sync_omp_one(credential: &OAuthCredential, provider: &str, path: &Path) -> Result<(), String> {
@@ -613,7 +739,8 @@ fn sync_omp_one(credential: &OAuthCredential, provider: &str, path: &Path) -> Re
     let has_updated_at = columns.contains("updated_at");
 
     let data_json = omp_data_json(credential)?;
-    let identity_key = omp_identity_key(credential);
+    let org_scoped = omp_org_scoped(provider);
+    let identity_key = omp_identity_key(credential, org_scoped);
 
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -647,6 +774,7 @@ fn sync_omp_one(credential: &OAuthCredential, provider: &str, path: &Path) -> Re
 
     let matched = active_rows.iter().find(|(_, ctype, data, id_key)| {
         omp_matches_replacement(
+            org_scoped,
             ctype,
             data,
             id_key.as_deref(),
@@ -788,6 +916,7 @@ fn sync_omp_one(credential: &OAuthCredential, provider: &str, path: &Path) -> Re
         };
         for (id, ctype, data, id_key) in disabled_rows {
             if omp_matches_replacement(
+                org_scoped,
                 &ctype,
                 &data,
                 id_key.as_deref(),
@@ -1202,6 +1331,7 @@ mod tests {
                 * 1000
         );
         assert!(saved["xai"].get("key").is_none());
+        assert!(saved["xai"].get("accountId").is_none());
     }
 
     #[test]
@@ -1245,11 +1375,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn after_switch_grok_skips_unsupported_agents_editors_and_codex_launch() {
-        let preferences = Preferences {
+    async fn after_switch_outside_codex_skips_editors_codex_launch_and_unsupported_agents() {
+        // Agents stay off for Grok: enabled, they would write the real home.
+        let grok_preferences = Preferences {
             sync_opencode_openai_auth: false,
-            sync_pi_auth: true,
-            sync_omp_auth: true,
+            sync_pi_auth: false,
+            sync_omp_auth: false,
             restart_editors_on_switch: true,
             restart_editor_targets: vec!["not-installed-editor".into()],
             launch_codex_after_switch: true,
@@ -1260,10 +1391,277 @@ mod tests {
             "refresh_token": "grok-refresh",
             "expires_at": "2026-11-26T12:00:00Z"
         });
-        let execution = after_switch(Pool::Grok, &preferences, Some(&doc))
+        let execution = after_switch(Pool::Grok, &grok_preferences, Some(&doc))
             .await
             .unwrap();
         assert_eq!(execution, SwitchExecution::default());
+        // OpenCode and pi do not take an Antigravity login, and OpenCode does
+        // not take Claude; keep supported agents off so tests never touch home.
+        let antigravity_preferences = Preferences {
+            sync_opencode_openai_auth: true,
+            sync_pi_auth: true,
+            sync_omp_auth: false,
+            ..grok_preferences.clone()
+        };
+        let doc = json!({
+            "token": {"access_token": "a", "refresh_token": "r"},
+            "id_token_email": "alice@gmail.com"
+        });
+        let execution = after_switch(Pool::Antigravity, &antigravity_preferences, Some(&doc))
+            .await
+            .unwrap();
+        assert_eq!(execution, SwitchExecution::default());
+
+        let claude_preferences = Preferences {
+            sync_opencode_openai_auth: true,
+            sync_pi_auth: false,
+            sync_omp_auth: false,
+            ..grok_preferences
+        };
+        let execution = after_switch(
+            Pool::Claude,
+            &claude_preferences,
+            Some(&sample_claude_doc("alice", "org-1", "rt-1")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(execution, SwitchExecution::default());
+    }
+
+    fn sample_claude_doc(name: &str, org: &str, refresh: &str) -> Value {
+        json!({
+            "claudeAiOauth": {
+                "accessToken": format!("sk-ant-oat-{name}"),
+                "refreshToken": refresh,
+                "expiresAt": 1_780_000_000_000_i64,
+                "scopes": ["user:inference"],
+                "subscriptionType": "max"
+            },
+            "oauthAccount": {
+                "accountUuid": format!("acct-{name}"),
+                "emailAddress": format!("{}@Example.com", name),
+                "organizationUuid": org,
+                "organizationName": format!("{name}'s Organization")
+            }
+        })
+    }
+
+    fn sample_grok_doc(user: &str, refresh: &str) -> Value {
+        json!({
+            "key": format!("grok-access-{user}"),
+            "refresh_token": refresh,
+            "expires_at": "2026-11-26T12:00:00Z",
+            "user_id": format!("uid-{user}"),
+            "email": format!("{user}@x.example"),
+            "team_id": "team-shared"
+        })
+    }
+
+    #[test]
+    fn sync_pi_writes_anthropic_and_xai_entries_beside_openai_codex() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let codex = sample_codex_auth("a@example.com", "acct-1", "plus", 1_780_000_000, "rt-1");
+        sync_pi(&codex, std::slice::from_ref(&path)).unwrap();
+        SyncAgent::Pi
+            .sync_raw(
+                Pool::Claude,
+                &sample_claude_doc("alice", "org-1", "claude-rt"),
+                std::slice::from_ref(&path),
+            )
+            .unwrap();
+        SyncAgent::Pi
+            .sync_raw(
+                Pool::Grok,
+                &sample_grok_doc("bob", "grok-rt"),
+                std::slice::from_ref(&path),
+            )
+            .unwrap();
+
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["openai-codex"]["refresh"], "rt-1");
+        assert_eq!(written["anthropic"]["type"], "oauth");
+        assert_eq!(written["anthropic"]["access"], "sk-ant-oat-alice");
+        assert_eq!(written["anthropic"]["refresh"], "claude-rt");
+        assert_eq!(written["anthropic"]["expires"], 1_780_000_000_000_i64);
+        assert!(written["anthropic"].get("accountId").is_none());
+        assert_eq!(written["xai"]["type"], "oauth");
+        assert_eq!(written["xai"]["access"], "grok-access-bob");
+        assert_eq!(written["xai"]["refresh"], "grok-rt");
+        assert!(written["xai"].get("accountId").is_none());
+        assert_eq!(
+            written["xai"]["expires"],
+            chrono::DateTime::parse_from_rfc3339("2026-11-26T12:00:00Z")
+                .unwrap()
+                .timestamp()
+                * 1000
+        );
+    }
+
+    fn omp_rows(
+        db_path: &Path,
+        provider: &str,
+    ) -> Vec<(i64, Value, Option<String>, Option<String>)> {
+        let conn = Connection::open(db_path).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, data, identity_key, disabled_cause FROM auth_credentials WHERE provider = ?1 ORDER BY id")
+            .unwrap();
+        let rows = stmt
+            .query_map(params![provider], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    serde_json::from_str::<Value>(&r.get::<_, String>(1)?).unwrap(),
+                    r.get(2)?,
+                    r.get(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows
+    }
+
+    #[test]
+    fn sync_omp_keys_anthropic_by_email_and_organization() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("agent.db");
+        let sync = |doc: &Value| {
+            SyncAgent::Omp
+                .sync_raw(Pool::Claude, doc, std::slice::from_ref(&db_path))
+                .unwrap()
+        };
+        sync(&sample_claude_doc("alice", "org-team", "rt-1"));
+        let rows = omp_rows(&db_path, "anthropic");
+        assert_eq!(rows.len(), 1);
+        let (alice_id, data, key, cause) = &rows[0];
+        assert_eq!(key.as_deref(), Some("email:alice@example.com|org:org-team"));
+        assert_eq!(cause, &None);
+        assert_eq!(data["access"], "sk-ant-oat-alice");
+        assert_eq!(data["refresh"], "rt-1");
+        assert_eq!(data["accountId"], "acct-alice");
+        assert_eq!(data["orgId"], "org-team");
+        assert_eq!(data["email"], "alice@example.com");
+        assert_eq!(data["orgName"], "alice's Organization");
+        assert_eq!(data["scope"], "user:inference");
+
+        // A renewal of the same login updates its row in place.
+        sync(&sample_claude_doc("alice", "org-team", "rt-2"));
+        let rows = omp_rows(&db_path, "anthropic");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, *alice_id);
+        assert_eq!(rows[0].1["refresh"], "rt-2");
+
+        // The same email in another organization is another subscription.
+        sync(&sample_claude_doc("alice", "org-personal", "rt-3"));
+        let rows = omp_rows(&db_path, "anthropic");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].3.as_deref(), Some(OMP_REPLACED_CAUSE));
+        assert_eq!(
+            rows[1].2.as_deref(),
+            Some("email:alice@example.com|org:org-personal")
+        );
+        assert_eq!(rows[1].3, None);
+    }
+
+    #[test]
+    fn sync_omp_keys_xai_oauth_by_account_without_organization() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("agent.db");
+        let sync = |doc: &Value| {
+            SyncAgent::Omp
+                .sync_raw(Pool::Grok, doc, std::slice::from_ref(&db_path))
+                .unwrap()
+        };
+        sync(&sample_grok_doc("alice", "rt-a1"));
+        let rows = omp_rows(&db_path, "xai-oauth");
+        assert_eq!(rows.len(), 1);
+        let (alice_id, data, key, _) = &rows[0];
+        assert_eq!(key.as_deref(), Some("account:uid-alice"));
+        assert_eq!(data["access"], "grok-access-alice");
+        assert_eq!(data["accountId"], "uid-alice");
+        assert_eq!(data["email"], "alice@x.example");
+        assert!(data.get("orgId").is_none());
+
+        sync(&sample_grok_doc("alice", "rt-a2"));
+        let rows = omp_rows(&db_path, "xai-oauth");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, *alice_id);
+        assert_eq!(rows[0].1["refresh"], "rt-a2");
+
+        // A teammate is another account: inserted, Alice's row disabled.
+        sync(&sample_grok_doc("bob", "rt-b1"));
+        let rows = omp_rows(&db_path, "xai-oauth");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].3.as_deref(), Some(OMP_REPLACED_CAUSE));
+        assert_eq!(rows[1].2.as_deref(), Some("account:uid-bob"));
+        assert_eq!(rows[1].3, None);
+    }
+
+    #[test]
+    fn sync_omp_writes_antigravity_cli_with_identity_and_rejects_nameless_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("agent.db");
+        let nameless = json!({
+            "token": {
+                "access_token": "agy-access",
+                "refresh_token": "agy-refresh",
+                "expiry": "2026-11-26T12:00:00Z"
+            },
+            "auth_method": "consumer"
+        });
+        assert_eq!(
+            SyncAgent::Omp
+                .sync_raw(Pool::Antigravity, &nameless, std::slice::from_ref(&db_path))
+                .unwrap_err(),
+            "Missing Antigravity account identity"
+        );
+
+        let alice = json!({
+            "token": {
+                "access_token": "agy-access-alice",
+                "refresh_token": "agy-rt-a1",
+                "expiry": "2026-11-26T12:00:00Z"
+            },
+            "auth_method": "consumer",
+            "id_token_email": "Alice@Gmail.com",
+            "account_id": "google-sub-alice"
+        });
+        SyncAgent::Omp
+            .sync_raw(Pool::Antigravity, &alice, std::slice::from_ref(&db_path))
+            .unwrap();
+        let rows = omp_rows(&db_path, "antigravity-cli");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.as_deref(), Some("account:google-sub-alice"));
+        assert_eq!(rows[0].1["access"], "agy-access-alice");
+        assert_eq!(rows[0].1["refresh"], "agy-rt-a1");
+        assert_eq!(rows[0].1["email"], "alice@gmail.com");
+        assert_eq!(rows[0].1["accountId"], "google-sub-alice");
+        assert_eq!(
+            rows[0].1["expires"],
+            chrono::DateTime::parse_from_rfc3339("2026-11-26T12:00:00Z")
+                .unwrap()
+                .timestamp()
+                * 1000
+        );
+
+        // Email-only grant (as `agy acp --login` often exports) keys by email.
+        let bob = json!({
+            "token": {
+                "access_token": "agy-access-bob",
+                "refresh_token": "agy-rt-b1",
+                "expiry": "2026-11-26T13:00:00Z"
+            },
+            "auth_method": "consumer",
+            "id_token_email": "Bob@Gmail.com"
+        });
+        SyncAgent::Omp
+            .sync_raw(Pool::Antigravity, &bob, std::slice::from_ref(&db_path))
+            .unwrap();
+        let rows = omp_rows(&db_path, "antigravity-cli");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].3.as_deref(), Some(OMP_REPLACED_CAUSE));
+        assert_eq!(rows[1].2.as_deref(), Some("email:bob@gmail.com"));
+        assert_eq!(rows[1].3, None);
     }
 
     fn sample_codex_auth(

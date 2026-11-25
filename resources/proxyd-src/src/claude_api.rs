@@ -99,9 +99,8 @@ pub(crate) async fn refresh_at(
     .to_owned())
 }
 
-/// The scopes a login was granted, as Claude Code asks for them on renewal;
-/// the default ones for a login that records none.
-pub(crate) fn refresh_scope(oauth: &Value) -> String {
+/// The space-separated scopes recorded on `oauth["scopes"]`, if any.
+pub(crate) fn granted_scope(oauth: &Value) -> Option<String> {
     let scopes: Vec<&str> = oauth["scopes"]
         .as_array()
         .into_iter()
@@ -110,11 +109,13 @@ pub(crate) fn refresh_scope(oauth: &Value) -> String {
         .map(str::trim)
         .filter(|scope| !scope.is_empty())
         .collect();
-    if scopes.is_empty() {
-        SCOPES.into()
-    } else {
-        scopes.join(" ")
-    }
+    (!scopes.is_empty()).then(|| scopes.join(" "))
+}
+
+/// The scopes a login was granted, as Claude Code asks for them on renewal;
+/// the default ones for a login that records none.
+pub(crate) fn refresh_scope(oauth: &Value) -> String {
+    granted_scope(oauth).unwrap_or_else(|| SCOPES.into())
 }
 
 pub(crate) fn text(value: &Value) -> Option<String> {
@@ -125,8 +126,14 @@ pub(crate) fn text(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+pub(crate) fn expires_at_ms(oauth: &Value) -> Option<i64> {
+    oauth
+        .get("expiresAt")
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|ms| ms as i64)))
+}
+
 pub(crate) fn expires_at(oauth: &Value) -> i64 {
-    oauth["expiresAt"].as_f64().map_or(0, |v| v as i64)
+    expires_at_ms(oauth).unwrap_or(0)
 }
 
 /// "max 20x" from the subscription and its rate limit tier.

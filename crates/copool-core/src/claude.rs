@@ -2139,10 +2139,14 @@ impl Application {
         if restoring_record {
             let _ = fs::remove_file(self.claude_official_path());
         }
-        Ok(SwitchExecution {
-            login_overrides: login_overrides(&location),
-            ..Default::default()
-        })
+        // Other agents take the login once Claude Code holds it, without
+        // keeping Claude Code's renewals waiting.
+        let synced = json!({"claudeAiOauth": target.oauth, "oauthAccount": target.account});
+        drop(_lock);
+        drop(claude_code);
+        let mut execution = self.after_switch(Pool::Claude, Some(&synced)).await?;
+        execution.login_overrides = login_overrides(&location);
+        Ok(execution)
     }
     /// Resolve a nameless live rotation by its own access token. Until its profile
     /// confirms the identity, never use a particular card's proxy or its login.
@@ -5530,6 +5534,39 @@ mod tests {
         );
         app.switch_account(Pool::Claude, &bob.id).await.unwrap();
         assert_eq!(read_backup(), backed_up);
+    }
+
+    #[tokio::test]
+    async fn switching_hands_the_login_and_identity_to_the_switch_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, _) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        sign_in(&location, "bob", LATER);
+        app.claude_import_current().await.unwrap();
+        let alice = app
+            .accounts(Pool::Claude)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|a| !a.is_current)
+            .unwrap()
+            .id;
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let observed = seen.clone();
+        app.on_switch_effects(Arc::new(move |pool, _, auth| {
+            let observed = observed.clone();
+            Box::pin(async move {
+                *observed.lock().unwrap() = Some((pool, auth));
+                Ok(SwitchExecution::default())
+            })
+        }));
+        app.switch_account(Pool::Claude, &alice).await.unwrap();
+        let (pool, auth) = seen.lock().unwrap().take().unwrap();
+        assert_eq!(pool, Pool::Claude);
+        let auth = auth.unwrap();
+        assert_eq!(auth["claudeAiOauth"]["accessToken"], "alice-access");
+        assert_eq!(auth["oauthAccount"]["accountUuid"], "acct-alice");
     }
 
     #[tokio::test]

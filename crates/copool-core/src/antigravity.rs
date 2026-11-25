@@ -20,7 +20,7 @@ use std::{
 };
 
 mod api;
-mod login;
+pub(crate) mod login;
 mod proxy;
 #[cfg(any(target_os = "macos", test))]
 mod security;
@@ -668,19 +668,36 @@ impl Application {
             sub2api::restore_settings(&path, settings);
             return Err(error);
         }
-        let _lock = self.antigravity.lock.lock().await;
-        let mut store = self.antigravity_load()?;
-        store.settings_record = None;
-        store.settings_provider = None;
-        // Unless the account was removed while its login was written.
-        store.current_account_id = store
-            .accounts
-            .iter()
-            .any(|a| a.id == target.id)
-            .then_some(target.id);
-        self.antigravity.switches.fetch_add(1, Ordering::SeqCst);
-        self.antigravity_save(&store)?;
-        Ok(SwitchExecution::default())
+        {
+            let _lock = self.antigravity.lock.lock().await;
+            let mut store = self.antigravity_load()?;
+            store.settings_record = None;
+            store.settings_provider = None;
+            // Unless the account was removed while its login was written.
+            store.current_account_id = store
+                .accounts
+                .iter()
+                .any(|a| a.id == target.id)
+                .then_some(target.id);
+            self.antigravity.switches.fetch_add(1, Ordering::SeqCst);
+            self.antigravity_save(&store)?;
+        }
+        let mut synced = target.document;
+        if let Some(object) = synced.as_object_mut() {
+            if let Some(email) = target.email.as_deref().filter(|e| !e.trim().is_empty()) {
+                object.entry("email").or_insert_with(|| email.into());
+            }
+            if let Some(google_id) = target
+                .google_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+            {
+                object
+                    .entry("account_id")
+                    .or_insert_with(|| google_id.into());
+            }
+        }
+        self.after_switch(Pool::Antigravity, Some(&synced)).await
     }
     /// Whether the account failed: its usage refused, or its token expired.
     pub(crate) async fn antigravity_login_failed(&self, id: &str) -> Result<bool> {
