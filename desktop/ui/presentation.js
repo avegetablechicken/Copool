@@ -470,6 +470,44 @@
       { intent: "refreshUsage", enabled: canRefresh, spinning },
     ];
   }
+  /// Each third-party agent's switch, mirroring `SyncAgent` in the core.
+  const agentSyncPreferences = {
+    opencode: "syncOpencodeOpenaiAuth",
+    pi: "syncPiAuth",
+    omp: "syncOmpAuth",
+  };
+  /// The third-party agents' rows: each one's switch, target and the pools
+  /// it can receive, every pool chosen unless saved as not.
+  function agentSyncRows(settings = {}, agents = []) {
+    return agents
+      .filter((agent) => agent.id in agentSyncPreferences)
+      .map((agent) => {
+        const preference = agentSyncPreferences[agent.id];
+        const chosen = settings.syncPools?.[agent.id] || {};
+        return {
+          id: agent.id,
+          preference,
+          enabled: Boolean(settings[preference]),
+          target: agent.target || null,
+          found: Boolean(agent.found),
+          pools: (agent.pools || []).map((pool) => ({
+            pool,
+            chosen: chosen[pool] !== false,
+          })),
+        };
+      });
+  }
+  /// The preferences after one agent's pool is chosen or not.
+  function toggleAgentSyncPool(settings = {}, agent, pool) {
+    const pools = settings.syncPools || {};
+    const current = pools[agent] || {};
+    return {
+      syncPools: {
+        ...pools,
+        [agent]: { ...current, [pool]: current[pool] === false },
+      },
+    };
+  }
   function settingsControls(settings = {}, editors = []) {
     return {
       usagePicker: {
@@ -481,13 +519,7 @@
         selectedValue: resolveTheme(settings.theme),
         options: themes,
       },
-      switchToggles: [
-        "autoSmartSwitch",
-        "syncOpencodeOpenaiAuth",
-        "syncPiAuth",
-        "syncOmpAuth",
-        "restartEditorsOnSwitch",
-      ],
+      switchToggles: ["autoSmartSwitch", "restartEditorsOnSwitch"],
       restartPicker: {
         isEnabled:
           Boolean(settings.restartEditorsOnSwitch) && editors.length > 0,
@@ -848,6 +880,8 @@
     resetInventory,
     balanceTooltips,
     settingsControls,
+    agentSyncRows,
+    toggleAgentSyncPool,
     publicCallout,
     remoteHeader,
     remoteMetrics,

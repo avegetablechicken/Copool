@@ -7,13 +7,7 @@ legacy(
   "testSwitchBehaviorSectionDisablesRestartTargetPickerWhenSwitchingIsOff",
   () => {
     const p = P.settingsControls({}, [{ id: "cursor", label: "Cursor" }]);
-    assert.deepEqual(p.switchToggles, [
-      "autoSmartSwitch",
-      "syncOpencodeOpenaiAuth",
-      "syncPiAuth",
-      "syncOmpAuth",
-      "restartEditorsOnSwitch",
-    ]);
+    assert.deepEqual(p.switchToggles, ["autoSmartSwitch", "restartEditorsOnSwitch"]);
     assert.equal(p.restartPicker.isEnabled, false);
     assert.deepEqual(
       p.restartPicker.options.map((o) => o.title),
@@ -191,8 +185,8 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
     restartedEditors: [],
   });
   assert.equal(ok.error, false);
-  assert.match(ok.text, /Opencode auth synced/);
-  assert.match(ok.text, /pi auth synced/);
+  assert.match(ok.text, /OpenCode auth synced/);
+  assert.match(ok.text, /Pi auth synced/);
   assert.match(ok.text, /omp auth synced/);
 
   const err = scope.switchNotice({
@@ -201,6 +195,56 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
     restartedEditors: [],
   });
   assert.equal(err.error, true);
-  assert.match(err.text, /pi sync failed: disk full/);
+  assert.match(err.text, /Pi sync failed: disk full/);
   assert.match(err.text, /omp sync failed: database locked/);
+});
+
+test("SettingsControlPresentationTests.testAgentSyncRowsChooseEveryPoolUnlessSavedOff", () => {
+  const agents = [
+    { id: "opencode", pools: ["codex", "grok"], target: "~/.config/opencode/auth.json", found: true },
+    { id: "omp", pools: ["codex", "claude", "antigravity", "grok"], target: null, found: false },
+    { id: "unknown", pools: ["codex"] },
+  ];
+  const rows = P.agentSyncRows(
+    { syncOpencodeOpenaiAuth: true, syncPools: { opencode: { grok: false } } },
+    agents,
+  );
+  assert.deepEqual(rows, [
+    {
+      id: "opencode",
+      preference: "syncOpencodeOpenaiAuth",
+      enabled: true,
+      target: "~/.config/opencode/auth.json",
+      found: true,
+      pools: [
+        { pool: "codex", chosen: true },
+        { pool: "grok", chosen: false },
+      ],
+    },
+    {
+      id: "omp",
+      preference: "syncOmpAuth",
+      enabled: false,
+      target: null,
+      found: false,
+      pools: ["codex", "claude", "antigravity", "grok"].map((pool) => ({ pool, chosen: true })),
+    },
+  ]);
+});
+test("SettingsControlPresentationTests.testToggleAgentSyncPoolKeepsOtherAgentsAndPools", () => {
+  const settings = {
+    syncPools: {
+      opencode: { codex: true, claude: true, antigravity: true, grok: true },
+      pi: { codex: false, claude: true, antigravity: true, grok: true },
+    },
+  };
+  assert.deepEqual(P.toggleAgentSyncPool(settings, "opencode", "grok").syncPools, {
+    opencode: { codex: true, claude: true, antigravity: true, grok: false },
+    pi: { codex: false, claude: true, antigravity: true, grok: true },
+  });
+  assert.equal(P.toggleAgentSyncPool(settings, "pi", "codex").syncPools.pi.codex, true);
+  // A selection not saved yet starts from every pool chosen.
+  assert.deepEqual(P.toggleAgentSyncPool({}, "omp", "claude"), {
+    syncPools: { omp: { claude: false } },
+  });
 });

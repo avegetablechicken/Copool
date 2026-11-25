@@ -69,9 +69,10 @@
 "tray.hidden" = "Hidden";
 "settings.section.switch_behavior" = "Switch Behavior";
 "settings.auto_smart_switch" = "Auto smart switch";
-"settings.sync_opencode_openai_auth" = "Sync opencode auth";
-"settings.sync_pi_auth" = "Sync pi auth";
+"settings.sync_opencode_openai_auth" = "Sync OpenCode auth";
+"settings.sync_pi_auth" = "Sync Pi auth";
 "settings.sync_omp_auth" = "Sync omp auth";
+"settings.agent_sync.not_found" = "Not found";
 "settings.restart_editors_on_switch" = "Restart editors on switch";
 "settings.editor_restart_target" = "Editor restart target";
 "settings.section.capability_matrix" = "Capability Matrix";
@@ -176,10 +177,10 @@
 "accounts.notice.switch_done" = "Switched account";
 "accounts.notice.switch_done_fallback" = "Switched account (via codex app command)";
 "accounts.notice.provider_switched_format" = "Switched Codex provider to %@";
-"accounts.notice.sync_failed_format" = "Opencode sync failed: %@";
-"accounts.notice.sync_done" = "Opencode auth synced";
-"accounts.notice.pi_sync_failed_format" = "pi sync failed: %@";
-"accounts.notice.pi_sync_done" = "pi auth synced";
+"accounts.notice.sync_failed_format" = "OpenCode sync failed: %@";
+"accounts.notice.sync_done" = "OpenCode auth synced";
+"accounts.notice.pi_sync_failed_format" = "Pi sync failed: %@";
+"accounts.notice.pi_sync_done" = "Pi auth synced";
 "accounts.notice.omp_sync_failed_format" = "omp sync failed: %@";
 "accounts.notice.omp_sync_done" = "omp auth synced";
 "accounts.notice.editor_restart_failed_format" = "Editor restart failed: %@";
@@ -396,7 +397,7 @@
 "error.cloudflared.create_log_dir_failed_format" = "Failed to create cloudflared log directory: %@";
 "error.cloudflared.create_log_file_failed" = "Failed to initialize cloudflared log file";
 
-"error.opencode.auth_path_not_found" = "Unable to locate opencode auth file path";
+"error.opencode.auth_path_not_found" = "Unable to locate OpenCode auth file path";
 "error.opencode.missing_tokens" = "auth.json missing tokens";
 "error.opencode.missing_refresh_token" = "auth.json missing refresh_token";
 

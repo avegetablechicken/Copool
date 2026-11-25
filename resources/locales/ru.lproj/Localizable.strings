@@ -69,9 +69,10 @@
 "tray.hidden" = "Скрыто";
 "settings.section.switch_behavior" = "Поведение переключения";
 "settings.auto_smart_switch" = "Автоматическое умное переключение";
-"settings.sync_opencode_openai_auth" = "Синхронизировать auth opencode";
-"settings.sync_pi_auth" = "Синхронизировать auth pi";
+"settings.sync_opencode_openai_auth" = "Синхронизировать auth OpenCode";
+"settings.sync_pi_auth" = "Синхронизировать auth Pi";
 "settings.sync_omp_auth" = "Синхронизировать auth omp";
+"settings.agent_sync.not_found" = "Не найден";
 "settings.restart_editors_on_switch" = "Перезапускать редакторы при переключении";
 "settings.editor_restart_target" = "Целевой редактор для перезапуска";
 "settings.section.capability_matrix" = "Матрица возможностей";
@@ -164,10 +165,10 @@
 "accounts.notice.switch_done" = "Аккаунт переключен";
 "accounts.notice.switch_done_fallback" = "Аккаунт переключен (через команду codex app)";
 "accounts.notice.provider_switched_format" = "Провайдер Codex переключен на %@";
-"accounts.notice.sync_failed_format" = "Сбой синхронизации Opencode: %@";
-"accounts.notice.sync_done" = "Auth Opencode синхронизирована";
-"accounts.notice.pi_sync_failed_format" = "Сбой синхронизации pi: %@";
-"accounts.notice.pi_sync_done" = "Auth pi синхронизирована";
+"accounts.notice.sync_failed_format" = "Сбой синхронизации OpenCode: %@";
+"accounts.notice.sync_done" = "Auth OpenCode синхронизирована";
+"accounts.notice.pi_sync_failed_format" = "Сбой синхронизации Pi: %@";
+"accounts.notice.pi_sync_done" = "Auth Pi синхронизирована";
 "accounts.notice.omp_sync_failed_format" = "Сбой синхронизации omp: %@";
 "accounts.notice.omp_sync_done" = "Auth omp синхронизирована";
 "accounts.notice.editor_restart_failed_format" = "Не удалось перезапустить редактор: %@";
@@ -370,7 +371,7 @@
 "error.cloudflared.api_request_failed_format" = "%@: %@";
 "error.cloudflared.create_log_dir_failed_format" = "Не удалось создать каталог логов cloudflared: %@";
 "error.cloudflared.create_log_file_failed" = "Не удалось инициализировать файл логов cloudflared";
-"error.opencode.auth_path_not_found" = "Unable to locate opencode auth file path";
+"error.opencode.auth_path_not_found" = "Unable to locate OpenCode auth file path";
 "error.opencode.missing_tokens" = "auth.json missing tokens";
 "error.opencode.missing_refresh_token" = "auth.json missing refresh_token";
 "error.remote.label_empty" = "Имя удалённого сервера не может быть пустым";

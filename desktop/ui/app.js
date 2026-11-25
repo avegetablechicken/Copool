@@ -2423,6 +2423,7 @@ function renderPreferences() {
   syncGeneralSelectLabels();
   $("restart-target").disabled = !controls.restartPicker.isEnabled;
   $("restart-target").value = controls.restartPicker.selectedValue || "";
+  renderAgentSync();
   // An edit still waiting to be saved is not overwritten.
   if (document.activeElement !== $("proxy-port"))
     $("proxy-port").value = preferences[PROXY_PREFERENCES[proxyPool].port];

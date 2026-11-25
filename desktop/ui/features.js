@@ -1,6 +1,8 @@
 "use strict";
 let configurationCache = null;
 let installedEditors = [];
+/// The third-party agents a switch can sync to, as the core located them.
+let syncAgents = [];
 const settingsController = new window.CopoolControllers.Settings(invoke);
 /// Each pool's Sub2api providers and their forms.
 const providerControllers = Object.fromEntries(
@@ -237,6 +239,14 @@ async function syncProvider(target, key) {
   }
 }
 async function initializeFeatures() {
+  // Locating OpenCode's storage asks its executable for its version, which
+  // must not hold up the rest of the settings.
+  invoke("sync_agents")
+    .then((agents) => {
+      syncAgents = agents;
+      renderAgentSync();
+    })
+    .catch((error) => notice(error, true));
   [configurationCache, installedEditors] = await Promise.all([
     invoke("configuration"),
     invoke("installed_editors"),
@@ -283,6 +293,52 @@ function brandIcon(target) {
   }
   icon.classList.add("provider-brand");
   return icon;
+}
+/// The third-party agents shown expanded; all start collapsed.
+const expandedAgents = new Set();
+/// Each third-party agent's row, which expands to the file it writes and a
+/// chip per pool; its switch is bound with the other preferences.
+function renderAgentSync() {
+  for (const row of P.agentSyncRows(preferences, syncAgents)) {
+    const root = document.querySelector(`.agent-sync[data-agent="${row.id}"]`);
+    if (!root) continue;
+    const expanded = expandedAgents.has(row.id);
+    const toggle = root.querySelector(".agent-sync-toggle");
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.onclick = () => {
+      if (expandedAgents.has(row.id)) expandedAgents.delete(row.id);
+      else expandedAgents.add(row.id);
+      renderAgentSync();
+    };
+    root.querySelector(".agent-sync-body").hidden = !expanded;
+    const target = root.querySelector(".agent-sync-target");
+    target.textContent = row.target || tr("settings.agent_sync.not_found");
+    target.title = row.target || "";
+    target.classList.toggle("missing", !row.found);
+    const pools = root.querySelector(".agent-sync-pools");
+    // Rebuilt only when the agent's pools change, so a chip keeps focus.
+    const signature = row.pools.map(({ pool }) => pool).join(" ");
+    if (pools.dataset.pools !== signature) {
+      pools.dataset.pools = signature;
+      pools.replaceChildren(
+        ...row.pools.map(({ pool: target }) => {
+          const chip = el("button", "agent-sync-pool");
+          chip.type = "button";
+          chip.dataset.pool = target;
+          chip.append(brandIcon(target), el("span"));
+          chip.onclick = () =>
+            savePreference((current) => P.toggleAgentSyncPool(current, row.id, target));
+          return chip;
+        }),
+      );
+    }
+    for (const { pool: target, chosen } of row.pools) {
+      const chip = pools.querySelector(`[data-pool="${target}"]`);
+      chip.setAttribute("aria-pressed", String(chosen));
+      chip.disabled = !row.enabled;
+      chip.querySelector("span").textContent = tr(`pool.${target}`);
+    }
+  }
 }
 /// Choose the provider first, then the pool whose form to open.
 $("provider-add").onclick = ({ currentTarget: trigger }) => {

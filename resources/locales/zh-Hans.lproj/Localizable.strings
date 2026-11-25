@@ -69,9 +69,10 @@
 "tray.hidden" = "隐藏";
 "settings.section.switch_behavior" = "切换行为";
 "settings.auto_smart_switch" = "自动智能切换";
-"settings.sync_opencode_openai_auth" = "同步 opencode 授权";
-"settings.sync_pi_auth" = "同步 pi 授权";
+"settings.sync_opencode_openai_auth" = "同步 OpenCode 授权";
+"settings.sync_pi_auth" = "同步 Pi 授权";
 "settings.sync_omp_auth" = "同步 omp 授权";
+"settings.agent_sync.not_found" = "未检测到";
 "settings.restart_editors_on_switch" = "切换账号后重启编辑器";
 "settings.editor_restart_target" = "编辑器重启目标";
 "settings.section.capability_matrix" = "能力清单";
@@ -176,10 +177,10 @@
 "accounts.notice.switch_done" = "已切换账号";
 "accounts.notice.switch_done_fallback" = "已切换账号（通过 codex app 命令启动）";
 "accounts.notice.provider_switched_format" = "已将 Codex provider 切换为 %@";
-"accounts.notice.sync_failed_format" = "同步 opencode 失败：%@";
-"accounts.notice.sync_done" = "已同步 opencode 认证";
-"accounts.notice.pi_sync_failed_format" = "同步 pi 失败：%@";
-"accounts.notice.pi_sync_done" = "已同步 pi 认证";
+"accounts.notice.sync_failed_format" = "同步 OpenCode 失败：%@";
+"accounts.notice.sync_done" = "已同步 OpenCode 认证";
+"accounts.notice.pi_sync_failed_format" = "同步 Pi 失败：%@";
+"accounts.notice.pi_sync_done" = "已同步 Pi 认证";
 "accounts.notice.omp_sync_failed_format" = "同步 omp 失败：%@";
 "accounts.notice.omp_sync_done" = "已同步 omp 认证";
 "accounts.notice.editor_restart_failed_format" = "编辑器重启失败：%@";
@@ -396,7 +397,7 @@
 "error.cloudflared.create_log_dir_failed_format" = "创建 cloudflared 日志目录失败：%@";
 "error.cloudflared.create_log_file_failed" = "初始化 cloudflared 日志文件失败";
 
-"error.opencode.auth_path_not_found" = "未能定位 opencode 认证文件路径";
+"error.opencode.auth_path_not_found" = "未能定位 OpenCode 认证文件路径";
 "error.opencode.missing_tokens" = "auth.json 缺少 tokens";
 "error.opencode.missing_refresh_token" = "auth.json 缺少 refresh_token";
 

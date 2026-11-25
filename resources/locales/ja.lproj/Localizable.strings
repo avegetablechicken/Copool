@@ -69,9 +69,10 @@
 "tray.hidden" = "非表示";
 "settings.section.switch_behavior" = "切替動作";
 "settings.auto_smart_switch" = "自動スマート切替";
-"settings.sync_opencode_openai_auth" = "opencode 認証を同期";
-"settings.sync_pi_auth" = "pi 認証を同期";
+"settings.sync_opencode_openai_auth" = "OpenCode 認証を同期";
+"settings.sync_pi_auth" = "Pi 認証を同期";
 "settings.sync_omp_auth" = "omp 認証を同期";
+"settings.agent_sync.not_found" = "見つかりません";
 "settings.restart_editors_on_switch" = "切替時にエディタを再起動";
 "settings.editor_restart_target" = "再起動対象エディタ";
 "settings.section.capability_matrix" = "機能マトリクス";
@@ -164,10 +165,10 @@
 "accounts.notice.switch_done" = "アカウントを切り替えました";
 "accounts.notice.switch_done_fallback" = "アカウントを切り替えました（codex app コマンド経由）";
 "accounts.notice.provider_switched_format" = "Codex provider を %@ に切り替えました";
-"accounts.notice.sync_failed_format" = "opencode 同期に失敗: %@";
-"accounts.notice.sync_done" = "opencode 認証を同期しました";
-"accounts.notice.pi_sync_failed_format" = "pi 同期に失敗: %@";
-"accounts.notice.pi_sync_done" = "pi 認証を同期しました";
+"accounts.notice.sync_failed_format" = "OpenCode 同期に失敗: %@";
+"accounts.notice.sync_done" = "OpenCode 認証を同期しました";
+"accounts.notice.pi_sync_failed_format" = "Pi 同期に失敗: %@";
+"accounts.notice.pi_sync_done" = "Pi 認証を同期しました";
 "accounts.notice.omp_sync_failed_format" = "omp 同期に失敗: %@";
 "accounts.notice.omp_sync_done" = "omp 認証を同期しました";
 "accounts.notice.editor_restart_failed_format" = "エディタ再起動に失敗: %@";
@@ -373,7 +374,7 @@
 "error.cloudflared.api_request_failed_format" = "Cloudflare API リクエスト失敗（%@）: %@";
 "error.cloudflared.create_log_dir_failed_format" = "cloudflared ログディレクトリ作成に失敗: %@";
 "error.cloudflared.create_log_file_failed" = "cloudflared ログファイル初期化に失敗";
-"error.opencode.auth_path_not_found" = "opencode の認証ファイルパスを特定できません";
+"error.opencode.auth_path_not_found" = "OpenCode の認証ファイルパスを特定できません";
 "error.opencode.missing_tokens" = "auth.json に tokens がありません";
 "error.opencode.missing_refresh_token" = "auth.json に refresh_token がありません";
 "error.remote.label_empty" = "リモートサーバー名は空にできません";

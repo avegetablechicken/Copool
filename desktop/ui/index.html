@@ -497,36 +497,75 @@
                   class="switch"
                   data-preference="autoSwitch"
               /></label>
-              <label class="row"
-                ><span
-                  class="row-label"
-                  data-l10n="settings.sync_opencode_openai_auth"
-                ></span
-                ><input
-                  type="checkbox"
-                  class="switch"
-                  data-preference="syncOpencodeOpenaiAuth"
-              /></label>
-              <label class="row"
-                ><span
-                  class="row-label"
-                  data-l10n="settings.sync_pi_auth"
-                ></span
-                ><input
-                  type="checkbox"
-                  class="switch"
-                  data-preference="syncPiAuth"
-              /></label>
-              <label class="row"
-                ><span
-                  class="row-label"
-                  data-l10n="settings.sync_omp_auth"
-                ></span
-                ><input
-                  type="checkbox"
-                  class="switch"
-                  data-preference="syncOmpAuth"
-              /></label>
+              <div class="agent-sync" data-agent="opencode">
+                <div class="row agent-sync-head">
+                  <button
+                    type="button"
+                    class="agent-sync-toggle"
+                    aria-expanded="false"
+                    aria-controls="agent-sync-opencode"
+                  >
+                    <span class="row-label" data-l10n="settings.sync_opencode_openai_auth"></span
+                    ><span data-icon="chevron-down"></span>
+                  </button>
+                  <input
+                    type="checkbox"
+                    class="switch"
+                    data-preference="syncOpencodeOpenaiAuth"
+                    data-title="settings.sync_opencode_openai_auth"
+                  />
+                </div>
+                <div id="agent-sync-opencode" class="agent-sync-body" hidden>
+                  <span class="agent-sync-target"></span>
+                  <div class="agent-sync-pools" role="group" data-title="settings.sync_opencode_openai_auth"></div>
+                </div>
+              </div>
+              <div class="agent-sync" data-agent="pi">
+                <div class="row agent-sync-head">
+                  <button
+                    type="button"
+                    class="agent-sync-toggle"
+                    aria-expanded="false"
+                    aria-controls="agent-sync-pi"
+                  >
+                    <span class="row-label" data-l10n="settings.sync_pi_auth"></span
+                    ><span data-icon="chevron-down"></span>
+                  </button>
+                  <input
+                    type="checkbox"
+                    class="switch"
+                    data-preference="syncPiAuth"
+                    data-title="settings.sync_pi_auth"
+                  />
+                </div>
+                <div id="agent-sync-pi" class="agent-sync-body" hidden>
+                  <span class="agent-sync-target"></span>
+                  <div class="agent-sync-pools" role="group" data-title="settings.sync_pi_auth"></div>
+                </div>
+              </div>
+              <div class="agent-sync" data-agent="omp">
+                <div class="row agent-sync-head">
+                  <button
+                    type="button"
+                    class="agent-sync-toggle"
+                    aria-expanded="false"
+                    aria-controls="agent-sync-omp"
+                  >
+                    <span class="row-label" data-l10n="settings.sync_omp_auth"></span
+                    ><span data-icon="chevron-down"></span>
+                  </button>
+                  <input
+                    type="checkbox"
+                    class="switch"
+                    data-preference="syncOmpAuth"
+                    data-title="settings.sync_omp_auth"
+                  />
+                </div>
+                <div id="agent-sync-omp" class="agent-sync-body" hidden>
+                  <span class="agent-sync-target"></span>
+                  <div class="agent-sync-pools" role="group" data-title="settings.sync_omp_auth"></div>
+                </div>
+              </div>
               <label class="row"
                 ><span
                   class="row-label"

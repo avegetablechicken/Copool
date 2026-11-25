@@ -107,6 +107,27 @@ impl SyncAgent {
         }
     }
 
+    const ALL: [Self; 3] = [Self::Opencode, Self::Pi, Self::Omp];
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Opencode => "opencode",
+            Self::Pi => "pi",
+            Self::Omp => "omp",
+        }
+    }
+
+    /// Whether a switch in the pool syncs to this agent: its sync is on, it
+    /// has a provider for the pool, and the pool is among those chosen.
+    fn enabled(self, p: &Preferences, pool: Pool) -> bool {
+        let (on, pools) = match self {
+            Self::Opencode => (p.sync_opencode_openai_auth, &p.sync_pools.opencode),
+            Self::Pi => (p.sync_pi_auth, &p.sync_pools.pi),
+            Self::Omp => (p.sync_omp_auth, &p.sync_pools.omp),
+        };
+        on && self.provider_key(pool).is_some() && pools.includes(pool)
+    }
+
     fn sync_credential(
         self,
         pool: Pool,
@@ -1559,6 +1580,56 @@ pub fn editors() -> Vec<Editor> {
     })
     .collect()
 }
+/// A third-party agent as the settings show it: the pools it can receive
+/// and where their logins are written.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncAgentInfo {
+    pub id: &'static str,
+    pub pools: Vec<Pool>,
+    /// The file written, `~`-abbreviated: OpenCode's storage follows its
+    /// installed version. None when it cannot be located.
+    pub target: Option<String>,
+    /// Whether that file already exists.
+    pub found: bool,
+}
+
+fn abbreviated(path: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| path.strip_prefix(home).ok()) {
+        Some(rest) => Path::new("~").join(rest).to_string_lossy().into_owned(),
+        None => path.to_string_lossy().into_owned(),
+    }
+}
+
+pub async fn sync_agents() -> Vec<SyncAgentInfo> {
+    let home = dirs::home_dir();
+    let mut agents = Vec::new();
+    for agent in SyncAgent::ALL {
+        let targets = match agent {
+            SyncAgent::Opencode => match opencode_target().await {
+                OpencodeTarget::Sqlite(path) => vec![path],
+                OpencodeTarget::Json(paths) => paths,
+            },
+            SyncAgent::Pi => pi_paths(),
+            SyncAgent::Omp => omp_paths(),
+        };
+        let target = targets
+            .iter()
+            .find(|path| path.exists())
+            .or_else(|| targets.first());
+        agents.push(SyncAgentInfo {
+            id: agent.id(),
+            pools: Pool::ALL
+                .into_iter()
+                .filter(|&pool| agent.provider_key(pool).is_some())
+                .collect(),
+            target: target.map(|path| abbreviated(path, home.as_deref())),
+            found: target.is_some_and(|path| path.exists()),
+        });
+    }
+    agents
+}
+
 fn record_sync(outcome: Result<(), String>, synced: &mut bool, sync_error: &mut Option<String>) {
     match outcome {
         Ok(()) => *synced = true,
@@ -1575,10 +1646,9 @@ pub async fn after_switch(
 ) -> Result<SwitchExecution, String> {
     let mut result = SwitchExecution::default();
     if let Some(auth) = auth {
-        let sync_opencode_enabled =
-            p.sync_opencode_openai_auth && SyncAgent::Opencode.provider_key(pool).is_some();
-        let sync_pi_enabled = p.sync_pi_auth && SyncAgent::Pi.provider_key(pool).is_some();
-        let sync_omp_enabled = p.sync_omp_auth && SyncAgent::Omp.provider_key(pool).is_some();
+        let sync_opencode_enabled = SyncAgent::Opencode.enabled(p, pool);
+        let sync_pi_enabled = SyncAgent::Pi.enabled(p, pool);
+        let sync_omp_enabled = SyncAgent::Omp.enabled(p, pool);
         if sync_opencode_enabled || sync_pi_enabled || sync_omp_enabled {
             let extracted = extract_oauth_credential(pool, auth);
             if sync_opencode_enabled {
@@ -1907,6 +1977,33 @@ mod tests {
                 .unwrap_err(),
             "Missing refresh token"
         );
+    }
+
+    #[test]
+    fn sync_agent_enabled_needs_switch_support_and_chosen_pool() {
+        let mut p = Preferences {
+            sync_opencode_openai_auth: true,
+            sync_pi_auth: true,
+            sync_omp_auth: false,
+            ..Default::default()
+        };
+        assert!(SyncAgent::Opencode.enabled(&p, Pool::Grok));
+        assert!(!SyncAgent::Opencode.enabled(&p, Pool::Antigravity));
+        assert!(!SyncAgent::Omp.enabled(&p, Pool::Codex));
+        p.sync_pools.opencode.grok = false;
+        assert!(!SyncAgent::Opencode.enabled(&p, Pool::Grok));
+        assert!(SyncAgent::Opencode.enabled(&p, Pool::Codex));
+        assert!(SyncAgent::Pi.enabled(&p, Pool::Grok));
+    }
+
+    #[test]
+    fn abbreviated_paths_start_from_home() {
+        let home = Path::new("/Users/someone");
+        assert_eq!(
+            abbreviated(&home.join(".pi/agent/auth.json"), Some(home)),
+            Path::new("~").join(".pi/agent/auth.json").to_string_lossy()
+        );
+        assert_eq!(abbreviated(Path::new("/tmp/a.db"), Some(home)), "/tmp/a.db");
     }
 
     #[tokio::test]

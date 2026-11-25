@@ -318,6 +318,11 @@ async fn refresh_provider(
 fn installed_editors() -> Vec<copool_core::platform::Editor> {
     copool_core::platform::editors()
 }
+/// The third-party agents a switch can sync to, with where each writes.
+#[tauri::command]
+async fn sync_agents() -> Vec<copool_core::platform::SyncAgentInfo> {
+    copool_core::platform::sync_agents().await
+}
 #[derive(Default)]
 struct LoginState(tokio::sync::Mutex<Option<Arc<copool_core::login::Login>>>);
 /// A browser sign-in to the pool; finish_login and cancel_login complete it.
@@ -764,6 +769,7 @@ fn main() {
             remove_provider,
             refresh_provider,
             installed_editors,
+            sync_agents,
             begin_login,
             finish_login,
             cancel_login,

@@ -69,6 +69,9 @@ pub struct Preferences {
     pub sync_opencode_openai_auth: bool,
     pub sync_pi_auth: bool,
     pub sync_omp_auth: bool,
+    /// The pools each third-party agent receives the switched-to login of,
+    /// while its sync is on.
+    pub sync_pools: SyncPools,
     pub host_api_only: bool,
     pub restart_editors_on_switch: bool,
     pub restart_editor_targets: Vec<String>,
@@ -95,6 +98,43 @@ pub struct AccountOrder {
     pub antigravity: Vec<String>,
     pub grok: Vec<String>,
 }
+/// Each third-party agent's pool selection.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SyncPools {
+    pub opencode: PoolSelection,
+    pub pi: PoolSelection,
+    pub omp: PoolSelection,
+}
+/// Pools chosen for one agent; a pool missing from the saved value is chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PoolSelection {
+    pub codex: bool,
+    pub claude: bool,
+    pub antigravity: bool,
+    pub grok: bool,
+}
+impl Default for PoolSelection {
+    fn default() -> Self {
+        Self {
+            codex: true,
+            claude: true,
+            antigravity: true,
+            grok: true,
+        }
+    }
+}
+impl PoolSelection {
+    pub fn includes(&self, pool: Pool) -> bool {
+        match pool {
+            Pool::Codex => self.codex,
+            Pool::Claude => self.claude,
+            Pool::Antigravity => self.antigravity,
+            Pool::Grok => self.grok,
+        }
+    }
+}
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -113,6 +153,7 @@ impl Default for Preferences {
             sync_opencode_openai_auth: false,
             sync_pi_auth: false,
             sync_omp_auth: false,
+            sync_pools: SyncPools::default(),
             host_api_only: false,
             restart_editors_on_switch: false,
             restart_editor_targets: vec![],
@@ -217,6 +258,12 @@ impl Preferences {
                 .or_else(|| settings.extra.get("syncOmpOpenaiAuth"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            // A selection this build cannot read keeps every pool chosen.
+            sync_pools: settings
+                .extra
+                .get("syncPools")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
             host_api_only: settings.local_proxy_host_api_only,
             restart_editors_on_switch: settings.restart_editors_on_switch,
             restart_editor_targets: settings.restart_editor_targets,
@@ -566,6 +613,10 @@ impl Application {
         s.extra.remove("syncOmpOpenaiAuth");
         s.extra.insert("syncPiAuth".into(), p.sync_pi_auth.into());
         s.extra.insert("syncOmpAuth".into(), p.sync_omp_auth.into());
+        s.extra.insert(
+            "syncPools".into(),
+            serde_json::to_value(&p.sync_pools).unwrap_or_default(),
+        );
         s.extra.insert(
             "antigravityAutoStartProxy".into(),
             p.antigravity_auto_start_proxy.into(),
@@ -2116,5 +2167,45 @@ mod tests {
         let reloaded = app.preferences().unwrap();
         assert!(reloaded.sync_pi_auth);
         assert!(reloaded.sync_omp_auth);
+    }
+
+    #[tokio::test]
+    async fn sync_pools_default_to_every_pool_and_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = Application::open(Paths {
+            data_dir: dir.path().join("data"),
+            codex_auth: dir.path().join("codex/auth.json"),
+        })
+        .unwrap();
+        let initial = app.preferences().unwrap();
+        for pool in Pool::ALL {
+            assert!(initial.sync_pools.opencode.includes(pool));
+            assert!(initial.sync_pools.pi.includes(pool));
+            assert!(initial.sync_pools.omp.includes(pool));
+        }
+
+        let mut updated = initial.clone();
+        updated.sync_pools.omp.claude = false;
+        updated.sync_pools.opencode.grok = false;
+        app.save_preferences(updated).await.unwrap();
+
+        let reloaded = app.preferences().unwrap();
+        assert!(!reloaded.sync_pools.omp.includes(Pool::Claude));
+        assert!(reloaded.sync_pools.omp.includes(Pool::Codex));
+        assert!(!reloaded.sync_pools.opencode.includes(Pool::Grok));
+        assert!(reloaded.sync_pools.pi.includes(Pool::Grok));
+    }
+
+    #[test]
+    fn sync_pools_tolerate_partial_and_unreadable_values() {
+        let partial: SyncPools = serde_json::from_value(json!({"pi": {"codex": false}})).unwrap();
+        assert!(!partial.pi.codex);
+        assert!(partial.pi.grok && partial.omp.claude);
+        let mut settings: crate::settings::Settings = Default::default();
+        settings
+            .extra
+            .insert("syncPools".into(), json!("not a selection"));
+        let preferences = Preferences::from_settings(settings).unwrap();
+        assert_eq!(preferences.sync_pools, SyncPools::default());
     }
 }

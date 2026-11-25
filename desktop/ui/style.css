@@ -641,6 +641,98 @@ main > section.page-leaving {
   white-space: normal;
 }
 
+/* ------------------------------------------------- third-party agents */
+
+/* A Switch Behavior row per agent, with a disclosure that shows the file it
+   writes and a chip per pool. */
+.agent-sync-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 24px;
+  text-align: left;
+}
+
+.agent-sync-toggle > .row-label {
+  flex: 0 1 auto;
+}
+
+.agent-sync-toggle .icon {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-left: auto;
+  color: var(--tertiary);
+  transition: transform 0.12s;
+}
+
+.agent-sync-toggle[aria-expanded="false"] .icon {
+  transform: rotate(-90deg);
+}
+
+.agent-sync-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 0 6px;
+}
+
+.agent-sync-body[hidden] {
+  display: none;
+}
+
+.agent-sync-target {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--tertiary);
+  font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.agent-sync-pools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-sync-pool {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px 0 5px;
+  border-radius: 5px;
+  color: var(--tertiary);
+  font-size: 10.5px;
+}
+
+.agent-sync-pool .provider-brand {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  opacity: 0.4;
+  filter: grayscale(1);
+}
+
+.agent-sync-pool:hover {
+  color: var(--secondary);
+}
+
+.agent-sync-pool[aria-pressed="true"] {
+  color: var(--label);
+  background: var(--track);
+}
+
+.agent-sync-pool[aria-pressed="true"] .provider-brand {
+  opacity: 1;
+  filter: none;
+}
+
 /* A field's title above it, with any trailing button on the same line. */
 .subhead {
   display: flex;

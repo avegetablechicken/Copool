@@ -69,9 +69,10 @@
 "tray.hidden" = "숨김";
 "settings.section.switch_behavior" = "전환 동작";
 "settings.auto_smart_switch" = "자동 스마트 전환";
-"settings.sync_opencode_openai_auth" = "opencode 인증 동기화";
-"settings.sync_pi_auth" = "pi 인증 동기화";
+"settings.sync_opencode_openai_auth" = "OpenCode 인증 동기화";
+"settings.sync_pi_auth" = "Pi 인증 동기화";
 "settings.sync_omp_auth" = "omp 인증 동기화";
+"settings.agent_sync.not_found" = "찾을 수 없음";
 "settings.restart_editors_on_switch" = "전환 시 편집기 재시작";
 "settings.editor_restart_target" = "편집기 재시작 대상";
 "settings.section.capability_matrix" = "기능 매트릭스";
@@ -164,10 +165,10 @@
 "accounts.notice.switch_done" = "계정을 전환했습니다";
 "accounts.notice.switch_done_fallback" = "계정을 전환했습니다(codex app 명령 사용)";
 "accounts.notice.provider_switched_format" = "Codex provider를 %@로 전환했습니다";
-"accounts.notice.sync_failed_format" = "opencode 동기화 실패: %@";
-"accounts.notice.sync_done" = "opencode 인증 동기화 완료";
-"accounts.notice.pi_sync_failed_format" = "pi 동기화 실패: %@";
-"accounts.notice.pi_sync_done" = "pi 인증 동기화 완료";
+"accounts.notice.sync_failed_format" = "OpenCode 동기화 실패: %@";
+"accounts.notice.sync_done" = "OpenCode 인증 동기화 완료";
+"accounts.notice.pi_sync_failed_format" = "Pi 동기화 실패: %@";
+"accounts.notice.pi_sync_done" = "Pi 인증 동기화 완료";
 "accounts.notice.omp_sync_failed_format" = "omp 동기화 실패: %@";
 "accounts.notice.omp_sync_done" = "omp 인증 동기화 완료";
 "accounts.notice.editor_restart_failed_format" = "편집기 재시작 실패: %@";
@@ -373,7 +374,7 @@
 "error.cloudflared.api_request_failed_format" = "Cloudflare API 요청 실패(%@): %@";
 "error.cloudflared.create_log_dir_failed_format" = "cloudflared 로그 디렉터리 생성 실패: %@";
 "error.cloudflared.create_log_file_failed" = "cloudflared 로그 파일 초기화 실패";
-"error.opencode.auth_path_not_found" = "opencode 인증 파일 경로를 찾을 수 없습니다";
+"error.opencode.auth_path_not_found" = "OpenCode 인증 파일 경로를 찾을 수 없습니다";
 "error.opencode.missing_tokens" = "auth.json에 tokens가 없습니다";
 "error.opencode.missing_refresh_token" = "auth.json에 refresh_token이 없습니다";
 "error.remote.label_empty" = "원격 서버 이름은 비워둘 수 없습니다";

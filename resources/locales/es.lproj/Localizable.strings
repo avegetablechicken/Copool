@@ -69,9 +69,10 @@
 "tray.hidden" = "Oculto";
 "settings.section.switch_behavior" = "Comportamiento de cambio";
 "settings.auto_smart_switch" = "Cambio inteligente automático";
-"settings.sync_opencode_openai_auth" = "Sincronizar auth de opencode";
-"settings.sync_pi_auth" = "Sincronizar auth de pi";
+"settings.sync_opencode_openai_auth" = "Sincronizar auth de OpenCode";
+"settings.sync_pi_auth" = "Sincronizar auth de Pi";
 "settings.sync_omp_auth" = "Sincronizar auth de omp";
+"settings.agent_sync.not_found" = "No encontrado";
 "settings.restart_editors_on_switch" = "Reiniciar editores al cambiar";
 "settings.editor_restart_target" = "Editor a reiniciar";
 "settings.section.capability_matrix" = "Matriz de capacidades";
@@ -164,10 +165,10 @@
 "accounts.notice.switch_done" = "Cuenta cambiada";
 "accounts.notice.switch_done_fallback" = "Cuenta cambiada (mediante comando codex app)";
 "accounts.notice.provider_switched_format" = "Proveedor de Codex cambiado a %@";
-"accounts.notice.sync_failed_format" = "Falló la sincronización de Opencode: %@";
-"accounts.notice.sync_done" = "Auth de Opencode sincronizada";
-"accounts.notice.pi_sync_failed_format" = "Falló la sincronización de pi: %@";
-"accounts.notice.pi_sync_done" = "Auth de pi sincronizada";
+"accounts.notice.sync_failed_format" = "Falló la sincronización de OpenCode: %@";
+"accounts.notice.sync_done" = "Auth de OpenCode sincronizada";
+"accounts.notice.pi_sync_failed_format" = "Falló la sincronización de Pi: %@";
+"accounts.notice.pi_sync_done" = "Auth de Pi sincronizada";
 "accounts.notice.omp_sync_failed_format" = "Falló la sincronización de omp: %@";
 "accounts.notice.omp_sync_done" = "Auth de omp sincronizada";
 "accounts.notice.editor_restart_failed_format" = "Falló el reinicio del editor: %@";
@@ -370,7 +371,7 @@
 "error.cloudflared.api_request_failed_format" = "%@: %@";
 "error.cloudflared.create_log_dir_failed_format" = "No se pudo crear el directorio de logs de cloudflared: %@";
 "error.cloudflared.create_log_file_failed" = "No se pudo inicializar el archivo de log de cloudflared";
-"error.opencode.auth_path_not_found" = "Unable to locate opencode auth file path";
+"error.opencode.auth_path_not_found" = "Unable to locate OpenCode auth file path";
 "error.opencode.missing_tokens" = "auth.json missing tokens";
 "error.opencode.missing_refresh_token" = "auth.json missing refresh_token";
 "error.remote.label_empty" = "El nombre del servidor remoto no puede estar vacío";
