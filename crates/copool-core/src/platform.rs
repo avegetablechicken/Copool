@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 pub fn executable(name: &str) -> Option<PathBuf> {
@@ -61,6 +61,15 @@ const OPENAI_CODEX_PROVIDER: &str = "openai-codex";
 const ANTHROPIC_PROVIDER: &str = "anthropic";
 const ANTIGRAVITY_CLI_PROVIDER: &str = "antigravity-cli";
 const OMP_REPLACED_CAUSE: &str = "replaced by newer credential";
+const OPENCODE_OPENAI_BROWSER_METHOD: &str = "chatgpt-browser";
+const OPENCODE_OPENAI_HEADLESS_METHOD: &str = "chatgpt-headless";
+const OPENCODE_XAI_DEVICE_METHOD: &str = "device";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OpencodeTarget {
+    Json(Vec<PathBuf>),
+    Sqlite(PathBuf),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OAuthCredential {
@@ -109,15 +118,7 @@ impl SyncAgent {
             .ok_or_else(|| format!("Unsupported sync target: {self:?} for {pool:?}"))?;
         let include_account_id = pool == Pool::Codex;
         match self {
-            Self::Opencode => sync_oauth_json(
-                credential,
-                targets,
-                provider_key,
-                "",
-                "Invalid OpenCode auth document",
-                false,
-                include_account_id,
-            ),
+            Self::Opencode => sync_opencode_paths(pool, credential, provider_key, targets),
             Self::Pi => sync_oauth_json(
                 credential,
                 targets,
@@ -146,6 +147,24 @@ fn non_empty_trimmed(value: Option<&str>) -> Option<String> {
 
 fn default_expires_ms() -> i64 {
     now_unix_seconds().saturating_mul(1000) + 55 * 60 * 1000
+}
+
+fn now_unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_else(|_| now_unix_seconds().saturating_mul(1000))
+}
+
+fn is_sqlite_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "db" | "sqlite" | "sqlite3"
+            )
+        })
 }
 
 fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCredential, String> {
@@ -305,6 +324,47 @@ where
         Ok(())
     }
 }
+fn sync_oauth_json_one(
+    credential: &OAuthCredential,
+    path: &Path,
+    provider_key: &str,
+    invalid_doc_error: &str,
+    replace_entry: bool,
+    include_account_id: bool,
+) -> Result<(), String> {
+    let mut root: Value = if path.exists() {
+        let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let content = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+        serde_json::from_str(content).map_err(|e| e.to_string())?
+    } else {
+        json!({})
+    };
+    let Some(root_obj) = root.as_object_mut() else {
+        return Err(invalid_doc_error.into());
+    };
+    let mut entry = if replace_entry {
+        serde_json::Map::new()
+    } else {
+        root_obj
+            .get(provider_key)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default()
+    };
+    entry.insert("type".into(), json!("oauth"));
+    entry.remove("key");
+    entry.insert("access".into(), credential.access.clone().into());
+    entry.insert("refresh".into(), credential.refresh.clone().into());
+    entry.insert("expires".into(), credential.expires_ms.into());
+    if include_account_id {
+        if let Some(id) = &credential.account_id {
+            entry.insert("accountId".into(), id.clone().into());
+        }
+    }
+    root_obj.insert(provider_key.into(), Value::Object(entry));
+    write_json(path, &root)
+}
+
 fn sync_oauth_json(
     credential: &OAuthCredential,
     targets: &[PathBuf],
@@ -315,37 +375,363 @@ fn sync_oauth_json(
     include_account_id: bool,
 ) -> Result<(), String> {
     sync_targets(targets, empty_error, |path| {
-        let mut root: Value = if path.exists() {
-            let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-            let content = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
-            serde_json::from_str(content).map_err(|e| e.to_string())?
+        sync_oauth_json_one(
+            credential,
+            path,
+            provider_key,
+            invalid_doc_error,
+            replace_entry,
+            include_account_id,
+        )
+    })
+}
+
+fn opencode_credential_id(now_ms: i64) -> String {
+    const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let value = ((now_ms.max(0) as u64) << 12).saturating_add(1);
+    let mut id = format!("cred_{:012x}", value & 0xffff_ffff_ffff);
+    for byte in uuid::Uuid::new_v4().as_bytes().iter().take(14) {
+        id.push(BASE62[(*byte as usize) % BASE62.len()] as char);
+    }
+    id
+}
+
+fn opencode_default_method_id(pool: Pool, existing_method: Option<&str>) -> &'static str {
+    match pool {
+        Pool::Codex => match existing_method {
+            Some(OPENCODE_OPENAI_HEADLESS_METHOD) => OPENCODE_OPENAI_HEADLESS_METHOD,
+            _ => OPENCODE_OPENAI_BROWSER_METHOD,
+        },
+        Pool::Grok => OPENCODE_XAI_DEVICE_METHOD,
+        Pool::Claude | Pool::Antigravity => "oauth",
+    }
+}
+
+fn opencode_oauth_value(
+    pool: Pool,
+    credential: &OAuthCredential,
+    existing: Option<&Value>,
+) -> Value {
+    let existing_method = existing
+        .and_then(|v| v.get("methodID"))
+        .and_then(Value::as_str);
+    let method_id = opencode_default_method_id(pool, existing_method);
+    let mut metadata = existing
+        .and_then(|v| v.get("metadata"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if pool == Pool::Codex {
+        if let Some(account_id) = &credential.account_id {
+            metadata.insert("accountID".into(), account_id.clone().into());
         } else {
-            json!({})
-        };
-        let Some(root_obj) = root.as_object_mut() else {
-            return Err(invalid_doc_error.into());
-        };
-        let mut entry = if replace_entry {
-            serde_json::Map::new()
-        } else {
-            root_obj
-                .get(provider_key)
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default()
-        };
-        entry.insert("type".into(), json!("oauth"));
-        entry.remove("key");
-        entry.insert("access".into(), credential.access.clone().into());
-        entry.insert("refresh".into(), credential.refresh.clone().into());
-        entry.insert("expires".into(), credential.expires_ms.into());
-        if include_account_id {
-            if let Some(id) = &credential.account_id {
-                entry.insert("accountId".into(), id.clone().into());
-            }
+            metadata.remove("accountID");
         }
-        root_obj.insert(provider_key.into(), Value::Object(entry));
-        write_json(path, &root)
+    }
+    let mut value = serde_json::Map::new();
+    value.insert("type".into(), json!("oauth"));
+    value.insert("methodID".into(), method_id.into());
+    value.insert("refresh".into(), credential.refresh.clone().into());
+    value.insert("access".into(), credential.access.clone().into());
+    value.insert("expires".into(), credential.expires_ms.max(0).into());
+    if !metadata.is_empty() {
+        value.insert("metadata".into(), Value::Object(metadata));
+    }
+    Value::Object(value)
+}
+
+fn opencode_row_email(pool: Pool, label: &str, value: &Value) -> Option<String> {
+    let from_token = value
+        .get("access")
+        .and_then(Value::as_str)
+        .and_then(|access| match pool {
+            Pool::Codex => {
+                let claims = auth::decode_jwt_payload(access).ok()?;
+                auth::jwt_openai_email(&claims)
+            }
+            Pool::Grok => non_empty_trimmed(
+                crate::grok::login::claims(access)
+                    .get("email")
+                    .and_then(Value::as_str),
+            )
+            .filter(|email| email.contains('@')),
+            Pool::Claude | Pool::Antigravity => None,
+        });
+    from_token
+        .or_else(|| non_empty_trimmed(Some(label)).filter(|email| email.contains('@')))
+        .map(|email| email.to_ascii_lowercase())
+}
+
+fn opencode_row_account_id(pool: Pool, value: &Value) -> Option<String> {
+    non_empty_trimmed(
+        value
+            .get("metadata")
+            .and_then(|m| m.get("accountID"))
+            .and_then(Value::as_str),
+    )
+    .or_else(|| {
+        let access = value.get("access").and_then(Value::as_str)?;
+        match pool {
+            Pool::Codex => {
+                let claims = auth::decode_jwt_payload(access).ok()?;
+                auth::jwt_chatgpt_account_id(&claims)
+            }
+            Pool::Grok => non_empty_trimmed(
+                crate::grok::login::claims(access)
+                    .get("sub")
+                    .and_then(Value::as_str),
+            ),
+            Pool::Claude | Pool::Antigravity => None,
+        }
+    })
+}
+
+fn opencode_db_matches_row(
+    pool: Pool,
+    label: &str,
+    existing: &Value,
+    incoming: &OAuthCredential,
+) -> bool {
+    if existing.get("type").and_then(Value::as_str) != Some("oauth") {
+        return false;
+    }
+    if existing.get("refresh").and_then(Value::as_str) == Some(incoming.refresh.as_str())
+        || existing.get("access").and_then(Value::as_str) == Some(incoming.access.as_str())
+    {
+        return true;
+    }
+    let existing_account = opencode_row_account_id(pool, existing);
+    let existing_email = opencode_row_email(pool, label, existing);
+    match pool {
+        Pool::Codex => {
+            if let (Some(incoming_id), Some(existing_id)) =
+                (incoming.account_id.as_deref(), existing_account.as_deref())
+            {
+                if incoming_id != existing_id {
+                    return false;
+                }
+                // Team workspace members share accountID; distinct emails stay separate rows.
+                return match (incoming.email.as_deref(), existing_email.as_deref()) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => true,
+                };
+            }
+            incoming.account_id.is_none()
+                && existing_account.is_none()
+                && incoming.email.is_some()
+                && incoming.email == existing_email
+        }
+        Pool::Grok => {
+            if let (Some(incoming_id), Some(existing_id)) =
+                (incoming.account_id.as_deref(), existing_account.as_deref())
+            {
+                return incoming_id == existing_id;
+            }
+            incoming.email.is_some() && incoming.email == existing_email
+        }
+        Pool::Claude | Pool::Antigravity => false,
+    }
+}
+
+fn opencode_db_has_credential_table(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(conn) = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return false;
+    };
+    let _ = conn.busy_timeout(Duration::from_millis(1000));
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'credential'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some()
+}
+
+fn sync_opencode_db_one(
+    pool: Pool,
+    credential: &OAuthCredential,
+    integration_id: &str,
+    path: &Path,
+) -> Result<(), String> {
+    // OpenCode 2's initial credential migration uses CREATE TABLE without IF NOT EXISTS,
+    // so never pre-create an unmigrated opencode.db file here.
+    if !path.is_file() {
+        return Err(
+            "OpenCode database not found; launch OpenCode once to initialize opencode.db".into(),
+        );
+    }
+    let mut conn = Connection::open(path).map_err(|e| e.to_string())?;
+    conn.busy_timeout(Duration::from_millis(5000))
+        .map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+        .map_err(|e| e.to_string())?;
+
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'credential'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .is_some();
+    if !table_exists {
+        return Err(
+            "OpenCode database is missing the credential table; launch OpenCode once first".into(),
+        );
+    }
+
+    let columns: HashSet<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(credential)")
+            .map_err(|e| e.to_string())?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<HashSet<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        names
+    };
+    if ![
+        "id",
+        "integration_id",
+        "label",
+        "value",
+        "active",
+        "time_created",
+        "time_updated",
+    ]
+    .into_iter()
+    .all(|col| columns.contains(col))
+    {
+        return Err("Invalid OpenCode credential table".into());
+    }
+
+    let now_ms = now_unix_millis();
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+
+    let existing_rows: Vec<(String, String, String, Option<i64>)> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id, label, value, active FROM credential WHERE integration_id = ?1 ORDER BY active DESC, time_created DESC, id DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![integration_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+
+    let matched = existing_rows
+        .iter()
+        .find_map(|(id, label, raw_value, active)| {
+            let parsed = serde_json::from_str::<Value>(raw_value).ok()?;
+            opencode_db_matches_row(pool, label, &parsed, credential).then_some((
+                id.as_str(),
+                parsed,
+                *active,
+            ))
+        });
+
+    if let Some((target_id, existing_value, active)) = matched {
+        let next_value = opencode_oauth_value(pool, credential, Some(&existing_value));
+        let other_active = existing_rows
+            .iter()
+            .any(|(id, _, _, row_active)| id != target_id && row_active.unwrap_or(1) != 0);
+        if active == Some(1) && !other_active && next_value == existing_value {
+            return Ok(());
+        }
+        let next_json = serde_json::to_string(&next_value).map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE credential SET active = 0 WHERE integration_id = ?1 AND id != ?2 AND COALESCE(active, 1) != 0",
+            params![integration_id, target_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE credential SET value = ?1, active = 1, time_updated = ?2 WHERE id = ?3",
+            params![&next_json, now_ms, target_id],
+        )
+        .map_err(|e| e.to_string())?;
+    } else {
+        let next_value = opencode_oauth_value(pool, credential, None);
+        let next_json = serde_json::to_string(&next_value).map_err(|e| e.to_string())?;
+        let id = opencode_credential_id(now_ms);
+        let label = credential.email.as_deref().unwrap_or("OAuth");
+        tx.execute(
+            "UPDATE credential SET active = 0 WHERE integration_id = ?1 AND COALESCE(active, 1) != 0",
+            params![integration_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)",
+            params![&id, integration_id, label, &next_json, now_ms],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().map_err(|e| e.to_string())
+}
+
+fn sync_opencode_target(
+    pool: Pool,
+    credential: &OAuthCredential,
+    target: &OpencodeTarget,
+) -> Result<(), String> {
+    let provider_key = SyncAgent::Opencode
+        .provider_key(pool)
+        .ok_or_else(|| format!("Unsupported sync target: Opencode for {pool:?}"))?;
+    match target {
+        OpencodeTarget::Json(paths) => sync_oauth_json(
+            credential,
+            paths,
+            provider_key,
+            "",
+            "Invalid OpenCode auth document",
+            false,
+            pool == Pool::Codex,
+        ),
+        OpencodeTarget::Sqlite(path) => sync_opencode_db_one(pool, credential, provider_key, path),
+    }
+}
+
+fn sync_opencode_paths(
+    pool: Pool,
+    credential: &OAuthCredential,
+    provider_key: &str,
+    targets: &[PathBuf],
+) -> Result<(), String> {
+    sync_targets(targets, "", |path| {
+        if is_sqlite_path(path) {
+            sync_opencode_db_one(pool, credential, provider_key, path)
+        } else {
+            sync_oauth_json_one(
+                credential,
+                path,
+                provider_key,
+                "Invalid OpenCode auth document",
+                false,
+                pool == Pool::Codex,
+            )
+        }
     })
 }
 
@@ -947,6 +1333,141 @@ fn sync_omp_credential(
 pub fn sync_omp(auth_json: &Value, targets: &[PathBuf]) -> Result<(), String> {
     SyncAgent::Omp.sync_raw(Pool::Codex, auth_json, targets)
 }
+fn opencode_data_dir(home: Option<&Path>, xdg_data_home: Option<&str>) -> Option<PathBuf> {
+    if let Some(xdg) = non_empty_trimmed(xdg_data_home) {
+        return Some(expand_tilde(&xdg, home).join("opencode"));
+    }
+    home.map(|h| h.join(".local/share/opencode"))
+}
+
+fn opencode_db_path_from(
+    home: Option<&Path>,
+    opencode_db: Option<&str>,
+    xdg_data_home: Option<&str>,
+) -> Option<PathBuf> {
+    let data_dir = opencode_data_dir(home, xdg_data_home);
+    if let Some(raw) = non_empty_trimmed(opencode_db).filter(|v| v != ":memory:") {
+        let path = expand_tilde(&raw, home);
+        return if path.is_absolute() {
+            Some(path)
+        } else {
+            data_dir.map(|dir| dir.join(path))
+        };
+    }
+    data_dir.map(|dir| dir.join("opencode.db"))
+}
+
+fn parse_opencode_major_version(output: &str) -> Option<u32> {
+    for token in output.split(|c: char| c.is_whitespace() || matches!(c, '/' | ',' | '(' | ')')) {
+        let trimmed = token.trim().trim_start_matches(['v', 'V']);
+        let Some((major, rest)) = trimmed.split_once('.') else {
+            continue;
+        };
+        if major.is_empty() || !major.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let minor = rest.split(['.', '-', '+']).next().unwrap_or("");
+        if minor.is_empty() || !minor.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        if let Ok(parsed) = major.parse::<u32>() {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn opencode_executable() -> Option<PathBuf> {
+    executable("opencode").or_else(|| {
+        let name = if cfg!(windows) {
+            "opencode.exe"
+        } else {
+            "opencode"
+        };
+        let candidate = dirs::home_dir()?.join(".opencode/bin").join(name);
+        candidate.is_file().then_some(candidate)
+    })
+}
+
+async fn detect_opencode_major_version() -> Option<u32> {
+    let bin = opencode_executable()?;
+    let output = checked(&bin.to_string_lossy(), &["--version"], 3)
+        .await
+        .ok()?;
+    parse_opencode_major_version(&output)
+}
+
+fn resolve_opencode_target(
+    installed_major: Option<u32>,
+    home: Option<&Path>,
+    opencode_auth_path: Option<&str>,
+    opencode_db: Option<&str>,
+    xdg_data_home: Option<&str>,
+    json_paths: Vec<PathBuf>,
+) -> OpencodeTarget {
+    if let Some(raw) = non_empty_trimmed(opencode_auth_path) {
+        let path = expand_tilde(&raw, home);
+        return if is_sqlite_path(&path) {
+            OpencodeTarget::Sqlite(path)
+        } else {
+            OpencodeTarget::Json(vec![path])
+        };
+    }
+    if non_empty_trimmed(opencode_db)
+        .filter(|v| v != ":memory:")
+        .is_some()
+    {
+        if let Some(db_path) = opencode_db_path_from(home, opencode_db, xdg_data_home) {
+            return OpencodeTarget::Sqlite(db_path);
+        }
+    }
+    let db_path = opencode_db_path_from(home, None, xdg_data_home);
+    match installed_major {
+        Some(major) if major >= 2 => {
+            if let Some(db_path) = db_path {
+                if db_path.exists() {
+                    return OpencodeTarget::Sqlite(db_path);
+                }
+                // Before OpenCode 2's first launch, write its legacy import source
+                // (`<data>/auth.json`) rather than pre-creating an unmigrated DB.
+                if let Some(data_dir) = db_path.parent() {
+                    return OpencodeTarget::Json(vec![data_dir.join("auth.json")]);
+                }
+            }
+            OpencodeTarget::Json(json_paths)
+        }
+        Some(_) => OpencodeTarget::Json(json_paths),
+        None => {
+            if let Some(db_path) = db_path.filter(|p| opencode_db_has_credential_table(p)) {
+                OpencodeTarget::Sqlite(db_path)
+            } else {
+                OpencodeTarget::Json(json_paths)
+            }
+        }
+    }
+}
+
+async fn opencode_target() -> OpencodeTarget {
+    let home = dirs::home_dir();
+    let auth_path = non_empty_env("OPENCODE_AUTH_PATH");
+    let db_env = non_empty_env("OPENCODE_DB");
+    let xdg_data_home = non_empty_env("XDG_DATA_HOME");
+    let installed_major =
+        if auth_path.is_some() || db_env.as_deref().is_some_and(|v| v != ":memory:") {
+            None
+        } else {
+            detect_opencode_major_version().await
+        };
+    resolve_opencode_target(
+        installed_major,
+        home.as_deref(),
+        auth_path.as_deref(),
+        db_env.as_deref(),
+        xdg_data_home.as_deref(),
+        opencode_paths(),
+    )
+}
+
 pub fn opencode_paths() -> Vec<PathBuf> {
     if let Some(p) = std::env::var_os("OPENCODE_AUTH_PATH").filter(|p| !p.is_empty()) {
         return vec![p.into()];
@@ -1061,9 +1582,23 @@ pub async fn after_switch(
         if sync_opencode_enabled || sync_pi_enabled || sync_omp_enabled {
             let extracted = extract_oauth_credential(pool, auth);
             if sync_opencode_enabled {
-                let outcome = extracted.as_ref().map_err(Clone::clone).and_then(|cred| {
-                    SyncAgent::Opencode.sync_credential(pool, cred, &opencode_paths())
-                });
+                let outcome = match extracted.as_ref() {
+                    Ok(cred) => match opencode_target().await {
+                        OpencodeTarget::Sqlite(db_path) => {
+                            let cred = cred.clone();
+                            tokio::task::spawn_blocking(move || {
+                                sync_opencode_target(pool, &cred, &OpencodeTarget::Sqlite(db_path))
+                            })
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|res| res)
+                        }
+                        target @ OpencodeTarget::Json(_) => {
+                            sync_opencode_target(pool, cred, &target)
+                        }
+                    },
+                    Err(error) => Err(error.clone()),
+                };
                 record_sync(
                     outcome,
                     &mut result.opencode_synced,
@@ -2200,5 +2735,354 @@ mod tests {
             identity_key.as_deref(),
             Some("email:id-profile@example.com|org:ws-priority")
         );
+    }
+
+    fn init_opencode_v2_db(path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE credential (
+                id TEXT PRIMARY KEY,
+                integration_id TEXT,
+                label TEXT NOT NULL,
+                value TEXT NOT NULL,
+                connector_id TEXT,
+                method_id TEXT,
+                active INTEGER,
+                time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+    }
+
+    fn opencode_db_rows(
+        db_path: &Path,
+        integration_id: &str,
+    ) -> Vec<(String, String, Value, Option<i64>, i64)> {
+        let conn = Connection::open(db_path).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, label, value, active, time_updated FROM credential WHERE integration_id = ?1 ORDER BY time_created ASC, id ASC",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map(params![integration_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    serde_json::from_str::<Value>(&r.get::<_, String>(2)?).unwrap(),
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows
+    }
+
+    #[test]
+    fn parse_opencode_major_version_handles_cli_formats() {
+        assert_eq!(parse_opencode_major_version("1.19.6\n"), Some(1));
+        assert_eq!(parse_opencode_major_version("2.4.1\n"), Some(2));
+        assert_eq!(parse_opencode_major_version("v2.0.0-beta.1"), Some(2));
+        assert_eq!(
+            parse_opencode_major_version("opencode 2.3.1 (abc)"),
+            Some(2)
+        );
+        assert_eq!(parse_opencode_major_version("opencode/1.2.3"), Some(1));
+        assert_eq!(parse_opencode_major_version(""), None);
+        assert_eq!(parse_opencode_major_version("unknown"), None);
+    }
+
+    #[test]
+    fn resolve_opencode_target_selects_storage_by_version_env_and_existing_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let xdg = dir.path().join("xdg");
+        let fallback_json = vec![home.join(".config/opencode/auth.json")];
+
+        // Explicit OPENCODE_AUTH_PATH picks SQLite or JSON by extension.
+        assert_eq!(
+            resolve_opencode_target(
+                Some(1),
+                Some(&home),
+                Some("~/custom/opencode.db"),
+                None,
+                None,
+                fallback_json.clone(),
+            ),
+            OpencodeTarget::Sqlite(home.join("custom/opencode.db"))
+        );
+        assert_eq!(
+            resolve_opencode_target(
+                Some(2),
+                Some(&home),
+                Some("~/custom/auth.json"),
+                None,
+                None,
+                fallback_json.clone(),
+            ),
+            OpencodeTarget::Json(vec![home.join("custom/auth.json")])
+        );
+
+        // Explicit OPENCODE_DB resolves relative to data dir and ignores `:memory:`.
+        assert_eq!(
+            resolve_opencode_target(
+                Some(1),
+                Some(&home),
+                None,
+                Some("opencode-beta.db"),
+                Some(&xdg.to_string_lossy()),
+                fallback_json.clone(),
+            ),
+            OpencodeTarget::Sqlite(xdg.join("opencode/opencode-beta.db"))
+        );
+        assert_eq!(
+            resolve_opencode_target(
+                Some(1),
+                Some(&home),
+                None,
+                Some(":memory:"),
+                None,
+                fallback_json.clone(),
+            ),
+            OpencodeTarget::Json(fallback_json.clone())
+        );
+
+        // OpenCode 1.x uses auth.json.
+        assert_eq!(
+            resolve_opencode_target(
+                Some(1),
+                Some(&home),
+                None,
+                None,
+                None,
+                fallback_json.clone(),
+            ),
+            OpencodeTarget::Json(fallback_json.clone())
+        );
+
+        // OpenCode 2.x before first launch writes `<data>/auth.json` for migration import.
+        let default_db = home.join(".local/share/opencode/opencode.db");
+        assert_eq!(
+            resolve_opencode_target(
+                Some(2),
+                Some(&home),
+                None,
+                None,
+                None,
+                fallback_json.clone(),
+            ),
+            OpencodeTarget::Json(vec![home.join(".local/share/opencode/auth.json")])
+        );
+
+        // Once opencode.db exists, OpenCode 2.x targets SQLite.
+        init_opencode_v2_db(&default_db);
+        assert_eq!(
+            resolve_opencode_target(
+                Some(2),
+                Some(&home),
+                None,
+                None,
+                None,
+                fallback_json.clone(),
+            ),
+            OpencodeTarget::Sqlite(default_db.clone())
+        );
+
+        // Unknown version falls back to SQLite when an initialized opencode.db exists.
+        assert_eq!(
+            resolve_opencode_target(None, Some(&home), None, None, None, fallback_json.clone()),
+            OpencodeTarget::Sqlite(default_db)
+        );
+    }
+
+    #[test]
+    fn sync_opencode_db_manages_openai_credentials_preserves_api_key_and_isolates_team_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        init_opencode_v2_db(&db_path);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, 1, 1000, 1000)",
+            params!["cred_openai_key", "openai", "API key", r#"{"type":"key","key":"sk-old"}"#],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, 1, 1000, 1000)",
+            params!["cred_anthropic_key", "anthropic", "API key", r#"{"type":"key","key":"sk-ant"}"#],
+        )
+        .unwrap();
+        drop(conn);
+
+        // 1. Switch to Alice in Team workspace ws-team.
+        let alice1 = sample_codex_auth(
+            "Alice@Example.com",
+            "ws-team",
+            "team",
+            1_780_000_000,
+            "rt-a1",
+        );
+        sync_opencode(&alice1, std::slice::from_ref(&db_path)).unwrap();
+
+        let rows = opencode_db_rows(&db_path, "openai");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "cred_openai_key");
+        assert_eq!(rows[0].3, Some(0));
+        let (alice_id, alice_label, alice_val, alice_active, alice_updated) = rows[1].clone();
+        assert!(alice_id.starts_with("cred_"));
+        assert_eq!(alice_label, "alice@example.com");
+        assert_eq!(alice_active, Some(1));
+        assert_eq!(alice_val["type"], "oauth");
+        assert_eq!(alice_val["methodID"], "chatgpt-browser");
+        assert_eq!(alice_val["refresh"], "rt-a1");
+        assert_eq!(alice_val["expires"], 1_780_000_000_000_i64);
+        assert_eq!(alice_val["metadata"]["accountID"], "ws-team");
+
+        // Unrelated integrations remain active.
+        let anthropic_rows = opencode_db_rows(&db_path, "anthropic");
+        assert_eq!(anthropic_rows[0].3, Some(1));
+
+        // 2. Re-syncing identical credentials is a no-op.
+        sync_opencode(&alice1, std::slice::from_ref(&db_path)).unwrap();
+        let rows_after_noop = opencode_db_rows(&db_path, "openai");
+        assert_eq!(rows_after_noop.len(), 2);
+        assert_eq!(rows_after_noop[1].4, alice_updated);
+
+        // 3. Refreshing Alice updates her row in place and preserves headless methodID + custom metadata.
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE credential SET label = 'Alice Work', value = ?1 WHERE id = ?2",
+            params![
+                json!({
+                    "type": "oauth",
+                    "methodID": "chatgpt-headless",
+                    "refresh": "rt-a1",
+                    "access": alice1["tokens"]["access_token"],
+                    "expires": 1_780_000_000_000_i64,
+                    "metadata": { "accountID": "ws-team", "custom": "keep" }
+                })
+                .to_string(),
+                &alice_id
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let alice2 = sample_codex_auth(
+            "Alice@Example.com",
+            "ws-team",
+            "team",
+            1_780_003_600,
+            "rt-a2",
+        );
+        sync_opencode(&alice2, std::slice::from_ref(&db_path)).unwrap();
+        let rows = opencode_db_rows(&db_path, "openai");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].0, alice_id);
+        assert_eq!(rows[1].1, "Alice Work");
+        assert_eq!(rows[1].2["methodID"], "chatgpt-headless");
+        assert_eq!(rows[1].2["refresh"], "rt-a2");
+        assert_eq!(rows[1].2["metadata"]["accountID"], "ws-team");
+        assert_eq!(rows[1].2["metadata"]["custom"], "keep");
+
+        // 4. Switching to Bob in the SAME Team workspace creates a separate row and deactivates Alice.
+        let bob = sample_codex_auth("bob@example.com", "ws-team", "team", 1_780_007_200, "rt-b1");
+        sync_opencode(&bob, std::slice::from_ref(&db_path)).unwrap();
+        let rows = opencode_db_rows(&db_path, "openai");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1].0, alice_id);
+        assert_eq!(rows[1].3, Some(0));
+        let bob_id = rows[2].0.clone();
+        assert_ne!(bob_id, alice_id);
+        assert_eq!(rows[2].1, "bob@example.com");
+        assert_eq!(rows[2].3, Some(1));
+        assert_eq!(rows[2].2["metadata"]["accountID"], "ws-team");
+
+        // 5. Switching back to Alice reactivates Alice's existing row without duplicating.
+        sync_opencode(&alice2, std::slice::from_ref(&db_path)).unwrap();
+        let rows = opencode_db_rows(&db_path, "openai");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1].3, Some(1));
+        assert_eq!(rows[2].3, Some(0));
+    }
+
+    #[test]
+    fn sync_opencode_db_writes_and_updates_xai_device_oauth() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        init_opencode_v2_db(&db_path);
+
+        let alice_access = fake_jwt(json!({
+            "sub": "uid-alice",
+            "email": "alice@x.example",
+            "exp": 1_800_000_000_i64
+        }));
+        let alice1 = json!({
+            "key": alice_access,
+            "refresh_token": "xai-rt-a1",
+            "user_id": "uid-alice",
+            "email": "Alice@x.example"
+        });
+        sync_opencode_grok(&alice1, std::slice::from_ref(&db_path)).unwrap();
+
+        let rows = opencode_db_rows(&db_path, "xai");
+        assert_eq!(rows.len(), 1);
+        let alice_id = rows[0].0.clone();
+        assert_eq!(rows[0].1, "alice@x.example");
+        assert_eq!(rows[0].2["type"], "oauth");
+        assert_eq!(rows[0].2["methodID"], "device");
+        assert_eq!(rows[0].2["refresh"], "xai-rt-a1");
+        assert!(rows[0].2.get("metadata").is_none());
+        assert_eq!(rows[0].3, Some(1));
+
+        // Token renewal updates Alice in place by matching JWT `sub`.
+        let alice_access2 = fake_jwt(json!({
+            "sub": "uid-alice",
+            "email": "alice@x.example",
+            "exp": 1_800_003_600_i64
+        }));
+        let alice2 = json!({
+            "key": alice_access2,
+            "refresh_token": "xai-rt-a2",
+            "user_id": "uid-alice",
+            "email": "alice@x.example"
+        });
+        sync_opencode_grok(&alice2, std::slice::from_ref(&db_path)).unwrap();
+        let rows = opencode_db_rows(&db_path, "xai");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, alice_id);
+        assert_eq!(rows[0].2["refresh"], "xai-rt-a2");
+
+        // Switching to Bob adds a separate active xai row and deactivates Alice.
+        let bob = sample_grok_doc("bob", "xai-rt-b1");
+        sync_opencode_grok(&bob, std::slice::from_ref(&db_path)).unwrap();
+        let rows = opencode_db_rows(&db_path, "xai");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].3, Some(0));
+        assert_eq!(rows[1].1, "bob@x.example");
+        assert_eq!(rows[1].2["methodID"], "device");
+        assert_eq!(rows[1].3, Some(1));
+    }
+
+    #[test]
+    fn sync_opencode_db_rejects_uninitialized_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("opencode.db");
+        let auth = sample_codex_auth("a@example.com", "acct-1", "plus", 1_780_000_000, "rt-1");
+        assert!(sync_opencode(&auth, std::slice::from_ref(&missing))
+            .unwrap_err()
+            .contains("not found"));
+        assert!(!missing.exists());
+
+        // An empty DB without the `credential` table is rejected without mutating schema.
+        Connection::open(&missing).unwrap();
+        assert!(sync_opencode(&auth, std::slice::from_ref(&missing))
+            .unwrap_err()
+            .contains("missing the credential table"));
     }
 }
