@@ -4,7 +4,7 @@
 //! OAuth client.
 #[cfg(test)]
 pub(crate) use crate::antigravity_cloud::QUOTA_SUMMARY_PATH;
-use crate::models::UsageSnapshot;
+use crate::models::{CreditSnapshot, UsageSnapshot};
 use serde_json::{json, Value};
 
 const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -77,6 +77,35 @@ pub(crate) async fn exchange(code: &str, verifier: &str, redirect: &str) -> Resu
     Ok(body)
 }
 
+/// Sub2api's Antigravity AI credits (`ai_credits` in `/admin/accounts/{id}/usage`),
+/// matching `loadCodeAssist`'s `GOOGLE_ONE_AI` available credits.
+fn sub2api_credits(value: &Value) -> Option<CreditSnapshot> {
+    let list = value.get("ai_credits").and_then(Value::as_array)?;
+    let amount = |entry: &Value, key: &str| match entry.get(key) {
+        None | Some(Value::Null) => Some(0.0),
+        Some(value) => number(value),
+    };
+    let (mut balance, mut minimum, mut found) = (0.0_f64, 0.0_f64, false);
+    for entry in list
+        .iter()
+        .filter(|entry| entry.get("credit_type").and_then(Value::as_str) == Some("GOOGLE_ONE_AI"))
+    {
+        balance += amount(entry, "amount")?;
+        minimum = minimum.max(amount(entry, "minimum_balance")?);
+        found = true;
+    }
+    found.then(|| {
+        let balance = balance.max(0.0).round() as i64;
+        let minimum = minimum.max(0.0).round() as i64;
+        CreditSnapshot {
+            expiries: Vec::new(),
+            has_credits: balance > 0 && balance >= minimum,
+            unlimited: false,
+            balance: Some(balance.to_string()),
+        }
+    })
+}
+
 /// A Sub2api Antigravity account's usage (`/admin/accounts/{id}/usage`): the
 /// same pools as `retrieveUserQuotaSummary`, which Sub2api reads, as groups
 /// of windows with the share used (0-100); else, for an account without
@@ -97,6 +126,7 @@ pub(crate) fn sub2api_usage(value: &Value, now: i64) -> Result<UsageSnapshot, St
     }
     let mut usage = snapshot(now);
     usage.plan_type = crate::sub2api::reported_plan(crate::Pool::Antigravity, value);
+    usage.credits = sub2api_credits(value);
     let left = |entry: &Value| {
         entry
             .get("utilization")
@@ -508,5 +538,52 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn sub2api_ai_credits_are_read_when_reported() {
+        let with_credits = sub2api_usage(
+            &json!({
+                "antigravity_quota_groups": [
+                    {"key": "gemini", "windows": [{"window": "5h", "utilization": 10}]}
+                ],
+                "ai_credits": [
+                    {"credit_type": "GOOGLE_ONE_AI", "amount": 1000, "minimum_balance": 50},
+                    {"credit_type": "OTHER", "amount": 500}
+                ]
+            }),
+            0,
+        )
+        .unwrap();
+        let credits = with_credits.credits.unwrap();
+        assert_eq!(credits.balance.as_deref(), Some("1000"));
+        assert!(credits.has_credits && !credits.unlimited && credits.expiries.is_empty());
+
+        let below_min = sub2api_usage(
+            &json!({
+                "antigravity_quota_groups": [
+                    {"key": "gemini", "windows": [{"window": "5h", "utilization": 10}]}
+                ],
+                "ai_credits": [
+                    {"credit_type": "GOOGLE_ONE_AI", "amount": 20, "minimum_balance": 50}
+                ]
+            }),
+            0,
+        )
+        .unwrap();
+        let credits = below_min.credits.unwrap();
+        assert_eq!(credits.balance.as_deref(), Some("20"));
+        assert!(!credits.has_credits);
+
+        let absent = sub2api_usage(
+            &json!({
+                "antigravity_quota_groups": [
+                    {"key": "gemini", "windows": [{"window": "5h", "utilization": 10}]}
+                ]
+            }),
+            0,
+        )
+        .unwrap();
+        assert!(absent.credits.is_none());
     }
 }

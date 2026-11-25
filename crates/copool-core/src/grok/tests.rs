@@ -255,6 +255,9 @@ async fn an_imported_login_waits_then_shows_its_weekly_usage_and_plan() {
     let usage = card.usage.unwrap();
     assert_eq!(usage.plan_type.as_deref(), Some("SuperGrok"));
     assert!(usage.five_hour.is_none() && usage.one_month.is_none());
+    let credits = usage.credits.unwrap();
+    assert_eq!(credits.balance.as_deref(), Some("$0.00"));
+    assert!(!credits.has_credits && !credits.unlimited && credits.expiries.is_empty());
     let week = usage.one_week.unwrap();
     assert_eq!(week.used_percent, 7.0);
     assert_eq!(week.window_seconds, 7 * 24 * 60 * 60);
@@ -635,6 +638,37 @@ fn usage_and_plan_are_read_as_grok_build_reports_them() {
         Some("Free")
     );
     assert_eq!(api::plan(&json!({"subscription_tier_display": ""})), None);
+    // Prepaid balance is in USD cents; absent or unreadable stays unknown.
+    let credits_of = |prepaid: Option<Value>| {
+        let mut config = json!({"creditUsagePercent": 5.0});
+        if let Some(value) = prepaid {
+            config["prepaidBalance"] = value;
+        }
+        api::usage(&json!({"config": config}), now)
+            .unwrap()
+            .credits
+            .map(|c| (c.balance, c.has_credits, c.unlimited))
+    };
+    assert_eq!(
+        credits_of(Some(json!({"val": 1446}))),
+        Some((Some("$14.46".into()), true, false))
+    );
+    assert_eq!(
+        credits_of(Some(json!({"val": "500"}))),
+        Some((Some("$5.00".into()), true, false))
+    );
+    assert_eq!(
+        credits_of(Some(json!({}))),
+        Some((Some("$0.00".into()), false, false))
+    );
+    assert_eq!(
+        credits_of(Some(json!(250))),
+        Some((Some("$2.50".into()), true, false))
+    );
+    assert_eq!(credits_of(None), None);
+    assert_eq!(credits_of(Some(Value::Null)), None);
+    assert_eq!(credits_of(Some(json!({"val": "NaN"}))), None);
+    assert_eq!(credits_of(Some(json!({"val": "lots"}))), None);
 }
 
 #[test]

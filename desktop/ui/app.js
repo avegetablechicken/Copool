@@ -1498,7 +1498,7 @@ function providerControls(group, title, current) {
 function switchTarget(group) {
   return group.accounts.find((a) => a.available !== false) || group.accounts[0];
 }
-/// Without resets (Antigravity, which has none), the credits alone.
+/// Without resets (Antigravity and Grok, which have none), the credits alone.
 function accountBalanceText(usage, credits, inventory = P.resetInventory(usage), resets = true) {
   const footerText = el("span", "account-footer-text");
   const details = P.balanceTooltips(usage);
@@ -1631,8 +1631,8 @@ function accountCard(account, grouped = false) {
     view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
   const inventory = P.resetInventory(account.usage);
   const footer = el("div", "account-footer");
-  // Antigravity reports credits but no resets.
-  const footerText = accountBalanceText(account.usage, credits, inventory, pool !== "antigravity");
+  // Only Codex and Claude report banked resets; Antigravity and Grok show credits alone.
+  const footerText = accountBalanceText(account.usage, credits, inventory, pool === "codex" || pool === "claude");
   footer.append(footerText, accountControls(account, full, view, grouped));
   card.append(
     ...(headed ? [head] : []),

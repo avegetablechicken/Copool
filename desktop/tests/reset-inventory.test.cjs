@@ -137,16 +137,20 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   const unknownDates = context.accountBalanceText({credits: {balance: "5"}, remainingResetCount: 2}, "5");
   assert.match(unknownDates.children[0].title, /expiry_unknown/);
   assert.match(unknownDates.children[2].title, /expiry_unknown/);
-  // Antigravity: its credits alone, even with resets in the usage.
+  // Antigravity and Grok: their credits alone, even with resets in the usage.
   const creditsOnly = context.accountBalanceText({credits: {balance: "1000"},
     resetGrants: [grant("partial", 1, future)]}, "1000", undefined, false);
   assert.equal(creditsOnly.children.length, 1);
   assert.equal(creditsOnly.children[0].className, "account-credits");
   assert.match(creditsOnly.children[0].textContent, /credits_format:1000$/);
   assert.match(creditsOnly.children[0].title, /expiry_unknown/);
+  const grokZeroCredits = context.accountBalanceText({credits: {balance: "$0.00"}}, "$0.00", undefined, false);
+  assert.equal(grokZeroCredits.children.length, 1);
+  assert.match(grokZeroCredits.children[0].textContent, /credits_format:\$0\.00$/);
+  assert.equal(grokZeroCredits.children[0].title, undefined);
   const noCreditsOnly = context.accountBalanceText({}, "--", undefined, false);
   assert.equal(noCreditsOnly.children[0].title, undefined);
-  assert.match(source, /accountBalanceText\(account\.usage, credits, inventory, pool !== "antigravity"\)/);
+  assert.match(source, /accountBalanceText\(account\.usage, credits, inventory, pool === "codex" \|\| pool === "claude"\)/);
 });
 
 

@@ -3,7 +3,7 @@
 //! the plan (`/settings`), and token renewal with Grok Build's OAuth client
 //! at `auth.x.ai`.
 use super::login::{CLIENT_ID, ISSUER};
-use crate::models::{UsageSnapshot, UsageWindow};
+use crate::models::{CreditSnapshot, UsageSnapshot, UsageWindow};
 use serde_json::Value;
 
 pub(crate) const API_BASE: &str = "https://cli-chat-proxy.grok.com/v1";
@@ -169,6 +169,27 @@ fn time(value: &Value) -> Option<i64> {
         .and_then(|text| chrono::DateTime::parse_from_rfc3339(text.trim()).ok())
         .map(|date| date.timestamp())
 }
+/// The prepaid extra-usage balance of `/billing?format=credits`
+/// (`prepaidBalance.val`, in USD cents; proto3 JSON may omit a zero `val`).
+/// None when the response carries no `prepaidBalance` or an unreadable amount.
+fn prepaid_credits(config: &Value) -> Option<CreditSnapshot> {
+    let raw = config.get("prepaidBalance")?;
+    let cents = match raw {
+        Value::Null => return None,
+        Value::Object(map) => match map.get("val") {
+            None | Some(Value::Null) => 0.0,
+            Some(value) => number(value)?,
+        },
+        value => number(value)?,
+    };
+    let dollars = cents.max(0.0) / 100.0;
+    Some(CreditSnapshot {
+        expiries: Vec::new(),
+        has_credits: dollars > 0.0,
+        unlimited: false,
+        balance: Some(format!("${dollars:.2}")),
+    })
+}
 /// The usage limit of `/billing?format=credits`: the share of the current
 /// period's allowance used, and when the period ends. None for a reply
 /// without the share.
@@ -188,7 +209,9 @@ pub(crate) fn usage(body: &Value, now: i64) -> Option<UsageSnapshot> {
         .and_then(|p| p.get("type"))
         .and_then(Value::as_str)
         .is_some_and(|kind| kind.ends_with("MONTHLY"));
-    Some(snapshot(used, start, end, monthly, now))
+    let mut usage = snapshot(used, start, end, monthly, now);
+    usage.credits = prepaid_credits(config);
+    Some(usage)
 }
 /// A usage limit's snapshot: a period of about a week is the card's weekly
 /// window, a longer one its monthly window.
