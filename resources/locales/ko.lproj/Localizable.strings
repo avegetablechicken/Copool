@@ -70,6 +70,8 @@
 "settings.section.switch_behavior" = "전환 동작";
 "settings.auto_smart_switch" = "자동 스마트 전환";
 "settings.sync_opencode_openai_auth" = "opencode 인증 동기화";
+"settings.sync_pi_auth" = "pi 인증 동기화";
+"settings.sync_omp_auth" = "omp 인증 동기화";
 "settings.restart_editors_on_switch" = "전환 시 편집기 재시작";
 "settings.editor_restart_target" = "편집기 재시작 대상";
 "settings.section.capability_matrix" = "기능 매트릭스";
@@ -164,6 +166,10 @@
 "accounts.notice.provider_switched_format" = "Codex provider를 %@로 전환했습니다";
 "accounts.notice.sync_failed_format" = "opencode 동기화 실패: %@";
 "accounts.notice.sync_done" = "opencode 인증 동기화 완료";
+"accounts.notice.pi_sync_failed_format" = "pi 동기화 실패: %@";
+"accounts.notice.pi_sync_done" = "pi 인증 동기화 완료";
+"accounts.notice.omp_sync_failed_format" = "omp 동기화 실패: %@";
+"accounts.notice.omp_sync_done" = "omp 인증 동기화 완료";
 "accounts.notice.editor_restart_failed_format" = "편집기 재시작 실패: %@";
 "accounts.notice.editor_restarted_format" = "재시작된 편집기: %@";
 

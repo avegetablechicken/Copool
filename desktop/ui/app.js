@@ -3331,13 +3331,31 @@ function switchNotice(execution) {
       ),
     );
   }
-  if (execution.opencodeSyncError) {
-    error = true;
-    segments.push(
-      tr("accounts.notice.sync_failed_format", execution.opencodeSyncError),
-    );
-  } else if (execution.opencodeSynced)
-    segments.push(tr("accounts.notice.sync_done"));
+  for (const [synced, syncError, doneKey, failedKey] of [
+    [
+      "opencodeSynced",
+      "opencodeSyncError",
+      "accounts.notice.sync_done",
+      "accounts.notice.sync_failed_format",
+    ],
+    [
+      "piSynced",
+      "piSyncError",
+      "accounts.notice.pi_sync_done",
+      "accounts.notice.pi_sync_failed_format",
+    ],
+    [
+      "ompSynced",
+      "ompSyncError",
+      "accounts.notice.omp_sync_done",
+      "accounts.notice.omp_sync_failed_format",
+    ],
+  ]) {
+    if (execution[syncError]) {
+      error = true;
+      segments.push(tr(failedKey, execution[syncError]));
+    } else if (execution[synced]) segments.push(tr(doneKey));
+  }
   if (execution.editorRestartError) {
     error = true;
     segments.push(

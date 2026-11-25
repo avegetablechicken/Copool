@@ -67,6 +67,8 @@ pub struct Preferences {
     pub launch_at_startup: bool,
     pub launch_codex_after_switch: bool,
     pub sync_opencode_openai_auth: bool,
+    pub sync_pi_auth: bool,
+    pub sync_omp_auth: bool,
     pub host_api_only: bool,
     pub restart_editors_on_switch: bool,
     pub restart_editor_targets: Vec<String>,
@@ -109,6 +111,8 @@ impl Default for Preferences {
             launch_at_startup: false,
             launch_codex_after_switch: true,
             sync_opencode_openai_auth: false,
+            sync_pi_auth: false,
+            sync_omp_auth: false,
             host_api_only: false,
             restart_editors_on_switch: false,
             restart_editor_targets: vec![],
@@ -128,6 +132,10 @@ pub struct SwitchExecution {
     pub provider: Option<String>,
     pub opencode_synced: bool,
     pub opencode_sync_error: Option<String>,
+    pub pi_synced: bool,
+    pub pi_sync_error: Option<String>,
+    pub omp_synced: bool,
+    pub omp_sync_error: Option<String>,
     pub restarted_editors: Vec<String>,
     pub editor_restart_error: Option<String>,
     pub launch_error: Option<String>,
@@ -197,6 +205,18 @@ impl Preferences {
             launch_at_startup: settings.launch_at_startup,
             launch_codex_after_switch: settings.launch_codex_after_switch,
             sync_opencode_openai_auth: settings.sync_opencode_openai_auth,
+            sync_pi_auth: settings
+                .extra
+                .get("syncPiAuth")
+                .or_else(|| settings.extra.get("syncPiOpenaiAuth"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            sync_omp_auth: settings
+                .extra
+                .get("syncOmpAuth")
+                .or_else(|| settings.extra.get("syncOmpOpenaiAuth"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             host_api_only: settings.local_proxy_host_api_only,
             restart_editors_on_switch: settings.restart_editors_on_switch,
             restart_editor_targets: settings.restart_editor_targets,
@@ -542,6 +562,10 @@ impl Application {
         s.launch_at_startup = p.launch_at_startup;
         s.launch_codex_after_switch = p.launch_codex_after_switch;
         s.sync_opencode_openai_auth = p.sync_opencode_openai_auth;
+        s.extra.remove("syncPiOpenaiAuth");
+        s.extra.remove("syncOmpOpenaiAuth");
+        s.extra.insert("syncPiAuth".into(), p.sync_pi_auth.into());
+        s.extra.insert("syncOmpAuth".into(), p.sync_omp_auth.into());
         s.extra.insert(
             "antigravityAutoStartProxy".into(),
             p.antigravity_auto_start_proxy.into(),
@@ -2070,5 +2094,27 @@ mod tests {
             401
         );
         assert!(!app.stop_proxy(Pool::Codex).await.unwrap().running);
+    }
+
+    #[tokio::test]
+    async fn pi_and_omp_sync_preferences_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = Application::open(Paths {
+            data_dir: dir.path().join("data"),
+            codex_auth: dir.path().join("codex/auth.json"),
+        })
+        .unwrap();
+        let initial = app.preferences().unwrap();
+        assert!(!initial.sync_pi_auth);
+        assert!(!initial.sync_omp_auth);
+
+        let mut updated = initial.clone();
+        updated.sync_pi_auth = true;
+        updated.sync_omp_auth = true;
+        app.save_preferences(updated).await.unwrap();
+
+        let reloaded = app.preferences().unwrap();
+        assert!(reloaded.sync_pi_auth);
+        assert!(reloaded.sync_omp_auth);
     }
 }

@@ -70,6 +70,8 @@
 "settings.section.switch_behavior" = "Switch Behavior";
 "settings.auto_smart_switch" = "Auto smart switch";
 "settings.sync_opencode_openai_auth" = "Sync opencode auth";
+"settings.sync_pi_auth" = "Sync pi auth";
+"settings.sync_omp_auth" = "Sync omp auth";
 "settings.restart_editors_on_switch" = "Restart editors on switch";
 "settings.editor_restart_target" = "Editor restart target";
 "settings.section.capability_matrix" = "Capability Matrix";
@@ -176,6 +178,10 @@
 "accounts.notice.provider_switched_format" = "Switched Codex provider to %@";
 "accounts.notice.sync_failed_format" = "Opencode sync failed: %@";
 "accounts.notice.sync_done" = "Opencode auth synced";
+"accounts.notice.pi_sync_failed_format" = "pi sync failed: %@";
+"accounts.notice.pi_sync_done" = "pi auth synced";
+"accounts.notice.omp_sync_failed_format" = "omp sync failed: %@";
+"accounts.notice.omp_sync_done" = "omp auth synced";
 "accounts.notice.editor_restart_failed_format" = "Editor restart failed: %@";
 "accounts.notice.editor_restarted_format" = "Editors restarted: %@";
 

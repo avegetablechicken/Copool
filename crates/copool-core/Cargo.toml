@@ -25,6 +25,7 @@ tempfile = "3"
 flate2 = "1"
 toml_edit = "0.25"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("desktop"))'] }

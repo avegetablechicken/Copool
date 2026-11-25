@@ -191,7 +191,8 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 - 五小时/每周用量刷新、额度显示、手动智能切换与定时自动切换。
 - 手动智能切换与原版一致：在可见账号中取剩余额度最高者，并列时保留当前账号；已是最佳时提示“当前账号已是最佳可用账号”，无可选账号时提示“暂无可切换账号”。定时自动切换仍排除过期（超过 15 分钟）、刷新失败、额度耗尽及隐藏/停用账号。
 - 交互状态与原版一致，不使用面板级锁：导入、添加（等待浏览器登录时显示可取消的对话框）、切换（只禁用该卡片的切换和智能切换）、待授权工作区（该行变为“取消”）、代理 loading、远程卡片的保存/删除/采用实例（只锁该卡片）各自独立。删除账号保留二次确认（原版没有，按需保留）。
-- 切换提示按原版 `buildSwitchNotice` 拼接：切换结果、OpenCode 同步、编辑器重启、启动 Codex 的结果由 core 的 `SwitchExecution` 返回；导入、删除、刷新、设置、代理、隧道、远程操作的提示与自动消失时间（3 秒，错误 5 秒）使用原版文案键。
+- 切换提示按原版 `buildSwitchNotice` 拼接：切换结果、OpenCode / pi / omp 同步、编辑器重启、启动 Codex 的结果由 core 的 `SwitchExecution` 返回；导入、删除、刷新、设置、代理、隧道、远程操作的提示与自动消失时间（3 秒，错误 5 秒）使用原版文案键。
+- 第三方智能体凭据同步（默认关闭，位于设置页“切换行为”，按“上游账号池 × 下游智能体”映射分发）：开启“同步 opencode 授权”后，切换 Codex 账号写入 OpenCode `auth.json` 的 `openai` OAuth 条目，切换 Grok 账号写入 `xai` OAuth 条目；开启“同步 pi 授权”后，切换 Codex 账号按 `PI_AUTH_PATH` / `$PI_CODING_AGENT_DIR/auth.json` / `~/.pi/agent/auth.json` 原子写入 `openai-codex` OAuth 条目（保留其他 provider）；开启“同步 omp 授权”后，切换 Codex 账号按 `OMP_AGENT_DB_PATH` / `OMP_PROFILE` / `PI_PROFILE` / `PI_CONFIG_DIR` / `PI_CODING_AGENT_DIR` / `$XDG_DATA_HOME/omp/agent.db`（目录已存在时）/ `~/.omp/agent/agent.db` 打开 SQLite 数据库（WAL 模式、`rusqlite` bundled），按 `oh-my-pi` 的 `auth_credentials` 结构更新或插入当前 `openai-codex` OAuth 凭据（含 `accountId`/`orgId`/`email`/`orgName` 与 `orgScopedIdentity` 的 `identity_key`）、软停用被替代的同 provider 活跃记录并清理对应的旧停用记录，其他 provider 保持不变。
 - 代理页“可用账号”取代理自身的可路由候选数（`ApiProxyStatus.availableAccounts`，冷却中的账号不计），与原版 `currentCandidates().count` 一致，而非界面卡片数。
 - 本地 OpenAI 兼容代理：`/v1/models`、`/v1/responses`、`/v1/chat/completions`、SSE、模型映射、失败重试与代理请求中的 OAuth 刷新。`/v1/models` 像 Codex 一样按客户端版本向上游 `codex/models` 获取模型列表（Sub2api 网关取其 `/models`），列出上游标为可见的模型及其支持的 low–xhigh 推理别名，缓存 5 分钟；上游失败时沿用上次结果，从未获取成功则返回 502。Codex 打招呼时，先用同一账号获取模型列表，按版本从低到高依次尝试其中的 mini / luna 模型（用各自支持的最低推理档位），记住成功的那个，之后直接使用；它不再受支持时清掉记录，重新按列表选择。
 - 代理密钥生成/轮换、回环监听、启动/停止、打开应用时自动启动代理的设置。
@@ -237,7 +238,7 @@ Claude 池保存在数据目录的 `claude-accounts.json`；在 macOS 上（隔�
 
 - Claude 当前状态反映本机用户级 `settings.json` 与登录凭据，不代表每个终端进程的最终配置；命令行 `--settings`、项目配置、托管配置和终端环境覆盖尚未纳入识别。已保存的 Cloud gateway 登录、默认联邦认证 Profile、宿主强制路由及继承的 Unix socket 不在本次用户设置切换的控制范围内。未新增历史配置存储，因此第三方覆盖掉的旧官方转发地址不会自动恢复；离开第三方时回到官方默认地址。
 
-- 浏览器 OAuth 登录与工作区授权、SSH 远程节点、Cloudflared 隧道、Sub2api、编辑器重启、OpenCode 同步和登录时自启动均已实现，但未用真实账号、服务器或 Cloudflare 帐户验证。
+- 浏览器 OAuth 登录与工作区授权、SSH 远程节点、Cloudflared 隧道、Sub2api、编辑器重启、OpenCode / pi / omp 同步和登录时自启动均已实现，但未用真实账号、服务器或 Cloudflare 帐户验证。
 - 远程服务器“探测”使用已保存的配置，而原版使用卡片中未保存的草稿；先保存再探测。
 - 非 macOS 托盘右键菜单（Open/Quit Copool）尚未本地化；原版 macOS 只有 MenuBarExtra 面板，没有此菜单。
 - 少量新增提示（如复制成功、Sub2api 未配置）只提供中英文，其余文案复用全部 11 种语言。

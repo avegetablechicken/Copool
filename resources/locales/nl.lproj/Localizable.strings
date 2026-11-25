@@ -70,6 +70,8 @@
 "settings.section.switch_behavior" = "Schakelgedrag";
 "settings.auto_smart_switch" = "Automatisch slim schakelen";
 "settings.sync_opencode_openai_auth" = "Opencode-auth synchroniseren";
+"settings.sync_pi_auth" = "pi-auth synchroniseren";
+"settings.sync_omp_auth" = "omp-auth synchroniseren";
 "settings.restart_editors_on_switch" = "Editors herstarten bij wisselen";
 "settings.editor_restart_target" = "Doel-editor voor herstart";
 "settings.section.capability_matrix" = "Capaciteitenmatrix";
@@ -164,6 +166,10 @@
 "accounts.notice.provider_switched_format" = "Codex-provider gewijzigd naar %@";
 "accounts.notice.sync_failed_format" = "Opencode-synchronisatie mislukt: %@";
 "accounts.notice.sync_done" = "Opencode-auth gesynchroniseerd";
+"accounts.notice.pi_sync_failed_format" = "pi-synchronisatie mislukt: %@";
+"accounts.notice.pi_sync_done" = "pi-auth gesynchroniseerd";
+"accounts.notice.omp_sync_failed_format" = "omp-synchronisatie mislukt: %@";
+"accounts.notice.omp_sync_done" = "omp-auth gesynchroniseerd";
 "accounts.notice.editor_restart_failed_format" = "Editor herstarten mislukt: %@";
 "accounts.notice.editor_restarted_format" = "Editors herstart: %@";
 

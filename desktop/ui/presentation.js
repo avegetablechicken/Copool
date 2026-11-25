@@ -484,6 +484,8 @@
       switchToggles: [
         "autoSmartSwitch",
         "syncOpencodeOpenaiAuth",
+        "syncPiAuth",
+        "syncOmpAuth",
         "restartEditorsOnSwitch",
       ],
       restartPicker: {

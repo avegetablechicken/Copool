@@ -17,6 +17,8 @@ pub(crate) struct CodexOAuthTokens {
     pub(crate) refresh_token: String,
     pub(crate) account_id: Option<String>,
     pub(crate) expires_at_ms: Option<i64>,
+    pub(crate) email: Option<String>,
+    pub(crate) plan_type: Option<String>,
 }
 
 pub(crate) fn read_current_codex_auth() -> Result<Value, String> {
@@ -319,31 +321,95 @@ pub(crate) fn current_auth_account_id() -> Option<String> {
         .map(|auth| auth.account_id)
 }
 
+fn non_empty_trimmed_str(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn jwt_nested_str(claims: Option<&Value>, path: &[&str]) -> Option<String> {
+    let mut current = claims?;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    non_empty_trimmed_str(current.as_str())
+}
+
+fn jwt_exp_seconds(claims: &Value) -> Option<i64> {
+    claims
+        .get("exp")
+        .and_then(Value::as_f64)
+        .filter(|exp| exp.is_finite())
+        .map(|exp| exp as i64)
+}
+
+pub(crate) fn jwt_chatgpt_account_id(claims: &Value) -> Option<String> {
+    jwt_nested_str(
+        Some(claims),
+        &["https://api.openai.com/auth", "chatgpt_account_id"],
+    )
+}
+
+pub(crate) fn jwt_openai_profile_email(claims: &Value) -> Option<String> {
+    jwt_nested_str(Some(claims), &["https://api.openai.com/profile", "email"])
+}
+
+pub(crate) fn jwt_plain_email(claims: &Value) -> Option<String> {
+    jwt_nested_str(Some(claims), &["email"])
+}
+
+pub(crate) fn jwt_openai_email(claims: &Value) -> Option<String> {
+    jwt_openai_profile_email(claims).or_else(|| jwt_plain_email(claims))
+}
+
+pub(crate) fn jwt_chatgpt_plan_type(claims: &Value) -> Option<String> {
+    jwt_nested_str(
+        Some(claims),
+        &["https://api.openai.com/auth", "chatgpt_plan_type"],
+    )
+}
+
 /// Extracts the reusable OpenAI OAuth tokens when syncing a login to third-party clients.
 pub(crate) fn extract_codex_oauth_tokens(auth_json: &Value) -> Result<CodexOAuthTokens, String> {
     let tokens = auth_token_object(auth_json)
+        .or_else(|| {
+            let root = auth_json.as_object()?;
+            root.contains_key("access_token").then_some(root)
+        })
         .ok_or_else(|| localized("error.auth.auth_json_invalid_structure", &[]))?;
 
-    let access_token = tokens
-        .get("access_token")
-        .and_then(Value::as_str)
-        .ok_or_else(|| localized("error.auth.missing_access_token", &[]))?
-        .to_string();
-    let refresh_token = tokens
-        .get("refresh_token")
-        .and_then(Value::as_str)
-        .ok_or_else(|| localized("error.opencode.missing_refresh_token", &[]))?
-        .to_string();
-    let account_id = tokens
-        .get("account_id")
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
-
-    let expires_at_ms = tokens
+    let access_token = non_empty_trimmed_str(tokens.get("access_token").and_then(Value::as_str))
+        .ok_or_else(|| localized("error.auth.missing_access_token", &[]))?;
+    let refresh_token = non_empty_trimmed_str(tokens.get("refresh_token").and_then(Value::as_str))
+        .ok_or_else(|| localized("error.opencode.missing_refresh_token", &[]))?;
+    let access_claims = decode_jwt_payload(&access_token).ok();
+    let id_claims = tokens
         .get("id_token")
         .and_then(Value::as_str)
-        .and_then(|id_token| decode_jwt_payload(id_token).ok())
-        .and_then(|payload| payload.get("exp").and_then(Value::as_i64))
+        .and_then(|id_token| decode_jwt_payload(id_token).ok());
+
+    let account_id = non_empty_trimmed_str(tokens.get("account_id").and_then(Value::as_str))
+        .or_else(|| access_claims.as_ref().and_then(jwt_chatgpt_account_id))
+        .or_else(|| id_claims.as_ref().and_then(jwt_chatgpt_account_id));
+    let email = access_claims
+        .as_ref()
+        .and_then(jwt_openai_profile_email)
+        .or_else(|| id_claims.as_ref().and_then(jwt_openai_profile_email))
+        .or_else(|| access_claims.as_ref().and_then(jwt_plain_email))
+        .or_else(|| id_claims.as_ref().and_then(jwt_plain_email))
+        .or_else(|| non_empty_trimmed_str(auth_json.get("email").and_then(Value::as_str)))
+        .map(|value| value.to_ascii_lowercase());
+    let plan_type = access_claims
+        .as_ref()
+        .and_then(jwt_chatgpt_plan_type)
+        .or_else(|| id_claims.as_ref().and_then(jwt_chatgpt_plan_type))
+        .map(|value| value.to_ascii_lowercase());
+
+    let expires_at_ms = access_claims
+        .as_ref()
+        .and_then(jwt_exp_seconds)
+        .or_else(|| id_claims.as_ref().and_then(jwt_exp_seconds))
         .map(|value| value * 1000);
 
     Ok(CodexOAuthTokens {
@@ -351,6 +417,8 @@ pub(crate) fn extract_codex_oauth_tokens(auth_json: &Value) -> Result<CodexOAuth
         refresh_token,
         account_id,
         expires_at_ms,
+        email,
+        plan_type,
     })
 }
 
@@ -495,8 +563,7 @@ pub(crate) fn access_token_expiry(auth_json: &Value) -> Option<i64> {
         .or_else(|| auth_json.get("access_token"))
         .and_then(Value::as_str)
         .and_then(|t| decode_jwt_payload(t).ok())
-        .and_then(|v| v["exp"].as_f64())
-        .map(|exp| exp as i64)
+        .and_then(|v| jwt_exp_seconds(&v))
 }
 
 pub(crate) fn decode_jwt_payload(token: &str) -> Result<Value, String> {

@@ -70,6 +70,8 @@
 "settings.section.switch_behavior" = "Wechselverhalten";
 "settings.auto_smart_switch" = "Automatischer intelligenter Wechsel";
 "settings.sync_opencode_openai_auth" = "Opencode-Auth synchronisieren";
+"settings.sync_pi_auth" = "pi-Auth synchronisieren";
+"settings.sync_omp_auth" = "omp-Auth synchronisieren";
 "settings.restart_editors_on_switch" = "Editoren nach Kontowechsel neu starten";
 "settings.editor_restart_target" = "Neustart-Ziel des Editors";
 "settings.section.capability_matrix" = "Fähigkeitsmatrix";
@@ -164,6 +166,10 @@
 "accounts.notice.provider_switched_format" = "Codex-Anbieter zu %@ gewechselt";
 "accounts.notice.sync_failed_format" = "Opencode-Synchronisierung fehlgeschlagen: %@";
 "accounts.notice.sync_done" = "Opencode-Auth synchronisiert";
+"accounts.notice.pi_sync_failed_format" = "pi-Synchronisierung fehlgeschlagen: %@";
+"accounts.notice.pi_sync_done" = "pi-Auth synchronisiert";
+"accounts.notice.omp_sync_failed_format" = "omp-Synchronisierung fehlgeschlagen: %@";
+"accounts.notice.omp_sync_done" = "omp-Auth synchronisiert";
 "accounts.notice.editor_restart_failed_format" = "Editor-Neustart fehlgeschlagen: %@";
 "accounts.notice.editor_restarted_format" = "Editoren neu gestartet: %@";
 

@@ -10,6 +10,8 @@ legacy(
     assert.deepEqual(p.switchToggles, [
       "autoSmartSwitch",
       "syncOpencodeOpenaiAuth",
+      "syncPiAuth",
+      "syncOmpAuth",
       "restartEditorsOnSwitch",
     ]);
     assert.equal(p.restartPicker.isEnabled, false);
@@ -153,3 +155,52 @@ legacy(
     assert.equal(p.canCopy, false);
   },
 );
+
+test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const vm = require("node:vm");
+  const source = fs
+    .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
+    .replace(/\r\n/g, "\n");
+  const start = source.indexOf("function switchNotice(execution) {");
+  assert.notEqual(start, -1, "switchNotice start marker not found");
+  const end = source.indexOf("\n}\n", start);
+  assert.notEqual(end, -1, "switchNotice end marker not found");
+  const snippet = source.slice(start, end + 2);
+
+  const localeScope = { window: {} };
+  vm.runInNewContext(
+    fs
+      .readFileSync(path.join(__dirname, "../ui/locales.js"), "utf8")
+      .replace(/\r\n/g, "\n"),
+    localeScope,
+  );
+  const en = localeScope.window.COPOOL_LOCALES.en;
+  const scope = {
+    pool: "codex",
+    tr: (key, ...args) => P.formatLocalized(en[key] ?? key, args),
+  };
+  vm.runInNewContext(snippet, scope);
+  assert.equal(typeof scope.switchNotice, "function");
+
+  const ok = scope.switchNotice({
+    opencodeSynced: true,
+    piSynced: true,
+    ompSynced: true,
+    restartedEditors: [],
+  });
+  assert.equal(ok.error, false);
+  assert.match(ok.text, /Opencode auth synced/);
+  assert.match(ok.text, /pi auth synced/);
+  assert.match(ok.text, /omp auth synced/);
+
+  const err = scope.switchNotice({
+    piSyncError: "disk full",
+    ompSyncError: "database locked",
+    restartedEditors: [],
+  });
+  assert.equal(err.error, true);
+  assert.match(err.text, /pi sync failed: disk full/);
+  assert.match(err.text, /omp sync failed: database locked/);
+});

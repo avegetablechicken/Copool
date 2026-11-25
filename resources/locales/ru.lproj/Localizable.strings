@@ -70,6 +70,8 @@
 "settings.section.switch_behavior" = "Поведение переключения";
 "settings.auto_smart_switch" = "Автоматическое умное переключение";
 "settings.sync_opencode_openai_auth" = "Синхронизировать auth opencode";
+"settings.sync_pi_auth" = "Синхронизировать auth pi";
+"settings.sync_omp_auth" = "Синхронизировать auth omp";
 "settings.restart_editors_on_switch" = "Перезапускать редакторы при переключении";
 "settings.editor_restart_target" = "Целевой редактор для перезапуска";
 "settings.section.capability_matrix" = "Матрица возможностей";
@@ -164,6 +166,10 @@
 "accounts.notice.provider_switched_format" = "Провайдер Codex переключен на %@";
 "accounts.notice.sync_failed_format" = "Сбой синхронизации Opencode: %@";
 "accounts.notice.sync_done" = "Auth Opencode синхронизирована";
+"accounts.notice.pi_sync_failed_format" = "Сбой синхронизации pi: %@";
+"accounts.notice.pi_sync_done" = "Auth pi синхронизирована";
+"accounts.notice.omp_sync_failed_format" = "Сбой синхронизации omp: %@";
+"accounts.notice.omp_sync_done" = "Auth omp синхронизирована";
 "accounts.notice.editor_restart_failed_format" = "Не удалось перезапустить редактор: %@";
 "accounts.notice.editor_restarted_format" = "Редакторы перезапущены: %@";
 

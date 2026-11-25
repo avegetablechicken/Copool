@@ -70,6 +70,8 @@
 "settings.section.switch_behavior" = "Comportement de bascule";
 "settings.auto_smart_switch" = "Bascule intelligente automatique";
 "settings.sync_opencode_openai_auth" = "Synchroniser l'auth d'opencode";
+"settings.sync_pi_auth" = "Synchroniser l'auth de pi";
+"settings.sync_omp_auth" = "Synchroniser l'auth d'omp";
 "settings.restart_editors_on_switch" = "Redémarrer les éditeurs après changement";
 "settings.editor_restart_target" = "Éditeur à redémarrer";
 "settings.section.capability_matrix" = "Matrice des capacités";
@@ -164,6 +166,10 @@
 "accounts.notice.provider_switched_format" = "Fournisseur Codex remplacé par %@";
 "accounts.notice.sync_failed_format" = "Échec de la synchro Opencode : %@";
 "accounts.notice.sync_done" = "Auth Opencode synchronisée";
+"accounts.notice.pi_sync_failed_format" = "Échec de la synchro pi : %@";
+"accounts.notice.pi_sync_done" = "Auth pi synchronisée";
+"accounts.notice.omp_sync_failed_format" = "Échec de la synchro omp : %@";
+"accounts.notice.omp_sync_done" = "Auth omp synchronisée";
 "accounts.notice.editor_restart_failed_format" = "Échec du redémarrage de l'éditeur : %@";
 "accounts.notice.editor_restarted_format" = "Éditeurs redémarrés : %@";
 

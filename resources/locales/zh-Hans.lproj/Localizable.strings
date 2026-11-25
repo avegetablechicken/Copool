@@ -70,6 +70,8 @@
 "settings.section.switch_behavior" = "切换行为";
 "settings.auto_smart_switch" = "自动智能切换";
 "settings.sync_opencode_openai_auth" = "同步 opencode 授权";
+"settings.sync_pi_auth" = "同步 pi 授权";
+"settings.sync_omp_auth" = "同步 omp 授权";
 "settings.restart_editors_on_switch" = "切换账号后重启编辑器";
 "settings.editor_restart_target" = "编辑器重启目标";
 "settings.section.capability_matrix" = "能力清单";
@@ -176,6 +178,10 @@
 "accounts.notice.provider_switched_format" = "已将 Codex provider 切换为 %@";
 "accounts.notice.sync_failed_format" = "同步 opencode 失败：%@";
 "accounts.notice.sync_done" = "已同步 opencode 认证";
+"accounts.notice.pi_sync_failed_format" = "同步 pi 失败：%@";
+"accounts.notice.pi_sync_done" = "已同步 pi 认证";
+"accounts.notice.omp_sync_failed_format" = "同步 omp 失败：%@";
+"accounts.notice.omp_sync_done" = "已同步 omp 认证";
 "accounts.notice.editor_restart_failed_format" = "编辑器重启失败：%@";
 "accounts.notice.editor_restarted_format" = "已重启编辑器：%@";
 
