@@ -120,9 +120,23 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   assert.match(cached.textContent, /remaining_resets_format:1$/);
   assert.match(cached.title, /reset_expires_format/);
   assert.match(cached.title, /resets_last_confirmed_format/);
-  const unknown = context.accountBalanceText({}, "--");
-  assert.match(unknown.children[0].title, /expiry_unknown/);
-  assert.match(unknown.children[2].title, /expiry_unknown/);
+  const unavailable = context.accountBalanceText({}, "--");
+  assert.equal(unavailable.children[0].title, undefined);
+  assert.equal(unavailable.children[2].title, undefined);
+  const unavailableWithDates = context.accountBalanceText({credits: {expiries: [future]},
+    resetsLastConfirmedAt: 100}, "--");
+  assert.equal(unavailableWithDates.children[0].title, undefined);
+  assert.equal(unavailableWithDates.children[2].title, undefined);
+  const zero = context.accountBalanceText({credits: {balance: "$0.00"}, remainingResetCount: 0}, "$0.00");
+  assert.equal(zero.children[0].title, undefined);
+  assert.equal(zero.children[2].title, undefined);
+  const zeroConfirmed = context.accountBalanceText({credits: {balance: "0"},
+    remainingResetCount: 0, resetsLastConfirmedAt: 100}, "0");
+  assert.equal(zeroConfirmed.children[0].title, undefined);
+  assert.match(zeroConfirmed.children[2].title, /^accounts\.card\.resets_last_confirmed_format:/);
+  const unknownDates = context.accountBalanceText({credits: {balance: "5"}, remainingResetCount: 2}, "5");
+  assert.match(unknownDates.children[0].title, /expiry_unknown/);
+  assert.match(unknownDates.children[2].title, /expiry_unknown/);
   // Antigravity: its credits alone, even with resets in the usage.
   const creditsOnly = context.accountBalanceText({credits: {balance: "1000"},
     resetGrants: [grant("partial", 1, future)]}, "1000", undefined, false);
@@ -130,6 +144,8 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   assert.equal(creditsOnly.children[0].className, "account-credits");
   assert.match(creditsOnly.children[0].textContent, /credits_format:1000$/);
   assert.match(creditsOnly.children[0].title, /expiry_unknown/);
+  const noCreditsOnly = context.accountBalanceText({}, "--", undefined, false);
+  assert.equal(noCreditsOnly.children[0].title, undefined);
   assert.match(source, /accountBalanceText\(account\.usage, credits, inventory, pool !== "antigravity"\)/);
 });
 

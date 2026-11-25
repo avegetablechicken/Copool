@@ -1506,8 +1506,13 @@ function accountBalanceText(usage, credits, inventory = P.resetInventory(usage),
     ? tr("accounts.card.expiry_unknown")
     : tr("accounts.card.reset_expires_format", P.formatReset(at, locale));
   const creditText = el("span", "account-credits", tr("accounts.card.credits_format", credits));
-  creditText.title = details.creditDates.length
-    ? details.creditDates.map(expiry).join("\n") : expiry(null);
+  const creditValue = String(credits ?? "").trim();
+  const hasCredits = creditValue !== "" && creditValue !== "--"
+    && (!/\d/.test(creditValue) || /[1-9]/.test(creditValue));
+  if (hasCredits) {
+    creditText.title = details.creditDates.length
+      ? details.creditDates.map(expiry).join("\n") : expiry(null);
+  }
   if (!resets) {
     footerText.append(creditText);
     return footerText;
@@ -1517,13 +1522,17 @@ function accountBalanceText(usage, credits, inventory = P.resetInventory(usage),
       ? "accounts.card.remaining_resets_format" : "accounts.card.resets_unavailable_format",
     inventory.count ?? "--",
   ));
-  resetCount.title = details.resetDates.length
-    ? details.resetDates.map(({ at, count }) => `${expiry(at)}${count > 1 ? ` × ${count}` : ""}`).join("\n")
-    : expiry(null);
-  if (usage?.resetsLastConfirmedAt != null) {
-    const confirmed = tr("accounts.card.resets_last_confirmed_format",
-      P.formatReset(usage.resetsLastConfirmedAt, locale));
-    resetCount.title = inventory.count === 0 ? confirmed : `${resetCount.title}\n${confirmed}`;
+  if (inventory.count !== null) {
+    if (inventory.count > 0) {
+      resetCount.title = details.resetDates.length
+        ? details.resetDates.map(({ at, count }) => `${expiry(at)}${count > 1 ? ` × ${count}` : ""}`).join("\n")
+        : expiry(null);
+    }
+    if (usage?.resetsLastConfirmedAt != null) {
+      const confirmed = tr("accounts.card.resets_last_confirmed_format",
+        P.formatReset(usage.resetsLastConfirmedAt, locale));
+      resetCount.title = resetCount.title ? `${resetCount.title}\n${confirmed}` : confirmed;
+    }
   }
   footerText.append(creditText, " · ", resetCount);
   if (inventory.warning) {
