@@ -73,7 +73,7 @@ pub(crate) async fn refresh_at(
         .await
         .map_err(request_error)?;
     let status = response.status();
-    let body: Value = response.json().await.unwrap_or(Value::Null);
+    let body = crate::usage::read_json_body(response, "Claude token refresh").await?;
     if status.is_success() {
         return Ok(body);
     }
@@ -425,7 +425,7 @@ pub(crate) async fn request_usage(
         .get(reqwest::header::DATE)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| clock_offset_seconds(value, now_unix_seconds()));
-    let body = response.json().await.unwrap_or(Value::Null);
+    let body = crate::usage::read_json_body(response, "Claude usage").await?;
     Ok((status, body, retry_after, clock_offset))
 }
 /// Renews a login's `claudeAiOauth` entry in place.

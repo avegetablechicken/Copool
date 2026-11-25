@@ -482,3 +482,44 @@ async fn explicit_codex_greeting_sends_without_usage_preflight_or_reset_shortcut
         assert!(app.refresh_activity().is_empty());
     }
 }
+
+#[tokio::test]
+async fn malformed_usage_json_keeps_previous_quota_and_recovers() {
+    use serde_json::json;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (_dir, app) = super::fixture();
+    let failing = Arc::new(AtomicBool::new(true));
+    let state = failing.clone();
+    let server = serve(move |_| {
+        (StatusCode::OK, if state.load(Ordering::SeqCst) {
+            "{\"private\":\"synthetic-body-secret\",BAD}".into()
+        } else {
+            json!({"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":25,"limit_window_seconds":18000}}}).to_string()
+        })
+    }).await;
+    std::fs::create_dir_all(app.codex_config_path().parent().unwrap()).unwrap();
+    std::fs::write(
+        app.codex_config_path(),
+        format!("chatgpt_base_url = {:?}\n", server.base),
+    )
+    .unwrap();
+    let mut account = super::stored("body-failure", "fixture-user", "fixture-workspace");
+    account["usage"] = json!({"fetchedAt":1,"fiveHour":{"usedPercent":10,"windowSeconds":18000}});
+    super::save_fixture(&app, json!({"accounts":[account]}));
+    let error = app
+        .refresh_usage(Pool::Codex, "body-failure")
+        .await
+        .unwrap_err();
+    assert!(error.contains("invalid JSON response"), "{error}");
+    assert!(!error.contains("synthetic-body-secret"));
+    let card = app.accounts(Pool::Codex).await.unwrap().remove(0);
+    assert_eq!(card.usage_error.as_deref(), Some(error.as_str()));
+    assert_eq!(card.usage.unwrap().five_hour.unwrap().used_percent, 10.0);
+    failing.store(false, Ordering::SeqCst);
+    app.refresh_usage(Pool::Codex, "body-failure")
+        .await
+        .unwrap();
+    let card = app.accounts(Pool::Codex).await.unwrap().remove(0);
+    assert!(card.usage_error.is_none());
+    assert_eq!(card.usage.unwrap().five_hour.unwrap().used_percent, 25.0);
+}

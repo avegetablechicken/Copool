@@ -51,10 +51,10 @@ fn client(proxy: &str) -> Result<reqwest::Client, String> {
         .build()
         .map_err(|e| e.to_string())
 }
-async fn reply(response: reqwest::Response) -> Reply {
+async fn reply(response: reqwest::Response) -> Result<Reply, String> {
     let status = response.status().as_u16();
-    let body = response.json().await.unwrap_or(Value::Null);
-    (status, body)
+    let body = crate::usage::read_json_body(response, "Grok API").await?;
+    Ok((status, body))
 }
 impl Network for Http {
     fn api<'a>(&'a self, path: &'a str, token: &'a str, proxy: &'a str) -> Response<'a, Reply> {
@@ -67,7 +67,7 @@ impl Network for Http {
                 .send()
                 .await
                 .map_err(|e| crate::usage::format_reqwest_error(&e))?;
-            Ok(reply(response).await)
+            reply(response).await
         })
     }
     fn renew<'a>(&'a self, refresh_token: &'a str, proxy: &'a str) -> Response<'a, Reply> {
@@ -82,7 +82,7 @@ impl Network for Http {
                 .send()
                 .await
                 .map_err(|e| crate::usage::format_reqwest_error(&e))?;
-            Ok(reply(response).await)
+            reply(response).await
         })
     }
     fn gateway_models<'a>(
@@ -104,7 +104,7 @@ impl Network for Http {
                 .send()
                 .await
                 .map_err(|e| crate::usage::format_reqwest_error(&e))?;
-            Ok(reply(response).await)
+            reply(response).await
         })
     }
 }
@@ -138,7 +138,7 @@ pub(crate) async fn exchange(code: &str, verifier: &str, redirect: &str) -> Resu
         .send()
         .await
         .map_err(|e| crate::usage::format_reqwest_error(&e))?;
-    let (status, body) = reply(response).await;
+    let (status, body) = reply(response).await?;
     if !(200..300).contains(&status) {
         return Err(status_error("OAuth token exchange", status, &body));
     }
@@ -363,4 +363,25 @@ pub(crate) fn models(body: &Value) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod response_tests {
+    #[tokio::test]
+    async fn unreadable_success_is_an_error_and_authentication_status_is_preserved() {
+        let (response, worker) =
+            crate::usage::response_body_tests::response(200, b"{", true, false).await;
+        let error = super::reply(response).await.unwrap_err();
+        assert!(error.contains("response body read failed"), "{error}");
+        worker.join().unwrap();
+        let (response, worker) =
+            crate::usage::response_body_tests::response(401, b"not-json", false, false).await;
+        let (status, body) = super::reply(response).await.unwrap();
+        assert_eq!(status, 401);
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("HTTP 401"));
+        worker.join().unwrap();
+    }
 }

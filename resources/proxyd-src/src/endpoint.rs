@@ -105,7 +105,13 @@ where
     })?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let body = response.text().await.map_err(|error| {
+            Failure::Other(format!(
+                "{endpoint}: response body read failed (HTTP {}): {}",
+                status.as_u16(),
+                crate::usage::format_reqwest_error(&error.without_url())
+            ))
+        })?;
         if let Ok(payload) = serde_json::from_str::<Value>(&body) {
             let message = payload
                 .pointer("/error/message")
@@ -124,10 +130,9 @@ where
             crate::utils::truncate_for_error(&body, 140)
         )));
     }
-    let payload = response
-        .json::<Value>()
+    let payload = crate::usage::read_json_body(response, "Codex usage")
         .await
-        .map_err(|e| Failure::Other(format!("{endpoint}: {e}")))?;
+        .map_err(|error| Failure::Other(format!("{endpoint}: {error}")))?;
     let value = validate(payload).map_err(|e| Failure::Other(format!("{endpoint}: {e}")))?;
     Ok(EndpointResult { value, endpoint })
 }

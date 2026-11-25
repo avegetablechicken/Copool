@@ -58,10 +58,10 @@ fn client(proxy: &str) -> Result<reqwest::Client, String> {
         },
     )
 }
-async fn reply(response: reqwest::Response) -> Reply {
+async fn reply(response: reqwest::Response) -> Result<Reply, String> {
     let status = response.status().as_u16();
-    let body = response.json().await.unwrap_or(Value::Null);
-    (status, body)
+    let body = crate::usage::read_json_body(response, "Antigravity API").await?;
+    Ok((status, body))
 }
 impl Network for Http {
     fn cloud<'a>(
@@ -85,14 +85,16 @@ impl Network for Http {
                     .send()
                     .await;
                 match sent {
-                    Ok(response) => {
-                        let (status, body) = reply(response).await;
-                        // Only a server failure tries the other endpoint.
-                        if status < 500 && status != 404 {
-                            return Ok((status, body));
+                    Ok(response) => match reply(response).await {
+                        Ok((status, body)) => {
+                            if status < 500 && status != 404 {
+                                return Ok((status, body));
+                            }
+                            last = Ok((status, body));
                         }
-                        last = Ok((status, body));
-                    }
+                        // An interrupted successful body is a transport failure too.
+                        Err(error) => last = Err(error),
+                    },
                     Err(error) => last = Err(crate::usage::format_reqwest_error(&error)),
                 }
             }
@@ -113,7 +115,7 @@ impl Network for Http {
                 .send()
                 .await
                 .map_err(|e| crate::usage::format_reqwest_error(&e))?;
-            Ok(reply(response).await)
+            reply(response).await
         })
     }
     fn identity<'a>(&'a self, token: &'a str, proxy: &'a str) -> Response<'a, Reply> {
@@ -124,7 +126,7 @@ impl Network for Http {
                 .send()
                 .await
                 .map_err(|e| crate::usage::format_reqwest_error(&e))?;
-            Ok(reply(response).await)
+            reply(response).await
         })
     }
 }
@@ -468,5 +470,26 @@ pub(crate) async fn renew_token(
             Err("error.antigravity.sign_in_expired".into())
         }
         _ => Err(status_error("Google token request", status, &body)),
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    #[tokio::test]
+    async fn unreadable_success_is_an_error_and_authentication_status_is_preserved() {
+        let (response, worker) =
+            crate::usage::response_body_tests::response(200, b"{", true, false).await;
+        let error = super::reply(response).await.unwrap_err();
+        assert!(error.contains("response body read failed"), "{error}");
+        worker.join().unwrap();
+        let (response, worker) =
+            crate::usage::response_body_tests::response(401, b"not-json", false, false).await;
+        let (status, body) = super::reply(response).await.unwrap();
+        assert_eq!(status, 401);
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("HTTP 401"));
+        worker.join().unwrap();
     }
 }

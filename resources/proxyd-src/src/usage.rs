@@ -223,6 +223,56 @@ pub(crate) fn chatgpt_base_origin(configured: Option<&str>) -> String {
     base_url.trim().trim_end_matches('/').to_owned()
 }
 
+/// Reads a JSON API reply without confusing an interrupted body with missing quota.
+/// Successful responses must contain valid JSON. For an HTTP failure, retain its
+/// status-driven handling (401 renewal, 429 backoff, 5xx fallback) and attach the
+/// body failure as an error message instead of discarding the transport cause.
+pub(crate) async fn read_json_body(
+    response: reqwest::Response,
+    operation: &str,
+) -> Result<serde_json::Value, String> {
+    let status = response.status();
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let problem = if error.is_timeout() {
+                "response body read timed out"
+            } else {
+                "response body read failed"
+            };
+            let message = format!(
+                "{operation}: {problem} (HTTP {}): {}",
+                status.as_u16(),
+                format_reqwest_error(&error.without_url())
+            );
+            return if status.is_success() {
+                Err(message)
+            } else {
+                Ok(serde_json::json!({"error": {"message": message}}))
+            };
+        }
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            // Do not include body text or serde's Display: either may quote a
+            // credential or other private value from a malformed response.
+            let message = format!(
+                "{operation}: invalid JSON response (HTTP {}; {:?}, line {}, column {})",
+                status.as_u16(),
+                error.classify(),
+                error.line(),
+                error.column()
+            );
+            if status.is_success() {
+                Err(message)
+            } else {
+                Ok(serde_json::json!({"error": {"message": message}}))
+            }
+        }
+    }
+}
+
 pub(crate) fn format_reqwest_error(err: &reqwest::Error) -> String {
     let mut parts = vec![err.to_string()];
     let mut source = err.source();
@@ -514,3 +564,7 @@ mod certificate_hint_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "response_body_tests.rs"]
+pub(crate) mod response_body_tests;

@@ -13,6 +13,7 @@ struct Fake {
     revoked: Mutex<Vec<String>>,
     /// The share of the period used.
     used: Mutex<f64>,
+    usage_error: Mutex<Option<String>>,
     /// The settings fail, as a server error.
     settings_down: std::sync::atomic::AtomicBool,
     /// Official xAI `/v1/models` list returned for subscription accounts.
@@ -45,11 +46,17 @@ impl Network for Fake {
             .unwrap()
             .push(format!("{path} {token} {proxy}"));
         let used = *self.used.lock().unwrap();
+        let usage_error = self.usage_error.lock().unwrap().clone();
         let settings_down = self
             .settings_down
             .load(std::sync::atomic::Ordering::Relaxed);
         let official_models = self.official_models.lock().unwrap().clone();
         Box::pin(async move {
+            if path == api::USAGE_PATH {
+                if let Some(error) = usage_error {
+                    return Err(error);
+                }
+            }
             if token.starts_with("expired") {
                 return Ok((401, json!({"error": "unauthorized"})));
             }
@@ -1434,4 +1441,33 @@ async fn switching_a_grok_account_triggers_opencode_sync_effect() {
     assert_eq!(synced["xai"]["access"], "access-alice");
     assert_eq!(synced["xai"]["refresh"], "refresh-alice");
     assert_eq!(synced["xai"]["expires"], first_exp * 1000);
+}
+
+#[tokio::test]
+async fn interrupted_usage_keeps_cached_quota_without_renewing_and_recovers() {
+    let h = harness(false).await;
+    h.sign_in(&sign_in_of("alice", "access-alice", later()));
+    h.app.import_current(Pool::Grok).await.unwrap();
+    let id = cards(&h.app).await[0].id.clone();
+    h.app.refresh_now(Pool::Grok, Some(&id)).await.unwrap();
+    let previous = cards(&h.app).await.remove(0).usage.unwrap();
+    let message = "Grok API: response body read timed out (HTTP 200)";
+    *h.fake.usage_error.lock().unwrap() = Some(message.into());
+    assert_eq!(
+        h.app.refresh_usage(Pool::Grok, &id).await.unwrap_err(),
+        message
+    );
+    let card = cards(&h.app).await.remove(0);
+    assert_eq!(card.usage_error.as_deref(), Some(message));
+    assert_eq!(
+        serde_json::to_value(card.usage).unwrap(),
+        serde_json::to_value(Some(previous)).unwrap()
+    );
+    assert_eq!(h.fake.renewals(), 0);
+    *h.fake.usage_error.lock().unwrap() = None;
+    *h.fake.used.lock().unwrap() = 17.0;
+    h.app.refresh_usage(Pool::Grok, &id).await.unwrap();
+    let card = cards(&h.app).await.remove(0);
+    assert!(card.usage_error.is_none());
+    assert_eq!(card.usage.unwrap().one_week.unwrap().used_percent, 17.0);
 }
