@@ -12,8 +12,11 @@ pub(crate) const SETTINGS_PATH: &str = "/settings";
 pub(crate) const MODELS_PATH: &str = "/models";
 const AUTHORIZE_PATH: &str = "/oauth2/authorize";
 const TOKEN_PATH: &str = "/oauth2/token";
-/// What Grok Build's sign-in asks for.
-const SCOPES: &str = "openid profile email offline_access grok-cli:access api:access";
+/// What Grok Build's sign-in asks for (`default_oauth2_scopes` in its
+/// `xai-grok-login`): without the conversation and workspace scopes, its
+/// cloud conversations and workspaces refuse the login.
+const SCOPES: &str = "openid profile email offline_access grok-cli:access api:access \
+conversations:read conversations:write workspaces:read workspaces:write";
 /// The Grok Build release whose requests Copool's resemble.
 pub(crate) const CLIENT_VERSION: &str = "1.0.92";
 const ONE_WEEK: i64 = 7 * 24 * 60 * 60;

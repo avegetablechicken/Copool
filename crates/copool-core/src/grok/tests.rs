@@ -715,6 +715,18 @@ fn a_browser_sign_in_is_kept_as_grok_build_keeps_its_sign_in() {
     assert!(url.starts_with("https://auth.x.ai/oauth2/authorize?"));
     assert!(url.contains("client_id=b1a00492-073a-47ea-816f-4c329264a828"));
     assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A5%2Fcallback"));
+    // The scopes of Grok Build's own sign-in, in its order.
+    let scope = reqwest::Url::parse(&url)
+        .unwrap()
+        .query_pairs()
+        .find(|(key, _)| key == "scope")
+        .map(|(_, value)| value.into_owned())
+        .unwrap();
+    assert_eq!(
+        scope,
+        "openid profile email offline_access grok-cli:access api:access \
+         conversations:read conversations:write workspaces:read workspaces:write"
+    );
 }
 
 /// What a Sub2api reports for a Grok account's usage: before 0.1.155 no
