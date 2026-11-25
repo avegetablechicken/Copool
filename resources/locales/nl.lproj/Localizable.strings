@@ -69,7 +69,7 @@
 "tray.hidden" = "Verborgen";
 "settings.section.switch_behavior" = "Schakelgedrag";
 "settings.auto_smart_switch" = "Automatisch slim schakelen";
-"settings.sync_opencode_openai_auth" = "Opencode OpenAI-auth synchroniseren";
+"settings.sync_opencode_openai_auth" = "Opencode-auth synchroniseren";
 "settings.restart_editors_on_switch" = "Editors herstarten bij wisselen";
 "settings.editor_restart_target" = "Doel-editor voor herstart";
 "settings.section.capability_matrix" = "Capaciteitenmatrix";

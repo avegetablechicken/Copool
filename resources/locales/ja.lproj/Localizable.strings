@@ -69,7 +69,7 @@
 "tray.hidden" = "非表示";
 "settings.section.switch_behavior" = "切替動作";
 "settings.auto_smart_switch" = "自動スマート切替";
-"settings.sync_opencode_openai_auth" = "opencode OpenAI 認証を同期";
+"settings.sync_opencode_openai_auth" = "opencode 認証を同期";
 "settings.restart_editors_on_switch" = "切替時にエディタを再起動";
 "settings.editor_restart_target" = "再起動対象エディタ";
 "settings.section.capability_matrix" = "機能マトリクス";

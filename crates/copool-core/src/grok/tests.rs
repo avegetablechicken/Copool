@@ -1360,3 +1360,78 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
     assert!(!env_file.exists());
     assert_eq!(fs::read_to_string(&rc_file).unwrap(), rc_before);
 }
+
+#[tokio::test]
+async fn switching_a_grok_account_triggers_opencode_sync_effect() {
+    let h = harness(false).await;
+    let first_exp = later();
+    let second_exp = first_exp + 1800;
+    let first = sign_in_of("alice", "access-alice", first_exp);
+    let second = sign_in_of("bob", "access-bob", second_exp);
+    h.sign_in(&first);
+    assert_eq!(h.app.import_current(Pool::Grok).await.unwrap(), 1);
+    assert_eq!(
+        h.app
+            .import_json(Pool::Grok, &second.to_string())
+            .await
+            .unwrap(),
+        1
+    );
+    let listed = cards(&h.app).await;
+    let alice = listed
+        .iter()
+        .find(|c| c.account_id == "uid-alice")
+        .unwrap()
+        .clone();
+    let bob = listed
+        .iter()
+        .find(|c| c.account_id == "uid-bob")
+        .unwrap()
+        .clone();
+    h.app
+        .save_preferences(Preferences {
+            sync_opencode_openai_auth: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let opencode_path = h._dir.path().join("opencode/auth.json");
+    let target_path = opencode_path.clone();
+    let calls = Arc::new(Mutex::new(0usize));
+    let observed = calls.clone();
+    h.app.on_switch_effects(Arc::new(move |pool, prefs, auth| {
+        let target_path = target_path.clone();
+        let observed = observed.clone();
+        Box::pin(async move {
+            *observed.lock().unwrap() += 1;
+            assert_eq!(pool, Pool::Grok);
+            assert!(prefs.sync_opencode_openai_auth);
+            crate::platform::sync_opencode_grok(
+                auth.as_ref().unwrap(),
+                std::slice::from_ref(&target_path),
+            )?;
+            Ok(SwitchExecution {
+                opencode_synced: true,
+                ..Default::default()
+            })
+        })
+    }));
+
+    let execution = h.app.switch_account(Pool::Grok, &bob.id).await.unwrap();
+    assert!(execution.opencode_synced);
+    assert_eq!(*calls.lock().unwrap(), 1);
+    let synced: Value = serde_json::from_slice(&fs::read(&opencode_path).unwrap()).unwrap();
+    assert_eq!(synced["xai"]["type"], "oauth");
+    assert_eq!(synced["xai"]["access"], "access-bob");
+    assert_eq!(synced["xai"]["refresh"], "refresh-bob");
+    assert_eq!(synced["xai"]["expires"], second_exp * 1000);
+
+    let execution = h.app.switch_account(Pool::Grok, &alice.id).await.unwrap();
+    assert!(execution.opencode_synced);
+    assert_eq!(*calls.lock().unwrap(), 2);
+    let synced: Value = serde_json::from_slice(&fs::read(&opencode_path).unwrap()).unwrap();
+    assert_eq!(synced["xai"]["access"], "access-alice");
+    assert_eq!(synced["xai"]["refresh"], "refresh-alice");
+    assert_eq!(synced["xai"]["expires"], first_exp * 1000);
+}

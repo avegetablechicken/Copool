@@ -69,7 +69,7 @@
 "tray.hidden" = "숨김";
 "settings.section.switch_behavior" = "전환 동작";
 "settings.auto_smart_switch" = "자동 스마트 전환";
-"settings.sync_opencode_openai_auth" = "opencode OpenAI 인증 동기화";
+"settings.sync_opencode_openai_auth" = "opencode 인증 동기화";
 "settings.restart_editors_on_switch" = "전환 시 편집기 재시작";
 "settings.editor_restart_target" = "편집기 재시작 대상";
 "settings.section.capability_matrix" = "기능 매트릭스";

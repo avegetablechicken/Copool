@@ -147,6 +147,7 @@ pub enum SmartSwitchOutcome {
 }
 type SwitchEffect = Arc<
     dyn Fn(
+            Pool,
             Preferences,
             Option<Value>,
         )
@@ -397,16 +398,20 @@ impl Application {
         *self.switch_effects.write().unwrap() = Some(effect);
     }
     pub fn enable_desktop_effects(&self) {
-        self.on_switch_effects(Arc::new(|preferences, auth| {
-            Box::pin(
-                async move { crate::platform::after_switch(&preferences, auth.as_ref()).await },
-            )
+        self.on_switch_effects(Arc::new(|pool, preferences, auth| {
+            Box::pin(async move {
+                crate::platform::after_switch(pool, &preferences, auth.as_ref()).await
+            })
         }));
     }
-    async fn after_switch(&self, auth: Option<&Value>) -> Result<SwitchExecution> {
+    pub(crate) async fn after_switch(
+        &self,
+        pool: Pool,
+        auth: Option<&Value>,
+    ) -> Result<SwitchExecution> {
         let effect = self.switch_effects.read().unwrap().clone();
         if let Some(effect) = effect {
-            effect(self.preferences()?, auth.cloned()).await
+            effect(pool, self.preferences()?, auth.cloned()).await
         } else {
             Ok(SwitchExecution::default())
         }
@@ -462,6 +467,7 @@ impl Application {
                         )?;
                         let preferences = Preferences::from_settings(settings)?;
                         effect(
+                            Pool::Codex,
                             preferences,
                             if auth.get("copoolProvider").is_some() {
                                 None
@@ -909,7 +915,7 @@ impl Application {
             crate::codex_config::switch(&self.codex_config_path(), &provider.key)?;
             self.publish();
             drop(_op);
-            let mut execution = self.after_switch(None).await?;
+            let mut execution = self.after_switch(Pool::Codex, None).await?;
             execution.provider = Some(provider.key);
             return Ok(execution);
         }
@@ -956,7 +962,7 @@ impl Application {
         }
         drop(_lock);
         drop(_op);
-        self.after_switch(Some(&normalized)).await
+        self.after_switch(Pool::Codex, Some(&normalized)).await
     }
     /// Whether the stored account failed: its usage refused, or its token
     /// expired.

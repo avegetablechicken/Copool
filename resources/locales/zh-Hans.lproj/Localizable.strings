@@ -69,7 +69,7 @@
 "tray.hidden" = "隐藏";
 "settings.section.switch_behavior" = "切换行为";
 "settings.auto_smart_switch" = "自动智能切换";
-"settings.sync_opencode_openai_auth" = "同步 opencode OpenAI 授权";
+"settings.sync_opencode_openai_auth" = "同步 opencode 授权";
 "settings.restart_editors_on_switch" = "切换账号后重启编辑器";
 "settings.editor_restart_target" = "编辑器重启目标";
 "settings.section.capability_matrix" = "能力清单";

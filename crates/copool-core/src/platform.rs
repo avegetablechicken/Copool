@@ -1,6 +1,7 @@
 //! Explicit desktop integrations. Never run by core tests or during account reads.
 use crate::{
-    auth, persistence::write_json, process, utils::now_unix_seconds, Preferences, SwitchExecution,
+    auth, persistence::write_json, process, utils::now_unix_seconds, Pool, Preferences,
+    SwitchExecution,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -54,20 +55,17 @@ pub fn open_url(url: &str) -> Result<(), String> {
     };
     cmd.arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
-pub fn sync_opencode(auth_json: &Value, targets: &[PathBuf]) -> Result<(), String> {
-    let tokens = auth_json.get("tokens").unwrap_or(auth_json);
-    let access = tokens["access_token"]
-        .as_str()
-        .ok_or("Missing access token")?;
-    let refresh = tokens["refresh_token"]
-        .as_str()
-        .ok_or("Missing refresh token")?;
-    let expires = tokens["id_token"]
-        .as_str()
-        .and_then(|s| auth::decode_jwt_payload(s).ok())
-        .and_then(|v| v["exp"].as_i64())
-        .map(|v| v * 1000)
-        .unwrap_or(now_unix_seconds() * 1000 + 55 * 60 * 1000);
+fn write_opencode_oauth(
+    targets: &[PathBuf],
+    provider: &str,
+    access: &str,
+    refresh: &str,
+    expires_seconds: Option<i64>,
+    account_id: Option<&str>,
+) -> Result<(), String> {
+    let expires = expires_seconds
+        .map(|seconds| seconds.saturating_mul(1000).max(0))
+        .unwrap_or_else(|| now_unix_seconds().saturating_mul(1000) + 55 * 60 * 1000);
     let mut failures = vec![];
     for path in targets {
         let result = (|| {
@@ -80,15 +78,16 @@ pub fn sync_opencode(auth_json: &Value, targets: &[PathBuf]) -> Result<(), Strin
             if !root.is_object() {
                 return Err("Invalid OpenCode auth document".into());
             }
-            if !root["openai"].is_object() {
-                root["openai"] = json!({});
+            if !root[provider].is_object() {
+                root[provider] = json!({});
             }
-            let item = root["openai"].as_object_mut().unwrap();
-            item.entry("type").or_insert(json!("oauth"));
+            let item = root[provider].as_object_mut().unwrap();
+            item.insert("type".into(), json!("oauth"));
+            item.remove("key");
             item.insert("access".into(), access.into());
             item.insert("refresh".into(), refresh.into());
             item.insert("expires".into(), expires.into());
-            if let Some(id) = tokens["account_id"].as_str() {
+            if let Some(id) = account_id {
                 item.insert("accountId".into(), id.into());
             }
             write_json(path, &root)
@@ -102,6 +101,33 @@ pub fn sync_opencode(auth_json: &Value, targets: &[PathBuf]) -> Result<(), Strin
     } else {
         Ok(())
     }
+}
+pub fn sync_opencode(auth_json: &Value, targets: &[PathBuf]) -> Result<(), String> {
+    let tokens = auth_json.get("tokens").unwrap_or(auth_json);
+    let access = tokens["access_token"]
+        .as_str()
+        .ok_or("Missing access token")?;
+    let refresh = tokens["refresh_token"]
+        .as_str()
+        .ok_or("Missing refresh token")?;
+    let expires = tokens["id_token"]
+        .as_str()
+        .and_then(|s| auth::decode_jwt_payload(s).ok())
+        .and_then(|v| v["exp"].as_i64());
+    let account_id = tokens["account_id"].as_str();
+    write_opencode_oauth(targets, "openai", access, refresh, expires, account_id)
+}
+pub fn sync_opencode_grok(document: &Value, targets: &[PathBuf]) -> Result<(), String> {
+    let sign_in = crate::grok::login::sign_in_of(document);
+    let doc = sign_in.as_ref().unwrap_or(document);
+    let access = crate::grok::login::access_token(doc).ok_or("Missing access token")?;
+    let refresh = crate::grok::login::refresh_token(doc).ok_or("Missing refresh token")?;
+    let expires = crate::grok::login::expiry(doc).or_else(|| {
+        crate::grok::login::claims(&access)
+            .get("exp")
+            .and_then(Value::as_i64)
+    });
+    write_opencode_oauth(targets, "xai", &access, &refresh, expires, None)
 }
 pub fn opencode_paths() -> Vec<PathBuf> {
     if let Some(p) = std::env::var_os("OPENCODE_AUTH_PATH").filter(|p| !p.is_empty()) {
@@ -197,19 +223,27 @@ pub fn editors() -> Vec<Editor> {
 /// Side effects of a switch, reported as Swift's SwitchAccountExecutionResult:
 /// the switch itself has succeeded whatever fails here.
 pub async fn after_switch(
+    pool: Pool,
     p: &Preferences,
     auth: Option<&Value>,
 ) -> Result<SwitchExecution, String> {
     let mut result = SwitchExecution::default();
     if p.sync_opencode_openai_auth {
         if let Some(auth) = auth {
-            match sync_opencode(auth, &opencode_paths()) {
-                Ok(()) => result.opencode_synced = true,
-                Err(e) => result.opencode_sync_error = Some(e),
+            let synced = match pool {
+                Pool::Codex => Some(sync_opencode(auth, &opencode_paths())),
+                Pool::Grok => Some(sync_opencode_grok(auth, &opencode_paths())),
+                Pool::Claude | Pool::Antigravity => None,
+            };
+            if let Some(synced) = synced {
+                match synced {
+                    Ok(()) => result.opencode_synced = true,
+                    Err(e) => result.opencode_sync_error = Some(e),
+                }
             }
         }
     }
-    if p.restart_editors_on_switch {
+    if pool == Pool::Codex && p.restart_editors_on_switch {
         let installed = editors();
         let mut errors = vec![];
         for id in &p.restart_editor_targets {
@@ -248,7 +282,7 @@ pub async fn after_switch(
             result.editor_restart_error = Some(errors.join(" | "));
         }
     }
-    if p.launch_codex_after_switch {
+    if pool == Pool::Codex && p.launch_codex_after_switch {
         result.launch_error = launch_codex().await.err();
     }
     Ok(result)
@@ -355,5 +389,156 @@ pub fn startup(enabled: bool, executable: &Path) -> Result<(), String> {
         } else {
             Err(String::from_utf8_lossy(&output.stderr).into_owned())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    fn jwt(payload: Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let body = URL_SAFE_NO_PAD.encode(payload.to_string());
+        format!("{header}.{body}.")
+    }
+
+    #[test]
+    fn sync_opencode_writes_openai_oauth_and_replaces_api_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        write_json(
+            &path,
+            &json!({
+                "openai": { "type": "api", "key": "sk-old" },
+                "xai": { "type": "oauth", "access": "xai-access", "refresh": "xai-refresh", "expires": 1_700_000_000_000_i64 }
+            }),
+        )
+        .unwrap();
+
+        let id_token = jwt(json!({"exp": 1_800_000_456_i64}));
+        let auth = json!({
+            "tokens": {
+                "access_token": "openai-access",
+                "refresh_token": "openai-refresh",
+                "id_token": id_token,
+                "account_id": "acct-42"
+            }
+        });
+        sync_opencode(&auth, std::slice::from_ref(&path)).unwrap();
+
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["openai"]["type"], "oauth");
+        assert_eq!(saved["openai"]["access"], "openai-access");
+        assert_eq!(saved["openai"]["refresh"], "openai-refresh");
+        assert_eq!(saved["openai"]["expires"], 1_800_000_456_000_i64);
+        assert_eq!(saved["openai"]["accountId"], "acct-42");
+        assert!(saved["openai"].get("key").is_none());
+        assert_eq!(saved["xai"]["access"], "xai-access");
+    }
+
+    #[test]
+    fn sync_opencode_grok_writes_xai_oauth_and_keeps_other_providers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        write_json(
+            &path,
+            &json!({
+                "openai": {
+                    "type": "oauth",
+                    "access": "openai-access",
+                    "refresh": "openai-refresh",
+                    "expires": 1_700_000_000_000_i64,
+                    "accountId": "acct-1"
+                },
+                "xai": {
+                    "type": "api",
+                    "key": "xai-old-api-key"
+                }
+            }),
+        )
+        .unwrap();
+
+        let doc = json!({
+            "key": "grok-access-1",
+            "refresh_token": "grok-refresh-1",
+            "expires_at": "2026-11-26T12:00:00.000000Z"
+        });
+        sync_opencode_grok(&doc, std::slice::from_ref(&path)).unwrap();
+
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["openai"]["access"], "openai-access");
+        assert_eq!(saved["openai"]["accountId"], "acct-1");
+        assert_eq!(saved["xai"]["type"], "oauth");
+        assert_eq!(saved["xai"]["access"], "grok-access-1");
+        assert_eq!(saved["xai"]["refresh"], "grok-refresh-1");
+        assert_eq!(
+            saved["xai"]["expires"],
+            chrono::DateTime::parse_from_rfc3339("2026-11-26T12:00:00Z")
+                .unwrap()
+                .timestamp()
+                * 1000
+        );
+        assert!(saved["xai"].get("key").is_none());
+    }
+
+    #[test]
+    fn sync_opencode_grok_reads_wrapped_auth_and_jwt_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let access = jwt(json!({"exp": 1_800_000_123_i64}));
+        let wrapped = json!({
+            "https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828": {
+                "key": access,
+                "refresh_token": "grok-refresh-wrapped"
+            }
+        });
+
+        sync_opencode_grok(&wrapped, std::slice::from_ref(&path)).unwrap();
+
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["xai"]["type"], "oauth");
+        assert_eq!(saved["xai"]["access"], access);
+        assert_eq!(saved["xai"]["refresh"], "grok-refresh-wrapped");
+        assert_eq!(saved["xai"]["expires"], 1_800_000_123_000_i64);
+    }
+
+    #[test]
+    fn sync_opencode_grok_errors_when_tokens_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        assert_eq!(
+            sync_opencode_grok(
+                &json!({"refresh_token": "only-refresh"}),
+                std::slice::from_ref(&path)
+            )
+            .unwrap_err(),
+            "Missing access token"
+        );
+        assert_eq!(
+            sync_opencode_grok(&json!({"key": "only-access"}), std::slice::from_ref(&path))
+                .unwrap_err(),
+            "Missing refresh token"
+        );
+    }
+
+    #[tokio::test]
+    async fn after_switch_grok_skips_editor_restart_and_codex_launch() {
+        let preferences = Preferences {
+            sync_opencode_openai_auth: false,
+            restart_editors_on_switch: true,
+            restart_editor_targets: vec!["not-installed-editor".into()],
+            launch_codex_after_switch: true,
+            ..Default::default()
+        };
+        let doc = json!({
+            "key": "grok-access",
+            "refresh_token": "grok-refresh",
+            "expires_at": "2026-11-26T12:00:00Z"
+        });
+        let execution = after_switch(Pool::Grok, &preferences, Some(&doc))
+            .await
+            .unwrap();
+        assert_eq!(execution, SwitchExecution::default());
     }
 }

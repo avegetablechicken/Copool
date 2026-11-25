@@ -69,7 +69,7 @@
 "tray.hidden" = "Скрыто";
 "settings.section.switch_behavior" = "Поведение переключения";
 "settings.auto_smart_switch" = "Автоматическое умное переключение";
-"settings.sync_opencode_openai_auth" = "Синхронизировать OpenAI auth opencode";
+"settings.sync_opencode_openai_auth" = "Синхронизировать auth opencode";
 "settings.restart_editors_on_switch" = "Перезапускать редакторы при переключении";
 "settings.editor_restart_target" = "Целевой редактор для перезапуска";
 "settings.section.capability_matrix" = "Матрица возможностей";

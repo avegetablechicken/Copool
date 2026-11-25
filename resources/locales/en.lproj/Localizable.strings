@@ -69,7 +69,7 @@
 "tray.hidden" = "Hidden";
 "settings.section.switch_behavior" = "Switch Behavior";
 "settings.auto_smart_switch" = "Auto smart switch";
-"settings.sync_opencode_openai_auth" = "Sync opencode OpenAI auth";
+"settings.sync_opencode_openai_auth" = "Sync opencode auth";
 "settings.restart_editors_on_switch" = "Restart editors on switch";
 "settings.editor_restart_target" = "Editor restart target";
 "settings.section.capability_matrix" = "Capability Matrix";

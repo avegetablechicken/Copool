@@ -69,7 +69,7 @@
 "tray.hidden" = "Masqué";
 "settings.section.switch_behavior" = "Comportement de bascule";
 "settings.auto_smart_switch" = "Bascule intelligente automatique";
-"settings.sync_opencode_openai_auth" = "Synchroniser l'auth OpenAI d'opencode";
+"settings.sync_opencode_openai_auth" = "Synchroniser l'auth d'opencode";
 "settings.restart_editors_on_switch" = "Redémarrer les éditeurs après changement";
 "settings.editor_restart_target" = "Éditeur à redémarrer";
 "settings.section.capability_matrix" = "Matrice des capacités";

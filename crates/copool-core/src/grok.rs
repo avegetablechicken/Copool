@@ -16,7 +16,7 @@ use serde_json::Value;
 use std::{fs, path::PathBuf, sync::Arc};
 
 mod api;
-mod login;
+pub(crate) mod login;
 mod sub2api;
 
 pub(crate) use api::{sign_in_url, sub2api_usage, Network};
@@ -630,7 +630,9 @@ impl Application {
         }
         store.current_account_id = Some(target.id);
         self.grok_save(&store)?;
-        Ok(SwitchExecution::default())
+        drop(_lock);
+        drop(_op);
+        self.after_switch(Pool::Grok, Some(&target.document)).await
     }
     /// Whether the account failed: its usage refused, or its token expired.
     pub(crate) async fn grok_login_failed(&self, id: &str) -> Result<bool> {

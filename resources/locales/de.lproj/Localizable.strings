@@ -69,7 +69,7 @@
 "tray.hidden" = "Ausgeblendet";
 "settings.section.switch_behavior" = "Wechselverhalten";
 "settings.auto_smart_switch" = "Automatischer intelligenter Wechsel";
-"settings.sync_opencode_openai_auth" = "Opencode OpenAI-Auth synchronisieren";
+"settings.sync_opencode_openai_auth" = "Opencode-Auth synchronisieren";
 "settings.restart_editors_on_switch" = "Editoren nach Kontowechsel neu starten";
 "settings.editor_restart_target" = "Neustart-Ziel des Editors";
 "settings.section.capability_matrix" = "Fähigkeitsmatrix";

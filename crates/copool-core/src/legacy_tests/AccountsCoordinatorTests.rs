@@ -1020,9 +1020,10 @@ async fn testTrayMenuModelAutoSmartSwitchWritesAuthAndLaunchesCodex() {
     .unwrap();
     let events = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
     let observed = events.clone();
-    app.on_switch_effects(std::sync::Arc::new(move |settings, auth| {
+    app.on_switch_effects(std::sync::Arc::new(move |pool, settings, auth| {
         let observed = observed.clone();
         Box::pin(async move {
+            assert_eq!(pool, Pool::Codex);
             observed.lock().unwrap().push((
                 settings.launch_codex_after_switch,
                 crate::auth::extract_auth(&auth.unwrap())
