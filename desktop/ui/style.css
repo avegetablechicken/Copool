@@ -2153,6 +2153,10 @@ button.usage-reset:hover {
   border-radius: 4px;
 }
 
+.card-edit + .model-switch {
+  margin-left: 0;
+}
+
 /* Both models' marks stacked, alike in size: the shown model's in front, the
    other's behind it, set off up and to the right and turned, faded and grey.
    The front mark covers it where they overlap; neither is cut. */
