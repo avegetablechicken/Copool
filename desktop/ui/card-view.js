@@ -13,8 +13,9 @@
      accountProxy  the shared account proxy, trimmed; blank for none
      switchingId   the account being switched to, or null
      adding, authorizing   a sign-in under way
-     ui(id)        the card's state under way: { refreshing, greeting, hi,
-                   renewing, renewed, thirdParty } (see IDLE)
+     ui(id)        the card's state under way: { refreshing, hi, renewing,
+                   renewed, thirdParty } (see IDLE), as the Accounts
+                   controller's cardState has it
    The view is plain data. What changes with time alone while it is shown
    (resetLabel, paceTitle, refreshTitle, details) is worked out again by the
    functions below as the pointer enters. */
@@ -28,10 +29,9 @@
   const IDLE = {
     // Its usage is being read, here or by a remote server.
     refreshing: false,
-    // A hi is being sent (the controller's request).
-    greeting: false,
-    // How far its hi got: "sent" until the model replies, then "received"
-    // while its 5h window has yet to show; null for none.
+    // How far its hi got: "sent" until the model replies, which locks its
+    // refresh, then "received" while its 5h window has yet to show; null
+    // for none.
     hi: null,
     renewing: false,
     // Its token was just renewed.
@@ -411,8 +411,8 @@
     if (actions.some((action) => action.menu)) actions.push(separator());
     if (task) actions.push(taskAction());
     // The menu's refresh waits while any request is under way; the button
-    // spins while the card refreshes, and waits for a hi or renewal.
-    const busy = ui.refreshing || ui.greeting || ui.renewing;
+    // spins while the card refreshes, and gives way to a hi or renewal.
+    const busy = ui.refreshing || ui.hi === "sent" || ui.renewing;
     actions.push({
       kind: "refresh",
       button: reauthenticate || task
@@ -422,7 +422,7 @@
             label: tr("common.refresh_usage"),
             nextAt: account.nextRefreshAt ?? null,
             spinning: ui.refreshing,
-            disabled: ui.greeting || ui.renewing,
+            disabled: false,
           },
       menu: { label: tr("common.refresh_usage"), disabled: busy },
     });
@@ -496,11 +496,11 @@
         // Its first card due.
         nextAt: nextAt.length ? Math.min(...nextAt) : null,
         spinning: refreshing,
-        disabled: uis.some((ui) => ui.greeting),
+        disabled: uis.some((ui) => ui.hi === "sent"),
       },
       menu: {
         label: tr("common.refresh_usage"),
-        disabled: uis.some((ui) => ui.refreshing || ui.greeting || ui.renewing),
+        disabled: uis.some((ui) => ui.refreshing || ui.hi === "sent" || ui.renewing),
       },
     });
     const target = switchTarget(group);

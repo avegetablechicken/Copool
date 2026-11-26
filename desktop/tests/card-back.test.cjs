@@ -529,8 +529,7 @@ function cardFields() {
     setAttribute() {},
   });
   const scope = {
-    sayingHi: new Map(),
-    accountsController: { refreshingIds: new Set(), remoteRefreshingIds: new Set() },
+    accountsController: { cardState: () => ({ refreshing: false, hi: null }) },
     V: { canSayHi: () => true },
     cardContext: () => ({}),
     tr: (key) => key,

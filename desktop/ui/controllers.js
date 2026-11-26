@@ -1,13 +1,12 @@
 /* UI state shared by the actual desktop and migrated controller tests. */
 (function (root, factory) {
-  const api = factory(
-    typeof module === "object" && module.exports
-      ? require("./presentation.js")
-      : root.CopoolPresentation,
-  );
-  if (typeof module === "object" && module.exports) module.exports = api;
+  const node = typeof module === "object" && module.exports;
+  const api = node
+    ? factory(require("./presentation.js"), require("./card-view.js"))
+    : factory(root.CopoolPresentation, root.CopoolCardView);
+  if (node) module.exports = api;
   else root.CopoolControllers = api;
-})(globalThis, function (P) {
+})(globalThis, function (P, V) {
   const messageOf = (error) => error?.message || error?.code || String(error);
   /// The Sub2api provider forms of each pool: what they show. Everything
   /// else about them is the same: cards name a provider by its id.
@@ -241,14 +240,32 @@
       return this.invoke("quit_app");
     }
   }
+  /// The time, and waiting, as the Accounts controller has them.
+  const REAL_CLOCK = {
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  };
+  /// Seconds after a hi's reply at which its card is refreshed again, until
+  /// its 5h window shows.
+  const SAY_HI_LOOKS = [10, 30, 90, 180];
+  /// How long a card shows its token as just renewed.
+  const RENEWED_SHOWN_MS = 2200;
+  /// One pool's accounts and what each card has under way: its refresh, its
+  /// hi and the refreshes that follow it, its renewal and the moment it
+  /// shows as done, and which pool's windows its model switch shows. The
+  /// cards read it through `cardState`. `options.pool` names the pool;
+  /// `options.clock` ({ now, sleep }) is the time it waits by.
   class Accounts {
     constructor(
       invoke,
       initial = null,
       onUpdate = () => {},
       onMutation = () => {},
+      options = {},
     ) {
       this.invoke = invoke;
+      this.pool = options.pool ?? null;
+      this.clock = options.clock ?? REAL_CLOCK;
       this.onMutation = onMutation;
       this.accounts = initial || [];
       this.directory = [];
@@ -257,8 +274,13 @@
       this.manualRefreshing = false;
       this.refreshingIds = new Set();
       this.remoteRefreshingIds = new Set();
-      this.sayingHiIds = new Set();
+      // How far each card's hi got: "sent" until the model replies, which
+      // locks its refresh, then "received" until its 5h window shows.
+      this.hi = new Map();
       this.renewingIds = new Set();
+      this.renewedIds = new Set();
+      // Cards whose usage rows show their third-party pool (the model switch).
+      this.thirdPartyIds = new Set();
       this.pendingGeneration = 0;
       this.loadGeneration = 0;
       this.loginGeneration = 0;
@@ -276,9 +298,35 @@
         this.manualRefreshing ||
         this.refreshingIds.size > 0 ||
         this.remoteRefreshingIds.size > 0 ||
-        this.sayingHiIds.size > 0 ||
+        [...this.hi.values()].includes("sent") ||
         this.renewingIds.size > 0
       );
+    }
+    /// Whether a card's refresh, hi or renewal waits for another one.
+    busy(id) {
+      return (
+        this.manualRefreshing ||
+        this.refreshingIds.has(id) ||
+        this.remoteRefreshingIds.has(id) ||
+        this.hi.get(id) === "sent" ||
+        this.renewingIds.has(id)
+      );
+    }
+    /// What a card has under way, as card-view.js's `ui(id)`.
+    cardState(id) {
+      return {
+        refreshing: this.refreshingIds.has(id) || this.remoteRefreshingIds.has(id),
+        hi: this.hi.get(id) ?? null,
+        renewing: this.renewingIds.has(id),
+        renewed: this.renewedIds.has(id),
+        thirdParty: this.thirdPartyIds.has(id),
+      };
+    }
+    /// Shows a card's third-party pool in its usage rows, or its own.
+    showThirdParty(id, shown) {
+      if (shown) this.thirdPartyIds.add(id);
+      else this.thirdPartyIds.delete(id);
+      this.onUpdate();
     }
     get spinner() {
       return this.manualRefreshing;
@@ -335,14 +383,7 @@
     }
     async refresh(id = null) {
       // Refreshing all waits for every refresh; one account only for itself.
-      const busy =
-        id === null
-          ? this.refreshing
-          : this.manualRefreshing ||
-            this.refreshingIds.has(id) ||
-            this.remoteRefreshingIds.has(id) ||
-            this.sayingHiIds.has(id) ||
-            this.renewingIds.has(id);
+      const busy = id === null ? this.refreshing : this.busy(id);
       if (busy) return false;
       if (id === null) this.manualRefreshing = true;
       else this.refreshingIds.add(id);
@@ -363,43 +404,67 @@
         this.onUpdate();
       }
     }
-    /// Says hi with an account; refresh waits until the model replies.
-    /// `thirdParty`, when the card's model switch chose, names the one pool
-    /// to greet: the third party's, or the card's own.
-    async sayHi(id, thirdParty = null) {
-      if (
-        this.manualRefreshing ||
-        this.refreshingIds.has(id) ||
-        this.remoteRefreshingIds.has(id) ||
-        this.sayingHiIds.has(id) ||
-        this.renewingIds.has(id)
-      )
-        return false;
-      this.sayingHiIds.add(id);
+    /// Says hi with an account, which starts its 5h window, then refreshes
+    /// its card over the next minutes until the window shows: by these
+    /// refreshes or any other, at once; still not shown at the last, then.
+    /// A card with a model switch greets the pool it shows alone. Resolves
+    /// to "started" or "not_started", or false when the card was busy.
+    async sayHi(id) {
+      if (this.hi.has(id) || this.busy(id)) return false;
+      const card = () => this.accounts.find((a) => a.id === id);
+      const target = card()
+        ? V.helloTarget(card(), { pool: this.pool, ui: (card) => this.cardState(card) })
+        : null;
+      const shown = () => {
+        const account = card();
+        return (
+          !account ||
+          (!!account.usage &&
+            !V.fiveHourIdle(account, this.pool, target, this.clock.now() / 1000))
+        );
+      };
+      this.hi.set(id, "sent");
       this.onUpdate();
       try {
-        await this.invoke("say_hi", thirdParty === null ? { id } : { id, thirdParty });
-        return true;
+        try {
+          await this.invoke("say_hi", target === null ? { id } : { id, thirdParty: target });
+        } finally {
+          await this.load().catch(() => {});
+        }
+        this.hi.set(id, "received");
+        this.onUpdate();
+        const replied = this.clock.now();
+        // Always fetch usage after the reply; a cached reset cannot confirm this hi.
+        await this.refresh(id);
+        for (const at of SAY_HI_LOOKS) {
+          if (shown()) break;
+          await this.load();
+          // Until the next refresh, the window is looked for each second.
+          const due = replied + at * 1000;
+          while (!shown() && this.clock.now() < due)
+            await this.clock.sleep(Math.min(1000, due - this.clock.now()));
+          if (shown()) break;
+          await this.refresh(id);
+        }
+        return shown() ? "started" : "not_started";
       } finally {
-        await this.load().catch(() => {});
-        this.sayingHiIds.delete(id);
+        this.hi.delete(id);
         this.onUpdate();
       }
     }
-    /// Renews an account's tokens at once; its usage refreshes with them.
+    /// Renews an account's tokens at once; its usage refreshes with them,
+    /// and its card shows the renewal done for a moment.
     async renewNow(id) {
-      if (
-        this.manualRefreshing ||
-        this.refreshingIds.has(id) ||
-        this.remoteRefreshingIds.has(id) ||
-        this.sayingHiIds.has(id) ||
-        this.renewingIds.has(id)
-      )
-        return false;
+      if (this.busy(id)) return false;
       this.renewingIds.add(id);
       this.onUpdate();
       try {
         await this.invoke("renew_now", { id });
+        this.renewedIds.add(id);
+        this.clock.sleep(RENEWED_SHOWN_MS).then(() => {
+          this.renewedIds.delete(id);
+          this.onUpdate();
+        });
         return true;
       } finally {
         await this.load().catch(() => {});
@@ -416,7 +481,7 @@
           (id) =>
             this.refreshingIds.has(id) ||
             this.remoteRefreshingIds.has(id) ||
-            this.sayingHiIds.has(id),
+            this.hi.get(id) === "sent",
         );
       if (busy) return false;
       for (const id of ids) this.refreshingIds.add(id);

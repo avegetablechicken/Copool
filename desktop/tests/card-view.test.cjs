@@ -384,7 +384,7 @@ test("A hi or renewal takes the refresh button's place: under way, then done", (
   assert.deepEqual(buttons(V.cardView(card, context(), true)), []);
 });
 
-test("A refresh button spins while its card refreshes and waits for a hi or renewal", () => {
+test("A refresh button spins while its card refreshes and gives way to a hi or renewal", () => {
   const card = { id: "a", isCurrent: true, nextRefreshAt: NOW + 90 };
   const refresh = (ui = {}) => action(V.cardView(card, context({ ui: () => ui })), "refresh").button;
   assert.deepEqual(refresh(), {
@@ -392,8 +392,8 @@ test("A refresh button spins while its card refreshes and waits for a hi or rene
   });
   assert.equal(refresh({ refreshing: true }).spinning, true);
   assert.equal(refresh({ refreshing: true }).disabled, false);
-  assert.equal(refresh({ greeting: true }).disabled, true);
-  // A renewal under way shows in its place.
+  // A hi or renewal under way shows in its place.
+  assert.equal(refresh({ hi: "sent" }), null);
   assert.equal(refresh({ renewing: true }), null);
   // Its tooltip tells how long until the next automatic refresh, as the
   // pointer enters.
@@ -455,7 +455,7 @@ test("A card's menu edits it, then refreshes, greets, renews, switches and remov
   // A Grok provider can reapply its config after an app or gateway update.
   assert(menu(view(currentGroup, { pool: "grok" })).includes("accounts.card.switch_to_this"));
   // Busy, its refresh, greeting and renewal wait.
-  for (const ui of [{ refreshing: true }, { greeting: true }, { renewing: true }]) {
+  for (const ui of [{ refreshing: true }, { hi: "sent" }, { renewing: true }]) {
     const busy = view({ account }, { ui: () => ui });
     for (const kind of ["refresh", "say-hi", "renew"]) assert.equal(action(busy, kind).menu.disabled, true, kind);
     assert.equal(action(busy, "switch").menu.disabled, false);
@@ -492,7 +492,7 @@ test("A provider's group shares its cards' warnings, refresh and switch", () => 
   const busy = V.providerView(group, "Team", context({ ui: (id) => ({ refreshing: id === "sub2api-team-3" }) }));
   assert.deepEqual(buttons(busy), ["refresh", "switch"]);
   assert.equal(action(busy, "refresh").button.spinning, true);
-  const greeting = V.providerView(group, "Team", context({ ui: (id) => ({ greeting: id === "sub2api-team-1" }) }));
+  const greeting = V.providerView(group, "Team", context({ ui: (id) => ({ hi: id === "sub2api-team-1" ? "sent" : null }) }));
   assert.equal(action(greeting, "refresh").button.disabled, true);
   // In use, it says so once and has no switch button.
   const current = { key: "team", accounts: [card("sub2api-team-1", { isCurrent: true })] };

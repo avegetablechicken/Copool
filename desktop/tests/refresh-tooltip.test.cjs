@@ -5,6 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const P = require("../ui/presentation.js");
 const V = require("../ui/card-view.js");
+const { Accounts } = require("../ui/controllers.js");
 
 // Windows checkouts may end lines with CRLF; the slices below look for LF.
 const source = fs
@@ -169,8 +170,6 @@ test("A visible meter changes from red to amber without a data refresh", () => {
 // Which rows a card shows, its own or its third-party pool's, is
 // card-view.js's (card-view.test.cjs); here, its model switch.
 test("A card's model switch stacks both marks and switches the rows it shows", () => {
-  const declaration = "const thirdPartyShown = new Set();\n";
-  assert(source.includes(declaration), "thirdPartyShown");
   const swapped = "let modelsSwapped = null;\n";
   assert(source.includes(swapped), "modelsSwapped");
   const node = (className, text) => ({
@@ -179,8 +178,10 @@ test("A card's model switch stacks both marks and switches the rows it shows", (
     setAttribute(name, value) { this.attributes[name] = value; },
     addEventListener(name, handler) { this.listeners[name] = handler; },
   });
+  // The pool's controller keeps the choice and renders the cards anew.
+  const controller = new Accounts(async () => [], [], () => context.renderAccounts(), () => {}, { pool: "antigravity" });
   const context = vm.createContext({
-    accountsCache: [],
+    accountsController: controller,
     renders: 0,
     el: (tag, className, text) => node(className, text),
     button: (label, glyph, className, handler) => {
@@ -191,7 +192,7 @@ test("A card's model switch stacks both marks and switches the rows it shows", (
     modelBrand: (model) => `${model} mark`,
   });
   vm.runInContext(
-    declaration + swapped + "function renderAccounts() { renders++; }\n" + body("modelSwitch"),
+    swapped + "function renderAccounts() { renders++; }\n" + body("modelSwitch"),
     context,
   );
   const window = (usedPercent, windowSeconds) => ({ usedPercent, windowSeconds, resetAt: null });
@@ -200,9 +201,8 @@ test("A card's model switch stacks both marks and switches the rows it shows", (
     pool: "antigravity",
     locale: "en",
     tr: (key) => key,
-    ui: (card) => ({ thirdParty: context.thirdPartyShown.has(card) }),
+    ui: (card) => controller.cardState(card),
   });
-  vm.runInContext("this.thirdPartyShown = thirdPartyShown;", context);
   // The switch as the name of the model it shows, bracketed when that is the
   // third party's; the other model's mark sits behind the shown one's.
   const models = (id = "a") => {
@@ -236,7 +236,7 @@ test("A card's model switch stacks both marks and switches the rows it shows", (
   assert.equal(context.renders, 2);
   assert.equal(models(), "Gemini");
   // A switched card renders again.
-  assert.match(body("renderAccounts"), /\[\.\.\.thirdPartyShown\]/);
+  assert.match(body("renderAccounts"), /accountsController\.cardState\(account\.id\)/);
 });
 
 test("A render slides each card's meters from the levels they showed, changing color as they go", () => {

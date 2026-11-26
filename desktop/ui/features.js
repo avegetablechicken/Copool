@@ -24,6 +24,7 @@ function poolController(target, onMutation) {
       syncButtons();
     },
     onMutation,
+    { pool: target },
   );
   return controller;
 }

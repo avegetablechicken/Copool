@@ -386,14 +386,7 @@ function cardContext(now = Date.now() / 1000) {
     switchingId,
     adding: controller.adding,
     authorizing: controller.authorizing,
-    ui: (id) => ({
-      refreshing: controller.refreshingIds.has(id) || controller.remoteRefreshingIds.has(id),
-      greeting: controller.sayingHiIds.has(id),
-      hi: sayingHi.get(id) ?? null,
-      renewing: controller.renewingIds.has(id),
-      renewed: renewedIds.has(id),
-      thirdParty: thirdPartyShown.has(id),
-    }),
+    ui: (id) => controller.cardState(id),
   };
 }
 function toggleResetDisplay() {
@@ -539,25 +532,13 @@ async function confirmRemoval(cards, name, sub2api) {
   )
     await removeCards(cards, sub2api);
 }
-/// Cards whose token was just renewed, shown so on their refresh button
-/// for a moment.
-const renewedIds = new Set();
-const RENEWED_SHOWN_MS = 2200;
-/// Renews the account's tokens at once; its refresh button shows the
-/// renewal under way, then done, and a notice tells how it went, as saying
-/// hi does.
+/// Renews the account's tokens at once (the controller's renewNow); its
+/// refresh button shows the renewal under way, then done, and a notice
+/// tells how it went, as saying hi does.
 async function renewNow(account) {
-  const controller = accountsController;
   try {
-    if (await controller.renewNow(account.id)) {
-      renewedIds.add(account.id);
-      setTimeout(() => {
-        renewedIds.delete(account.id);
-        renderAccounts(accountsCache);
-      }, RENEWED_SHOWN_MS);
-      renderAccounts(accountsCache);
+    if (await accountsController.renewNow(account.id))
       notice(tr("accounts.notice.token_renewed"));
-    }
   } catch (error) {
     notice(error, true);
   }
@@ -587,52 +568,14 @@ function editButton(key, name) {
   control.setAttribute("aria-label", `${tr("accounts.card.edit")} ${name}`);
   return control;
 }
-/// Both pools use the same delayed usage checks after the model replies.
-const SAY_HI_LOOKS = [10, 30, 90, 180];
-/// Cards saying hi, by how far: "sent" until the model replies, then
-/// "received" while their 5h window has yet to show.
-const sayingHi = new Map();
-/// Says hi with the account, which starts its 5h window, then refreshes its
-/// card over the next minutes until the window shows. Its say hi button
-/// shows the hi sent, then the reply received; each refresh shows as one,
-/// and nothing between them. A window shown, by these refreshes or any
-/// other, is reported at once; one still not shown at the last, then.
+/// Says hi with the account (the controller's sayHi), then tells whether
+/// its 5h window started.
 async function sayHi(account) {
   const controller = accountsController;
-  const targetPool = pool;
-  // The model the card's switch shows, if it has one, alone.
-  const target = V.helloTarget(account, cardContext());
-  const shown = () => {
-    const card = controller.accounts.find((a) => a.id === account.id);
-    // The card's pool's windows, whichever pool is shown meanwhile.
-    return !card || (!!card.usage && !V.fiveHourIdle(card, targetPool, target, Date.now() / 1000));
-  };
-  if (sayingHi.has(account.id)) return;
-  sayingHi.set(account.id, "sent");
-  try {
-    if (!(await controller.sayHi(account.id, target))) return;
-    sayingHi.set(account.id, "received");
-    controller.onUpdate();
-    const replied = Date.now();
-    // Always fetch usage after the reply; a cached reset cannot confirm this hi.
-    await controller.refresh(account.id);
-    for (const at of SAY_HI_LOOKS) {
-      if (shown()) break;
-      await refreshView();
-      // Until the next refresh, the window is looked for each second.
-      const due = replied + at * 1000;
-      while (!shown() && Date.now() < due)
-        await new Promise((resolve) =>
-          setTimeout(resolve, Math.min(1000, due - Date.now())),
-        );
-      if (shown()) break;
-      await controller.refresh(account.id);
-    }
-    if (shown()) notice(tr("accounts.notice.said_hi"));
-    else notice(tr(`error.${targetPool}.say_hi_window_not_started`), true);
-  } finally {
-    sayingHi.delete(account.id);
-  }
+  const outcome = await controller.sayHi(account.id);
+  if (outcome === "started") notice(tr("accounts.notice.said_hi"));
+  else if (outcome === "not_started")
+    notice(tr(`error.${controller.pool}.say_hi_window_not_started`), true);
 }
 /// The card turned over to edit it, as a widget's: an account's id, or
 /// `sub2api:<provider>` for a provider's group; one at a time. Its draft
@@ -945,11 +888,8 @@ function proxySection(state, owner) {
 }
 /// The token's time left, renewing it now, and renewing it as needed.
 function renewalSection(account) {
-  const busy =
-    accountsController.refreshingIds.has(account.id) ||
-    accountsController.remoteRefreshingIds.has(account.id) ||
-    accountsController.sayingHiIds.has(account.id) ||
-    accountsController.renewingIds.has(account.id);
+  const ui = accountsController.cardState(account.id);
+  const busy = ui.refreshing || ui.hi === "sent" || ui.renewing;
   // Under its "Token renewal" title, the time left alone.
   const expiry = P.tokenExpiry(account.tokenExpiresAt, Date.now() / 1000, locale);
   const left = el(
@@ -979,10 +919,8 @@ function renewalSection(account) {
 /// Saying hi now, automatically, and at which times.
 function greetingSection(account, state) {
   const schedule = state.schedule;
-  const busy =
-    sayingHi.has(account.id) ||
-    accountsController.refreshingIds.has(account.id) ||
-    accountsController.remoteRefreshingIds.has(account.id);
+  const ui = accountsController.cardState(account.id);
+  const busy = !!ui.hi || ui.refreshing;
   const section = backSection(
     tr("accounts.say_hi.title"),
     backButton(
@@ -1411,9 +1349,6 @@ function accountCard(
   );
   return card;
 }
-/// Accounts whose usage rows show their third-party pool rather than their
-/// own.
-const thirdPartyShown = new Set();
 /// The account whose model switch was just clicked, while its card renders.
 let modelsSwapped = null;
 /// A model's mark for the model switch: its pool's from the pool switch, and
@@ -1446,12 +1381,10 @@ function modelSwitch(view, accountId) {
   const { shown: label, other, thirdParty: third } = view.models;
   const swapped = modelsSwapped === accountId;
   const control = button("", null, `model-switch${swapped ? " swapped" : ""}`, () => {
-    if (third) thirdPartyShown.delete(accountId);
-    else thirdPartyShown.add(accountId);
     // The switch rendered anew trades its marks' places as it appears.
     modelsSwapped = accountId;
     try {
-      renderAccounts(accountsCache);
+      accountsController.showThirdParty(accountId, !third);
     } finally {
       modelsSwapped = null;
     }
@@ -1619,19 +1552,14 @@ function renderAccounts(accounts) {
     resetDisplay === "countdown" &&
       accounts.map((account) => V.cardView(account, context).rows.map((row) => row.reset)),
     collapsed,
-    [...thirdPartyShown],
     locale,
     preferences?.usageDisplay,
     accounts.map(accountProxy),
     // Cards group under their provider, which may load after them.
     accounts.map(providerTitle),
     preferences?.accountOrder?.[pool],
-    [...accountsController.refreshingIds],
-    [...accountsController.remoteRefreshingIds],
-    [...accountsController.sayingHiIds],
-    [...sayingHi],
-    [...accountsController.renewingIds],
-    [...renewedIds],
+    // What each card has under way, and the pool its model switch shows.
+    accounts.map((account) => accountsController.cardState(account.id)),
     switchingId,
     accountsController.adding,
     accountsController.authorizing,

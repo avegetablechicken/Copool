@@ -11,7 +11,19 @@ const V = require("../ui/card-view.js");
 const source = fs
   .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
   .replace(/\r\n/g, "\n");
-function fixture(target) {
+/// A clock that moves only as the controller waits.
+function fakeClock() {
+  const clock = { at: Date.now() };
+  clock.now = () => clock.at;
+  clock.sleep = (ms) => {
+    clock.at += ms;
+    return Promise.resolve();
+  };
+  return clock;
+}
+// A 5h window already running, as after a hi.
+const RUNNING = { fiveHour: { usedPercent: 1, resetAt: 4102444800 } };
+function fixture(target, usage = RUNNING, clock = fakeClock()) {
   const calls = [];
   let renewal = "always";
   const scope = {
@@ -25,7 +37,7 @@ function fixture(target) {
             calls.push([command, JSON.parse(JSON.stringify(args))]);
             if (command === "set_renewal") renewal = args.renewal;
             if (command === "accounts" && args.pool === target)
-              return [{ id: "a", label: "Alice", updatedAt: 1, renewal }];
+              return [{ id: "a", label: "Alice", updatedAt: 1, renewal, usage }];
             return [];
           },
         },
@@ -34,7 +46,9 @@ function fixture(target) {
   };
   vm.createContext(scope);
   vm.runInContext(source.slice(0, source.indexOf("const ICONS =")), scope);
-  return { calls, model: new Accounts(vm.runInContext(`poolInvoke("${target}")`, scope)) };
+  const invoke = vm.runInContext(`poolInvoke("${target}")`, scope);
+  const model = new Accounts(invoke, null, () => {}, () => {}, { pool: target, clock });
+  return { calls, model };
 }
 
 // Every command of a pool's cards names that pool, and only that pool.
@@ -84,13 +98,26 @@ test("a card's back offers renew now, then auto renew as a switch", () => {
 });
 
 for (const target of ["claude", "codex"]) {
-  test(`renewing a ${target} account now shows as under way, then reloads its card`, async () => {
-    const { model, calls } = fixture(target);
+  test(`renewing a ${target} account now shows as under way, then done for a moment, and reloads its card`, async () => {
+    // The moment it shows as done ends when the test says.
+    let shownFor;
+    let ended;
+    const clock = fakeClock();
+    clock.sleep = (ms) => new Promise((resolve) => ((shownFor = ms), (ended = resolve)));
+    const { model, calls } = fixture(target, RUNNING, clock);
     let during;
-    model.onUpdate = () => (during ??= model.renewingIds.has("a"));
+    model.onUpdate = () => (during ??= model.cardState("a").renewing);
     assert.equal(await model.renewNow("a"), true);
     assert.equal(during, true);
-    assert.equal(model.renewingIds.has("a"), false);
+    assert.equal(model.cardState("a").renewing, false);
+    assert.equal(model.cardState("a").renewed, true);
+    assert.equal(shownFor, 2200);
+    let updated = false;
+    model.onUpdate = () => (updated = true);
+    ended();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(model.cardState("a").renewed, false);
+    assert(updated, "the card renders without the mark");
     const at = calls.findIndex(([name]) => name === "renew_now");
     assert.deepEqual(calls[at], ["renew_now", { id: "a", pool: target }]);
     assert(calls.slice(at + 1).some(([name]) => name === "accounts"), "the card reloads");
@@ -112,10 +139,11 @@ test("the card's back shows the token expiry", () => {
 test("saying hi goes to the Claude pool, locks the card's refresh without spinning it and reloads it", async () => {
   const { model, calls } = fixture("claude");
   let locked;
-  model.onUpdate = () => (locked ??= [model.sayingHiIds.has("a"), model.refreshingIds.has("a")]);
-  assert.equal(await model.sayHi("a"), true);
-  assert.deepEqual(locked, [true, false]);
-  assert.equal(model.sayingHiIds.has("a"), false);
+  model.onUpdate = () =>
+    (locked ??= [model.cardState("a").hi, model.busy("a"), model.cardState("a").refreshing]);
+  assert.equal(await model.sayHi("a"), "started");
+  assert.deepEqual(locked, ["sent", true, false]);
+  assert.equal(model.cardState("a").hi, null);
   const at = calls.findIndex(([name]) => name === "say_hi");
   assert.deepEqual(calls[at], ["say_hi", { id: "a", pool: "claude" }]);
   assert(calls.slice(at + 1).some(([name]) => name === "accounts"), "the cards reload");
@@ -135,179 +163,112 @@ test("saying hi goes to the Claude pool, locks the card's refresh without spinni
     assert.equal(locales.split(`"${key}"`).length - 1, 11, `${key} in every locale`);
 });
 
+/// A pool's controller saying hi with `card`, whose windows the commands it
+/// sends and its waits may start (`show`), on a clock that moves only as it
+/// waits. Counts the refreshes it asks for.
+function greeter(pool, card, show = () => {}) {
+  const clock = fakeClock();
+  const sleep = clock.sleep;
+  clock.sleep = (ms) => sleep(ms).then(() => show(counts, clock));
+  const counts = { refreshes: 0, sent: [] };
+  const invoke = async (command, args) => {
+    if (command === "accounts") return [card];
+    if (command === "say_hi") {
+      counts.sent.push(args);
+      show(counts, clock);
+    }
+    if (command === "refresh_usage") {
+      assert.equal(model.cardState(card.id).hi, "received", "refresh follows model reply");
+      counts.refreshes++;
+      show(counts, clock);
+    }
+    return [];
+  };
+  const model = new Accounts(invoke, [card], () => {}, () => {}, { pool, clock });
+  return { model, clock, counts };
+}
 
 test("both pools refresh immediately after a reply, then only until the window shows", async () => {
-  const start = source.indexOf("const SAY_HI_LOOKS =");
-  const end = source.indexOf("/// The card turned over to edit it");
-  assert(start >= 0 && end > start, "sayHi found");
   // [refreshes before the window shows, or the second another refresh shows it]
   for (const target of ["claude", "codex", "antigravity"]) {
     for (const [shownAfter, shownAt, expected] of [
-      [0, Infinity, { refreshes: 1, slept: 0, notices: [["accounts.notice.said_hi", false]] }],
-      [2, Infinity, { refreshes: 2, slept: 10000, notices: [["accounts.notice.said_hi", false]] }],
-      [Infinity, 15, { refreshes: 2, slept: 15000, notices: [["accounts.notice.said_hi", false]] }],
-      [Infinity, Infinity, { refreshes: 5, slept: 180000, notices: [["error.claude.say_hi_window_not_started", true]] }],
+      [0, Infinity, { refreshes: 1, slept: 0, outcome: "started" }],
+      [2, Infinity, { refreshes: 2, slept: 10000, outcome: "started" }],
+      [Infinity, 15, { refreshes: 2, slept: 15000, outcome: "started" }],
+      [Infinity, Infinity, { refreshes: 5, slept: 180000, outcome: "not_started" }],
     ]) {
-      const notices = [];
-      const phases = [];
-      let refreshes = 0;
-      let clock = Date.now();
-      const replied = clock;
       // Antigravity's card has both pools' windows; the hi shows once both run.
       const card = { id: "a", usage: { fiveHour: { resetAt: null } } };
       if (target === "antigravity") card.usage.thirdPartyFiveHour = { resetAt: null };
-      const show = () => {
-        if (refreshes >= shownAfter || clock - replied >= shownAt * 1000)
-          for (const window of Object.values(card.usage)) window.resetAt = clock / 1000 + 600;
+      let replied;
+      const { model, clock, counts } = greeter(target, card, ({ refreshes }, { at }) => {
+        if (refreshes >= shownAfter || (replied !== undefined && at - replied >= shownAt * 1000))
+          for (const window of Object.values(card.usage)) window.resetAt = at / 1000 + 600;
+      });
+      const phases = [];
+      model.onUpdate = () => {
+        const hi = model.cardState("a").hi;
+        if (hi === "received") replied ??= clock.at;
+        if (phases.at(-1) !== hi) phases.push(hi);
       };
-      const accountsController = {
-        accounts: [card],
-        onUpdate: () => phases.push(scope.pending.get("a")),
-        sayHi: async () => (phases.push(scope.pending.get("a")), show(), true),
-        refresh: async () => {
-          assert.equal(scope.pending.get("a"), "received", "refresh follows model reply");
-          if (refreshes === 0) assert.equal(clock, replied, "first refresh has no delay");
-          refreshes++;
-          show();
-          return true;
-        },
-      };
-      const scope = {
-        Date: { now: () => clock },
-        Math,
-        Set,
-        Map,
-        Promise,
-        accountsController,
-        pool: target,
-        refreshView: async () => phases.push(scope.pending.get("a")),
-        // The idle rule is card-view.js's; the card shows no model switch.
-        V: { ...V, helloTarget: () => null },
-        cardContext: () => ({}),
-        setTimeout: (resolve, ms) => ((clock += ms), show(), resolve()),
-        tr: (key) => key,
-        notice: (message, error = false) => notices.push([message, error]),
-      };
-      vm.createContext(scope);
-      vm.runInContext(
-        `${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`,
-        scope,
-      );
-      await scope.run({ id: "a" });
-      assert.equal(refreshes, expected.refreshes);
-      assert.equal(clock - replied, expected.slept);
-      assert.deepEqual(notices, expected.notices.map(([key, error]) => [key.replace("error.claude.", `error.${target}.`), error]));
-      assert.equal(scope.pending.size, 0);
-      assert.equal(phases[0], "sent");
-      assert(phases.slice(1).every((phase) => phase === "received"));
+      assert.equal(await model.sayHi("a"), expected.outcome);
+      assert.equal(counts.refreshes, expected.refreshes);
+      assert.equal(clock.at - replied, expected.slept);
+      assert.deepEqual(phases, ["sent", "received", null]);
     }
   }
 });
 
-
 test("an Antigravity hi waits for both windows while another pool is shown", async () => {
-  const start = source.indexOf("const SAY_HI_LOOKS =");
-  const end = source.indexOf("/// The card turned over to edit it");
-  assert(start >= 0 && end > start, "sayHi found");
-  let clock = Date.now();
-  let refreshes = 0;
-  const notices = [];
   // Gemini's window starts at once; the third-party one at the third refresh.
   const card = { id: "a", usage: { fiveHour: { resetAt: null }, thirdPartyFiveHour: { resetAt: null } } };
-  const scope = {
-    Date: { now: () => clock },
-    Math,
-    Map,
-    Promise,
-    pool: "antigravity",
-    accountsController: {
-      accounts: [card],
-      onUpdate: () => {},
-      sayHi: async () => {
-        card.usage.fiveHour.resetAt = clock / 1000 + 600;
-        // The Codex pool is shown while the hi runs.
-        scope.pool = "codex";
-        return true;
-      },
-      refresh: async () => {
-        if (++refreshes === 3) card.usage.thirdPartyFiveHour.resetAt = clock / 1000 + 600;
-        return true;
-      },
-    },
-    refreshView: async () => {},
-    V: { ...V, helloTarget: () => null },
-    cardContext: () => ({}),
-    setTimeout: (resolve, ms) => ((clock += ms), resolve()),
-    tr: (key) => key,
-    notice: (message, error = false) => notices.push([message, error]),
-  };
-  vm.createContext(scope);
-  vm.runInContext(
-    `${source.slice(start, end)}\nthis.run = sayHi;`,
-    scope,
-  );
-  await scope.run({ id: "a" });
-  assert.equal(refreshes, 3);
-  assert.deepEqual(notices, [["accounts.notice.said_hi", false]]);
+  const { model, counts } = greeter("antigravity", card, ({ refreshes, sent }, { at }) => {
+    if (sent.length) card.usage.fiveHour.resetAt = at / 1000 + 600;
+    if (refreshes >= 3) card.usage.thirdPartyFiveHour.resetAt ??= at / 1000 + 600;
+  });
+  assert.equal(await model.sayHi("a"), "started");
+  assert.equal(counts.refreshes, 3);
 });
 
 test("A card's model switch sends its hi to the chosen pool alone, and waits for its window", async () => {
-  const start = source.indexOf("const SAY_HI_LOOKS =");
-  const end = source.indexOf("/// The card turned over to edit it");
-  assert(start >= 0 && end > start, "sayHi found");
   for (const target of [true, false]) {
-    let clock = Date.now();
-    let refreshes = 0;
-    const sent = [];
-    const notices = [];
-    // Only the chosen pool's window starts, at the first refresh.
-    const card = { id: "a", usage: { fiveHour: { resetAt: null }, thirdPartyFiveHour: { resetAt: null } } };
-    const scope = {
-      Date: { now: () => clock },
-      Math,
-      Map,
-      Promise,
-      pool: "antigravity",
-      accountsController: {
-        accounts: [card],
-        onUpdate: () => {},
-        sayHi: async (id, thirdParty) => (sent.push([id, thirdParty]), true),
-        refresh: async () => {
-          refreshes++;
-          card.usage[target ? "thirdPartyFiveHour" : "fiveHour"].resetAt = clock / 1000 + 600;
-          return true;
-        },
-      },
-      refreshView: async () => {},
-      V: { ...V, helloTarget: () => target },
-      cardContext: () => ({}),
-      setTimeout: (resolve, ms) => ((clock += ms), resolve()),
-      tr: (key) => key,
-      notice: (message, error = false) => notices.push([message, error]),
-    };
-    vm.createContext(scope);
-    vm.runInContext(
-      `${source.slice(start, end)}\nthis.run = sayHi;`,
-      scope,
-    );
-    await scope.run({ id: "a" });
-    assert.deepEqual(sent, [["a", target]]);
-    assert.equal(refreshes, 1, "the other pool's idle window is not awaited");
-    assert.deepEqual(notices, [["accounts.notice.said_hi", false]]);
+    // Both pools report; only the chosen pool's window starts, at the first refresh.
+    const window = () => ({ usedPercent: 0, resetAt: null });
+    const card = { id: "a", usage: { fiveHour: window(), thirdPartyFiveHour: window() } };
+    const { model, counts } = greeter("antigravity", card, ({ refreshes }, { at }) => {
+      if (refreshes) card.usage[target ? "thirdPartyFiveHour" : "fiveHour"].resetAt = at / 1000 + 600;
+    });
+    model.showThirdParty("a", target);
+    assert.equal(await model.sayHi("a"), "started");
+    assert.deepEqual(counts.sent, [{ id: "a", thirdParty: target }]);
+    assert.equal(counts.refreshes, 1, "the other pool's idle window is not awaited");
   }
 });
 
 test("A chosen pool's hi goes to say_hi with it", async () => {
-  const { model, calls } = fixture("antigravity");
-  assert.equal(await model.sayHi("a", true), true);
+  const window = { usedPercent: 0, resetAt: 4102444800 };
+  const { model, calls } = fixture("antigravity", { fiveHour: window, thirdPartyFiveHour: window });
+  await model.load();
+  model.showThirdParty("a", true);
+  assert.equal(await model.sayHi("a"), "started");
   assert.deepEqual(calls.find(([name]) => name === "say_hi"), ["say_hi", { id: "a", thirdParty: true, pool: "antigravity" }]);
   // Its window alone decides idleness (card-view.test.cjs).
 });
 
+test("A hi under way is not sent again, and a busy card's is not sent", async () => {
+  const { model, calls } = fixture("claude");
+  await model.load();
+  const first = model.sayHi("a");
+  assert.equal(await model.sayHi("a"), false);
+  assert.equal(await first, "started");
+  model.renewingIds.add("a");
+  assert.equal(await model.sayHi("a"), false);
+  assert.equal(calls.filter(([name]) => name === "say_hi").length, 1);
+});
+
 test("Codex Plus greetings route to their own account command", async () => {
   const { model, calls } = fixture("codex");
-  assert.equal(await model.sayHi("a"), true);
+  assert.equal(await model.sayHi("a"), "started");
   assert(calls.some(([name, args]) => name === "say_hi" && args.id === "a"));
   assert(onlyTo(calls, "codex"));
 });
-
