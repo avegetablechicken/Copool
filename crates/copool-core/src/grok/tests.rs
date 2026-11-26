@@ -841,7 +841,6 @@ async fn grok_requires_the_providers_own_key_variable() {
     assert!(h
         .app
         .registry(Pool::Grok)
-        .unwrap()
         .connection(&store.providers[0].id)
         .is_ok());
 }
@@ -1253,7 +1252,6 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
         assert_eq!(
             h.app
                 .registry(Pool::Grok)
-                .unwrap()
                 .connection(&id)
                 .unwrap()
                 .admin_base,

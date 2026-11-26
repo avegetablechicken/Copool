@@ -1,18 +1,20 @@
 //! Sub2api providers in every pool: their settings forms, their cards and
 //! how both are refreshed, implemented once. Each pool only keeps its
-//! providers in its own place; the Codex pool's, here, in the settings
-//! beside the Codex configuration naming their gateways.
+//! providers in its own place; the Codex pool's, here, in its account store,
+//! each named after the `config.toml` provider whose gateway it serves.
 use crate::{
     application::{Application, SAY_HI_REQUIRES_PLUS},
     codex_config,
     models::AccountSummary,
     pool::Pool,
+    provider_registry::{upstream, Adapter, ProviderRecord, Route},
     repository,
-    settings::{Provider, Settings},
+    settings::Settings,
     sub2api::{self, Account, Member},
     utils::now_unix_seconds,
 };
 use serde_json::Value;
+use std::path::Path;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -116,32 +118,112 @@ impl Application {
     pub fn provider_definitions(&self) -> Vec<codex_config::Definition> {
         codex_config::definitions(&self.codex_config_path())
     }
+    /// The `config.toml` provider a Codex provider is named after; never the
+    /// official one.
+    fn codex_definition(&self, name: &str) -> Result<codex_config::Definition> {
+        if name.eq_ignore_ascii_case("openai") {
+            return Err(sub2api::PROVIDER_NOT_FOUND.into());
+        }
+        self.provider_definitions()
+            .into_iter()
+            .find(|d| d.id.eq_ignore_ascii_case(name))
+            .ok_or_else(|| sub2api::PROVIDER_NOT_FOUND.into())
+    }
+    /// The id of the Codex provider Codex uses: the one named after the
+    /// provider `config.toml` selects, unless that is the official one.
+    pub(crate) fn codex_provider_in_use(&self) -> Result<Option<String>> {
+        let selected = codex_config::resolve_path(&self.codex_config_path());
+        if selected.is_official() {
+            return Ok(None);
+        }
+        Ok(codex_providers(&self.paths.store())?
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(&selected.id))
+            .map(|p| p.id))
+    }
+    /// Copies the Codex providers the settings kept (`sub2APIProvider`, their
+    /// accounts in the account store's `cachedAccounts`) to the account
+    /// store's `providers`, keyed by id like every pool's, once: their
+    /// passwords to the keyring names of their ids, and the cards' refresh
+    /// switches and place in the order to the new card keys. The old data
+    /// stays as it was, for an earlier version to read
+    /// (docs/adr/0001-keep-codex-provider-data-after-migration.md). Providers
+    /// already in the account store, from a run that stopped before setting
+    /// the mark, stay as they are.
+    pub(crate) fn migrate_codex_providers(&self) -> Result<()> {
+        let mut settings = self.configuration()?;
+        if settings.extra.contains_key(CODEX_PROVIDERS_MIGRATED) {
+            return Ok(());
+        }
+        let legacy = settings.sub2_api_provider.providers.clone();
+        if !legacy.is_empty() {
+            let records: Vec<ProviderRecord> = legacy.iter().map(migrated_codex_provider).collect();
+            let records = serde_json::to_value(records).map_err(|e| e.to_string())?;
+            repository::mutate_accounts(&self.paths.store(), |store| {
+                store.extra.entry(CODEX_PROVIDERS).or_insert(records);
+                Ok(())
+            })?;
+        }
+        let copied = legacy.iter().try_for_each(|p| {
+            let key = sub2api::password_secret(Pool::Codex, &p.id);
+            if self.secrets.get(&key)?.is_none() {
+                if let Some(password) = self.secrets.get(&p.id)? {
+                    self.secrets.set(&key, &password)?;
+                }
+            }
+            Ok::<_, String>(())
+        });
+        if let Err(error) = copied {
+            // Copool still opens; the next start copies them.
+            log::warn!("The Codex provider passwords were not copied: {error}");
+            return Ok(());
+        }
+        let renamed = |key: &str| {
+            let provider = key.strip_prefix("sub2api:")?;
+            legacy
+                .iter()
+                .find(|p| p.provider_id.eq_ignore_ascii_case(provider))
+                .map(|p| format!("sub2api:{}", p.id))
+        };
+        if let Some(cards) = settings
+            .extra
+            .get_mut("refresh")
+            .and_then(|v| v.get_mut("cards"))
+            .and_then(|v| v.get_mut("codex"))
+            .and_then(Value::as_object_mut)
+        {
+            *cards = std::mem::take(cards)
+                .into_iter()
+                .map(|(key, value)| (renamed(&key).unwrap_or(key), value))
+                .collect();
+        }
+        if let Some(order) = settings
+            .extra
+            .get_mut("accountOrder")
+            .and_then(|v| v.get_mut("codex"))
+            .and_then(Value::as_array_mut)
+        {
+            for entry in order {
+                if let Some(key) = entry.as_str().and_then(renamed) {
+                    *entry = key.into();
+                }
+            }
+        }
+        settings
+            .extra
+            .insert(CODEX_PROVIDERS_MIGRATED.into(), true.into());
+        self.persist_configuration(&settings)
+    }
     /// A pool's Sub2api providers for the settings, without their secrets.
     pub fn providers(&self, pool: Pool) -> Result<Value> {
-        match self.registry(pool) {
-            Some(registry) => registry.providers(),
-            None => serde_json::to_value(self.configuration()?.sub2_api_provider.providers)
-                .map_err(|e| e.to_string()),
-        }
+        self.registry(pool).providers()
     }
     /// Saves a provider form; a blank password keeps the saved one.
     pub async fn save_provider(&self, pool: Pool, draft: Value) -> Result<Value> {
-        if let Some(registry) = self.registry(pool) {
-            return registry.save(draft).await;
-        }
-        let invalid = |e: serde_json::Error| e.to_string();
-        serde_json::to_value(
-            self.codex_save_provider(serde_json::from_value(draft).map_err(invalid)?)
-                .await?,
-        )
-        .map_err(invalid)
+        self.registry(pool).save(draft).await
     }
     pub async fn remove_provider(&self, pool: Pool, id: &str) -> Result<()> {
-        if let Some(registry) = self.registry(pool) {
-            return registry.remove(id).await;
-        }
-        self.codex_remove_provider(id).await?;
-        self.secrets.remove(&sub2api::password_secret(pool, id))
+        self.registry(pool).remove(id).await
     }
     /// Keeps a form's password in the keyring, never in the settings; a
     /// blank one keeps the saved one, which is never read while editing.
@@ -158,41 +240,16 @@ impl Application {
         Ok(())
     }
     fn members(&self, pool: Pool) -> Result<Vec<Member>> {
-        if let Some(registry) = self.registry(pool) {
-            return registry.members();
-        }
-        Ok(self
-            .configuration()?
-            .sub2_api_provider
-            .providers
-            .iter()
-            .map(codex_member)
-            .collect())
+        self.registry(pool).members()
     }
     fn member(&self, pool: Pool, key: &str) -> Result<Member> {
         self.members(pool)?
             .into_iter()
             .find(|m| m.key.eq_ignore_ascii_case(key))
-            .ok_or_else(|| {
-                match pool {
-                    Pool::Codex => sub2api::PROVIDER_NOT_FOUND,
-                    Pool::Claude | Pool::Antigravity | Pool::Grok => {
-                        crate::provider_registry::PROVIDER_NOT_FOUND
-                    }
-                }
-                .into()
-            })
+            .ok_or_else(|| crate::provider_registry::PROVIDER_NOT_FOUND.into())
     }
     fn member_connection(&self, pool: Pool, member: &Member) -> Result<sub2api::Connection> {
-        if let Some(registry) = self.registry(pool) {
-            return registry.connection(&member.key);
-        }
-        sub2api::connection(
-            &self.codex_config_path(),
-            &self.configuration()?.sub2_api_provider,
-            Some(&member.key),
-            self.secrets.as_ref(),
-        )
+        self.registry(pool).connection(&member.key)
     }
     /// Edits a provider's cards where its pool keeps them; none when it was
     /// removed.
@@ -202,11 +259,8 @@ impl Application {
         key: &str,
         edit: impl FnOnce(&mut Member) -> T + Send,
     ) -> Result<Option<T>> {
-        let Some(registry) = self.registry(pool) else {
-            return self.codex_edit_member(key, edit).await;
-        };
         let (mut edit, mut result) = (Some(edit), None);
-        registry
+        self.registry(pool)
             .edit_member(key, &mut |member| {
                 if let Some(edit) = edit.take() {
                     result = Some(edit(member));
@@ -369,77 +423,96 @@ impl Application {
         sync: bool,
     ) -> Result<usize> {
         Ok(self
-            .edit_member(pool, key, |m| m.adopt(pool, fetched, ids, sync))
+            .edit_member(pool, key, |m| m.adopt(fetched, ids, sync))
             .await?
             .unwrap_or(0))
     }
-    pub(crate) async fn codex_save_provider(&self, draft: Provider) -> Result<Provider> {
-        let _op = self.operations.lock().await;
-        let mut saved = self.configuration()?;
-        let mut draft = draft.normalized();
-        let providers = &saved.sub2_api_provider.providers;
-        let existing = providers.iter().find(|p| p.id == draft.id);
-        sub2api::validate_form(
-            &draft.provider_id,
-            providers.iter().any(|p| {
-                p.id != draft.id && p.provider_id.eq_ignore_ascii_case(&draft.provider_id)
-            }),
-            &draft.username,
-            &draft.password,
-            existing.is_some(),
-            &draft.proxy_url,
-            &[&draft.admin_base_url],
-        )?;
-        if let Some(old) = existing {
-            draft.imported_account_ids = old.imported_account_ids.clone();
-            draft.cached_accounts = old.cached_accounts.clone();
-            // The provider's card sets its proxy, not its settings.
-            draft.proxy_url = old.proxy_url.clone();
-        }
-        self.store_provider_password(Pool::Codex, &draft.id, &draft.password)?;
-        draft.password.clear();
-        draft.legacy_admin_base_url.clear();
-        saved.sub2_api_provider.upsert(draft.clone());
-        self.persist_configuration(&saved)?;
-        Ok(draft)
-    }
-    async fn codex_remove_provider(&self, id: &str) -> Result<()> {
-        let _op = self.operations.lock().await;
-        let mut saved = self.configuration()?;
-        saved.sub2_api_provider.providers.retain(|p| p.id != id);
-        self.persist_configuration(&saved)
-    }
-    async fn codex_edit_member<T>(
-        &self,
-        key: &str,
-        edit: impl FnOnce(&mut Member) -> T,
-    ) -> Result<Option<T>> {
-        let _op = self.operations.lock().await;
-        let mut settings = self.configuration()?;
-        let Some(p) = settings
-            .sub2_api_provider
-            .providers
-            .iter_mut()
-            .find(|p| p.provider_id.eq_ignore_ascii_case(key))
-        else {
-            return Ok(None);
-        };
-        let mut member = codex_member(p);
-        let result = edit(&mut member);
-        p.imported_account_ids = member.imported;
-        p.proxy_url = member.proxy_url;
-        p.cached_accounts = member
-            .cached
+}
+/// Where the Codex pool's account store keeps its providers.
+const CODEX_PROVIDERS: &str = "providers";
+/// Set in the settings once their Codex providers were copied to the account
+/// store.
+const CODEX_PROVIDERS_MIGRATED: &str = "codexProvidersMigrated";
+/// The Codex pool's providers, as the account store at `store` keeps them.
+pub(crate) fn codex_providers(store: &Path) -> Result<Vec<ProviderRecord>> {
+    stored_codex_providers(&repository::load_accounts(store)?)
+}
+fn stored_codex_providers(store: &crate::models::AccountsStore) -> Result<Vec<ProviderRecord>> {
+    store
+        .extra
+        .get(CODEX_PROVIDERS)
+        .map_or(Ok(vec![]), |v| serde_json::from_value(v.clone()))
+        .map_err(|e| e.to_string())
+}
+/// A Codex provider the settings kept, as the account store keeps it: named
+/// after its `config.toml` provider, with its cached accounts.
+fn migrated_codex_provider(p: &crate::settings::Provider) -> ProviderRecord {
+    ProviderRecord {
+        id: p.id.clone(),
+        name: p.provider_id.clone(),
+        admin_base_url: p.admin_base_url.clone(),
+        username: p.username.clone(),
+        proxy_url: p.proxy_url.clone(),
+        allow_insecure_tls: p.allow_insecure_tls,
+        imported_account_ids: p.imported_account_ids.clone(),
+        cached_accounts: p
+            .cached_accounts
             .iter()
-            .map(serde_json::to_value)
-            .collect::<std::result::Result<_, _>>()
-            .map_err(|e| e.to_string())?;
-        let key = format!("providerSyncNeeded:{}", p.provider_id);
-        settings.extra.remove(&key);
-        self.persist_configuration(&settings)?;
-        Ok(Some(result))
+            .filter_map(|raw| serde_json::from_value(raw.clone()).ok())
+            .collect(),
+        ..Default::default()
     }
 }
+
+/// The Codex pool's providers, for its Provider registry: kept in its
+/// account store, each named after the `config.toml` provider whose gateway
+/// it serves, which a switch to its cards selects.
+pub(crate) struct CodexAdapter<'a>(pub(crate) &'a Application);
+impl Adapter for CodexAdapter<'_> {
+    type Provider = ProviderRecord;
+    const POOL: Pool = Pool::Codex;
+    fn load_providers(&self) -> Result<Vec<ProviderRecord>> {
+        codex_providers(&self.0.paths.store())
+    }
+    async fn edit_providers<T: Send>(
+        &self,
+        edit: impl FnOnce(&mut Vec<ProviderRecord>) -> Result<T> + Send,
+    ) -> Result<T> {
+        let _op = self.0.operations.lock().await;
+        let mut result = None;
+        self.0
+            .mutate_accounts(|store| {
+                let mut providers = stored_codex_providers(store)?;
+                result = Some(edit(&mut providers)?);
+                store.extra.insert(
+                    CODEX_PROVIDERS.into(),
+                    serde_json::to_value(providers).map_err(|e| e.to_string())?,
+                );
+                Ok(())
+            })
+            .await?;
+        self.0.publish();
+        result.ok_or_else(|| "The Codex providers were not edited".into())
+    }
+    fn prepare(&self, draft: &mut ProviderRecord) -> Result<()> {
+        // The gateway is the one `config.toml` names, read on every use.
+        draft.base_url.clear();
+        Ok(())
+    }
+    fn route(&self, p: &ProviderRecord) -> Result<Route> {
+        // Without a gateway, only an admin API override reaches Sub2api.
+        let gateway = match self.0.codex_definition(&p.name)?.base_url {
+            Some(gateway) => gateway,
+            None if !p.admin_base_url.is_empty() => String::new(),
+            None => return Err(sub2api::PROVIDER_NOT_FOUND.into()),
+        };
+        Ok(Route {
+            sub2api: upstream(&gateway).to_owned(),
+            gateway,
+        })
+    }
+}
+
 /// Where a pool's tunnel configuration is kept in the proxy configuration.
 pub fn tunnel_configuration_key(pool: Pool) -> &'static str {
     match pool {
@@ -457,17 +530,290 @@ fn cloudflare_token_secret(pool: Pool) -> &'static str {
         Pool::Grok => "grok-cloudflare-api-token",
     }
 }
-/// A Codex provider's cards, named by the Codex provider it is.
-fn codex_member(p: &Provider) -> Member {
-    Member {
-        key: p.provider_id.clone(),
-        name: p.provider_id.clone(),
-        proxy_url: p.proxy_url.clone(),
-        imported: p.imported_account_ids.clone(),
-        cached: p
-            .cached_accounts
-            .iter()
-            .filter_map(|raw| serde_json::from_value(raw.clone()).ok())
-            .collect(),
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::SecretStore;
+    use serde_json::json;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+
+    #[derive(Default)]
+    struct Secrets(Mutex<HashMap<String, String>>);
+    impl SecretStore for Secrets {
+        fn get(&self, id: &str) -> Result<Option<String>> {
+            Ok(self.0.lock().unwrap().get(id).cloned())
+        }
+        fn set(&self, id: &str, value: &str) -> Result<()> {
+            self.0.lock().unwrap().insert(id.into(), value.into());
+            Ok(())
+        }
+        fn remove(&self, id: &str) -> Result<()> {
+            self.0.lock().unwrap().remove(id);
+            Ok(())
+        }
+    }
+
+    /// An earlier version's data directory, and the Codex configuration
+    /// defining `my`.
+    struct Earlier {
+        dir: tempfile::TempDir,
+        secrets: Arc<Secrets>,
+    }
+    impl Earlier {
+        fn new(settings: Value, accounts: Value) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("data");
+            std::fs::create_dir_all(&data).unwrap();
+            let mut full = serde_json::to_value(Settings::default()).unwrap();
+            for (k, v) in settings.as_object().unwrap() {
+                full[k] = v.clone();
+            }
+            std::fs::write(data.join("settings.json"), full.to_string()).unwrap();
+            std::fs::write(data.join("accounts.json"), accounts.to_string()).unwrap();
+            std::fs::create_dir_all(dir.path().join("codex")).unwrap();
+            std::fs::write(
+                dir.path().join("codex/config.toml"),
+                "model_provider = \"my\"\n[model_providers.my]\nbase_url = \"https://sub2.test/v1\"\n",
+            )
+            .unwrap();
+            Self {
+                dir,
+                secrets: Default::default(),
+            }
+        }
+        fn paths(&self) -> crate::Paths {
+            crate::Paths {
+                data_dir: self.dir.path().join("data"),
+                codex_auth: self.dir.path().join("codex/auth.json"),
+            }
+        }
+        fn open(&self) -> Application {
+            Application::open_with_secrets(self.paths(), self.secrets.clone()).unwrap()
+        }
+        fn file(&self, name: &str) -> Value {
+            serde_json::from_slice(&std::fs::read(self.paths().data_dir.join(name)).unwrap())
+                .unwrap()
+        }
+        fn secret(&self, id: &str) -> Option<String> {
+            self.secrets.0.lock().unwrap().get(id).cloned()
+        }
+        /// What an earlier version reads of its providers: the settings'
+        /// providers, with the account store's caches.
+        fn earlier_view(&self) -> (crate::settings::Providers, Value) {
+            let settings =
+                repository::load_settings(&self.paths().data_dir.join("settings.json")).unwrap();
+            (
+                settings.sub2_api_provider,
+                self.file("accounts.json")["cachedAccounts"].clone(),
+            )
+        }
+    }
+    fn cached(id: i64) -> Value {
+        json!({"id": id, "name": format!("a{id}"), "email": format!("a{id}@example.test"),
+            "accountType": "oauth", "status": "active", "planType": "pro", "providerID": "my",
+            "usage": null, "usageError": null})
+    }
+    const ID: &str = "5A4B3C2D-UPPER-CASE-ID";
+
+    #[tokio::test]
+    async fn codex_providers_move_to_the_account_store_keyed_by_id() {
+        let earlier = Earlier::new(
+            json!({
+                "sub2APIProvider": {"confirmedProviderIDs": ["my"], "providers": [{
+                    "id": ID, "providerID": "my", "username": "admin@example.test",
+                    "adminBaseURL": "https://admin.test/api/v1", "proxyURL": "direct://",
+                    "allowInsecureTLS": true, "importedAccountIDs": [42, 43]}]},
+                "refresh": {"cards": {"codex": {"sub2api:my": {"adaptive": true}, "local": {"adaptive": false}},
+                    "claude": {"sub2api:my": {"adaptive": true}}}},
+                "accountOrder": {"codex": ["local", "sub2api:MY"], "claude": ["sub2api:my"]},
+            }),
+            // Account 43's cache cannot be read: it is left behind.
+            json!({"accounts": [], "cachedAccounts": {ID: [cached(42), {"id": 43, "name": 5}]}}),
+        );
+        earlier.secrets.set(ID, "secret").unwrap();
+        let before = earlier.earlier_view();
+        let app = earlier.open();
+        let providers = earlier.file("accounts.json")["providers"].clone();
+        assert_eq!(
+            providers,
+            json!([{"id": ID, "name": "my", "baseURL": "", "adminBaseURL": "https://admin.test/api/v1",
+                "username": "admin@example.test", "proxyURL": "direct://", "allowInsecureTLS": true,
+                "importedAccountIDs": [42, 43],
+                "cachedAccounts": [serde_json::to_value(
+                    serde_json::from_value::<Account>(cached(42)).unwrap()).unwrap()]}])
+        );
+        // The password under the id's new name; the old one stays.
+        assert_eq!(
+            earlier
+                .secret(&sub2api::password_secret(Pool::Codex, ID))
+                .as_deref(),
+            Some("secret")
+        );
+        assert_eq!(earlier.secret(ID).as_deref(), Some("secret"));
+        // The cards' settings follow them to their new key, in their pool only.
+        let settings = earlier.file("settings.json");
+        assert_eq!(
+            settings["refresh"]["cards"]["codex"],
+            json!({format!("sub2api:{ID}"): {"adaptive": true}, "local": {"adaptive": false}})
+        );
+        assert_eq!(
+            settings["refresh"]["cards"]["claude"],
+            json!({"sub2api:my": {"adaptive": true}})
+        );
+        assert_eq!(
+            settings["accountOrder"]["codex"],
+            json!(["local", format!("sub2api:{ID}")])
+        );
+        assert_eq!(settings["accountOrder"]["claude"], json!(["sub2api:my"]));
+        assert_eq!(settings["codexProvidersMigrated"], true);
+        // An earlier version still finds its providers as they were.
+        assert_eq!(earlier.earlier_view(), before);
+        assert_eq!(
+            settings["sub2APIProvider"]["confirmedProviderIDs"],
+            json!(["my"])
+        );
+        // The cards are the provider's, current while Codex uses it.
+        let cards = app.accounts(Pool::Codex).await.unwrap();
+        assert_eq!(
+            cards
+                .iter()
+                .map(|c| (c.id.as_str(), c.is_current))
+                .collect::<Vec<_>>(),
+            [(format!("sub2api-{ID}-42").as_str(), true)]
+        );
+        assert_eq!(
+            app.registry(Pool::Codex)
+                .connection(ID)
+                .unwrap()
+                .configuration
+                .password,
+            "secret"
+        );
+    }
+
+    #[test]
+    fn a_swift_era_provider_and_caches_kept_in_the_settings_move_too() {
+        for (settings, accounts) in [
+            // The single provider of the Swift app, its password inline.
+            (
+                json!({"sub2APIProvider": {"isEnabled": true, "providerID": "my",
+                    "adminBaseURL": "https://sub2.test/api/v1", "username": "admin@example.test",
+                    "password": "secret", "allowInsecureTLS": false}}),
+                json!({"accounts": []}),
+            ),
+            // Caches the settings kept inline.
+            (
+                json!({"sub2APIProvider": {"providers": [{"id": ID, "providerID": "my",
+                    "username": "admin@example.test", "importedAccountIDs": [42],
+                    "cachedAccounts": [cached(42)]}]}}),
+                json!({"accounts": []}),
+            ),
+        ] {
+            let swift = settings["sub2APIProvider"].get("providers").is_none();
+            let earlier = Earlier::new(settings, accounts);
+            if !swift {
+                earlier.secrets.set(ID, "secret").unwrap();
+            }
+            let _app = earlier.open();
+            let legacy = earlier.earlier_view().0.providers;
+            let p = &earlier.file("accounts.json")["providers"][0];
+            assert_eq!(p["id"], legacy[0].id.as_str());
+            assert_eq!((&p["name"], &p["baseURL"]), (&json!("my"), &json!("")));
+            assert!(p.get("legacyAdminBaseURL").is_none());
+            assert!(p.get("password").is_none());
+            assert_eq!(
+                earlier
+                    .secret(&sub2api::password_secret(Pool::Codex, &legacy[0].id))
+                    .as_deref(),
+                Some("secret")
+            );
+            if swift {
+                // Its admin URL was the Codex provider's: no override.
+                assert_eq!(p["adminBaseURL"], "");
+            } else {
+                assert_eq!(p["cachedAccounts"][0]["id"], 42);
+                assert_eq!(legacy[0].cached_accounts.len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_migration_runs_once_and_keeps_what_an_earlier_run_stored() {
+        let earlier = Earlier::new(
+            json!({"sub2APIProvider": {"providers": [{"id": ID, "providerID": "my",
+                "username": "admin@example.test", "importedAccountIDs": [42]}]},
+                "accountOrder": {"codex": ["sub2api:my"]}}),
+            json!({"accounts": [], "cachedAccounts": {ID: [cached(42)]}}),
+        );
+        earlier.secrets.set(ID, "secret").unwrap();
+        let app = earlier.open();
+        // Edited since, in this version.
+        app.save_provider(
+            Pool::Codex,
+            json!({"id": ID, "name": "renamed", "username": "admin@example.test",
+                "password": "new"}),
+        )
+        .await
+        .unwrap();
+        drop(app);
+        let stored = earlier.file("accounts.json")["providers"].clone();
+        let settings = earlier.file("settings.json");
+        drop(earlier.open());
+        assert_eq!(earlier.file("accounts.json")["providers"], stored);
+        assert_eq!(earlier.file("settings.json"), settings);
+        assert_eq!(
+            earlier
+                .secret(&sub2api::password_secret(Pool::Codex, ID))
+                .as_deref(),
+            Some("new")
+        );
+        // A run stopped before its mark: the providers stored stay, and a
+        // password already under its new name is kept.
+        let mut unmarked = settings.clone();
+        unmarked
+            .as_object_mut()
+            .unwrap()
+            .remove(CODEX_PROVIDERS_MIGRATED);
+        std::fs::write(
+            earlier.paths().data_dir.join("settings.json"),
+            unmarked.to_string(),
+        )
+        .unwrap();
+        drop(earlier.open());
+        assert_eq!(earlier.file("accounts.json")["providers"], stored);
+        assert_eq!(
+            earlier.file("settings.json")["codexProvidersMigrated"],
+            true
+        );
+        assert_eq!(
+            earlier.file("settings.json")["accountOrder"]["codex"],
+            json!([format!("sub2api:{ID}")])
+        );
+        assert_eq!(
+            earlier
+                .secret(&sub2api::password_secret(Pool::Codex, ID))
+                .as_deref(),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn a_new_data_directory_is_only_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::Paths {
+            data_dir: dir.path().join("data"),
+            codex_auth: dir.path().join("codex/auth.json"),
+        };
+        let _app =
+            Application::open_with_secrets(paths.clone(), Arc::new(Secrets::default())).unwrap();
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(paths.data_dir.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(settings["codexProvidersMigrated"], true);
+        assert!(codex_providers(&paths.store()).unwrap().is_empty());
     }
 }

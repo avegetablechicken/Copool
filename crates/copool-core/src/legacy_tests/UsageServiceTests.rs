@@ -187,11 +187,42 @@ fn testCodexModelProviderSwitchServiceKeepsRepeatedSwitchesAtRootWithTrailingNew
     }
 }
 
-use crate::{
-    credentials::SecretStore,
-    settings::{Provider, Providers},
-    sub2api,
-};
+use crate::{sub2api, Pool};
+/// A Codex pool whose `config.toml` holds `config`.
+struct Codex {
+    _dir: tempfile::TempDir,
+    app: crate::Application,
+    secrets: Arc<super::MemorySecrets>,
+}
+impl Codex {
+    fn new(config: &str) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(super::MemorySecrets::default());
+        let app = crate::Application::open_with_secrets(
+            crate::Paths {
+                data_dir: dir.path().join("data"),
+                codex_auth: dir.path().join("codex/auth.json"),
+            },
+            secrets.clone(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("codex")).unwrap();
+        std::fs::write(app.codex_config_path(), config).unwrap();
+        Self {
+            _dir: dir,
+            app,
+            secrets,
+        }
+    }
+    /// Saves a provider form; returns its id.
+    async fn save(&self, form: serde_json::Value) -> String {
+        let saved = self.app.save_provider(Pool::Codex, form).await.unwrap();
+        saved["id"].as_str().unwrap().to_owned()
+    }
+    fn connection(&self, id: &str) -> Result<sub2api::Connection, String> {
+        self.app.registry(Pool::Codex).connection(id)
+    }
+}
 async fn check_sub2api(explicit: Option<&str>) {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorder = seen.clone();
@@ -210,37 +241,28 @@ async fn check_sub2api(explicit: Option<&str>) {
             _=>panic!("Unexpected request: {path}")
         };(StatusCode::OK,value.to_string())
     }).await;
-    let d = tempfile::tempdir().unwrap();
-    let path = d.path().join("config.toml");
     let model_base = if explicit.is_some() {
         "https://sub2.test:6060/v1".into()
     } else {
         format!("{}/v1", server.base)
     };
-    std::fs::write(
-        &path,
-        format!("model_provider = \"my\"\n[model_providers.my]\nbase_url = \"{model_base}\"\n"),
-    )
-    .unwrap();
+    let codex = Codex::new(&format!(
+        "model_provider = \"my\"\n[model_providers.my]\nbase_url = \"{model_base}\"\n"
+    ));
     let admin_base = match explicit {
         None => String::new(),
         Some("management") => format!("{}/management/api/v1", server.base),
         Some("api") => format!("{}/api/v1/", server.base),
         _ => server.base.clone(),
     };
-    let provider = Provider {
-        provider_id: "my".into(),
-        username: "you@example.com".into(),
-        admin_base_url: admin_base,
-        ..Default::default()
-    };
-    let secrets = super::MemorySecrets::default();
-    secrets.set(&provider.id, "secret").unwrap();
-    let settings = Providers {
-        confirmed_provider_ids: vec!["my".into()],
-        providers: vec![provider],
-    };
-    let connection = sub2api::connection(&path, &settings, None, &secrets).unwrap();
+    let id = codex
+        .save(
+            json!({"name": "my", "username": "you@example.com", "password": "secret",
+            "adminBaseURL": admin_base}),
+        )
+        .await;
+    let path = codex.app.codex_config_path();
+    let connection = codex.connection(&id).unwrap();
     let accounts = connection
         .fetch_accounts(crate::Pool::Codex, None, 1787431578)
         .await
@@ -314,35 +336,23 @@ async fn testFailedSub2APIQuotaKeepsLastKnownAccount() {
         (StatusCode::OK, value.to_string())
     })
     .await;
-    let d = tempfile::tempdir().unwrap();
-    let path = d.path().join("config.toml");
-    std::fs::write(
-        &path,
-        format!(
-            "model_provider = \"my\"\n[model_providers.my]\nbase_url = \"{}/v1\"\n",
-            server.base
-        ),
-    )
-    .unwrap();
-    let provider = Provider {
-        provider_id: "my".into(),
-        username: "admin@example.com".into(),
-        imported_account_ids: vec![10],
-        cached_accounts: vec![json!({
-            "id": 10, "name": "10", "email": "you@example.com", "accountID": "acct-10",
-            "accountType": "oauth", "status": "active", "planType": "plus",
-            "usage": {"fetchedAt": 1787431000, "planType": "plus", "oneWeek": {"usedPercent": 38, "windowSeconds": 604800, "resetAt": 1787810131}},
-            "usageError": null
-        })],
-        ..Default::default()
-    };
-    let secrets = super::MemorySecrets::default();
-    secrets.set(&provider.id, "secret").unwrap();
-    let settings = Providers {
-        confirmed_provider_ids: vec!["my".into()],
-        providers: vec![provider],
-    };
-    let connection = sub2api::connection(&path, &settings, None, &secrets).unwrap();
+    let codex = Codex::new(&format!(
+        "model_provider = \"my\"\n[model_providers.my]\nbase_url = \"{}/v1\"\n",
+        server.base
+    ));
+    let id = codex
+        .save(json!({
+            "name": "my", "username": "admin@example.com", "password": "secret",
+            "importedAccountIDs": [10],
+            "cachedAccounts": [{
+                "id": 10, "name": "10", "email": "you@example.com", "accountID": "acct-10",
+                "accountType": "oauth", "status": "active", "planType": "plus",
+                "usage": {"fetchedAt": 1787431000, "planType": "plus", "oneWeek": {"usedPercent": 38, "windowSeconds": 604800, "resetAt": 1787810131}},
+                "usageError": null
+            }]
+        }))
+        .await;
+    let connection = codex.connection(&id).unwrap();
     let accounts = connection
         .fetch_accounts(crate::Pool::Codex, None, 1787431578)
         .await
@@ -354,26 +364,22 @@ async fn testFailedSub2APIQuotaKeepsLastKnownAccount() {
     assert_eq!(a.usage.as_ref().unwrap().fetched_at, 1787431000);
     assert_eq!(a.usage_error.as_deref(), Some("upstream timeout"));
 }
-#[test]
-fn testConfiguredSub2APIIsNotQueriedWhenItIsNotTheDefaultProvider() {
-    let d = tempfile::tempdir().unwrap();
-    let path = d.path().join("config.toml");
-    std::fs::write(&path,"model_provider = \"other\"\n[model_providers.my]\nbase_url = \"https://sub2.test:6060/v1\"").unwrap();
-    let settings = Providers {
-        confirmed_provider_ids: vec!["my".into()],
-        providers: vec![Provider {
-            provider_id: "my".into(),
-            username: "you@example.com".into(),
-            password: "secret".into(),
-            ..Default::default()
-        }],
-    };
-    let secrets = super::MemorySecrets::default();
-    match sub2api::connection(&path, &settings, None, &secrets) {
+/// Copool reaches a provider only through the gateway `config.toml` defines
+/// for the provider it is named after.
+#[tokio::test]
+async fn testConfiguredSub2APIIsNotQueriedWhenItIsNotTheDefaultProvider() {
+    let codex = Codex::new(
+        "model_provider = \"other\"\n[model_providers.my]\nbase_url = \"https://sub2.test:6060/v1\"",
+    );
+    let id = codex
+        .save(json!({"name": "other", "username": "you@example.com", "password": "secret"}))
+        .await;
+    codex.secrets.gets.lock().unwrap().clear();
+    match codex.connection(&id) {
         Err(error) => assert_eq!(error, sub2api::PROVIDER_NOT_FOUND),
         Ok(_) => panic!("Expected provider mismatch"),
     };
-    assert!(secrets.gets.lock().unwrap().is_empty());
+    assert!(codex.secrets.gets.lock().unwrap().is_empty());
 }
 #[tokio::test]
 async fn testMultipleSub2APIConfigurationsUseCurrentProviderCredentialsAndBaseURL() {
@@ -389,27 +395,17 @@ async fn testMultipleSub2APIConfigurationsUseCurrentProviderCredentialsAndBaseUR
         (StatusCode::OK, json!({"code":0,"data":data}).to_string())
     })
     .await;
-    let d = tempfile::tempdir().unwrap();
-    let path = d.path().join("config.toml");
-    std::fs::write(&path,format!("model_provider = \"ShareCoder\"\n[model_providers.my]\nbase_url = \"https://my-sub2.test:6060/v1\"\n[model_providers.ShareCoder]\nbase_url = \"{}/v1\"",server.base)).unwrap();
-    let settings = Providers {
-        confirmed_provider_ids: vec!["my".into(), "ShareCoder".into()],
-        providers: vec![
-            Provider {
-                provider_id: "my".into(),
-                username: "my-admin@example.com".into(),
-                password: "my-secret".into(),
-                ..Default::default()
-            },
-            Provider {
-                provider_id: "ShareCoder".into(),
-                username: "share-admin@example.com".into(),
-                password: "share-secret".into(),
-                ..Default::default()
-            },
-        ],
-    };
-    let c = sub2api::connection(&path, &settings, None, &super::MemorySecrets::default()).unwrap();
+    let codex = Codex::new(&format!("model_provider = \"ShareCoder\"\n[model_providers.my]\nbase_url = \"https://my-sub2.test:6060/v1\"\n[model_providers.ShareCoder]\nbase_url = \"{}/v1\"",server.base));
+    codex
+        .save(json!({"name": "my", "username": "my-admin@example.com", "password": "my-secret"}))
+        .await;
+    let share = codex
+        .save(
+            json!({"name": "ShareCoder", "username": "share-admin@example.com",
+            "password": "share-secret"}),
+        )
+        .await;
+    let c = codex.connection(&share).unwrap();
     assert_eq!(c.admin_base, format!("{}/api/v1", server.base));
     assert!(c
         .fetch_accounts(crate::Pool::Codex, None, 1)
@@ -423,26 +419,15 @@ async fn testMultipleSub2APIConfigurationsUseCurrentProviderCredentialsAndBaseUR
         json!({"email":"share-admin@example.com","password":"share-secret"})
     );
 }
-#[test]
-fn testConfiguredProviderDoesNotRequireExplicitConfirmation() {
-    let d = tempfile::tempdir().unwrap();
-    let path = d.path().join("config.toml");
-    std::fs::write(
-        &path,
+#[tokio::test]
+async fn testConfiguredProviderDoesNotRequireExplicitConfirmation() {
+    let codex = Codex::new(
         "model_provider = \"my\"\n[model_providers.my]\nbase_url = \"https://sub2.test:6060/v1\"",
-    )
-    .unwrap();
-    let settings = Providers {
-        providers: vec![Provider {
-            provider_id: "my".into(),
-            username: "you@example.com".into(),
-            password: "secret".into(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-    let connection =
-        sub2api::connection(&path, &settings, None, &super::MemorySecrets::default()).unwrap();
+    );
+    let id = codex
+        .save(json!({"name": "my", "username": "you@example.com", "password": "secret"}))
+        .await;
+    let connection = codex.connection(&id).unwrap();
     assert_eq!(connection.definition.id, "my");
     assert!(connection.configuration.is_enabled());
 }

@@ -470,8 +470,11 @@ impl Application {
         match pool {
             Pool::Codex => {
                 let ids = refresh_policy::recurring_ids(tick, full_every, &accounts);
-                let current = crate::codex_config::resolve_path(&self.codex_config_path()).id;
-                let providers = ids.is_some().then(|| vec![current]);
+                // The provider Codex uses, by its id.
+                let current = self.codex_provider_in_use()?;
+                let providers = ids
+                    .is_some()
+                    .then(|| current.into_iter().collect::<Vec<_>>());
                 self.refresh_pool(pool, ids.as_deref(), providers.as_deref())
                     .await
             }

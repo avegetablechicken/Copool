@@ -58,7 +58,7 @@ fn testLegacySingleConfigurationMigratesWithoutImplicitConfirmation() {
         config.providers[0].legacy_admin_base_url,
         "https://sub2.test/api/v1"
     );
-    assert!(!config.confirms("my"));
+    assert!(config.confirmed_provider_ids.is_empty());
 }
 #[test]
 fn testCompleteSub2APICredentialsEnableConnectionRegardlessOfLegacyToggle() {

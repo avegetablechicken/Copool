@@ -1,19 +1,17 @@
 //! Sub2api providers, whose OAuth accounts join a pool as cards: one
 //! client for both pools, and what both do with their providers' cards.
 use crate::{
-    codex_config::{self, Definition},
-    credentials::SecretStore,
+    codex_config::Definition,
     models::{AccountSummary, UsageSnapshot},
     pool::Pool,
     proxy_session,
-    settings::{Provider, Providers},
+    settings::Provider,
     usage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    path::Path,
     sync::{LazyLock, Mutex},
     time::{Duration, Instant},
 };
@@ -210,7 +208,7 @@ pub(crate) fn card_provider(pool: Pool, id: &str) -> Option<&str> {
 /// Where the keyring keeps a provider's administrator password.
 pub(crate) fn password_secret(pool: Pool, id: &str) -> String {
     match pool {
-        Pool::Codex => id.to_owned(),
+        Pool::Codex => format!("codex-sub2api-password:{id}"),
         Pool::Claude => format!("claude-sub2api-password:{id}"),
         Pool::Antigravity => format!("antigravity-sub2api-password:{id}"),
         Pool::Grok => format!("grok-sub2api-password:{id}"),
@@ -246,12 +244,10 @@ impl Member {
     }
     /// Takes a refresh's accounts: a sync's are the provider's accounts from
     /// then on. A refresh of every card adds those it discovers; an account
-    /// it asked about (`ids`, every one without) and no longer lists leaves
-    /// the Codex pool, and in the Claude pool says so instead of its last
-    /// error.
+    /// it asked about (`ids`, every one without) and no longer lists says so
+    /// instead of its last error.
     pub(crate) fn adopt(
         &mut self,
-        pool: Pool,
         fetched: Vec<Account>,
         ids: Option<&[i64]>,
         sync: bool,
@@ -268,24 +264,10 @@ impl Member {
         let missing = |a: &Account| {
             ids.is_none_or(|ids| ids.contains(&a.id)) && !fetched.iter().any(|f| f.id == a.id)
         };
-        match pool {
-            Pool::Codex => {
-                let gone: Vec<i64> = self
-                    .cached
-                    .iter()
-                    .filter(|a| missing(a))
-                    .map(|a| a.id)
-                    .collect();
-                self.cached.retain(|a| !gone.contains(&a.id));
-                self.imported.retain(|id| !gone.contains(id));
-            }
-            Pool::Claude | Pool::Antigravity | Pool::Grok => {
-                for cached in self.cached.iter_mut().filter(|a| missing(a)) {
-                    cached.status = "missing".into();
-                    cached.usage = None;
-                    cached.usage_error = Some("The account is no longer in Sub2api".into());
-                }
-            }
+        for cached in self.cached.iter_mut().filter(|a| missing(a)) {
+            cached.status = "missing".into();
+            cached.usage = None;
+            cached.usage_error = Some("The account is no longer in Sub2api".into());
         }
         for account in fetched {
             if !self.imported.contains(&account.id) {
@@ -355,40 +337,6 @@ pub fn admin_base(raw: &str) -> Result<String, String> {
         return Err("Invalid Sub2api admin API URL".into());
     }
     Ok(format!("{base}/api/v1"))
-}
-pub fn connection(
-    config_path: &Path,
-    settings: &Providers,
-    id: Option<&str>,
-    secrets: &dyn SecretStore,
-) -> Result<Connection, String> {
-    let selected = codex_config::resolve_path(config_path);
-    let id = id.unwrap_or(&selected.id);
-    if id.eq_ignore_ascii_case("openai") {
-        return Err(PROVIDER_NOT_FOUND.into());
-    }
-    let mut configuration = settings.provider(id).ok_or(PROVIDER_NOT_FOUND)?;
-    let definition = codex_config::definitions(config_path)
-        .into_iter()
-        .find(|p| p.id.eq_ignore_ascii_case(id))
-        .ok_or(PROVIDER_NOT_FOUND)?;
-    if configuration.password.is_empty() {
-        configuration.password = secrets.get(&configuration.id)?.unwrap_or_default();
-    }
-    if !configuration.is_enabled() {
-        return Err("Sub2api administrator credentials are incomplete.".into());
-    }
-    let raw = if !configuration.admin_base_url.is_empty() {
-        configuration.admin_base_url.as_str()
-    } else {
-        definition.base_url.as_deref().ok_or(PROVIDER_NOT_FOUND)?
-    };
-    let admin_base = admin_base(raw)?;
-    Ok(Connection {
-        configuration,
-        definition,
-        admin_base,
-    })
 }
 async fn payload(response: reqwest::Response) -> Result<Value, String> {
     let status = response.status();
@@ -895,26 +843,40 @@ mod tests {
 
     #[test]
     fn refreshing_one_card_does_not_restore_a_card_removed_meanwhile() {
-        for pool in Pool::ALL {
-            // Card 42 was removed while its refresh ran; 43 remains.
-            let mut member = Member {
-                key: "p".into(),
-                name: "p".into(),
-                proxy_url: String::new(),
-                imported: vec![43],
-                cached: vec![account(43, 10.)],
-            };
-            member.adopt(pool, vec![account(42, 20.)], Some(&[42]), false);
-            assert_eq!(member.imported, [43], "{pool:?}");
-            assert_eq!(
-                member.cached.iter().map(|a| a.id).collect::<Vec<_>>(),
-                [43],
-                "{pool:?}"
-            );
-            // A refresh of every card still adds the accounts it discovers.
-            member.adopt(pool, vec![account(43, 30.), account(44, 0.)], None, false);
-            assert_eq!(member.imported, [43, 44], "{pool:?}");
-        }
+        // Card 42 was removed while its refresh ran; 43 remains.
+        let mut member = Member {
+            key: "p".into(),
+            name: "p".into(),
+            proxy_url: String::new(),
+            imported: vec![43],
+            cached: vec![account(43, 10.)],
+        };
+        member.adopt(vec![account(42, 20.)], Some(&[42]), false);
+        assert_eq!(member.imported, [43]);
+        assert_eq!(member.cached.iter().map(|a| a.id).collect::<Vec<_>>(), [43]);
+        // A refresh of every card still adds the accounts it discovers.
+        member.adopt(vec![account(43, 30.), account(44, 0.)], None, false);
+        assert_eq!(member.imported, [43, 44]);
+    }
+
+    #[test]
+    fn an_account_sub2api_no_longer_lists_says_so_in_every_pool() {
+        let mut member = Member {
+            key: "p".into(),
+            name: "p".into(),
+            proxy_url: String::new(),
+            imported: vec![42, 43],
+            cached: vec![account(42, 10.), account(43, 10.)],
+        };
+        member.adopt(vec![account(43, 30.)], None, false);
+        assert_eq!(member.imported, [42, 43]);
+        let gone = &member.cached[0];
+        assert_eq!((gone.id, gone.status.as_str()), (42, "missing"));
+        assert!(gone.usage.is_none());
+        assert_eq!(
+            gone.usage_error.as_deref(),
+            Some("The account is no longer in Sub2api")
+        );
     }
 
     #[test]

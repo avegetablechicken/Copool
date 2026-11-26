@@ -48,6 +48,16 @@ pub struct ProviderRecord {
     pub imported_account_ids: Vec<i64>,
     pub cached_accounts: Vec<Account>,
 }
+impl AsRef<ProviderRecord> for ProviderRecord {
+    fn as_ref(&self) -> &ProviderRecord {
+        self
+    }
+}
+impl AsMut<ProviderRecord> for ProviderRecord {
+    fn as_mut(&mut self) -> &mut ProviderRecord {
+        self
+    }
+}
 impl ProviderRecord {
     /// The provider's cards, named by its id.
     fn member(&self) -> Member {
@@ -93,7 +103,11 @@ pub(crate) trait Adapter: Send + Sync {
     /// anything only a form carries cleared. Runs outside the lock; it may
     /// read the tool's files, and may rename the provider.
     fn prepare(&self, draft: &mut Self::Provider) -> Result<()>;
-    /// Where the provider's tool sends its requests.
+    /// Where the provider's tool sends its requests. A save checks the
+    /// Sub2api address in it when there is one; a route the tool cannot give
+    /// yet (a Codex provider its `config.toml` does not define, say) is no
+    /// reason to refuse the form, and fails the provider's connections
+    /// instead.
     fn route(&self, provider: &Self::Provider) -> Result<Route>;
     /// Fills what a listing shows of a stored provider beyond what it keeps.
     fn present(&self, _provider: &mut Self::Provider) {}
@@ -103,8 +117,9 @@ pub(crate) trait Adapter: Send + Sync {
 pub(crate) trait ProviderRegistry: Send + Sync {
     /// The providers for the settings, without their secrets.
     fn providers(&self) -> Result<Value>;
-    /// Saves a form; a blank password keeps the saved one. Returns the
-    /// provider as a listing shows it.
+    /// Saves a form; a blank password keeps the saved one. Its addresses are
+    /// checked, the one in its route only while the tool gives a route (see
+    /// [`Adapter::route`]). Returns the provider as a listing shows it.
     fn save(&self, draft: Value) -> BoxFuture<'_, Result<Value>>;
     /// Removes a provider and its password; none to remove is no error.
     fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>>;
@@ -159,7 +174,12 @@ impl<A: Adapter> Registry<'_, A> {
         if draft.as_ref().id.trim().is_empty() {
             draft.as_mut().id = uuid::Uuid::new_v4().to_string();
         }
-        let route = self.adapter.route(&draft)?;
+        // A provider the tool does not route yet is saved all the same.
+        let routed = self
+            .adapter
+            .route(&draft)
+            .map(|route| route.sub2api)
+            .unwrap_or_default();
         let stored = self
             .adapter
             .edit_providers(|providers| {
@@ -174,7 +194,7 @@ impl<A: Adapter> Registry<'_, A> {
                     &r.password,
                     existing.is_some(),
                     &r.proxy_url,
-                    &[&r.base_url, &route.sub2api, &r.admin_base_url],
+                    &[&r.base_url, &routed, &r.admin_base_url],
                 )?;
                 let mut stored = draft.clone();
                 let s = stored.as_mut();
@@ -349,14 +369,13 @@ macro_rules! embeds_record {
 pub(crate) use embeds_record;
 
 impl Application {
-    /// A pool's Provider registry; none for Codex, whose providers its
-    /// settings keep.
-    pub(crate) fn registry(&self, pool: Pool) -> Option<Box<dyn ProviderRegistry + '_>> {
+    /// A pool's Provider registry.
+    pub(crate) fn registry(&self, pool: Pool) -> Box<dyn ProviderRegistry + '_> {
         match pool {
-            Pool::Codex => None,
-            Pool::Claude => Some(registry(self, crate::claude::ProviderAdapter(self))),
-            Pool::Antigravity => Some(registry(self, crate::antigravity::ProviderAdapter(self))),
-            Pool::Grok => Some(registry(self, crate::grok::ProviderAdapter(self))),
+            Pool::Codex => registry(self, crate::providers::CodexAdapter(self)),
+            Pool::Claude => registry(self, crate::claude::ProviderAdapter(self)),
+            Pool::Antigravity => registry(self, crate::antigravity::ProviderAdapter(self)),
+            Pool::Grok => registry(self, crate::grok::ProviderAdapter(self)),
         }
     }
 }
@@ -418,7 +437,25 @@ mod tests {
                 listed_own: json!({"apiKeyVariable": "GEMINI_API_KEY"}),
                 gateway: "https://relay.example.com/antigravity",
             },
+            // Codex's gateway is the one `config.toml` names (`gateway_at`),
+            // never a typed address.
+            Case {
+                pool: Pool::Codex,
+                typed_url: "https://typed.example.com/v1/",
+                own: json!({}),
+                listed_own: json!({"baseURL": ""}),
+                gateway: ROOT,
+            },
         ]
+    }
+    /// Has Codex's `config.toml` define the provider Relay with this gateway.
+    fn gateway_at(dir: &std::path::Path, url: &str) {
+        std::fs::create_dir_all(dir.join("codex")).unwrap();
+        std::fs::write(
+            dir.join("codex/config.toml"),
+            format!("[model_providers.Relay]\nbase_url = {url:?}\nwire_api = \"responses\"\n"),
+        )
+        .unwrap();
     }
     fn open(dir: &std::path::Path) -> (Application, Arc<Secrets>) {
         let secrets = Arc::new(Secrets::default());
@@ -431,6 +468,7 @@ mod tests {
         )
         .unwrap();
         app.set_claude_location(crate::claude::Location::files(dir.join("claude")));
+        gateway_at(dir, ROOT);
         (app, secrets)
     }
     fn form(case: &Case, url: &str, extra: Value) -> Value {
@@ -459,7 +497,7 @@ mod tests {
         for case in cases() {
             let dir = tempfile::tempdir().unwrap();
             let (app, secrets) = open(dir.path());
-            let registry = app.registry(case.pool).unwrap();
+            let registry = app.registry(case.pool);
             let saved = registry
                 .save(form(
                     &case,
@@ -505,7 +543,7 @@ mod tests {
         for case in cases() {
             let dir = tempfile::tempdir().unwrap();
             let (app, secrets) = open(dir.path());
-            let registry = app.registry(case.pool).unwrap();
+            let registry = app.registry(case.pool);
             let id = registry.save(form(&case, ROOT, json!({}))).await.unwrap()["id"]
                 .as_str()
                 .unwrap()
@@ -559,7 +597,7 @@ mod tests {
         for case in cases() {
             let dir = tempfile::tempdir().unwrap();
             let (app, _) = open(dir.path());
-            let registry = app.registry(case.pool).unwrap();
+            let registry = app.registry(case.pool);
             registry.save(form(&case, ROOT, json!({}))).await.unwrap();
             for (extra, error) in [
                 // Another provider of the same name, in any case.
@@ -581,7 +619,11 @@ mod tests {
                     json!({"name": "Other", "adminBaseURL": "https://a?b"}),
                     "error.sub2api.invalid_base_url",
                 ),
-            ] {
+            ]
+            .into_iter()
+            // A Codex form has no address of its own.
+            .filter(|(extra, _)| case.pool != Pool::Codex || extra.get("baseURL").is_none())
+            {
                 assert_eq!(
                     registry
                         .save(form(&case, ROOT, extra.clone()))
@@ -601,7 +643,7 @@ mod tests {
         for case in cases() {
             let dir = tempfile::tempdir().unwrap();
             let (app, secrets) = open(dir.path());
-            let registry = app.registry(case.pool).unwrap();
+            let registry = app.registry(case.pool);
             let id = registry.save(form(&case, ROOT, json!({}))).await.unwrap()["id"]
                 .as_str()
                 .unwrap()
@@ -624,6 +666,7 @@ mod tests {
                 .save(form(&case, PROXIED, json!({"id": id, "password": ""})))
                 .await
                 .unwrap();
+            gateway_at(dir.path(), PROXIED);
             let c = registry.connection(&id).unwrap();
             assert_eq!(
                 c.admin_base, "https://relay.example.com/api/v1",
@@ -661,7 +704,7 @@ mod tests {
         for case in cases() {
             let dir = tempfile::tempdir().unwrap();
             let (app, secrets) = open(dir.path());
-            let registry = app.registry(case.pool).unwrap();
+            let registry = app.registry(case.pool);
             let id = registry.save(form(&case, ROOT, json!({}))).await.unwrap()["id"]
                 .as_str()
                 .unwrap()
@@ -671,6 +714,40 @@ mod tests {
             assert_eq!(registry.providers().unwrap(), json!([]));
             assert!(secrets.0.lock().unwrap().is_empty(), "{:?}", case.pool);
         }
+    }
+
+    #[tokio::test]
+    async fn a_codex_provider_config_toml_does_not_define_yet_is_saved_but_not_reached() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _) = open(dir.path());
+        let registry = app.registry(Pool::Codex);
+        let case = cases().pop().unwrap();
+        for name in ["Later", "openai"] {
+            let saved = registry
+                .save(form(&case, ROOT, json!({"name": name})))
+                .await
+                .unwrap();
+            let id = saved["id"].as_str().unwrap();
+            assert_eq!(
+                registry.connection(id).err().unwrap(),
+                sub2api::PROVIDER_NOT_FOUND,
+                "{name}"
+            );
+        }
+        // Defined since, it is reached through the gateway named for it.
+        std::fs::write(
+            dir.path().join("codex/config.toml"),
+            "[model_providers.later]\nbase_url = \"https://later.example.com/v1\"\n",
+        )
+        .unwrap();
+        let id = registry.members().unwrap()[0].key.clone();
+        let c = registry.connection(&id).unwrap();
+        assert_eq!(c.admin_base, "https://later.example.com/api/v1");
+        assert_eq!(c.definition.id, "Later");
+        // Kept in the Codex account store, keyed by id.
+        let store = crate::repository::load_accounts(&app.paths.store()).unwrap();
+        assert_eq!(store.extra["providers"][0]["id"], id.as_str());
+        assert_eq!(store.extra["providers"][0]["name"], "Later");
     }
 
     #[test]

@@ -9,22 +9,21 @@
   else root.CopoolControllers = api;
 })(globalThis, function (P) {
   const messageOf = (error) => error?.message || error?.code || String(error);
-  /// The Sub2api provider forms of each pool: what they show and how their
-  /// cards name them. Everything else about them is the same.
+  /// The Sub2api provider forms of each pool: what they show. Everything
+  /// else about them is the same: cards name a provider by its id.
   const PROVIDER_FORMS = {
     codex: {
-      // Cards name a Codex provider by its provider ID, in any case.
-      key: "providerID",
-      name: "providerID",
+      // The name is the Codex configuration's provider ID, whose gateway
+      // the provider serves.
       fields: [
-        ["providerID", "provider_id"],
+        ["name", "provider_id"],
         ["adminBaseURL", "admin_base_url"],
         ["username", "username"],
         ["password", "password", "password"],
       ],
       secrets: ["password"],
       blank: () => ({
-        providerID: "",
+        name: "",
         username: "",
         password: "",
         proxyURL: "",
@@ -35,8 +34,6 @@
       }),
     },
     claude: {
-      key: "id",
-      name: "name",
       sourceFields: {
         address: [
           ["name", "claude_name"],
@@ -65,8 +62,6 @@
       }),
     },
     antigravity: {
-      key: "id",
-      name: "name",
       // agy's key stays in the environment: the form names its variable,
       // never the key. A switch writes the variable and the Sub2api URL,
       // agy's gateway, to ~/.gemini/.env.
@@ -90,8 +85,6 @@
       }),
     },
     grok: {
-      key: "id",
-      name: "name",
       // The variable authenticating Grok Build's Sub2API requests.
       fields: [
         ["name", "grok_name"],
@@ -132,12 +125,12 @@
       for (const key of this.form.secrets) draft[key] = "";
       return draft;
     }
-    /// The key naming a provider in its cards' ids.
+    /// The key naming a provider in its cards' ids: its id.
     key(provider) {
-      return provider?.[this.form.key] ?? "";
+      return provider?.id ?? "";
     }
     name(provider) {
-      return provider?.[this.form.name] || "";
+      return provider?.name || "";
     }
     /// The saved provider whose cards carry this key.
     find(key) {

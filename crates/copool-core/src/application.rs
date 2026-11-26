@@ -409,6 +409,7 @@ impl Application {
             _instance_lock: instance_lock,
         };
         app.migrate_provider_credentials()?;
+        app.migrate_codex_providers()?;
         app.preferences()?;
         Ok(app)
     }
@@ -770,8 +771,8 @@ impl Application {
             }
         }
         // Sub2api cards are current while Codex uses their provider.
-        let current = (!provider.is_official()).then_some(provider.id.as_str());
-        summaries.extend(self.provider_cards(Pool::Codex, current)?);
+        let current = self.codex_provider_in_use()?;
+        summaries.extend(self.provider_cards(Pool::Codex, current.as_deref())?);
         crate::ranking::sort_for_display(&mut summaries);
         if let Some(schedule) = self.schedule(Pool::Codex) {
             let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
@@ -987,11 +988,12 @@ impl Application {
                 return Err("Account is deactivated".into());
             }
             let _op = self.operations.lock().await;
-            crate::codex_config::switch(&self.codex_config_path(), &provider.key)?;
+            // Codex selects the `config.toml` provider it is named after.
+            crate::codex_config::switch(&self.codex_config_path(), &provider.name)?;
             self.publish();
             drop(_op);
             let mut execution = self.after_switch(Pool::Codex, None).await?;
-            execution.provider = Some(provider.key);
+            execution.provider = Some(provider.name);
             return Ok(execution);
         }
         let _op = self.operations.lock().await;

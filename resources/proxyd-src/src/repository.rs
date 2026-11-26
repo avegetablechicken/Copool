@@ -154,6 +154,8 @@ pub(crate) fn load_accounts(path: &Path) -> Result<AccountsStore, String> {
 pub(crate) fn save_accounts(path: &Path, store: &AccountsStore) -> Result<(), String> {
     let _guard = FILES.lock().map_err(|_| "Account store lock poisoned")?;
     let mut updated = store.clone();
+    // A store loaded earlier cannot write back the Sub2api data edited since:
+    // the caches the settings keep, and the Codex pool's providers.
     if path.exists() {
         let latest = load_accounts_inner(path)?;
         updated.extra.insert(
@@ -164,6 +166,10 @@ pub(crate) fn save_accounts(path: &Path, store: &AccountsStore) -> Result<(), St
                 .cloned()
                 .unwrap_or(json!({})),
         );
+        match latest.extra.get("providers") {
+            Some(providers) => updated.extra.insert("providers".into(), providers.clone()),
+            None => updated.extra.remove("providers"),
+        };
     }
     save_accounts_inner(path, &updated)
 }

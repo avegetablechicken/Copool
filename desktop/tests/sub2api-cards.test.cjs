@@ -19,7 +19,7 @@ test("Sub2api cards group by the provider in their id, even before the provider 
   providerControllers.claude.persisted = [
     { id: "srv", name: "myServer", cachedAccounts: [{ id: 1 }] },
   ];
-  providerControllers.codex.persisted = [{ id: "x", providerID: "Team-A", cachedAccounts: [] }];
+  providerControllers.codex.persisted = [{ id: "team-a", name: "Team-A", cachedAccounts: [] }];
   providerControllers.antigravity.persisted = [
     { id: "0b9e-4f1a", name: "Relay", cachedAccounts: [] },
   ];
@@ -33,9 +33,11 @@ test("Sub2api cards group by the provider in their id, even before the provider 
   assert.equal(scope.providerKey(card("claude-sub2api-srv-2")), "srv");
   assert.equal(scope.providerTitle(card("claude-sub2api-srv-2")), "myServer");
   assert.equal(scope.providerKey({ id: "claude-sub2api-srv-2" }), null);
+  // Codex's cards name their provider by its id too, in any case.
   scope.pool = "codex";
   assert.equal(scope.providerKey(card("sub2api-team-a-17")), "team-a");
   assert.equal(scope.providerTitle(card("sub2api-team-a-17")), "Team-A");
+  assert.equal(scope.providerTitle(card("sub2api-TEAM-A-18")), "Team-A");
   // An unknown provider still groups, under its id.
   assert.equal(scope.providerTitle(card("sub2api-gone-3")), "gone");
   // Antigravity's cards name their provider's id, dashes and all.
@@ -71,6 +73,22 @@ test("Antigravity's Sub2api form keeps agy's key out and its password secret", (
   assert.equal(providers.draft(saved).apiKeyVariable, "RELAY_KEY");
   assert.equal(providers.key({ id: "p", name: "Relay" }), "p");
   assert.equal(providers.name({ id: "p", name: "Relay" }), "Relay");
+});
+
+test("Codex's Sub2api form names the Codex configuration's provider and keeps its password secret", () => {
+  const { Providers } = require("../ui/controllers.js");
+  const providers = new Providers(null, "codex");
+  assert.deepEqual(
+    providers.form.fields.map(([key, label]) => [key, label]),
+    [["name", "provider_id"], ["adminBaseURL", "admin_base_url"],
+      ["username", "username"], ["password", "password"]],
+  );
+  assert.deepEqual(providers.form.secrets, ["password"]);
+  const id = providers.add();
+  assert.equal(providers.providers.get(id).name, "");
+  assert.equal("providerID" in providers.providers.get(id), false);
+  assert.equal(providers.key({ id: "p", name: "my" }), "p");
+  assert.equal(providers.name({ id: "p", name: "my" }), "my");
 });
 
 test("Claude providers keep the selected source across saving and reopening the form", async () => {

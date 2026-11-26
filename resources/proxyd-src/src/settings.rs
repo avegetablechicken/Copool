@@ -86,8 +86,12 @@ impl Serialize for Provider {
         json!({"id":p.id,"providerID":p.provider_id,"username":p.username,"allowInsecureTLS":p.allow_insecure_tls,"proxyURL":p.proxy_url,"importedAccountIDs":p.imported_account_ids,"cachedAccounts":p.cached_accounts,"adminBaseURL":p.admin_base_url,"legacyAdminBaseURL":p.legacy_admin_base_url}).serialize(serializer)
     }
 }
+/// The Codex providers an earlier version kept in the settings, which this
+/// one only reads to migrate them and writes back unchanged, for an earlier
+/// version to read after a downgrade.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Providers {
+    /// Unused since providers sync without confirmation; kept as saved.
     pub confirmed_provider_ids: Vec<String>,
     pub providers: Vec<Provider>,
 }
@@ -115,12 +119,6 @@ impl Providers {
             confirmed_provider_ids,
             providers,
         }
-    }
-    pub fn confirms(&self, id: &str) -> bool {
-        self.normalized()
-            .confirmed_provider_ids
-            .iter()
-            .any(|v| v.eq_ignore_ascii_case(id))
     }
     pub fn provider(&self, id: &str) -> Option<Provider> {
         self.normalized()

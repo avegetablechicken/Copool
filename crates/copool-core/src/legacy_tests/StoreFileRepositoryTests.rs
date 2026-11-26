@@ -92,6 +92,37 @@ fn testSub2APICacheMigratesAndSurvivesStaleAccountStoreSave() {
     assert_eq!(store.extra["cachedAccounts"][&second.id], json!([cached()]));
 }
 #[test]
+fn codexProvidersSurviveStaleAccountStoreSave() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("accounts.json");
+    let stale = load_accounts(&path).unwrap();
+    let providers = json!([{"id": "p", "name": "my", "cachedAccounts": [cached()]}]);
+    mutate_accounts(&path, |store| {
+        store.extra.insert("providers".into(), providers.clone());
+        Ok(())
+    })
+    .unwrap();
+    // A store loaded before the providers were edited keeps them as edited.
+    save_accounts(&path, &stale).unwrap();
+    assert_eq!(load_accounts(&path).unwrap().extra["providers"], providers);
+    // A save never writes them: only an edit of the store as it is now.
+    let mut latest = load_accounts(&path).unwrap();
+    latest.extra.insert("providers".into(), json!([]));
+    save_accounts(&path, &latest).unwrap();
+    assert_eq!(load_accounts(&path).unwrap().extra["providers"], providers);
+    mutate_accounts(&path, |store| {
+        store.extra.remove("providers");
+        Ok(())
+    })
+    .unwrap();
+    save_accounts(&path, &stale).unwrap();
+    assert!(load_accounts(&path)
+        .unwrap()
+        .extra
+        .get("providers")
+        .is_none());
+}
+#[test]
 fn testAccountProxyReloadsFromDiskIntoCardSnapshotAfterRepositoryRestart() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("accounts.json");

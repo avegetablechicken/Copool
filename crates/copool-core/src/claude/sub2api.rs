@@ -327,16 +327,16 @@ mod tests {
     /// A form saved through the pool's Provider registry, as the settings save it.
     async fn save(app: &Application, draft: Provider) -> Result<Provider> {
         let draft = serde_json::to_value(draft).unwrap();
-        let saved = app.registry(Pool::Claude).unwrap().save(draft).await?;
+        let saved = app.registry(Pool::Claude).save(draft).await?;
         Ok(serde_json::from_value(saved).unwrap())
     }
     /// The providers as the settings list them.
     fn listed(app: &Application) -> Vec<Provider> {
-        let listed = app.registry(Pool::Claude).unwrap().providers().unwrap();
+        let listed = app.registry(Pool::Claude).providers().unwrap();
         serde_json::from_value(listed).unwrap()
     }
     fn connection(app: &Application, key: &str) -> Result<crate::sub2api::Connection> {
-        app.registry(Pool::Claude).unwrap().connection(key)
+        app.registry(Pool::Claude).connection(key)
     }
     use serde_json::{json, Value};
     use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex};

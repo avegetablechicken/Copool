@@ -49,8 +49,8 @@ test("Import shows provider sync only for pools with saved providers", () => {
     { id: "c2", name: "Claude Two" },
   ];
   providerControllers.codex.persisted = [
-    { id: "x1", providerID: "Codex One" },
-    { id: "x2", providerID: "Codex Two" },
+    { id: "x1", name: "Codex One" },
+    { id: "x2", name: "Codex Two" },
   ];
   const trigger = {};
   let items;
@@ -81,8 +81,8 @@ test("Import shows provider sync only for pools with saved providers", () => {
   scope.pool = "codex";
   trigger.onclick();
   items[2].children[0].run();
-  // Each pool's cards name the provider by its own key.
-  assert.deepEqual(calls, [["claude", "c2"], ["codex", "Codex One"]]);
+  // Every pool's cards name the provider by its id.
+  assert.deepEqual(calls, [["claude", "c2"], ["codex", "x1"]]);
 });
 
 test("Add unofficial provider offers the pools as children of Sub2API", () => {

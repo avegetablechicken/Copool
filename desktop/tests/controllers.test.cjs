@@ -4,7 +4,7 @@ const { Settings, Providers } = require("../ui/controllers.js");
 const legacy = (suite, name, fn) => test(`${suite}.${name}`, fn);
 const p = (id, extra = {}) => ({
   id,
-  providerID: id,
+  name: id,
   username: `${id}@example.test`,
   password: "",
   cachedAccounts: [],
@@ -31,7 +31,7 @@ legacy(
     const model = new Providers();
     model.accept([
       p("id", {
-        providerID: "one",
+        name: "one",
         cachedAccounts: [{ id: 42 }],
         importedAccountIDs: [42],
       }),
@@ -40,7 +40,7 @@ legacy(
     model.providers.get("id").password = "unsaved-secret";
     model.accept([
       p("different-config-id", {
-        providerID: "one",
+        name: "one",
         cachedAccounts: [{ id: 42, usage: { fetchedAt: 10 } }],
         importedAccountIDs: [42],
       }),
@@ -111,7 +111,7 @@ legacy(
           persisted.some(
             (p) =>
               p.id !== saved.id &&
-              p.providerID.toLowerCase() === saved.providerID.toLowerCase(),
+              p.name.toLowerCase() === saved.name.toLowerCase(),
           )
         )
           throw "error.sub2api.duplicate_provider";
@@ -132,7 +132,7 @@ legacy(
     model.providers.get("first").adminBaseURL = "https://admin.example.test";
     model.providers.get("second").username = "";
     model.providers.get("second").password = "unsaved-password";
-    model.providers.set("third", p("third", { providerID: "", username: "" }));
+    model.providers.set("third", p("third", { name: "", username: "" }));
     await model.save("first");
     assert.equal(persisted.length, 2);
     assert.equal(persisted[0].adminBaseURL, "https://admin.example.test");
@@ -140,8 +140,8 @@ legacy(
     assert.equal(model.providers.get("second").password, "unsaved-password");
     assert.equal(model.providers.size, 3);
     assert.equal(model.notice, "settings.notice.sub2api_saved");
-    model.providers.get("second").providerID = "renamed-unsaved";
-    model.providers.get("first").providerID = "SECOND";
+    model.providers.get("second").name = "renamed-unsaved";
+    model.providers.get("first").name = "SECOND";
     await assert.rejects(model.save("first"));
     assert.equal(model.notice, "error.sub2api.duplicate_provider");
     await model.remove("second");
@@ -150,7 +150,7 @@ legacy(
       persisted.map((p) => p.id),
       ["first"],
     );
-    assert.equal(model.providers.get("first").providerID, "SECOND");
+    assert.equal(model.providers.get("first").name, "SECOND");
     assert.equal(model.providers.size, 2);
   },
 );

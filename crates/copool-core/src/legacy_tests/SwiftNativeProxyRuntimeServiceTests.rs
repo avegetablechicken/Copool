@@ -1,14 +1,15 @@
 use super::{fixture, http_fixture::serve, save_fixture, stored};
 use crate::Pool;
 use crate::{
-    proxy_integration, proxy_service as proxy, settings::Provider, ApiProxyStatus, Application,
+    provider_registry::ProviderRecord, proxy_integration, proxy_service as proxy, ApiProxyStatus,
+    Application,
 };
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
 };
-fn setup_provider(app: &Application, id: &str, base: &str, profile: bool) -> Provider {
+fn setup_provider(app: &Application, id: &str, base: &str, profile: bool) -> ProviderRecord {
     std::fs::create_dir_all(app.codex_config_path().parent().unwrap()).unwrap();
     std::fs::write(
         app.codex_config_path(),
@@ -25,26 +26,41 @@ fn setup_provider(app: &Application, id: &str, base: &str, profile: bool) -> Pro
     };
     let original = std::fs::read_to_string(&path).unwrap_or_default();
     std::fs::write(path,format!("{original}\n[model_providers.{id}]\nbase_url = {base:?}\nwire_api = \"responses\"\nenv_key = \"PROVIDER_TEST_KEY\"\nrequires_openai_auth = false\n")).unwrap();
-    let p = Provider {
-        provider_id: id.into(),
+    // Named after the `config.toml` provider, keyed by an id unlike it.
+    let p = ProviderRecord {
+        id: format!("id-{id}"),
+        name: id.into(),
         username: "admin@example.test".into(),
         allow_insecure_tls: true,
         imported_account_ids: vec![42, 43],
         ..Default::default()
     };
-    let mut settings = app.configuration().unwrap();
-    settings.sub2_api_provider.providers.push(p.clone());
-    app.persist_configuration(&settings).unwrap();
+    store_provider(app, &p);
     p
+}
+/// Puts a provider in the Codex account store, in place of one with its id.
+fn store_provider(app: &Application, p: &ProviderRecord) {
+    crate::repository::mutate_accounts(&app.paths.store(), |store| {
+        let mut providers: Vec<ProviderRecord> = store
+            .extra
+            .get("providers")
+            .map(|v| serde_json::from_value(v.clone()).unwrap())
+            .unwrap_or_default();
+        providers.retain(|v| v.id != p.id);
+        providers.push(p.clone());
+        store
+            .extra
+            .insert("providers".into(), serde_json::to_value(providers).unwrap());
+        Ok(())
+    })
+    .unwrap();
 }
 #[tokio::test]
 async fn testLoadCandidatesIncludesImportedSub2APIProviderUsingLoginShellFallback() {
     let (_dir, app) = fixture();
     let mut p = setup_provider(&app, "my", "https://sub2.test/v1", false);
     p.proxy_url = "socks5://127.0.0.1:1080".into();
-    let mut settings = app.configuration().unwrap();
-    settings.sub2_api_provider.upsert(p);
-    app.persist_configuration(&settings).unwrap();
+    store_provider(&app, &p);
     let candidates = proxy_integration::candidates_with_keys(&app.paths, |d| {
         assert_eq!(d.env_key.as_deref(), Some("PROVIDER_TEST_KEY"));
         Some("provider-api-key".into())

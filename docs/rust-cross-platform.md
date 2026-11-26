@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-26（Codex 的 Sub2api 提供方并入提供方注册表）：Codex 的 Sub2api 提供方与 Claude、Grok、Antigravity 一样按 id 保存和标识，存于 Codex 账号库 `accounts.json` 的 `providers`（各自内含 `cachedAccounts`），卡片 id 改为 `sub2api-<id>-<n>`；提供方的“Provider ID”（`name`）仍是 `config.toml` 中 `[model_providers.<名称>]` 的名称，网关地址每次使用时从 `config.toml` 读取（名称不区分大小写），切换、CURRENT 标签、按轮刷新与本地 API 代理候选（路由 id 仍为 `sub2api-provider:<名称小写>`）都按名称对应。`config.toml` 尚未定义的提供方照常保存，连接时报 “The provider was not found in Codex config or Sub2api settings.”；不存在的提供方记录在四个池中统一报 “Provider not found”。上游不再列出的账号也与其他池一样标记为 missing，而不是从池中移除。启动时一次性迁移（`settings.json` 记 `codexProvidersMigrated`）：把 `settings.json` 的 `sub2APIProvider`（含 Swift 单提供方旧格式和内联缓存）复制到 `providers`，密码从以 id 为名的钥匙串条目复制到 `codex-sub2api-password:<id>`，并把 `refresh.cards.codex` 与 `accountOrder.codex` 中的 `sub2api:<名称>` 改为 `sub2api:<id>`。迁移只复制不删除：旧的 `sub2APIProvider`、`cachedAccounts` 和旧密码条目保持原样，供降级后的旧版本读取（见 `docs/adr/0001-keep-codex-provider-data-after-migration.md`）。迁移、存储和连接已用临时目录与内存钥匙串测试，未用真实 Sub2api 服务器验证。
+
 2026-11-24（单池小组件显示池标签）：Codex、Claude、Antigravity、Grok 四个单池小组件的每张卡片现在也带池标签（`CODEX`、`CLAUDE`、`ANTIGRAVITY`、`GROK`），样式与 “Copool Accounts” 相同，此前只有后者显示，单池小组件看不出属于哪个池。快照中的 `poolLabel` 由 app 写出，升级后要等 app 下次刷新小组件才会显示。Rust 小组件测试已相应更新，核心 629 项测试通过，WidgetKit 扩展编译通过；尚未在桌面上实机查看，小尺寸下较长的 `ANTIGRAVITY` 与套餐标签并排时是否截断未核对。
 
 2026-11-24（小组件邮箱遮罩）：macOS 的五个小组件由 `StaticConfiguration` 改为 `AppIntentConfiguration`，“编辑小组件”中新增 “Mask Emails” 开关（默认关闭，各小组件分别设置）。开启后，卡片与列表的账号名只保留前 2 个字符（3、4 个字符的名称保留 1 个，更短的全部隐藏），其余显示为固定 4 个圆点，不透露长度；工作区名称不遮罩。遮罩只在小组件显示时进行，app 写出的快照不变。各小组件的 kind 未变，已放置的小组件开关默认为关闭。WidgetKit 扩展编译通过，App Intents 元数据已生成；尚未在桌面上实机查看编辑界面。
@@ -239,6 +241,7 @@ Claude 池保存在数据目录的 `claude-accounts.json`；在 macOS 上（隔�
 - Claude 当前状态反映本机用户级 `settings.json` 与登录凭据，不代表每个终端进程的最终配置；命令行 `--settings`、项目配置、托管配置和终端环境覆盖尚未纳入识别。已保存的 Cloud gateway 登录、默认联邦认证 Profile、宿主强制路由及继承的 Unix socket 不在本次用户设置切换的控制范围内。未新增历史配置存储，因此第三方覆盖掉的旧官方转发地址不会自动恢复；离开第三方时回到官方默认地址。
 
 - 浏览器 OAuth 登录与工作区授权、SSH 远程节点、Cloudflared 隧道、Sub2api、编辑器重启、OpenCode / pi / omp 同步和登录时自启动均已实现，但未用真实账号、服务器或 Cloudflare 帐户验证。
+- Codex 的 Sub2api 提供方迁移到 `accounts.json` 后，旧版本仍读取原来的 `sub2APIProvider`、`cachedAccounts` 与旧密码条目；降级后在旧版本中所做的修改不会带回新版本，新版本中的修改也不会写回旧数据。
 - 远程服务器“探测”使用已保存的配置，而原版使用卡片中未保存的草稿；先保存再探测。
 - 非 macOS 托盘右键菜单（Open/Quit Copool）尚未本地化；原版 macOS 只有 MenuBarExtra 面板，没有此菜单。
 - 少量新增提示（如复制成功、Sub2api 未配置）只提供中英文，其余文案复用全部 11 种语言。
