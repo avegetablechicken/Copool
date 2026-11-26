@@ -557,6 +557,19 @@
       ? "...\n" + chars.slice(-11996).join("")
       : log || "";
   }
+  /// The provider of a Sub2api card, which its cards refresh with: the core
+  /// names the card's refresh key `sub2api:<provider>` (refresh_plan.rs), so
+  /// cards synced since the provider list was last read still group with
+  /// their provider.
+  function providerKey(account) {
+    const key = account.refresh?.key;
+    return key?.startsWith("sub2api:") ? key.slice("sub2api:".length) : null;
+  }
+  /// The card whose proxy a card's back edits: the account's own, or its
+  /// provider's first card for a provider's group.
+  function proxyOwner(target) {
+    return target.group ? target.group.accounts[0] : target.account;
+  }
   function visibleAccounts(accounts) {
     return accounts.filter(
       (a) => !a.displayStatus || a.displayStatus === "list",
@@ -727,6 +740,8 @@
     return key === "ArrowLeft" ? "left" : key === "ArrowRight" ? "right" : null;
   }
   return {
+    providerKey,
+    proxyOwner,
     formatLocalized,
     proxyButtons,
     publicButtons,

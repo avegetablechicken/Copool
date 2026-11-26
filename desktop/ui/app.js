@@ -484,14 +484,8 @@ async function droppingNewCards(origin, task) {
     if (dropOrigin === origin) dropOrigin = null;
   }
 }
-/// The provider of a Sub2api card, which its cards refresh with: the core
-/// names the card's refresh key `sub2api:<provider>` (refresh_plan.rs), so
-/// cards synced since the provider list was last read still group with
-/// their provider.
-function providerKey(account) {
-  const key = account.refresh?.key;
-  return key?.startsWith("sub2api:") ? key.slice("sub2api:".length) : null;
-}
+/// The provider of a Sub2api card (presentation.js).
+const providerKey = P.providerKey;
 /// The saved Sub2api provider a card belongs to, if any.
 function accountProvider(account) {
   const key = providerKey(account);
@@ -560,7 +554,7 @@ function editButton(key, name) {
   const cardPool = pool;
   const update = () => {
     if (pool !== cardPool) return;
-    control.title = V.details(flipTarget(key), cardContext());
+    control.title = V.details(accountsController.flipTarget(key), cardContext());
   };
   update();
   control.onpointerenter = update;
@@ -577,48 +571,10 @@ async function sayHi(account) {
   else if (outcome === "not_started")
     notice(tr(`error.${controller.pool}.say_hi_window_not_started`), true);
 }
-/// The card turned over to edit it, as a widget's: an account's id, or
-/// `sub2api:<provider>` for a provider's group; one at a time. Its draft
-/// proxy, greeting schedule once read, a time being added and a removal
-/// awaiting confirmation stay over renders.
-let editing = null;
-/// The card being turned over, until its back shows, and the turn's
-/// number: a later turn, or Escape, cancels one under way.
-let pendingEdit = null;
-let editGeneration = 0;
 // Each half of a turn: edge-on at its middle, where the sides swap.
 const FLIP_HALF_MS = 210;
 // The list entry whose face is changing during this render.
 let turningEntry = null;
-/// What a flip key names among the shown cards: an account, maybe one of a
-/// Sub2api provider's, or a provider's group.
-function flipTarget(key) {
-  const accounts = P.visibleAccounts(accountsCache);
-  if (key.startsWith("sub2api:")) {
-    const provider = key.slice("sub2api:".length);
-    const members = accounts.filter((a) => providerKey(a) === provider);
-    return members.length ? { group: { key: provider, accounts: members } } : null;
-  }
-  const account = accounts.find((a) => a.id === key);
-  if (!account) return null;
-  // A provider's only card is an ordinary card, as P.providerGroups shows it.
-  const provider = providerKey(account);
-  const grouped =
-    provider !== null && accounts.filter((a) => providerKey(a) === provider).length > 1;
-  return { account, grouped };
-}
-/// The proxy edited: the account's own, or its provider's for a group.
-function proxyOwner(target) {
-  return target.group ? target.group.accounts[0] : target.account;
-}
-function proxyDraft(proxyUrl) {
-  const direct = proxyUrl === "direct://";
-  return { enabled: !direct, url: direct ? "" : proxyUrl || "" };
-}
-/// The proxy saved for a draft: none as "direct://"; blank inherits.
-function proxyValue(draft) {
-  return draft.enabled ? draft.url : "direct://";
-}
 /// The shared account proxy a blank proxy uses, when one is set; a
 /// Sub2api provider's never does.
 function sharedProxy(owner) {
@@ -633,86 +589,36 @@ function proxyHelp(owner) {
 function proxyPlaceholder(owner) {
   return sharedProxy(owner) || "http://127.0.0.1:7890";
 }
-/// Turns a card over to its settings.
+/// Turns a card over to its settings (the controller's edit), turning back
+/// any other card being edited.
 async function editCard(key) {
-  if (collapsed || editing?.key === key || pendingEdit === key) return;
-  const target = flipTarget(key);
-  if (!V.hasBack(target, pool)) return;
-  const state = {
-    key,
-    pool,
-    proxy: target.grouped ? null : proxyDraft(proxyOwner(target).proxyUrl),
-    proxyError: null,
-    schedule: null,
-    adding: null,
-    confirmRemove: false,
-  };
-  const schedule =
-    target.account && V.supportsSayHi(target.account, pool)
-      ? invoke("greeting_schedule", { pool, id: target.account.id }).catch((error) => {
-          notice(error, true);
-          return null;
-        })
-      : null;
-  if (editing || pendingEdit) cancelEditing();
-  const generation = ++editGeneration;
-  pendingEdit = key;
-  await turnCard(key, 1, async () => {
-    state.schedule = await schedule;
-    if (generation !== editGeneration) return;
-    pendingEdit = null;
-    if (pool === state.pool && !collapsed) editing = state;
-  });
+  if (collapsed) return;
+  const controller = accountsController;
+  const previous = controller.editing;
+  const open = controller.edit(key, (error) => notice(error, true));
+  if (!open) return;
+  if (previous) turnCard(previous.key, -1, () => controller.close(previous));
+  await turnCard(key, 1, open);
 }
 /// Saves the card's proxy, then turns it back; an invalid proxy keeps it
 /// open with the error.
 async function finishEditing() {
-  const state = editing;
+  const controller = accountsController;
+  const state = controller.editing;
   if (!state || state.saving) return;
-  if (state.proxy && !(await saveProxyDraft(state))) return;
-  await turnCard(state.key, -1, () => {
-    if (editing === state) editing = null;
-  });
-}
-/// Turns the card back without saving its proxy; at once, when the page
-/// changes under it.
-function cancelEditing(animated = true) {
-  // A card still turning over turns back instead of showing its back.
-  if (pendingEdit) {
-    pendingEdit = null;
-    editGeneration++;
-  }
-  const state = editing;
-  if (!state) return;
-  if (!animated) {
-    editing = null;
-    renderedAccountsState = undefined;
-    renderAccounts(accountsCache);
+  if (state.proxy && !(await controller.saveProxyDraft(state))) {
+    // Done shows enabled again, to save the corrected proxy.
+    renderEditing();
     return;
   }
-  turnCard(state.key, -1, () => {
-    if (editing === state) editing = null;
-  });
+  await turnCard(state.key, -1, () => controller.close(state));
 }
-async function saveProxyDraft(state) {
-  const target = flipTarget(state.key);
-  if (!target) return true;
-  const owner = proxyOwner(target);
-  const value = proxyValue(state.proxy);
-  if (value.trim() === (owner.proxyUrl || "").trim()) return true;
-  state.saving = true;
-  try {
-    await accountsController.saveProxy(owner.id, value);
-    return true;
-  } catch (error) {
-    // Done shows enabled again, to save the corrected proxy.
-    state.saving = false;
-    state.proxyError = tr(String(error?.message ?? error));
-    renderEditing();
-    return false;
-  } finally {
-    state.saving = false;
-  }
+/// Turns the card back without saving its proxy; a card still turning over
+/// turns back instead of showing its back.
+function cancelEditing() {
+  const controller = accountsController;
+  const state = controller.cancelTurn();
+  if (state) turnCard(state.key, -1, () => controller.close(state));
 }
 /// Renders the card being edited again, as its settings change.
 function renderEditing() {
@@ -780,7 +686,7 @@ async function turnCard(key, direction, change) {
 /// refresh and its removal; a provider's group has the provider's proxy;
 /// a provider's account its greetings alone.
 function cardBack(target) {
-  const state = editing;
+  const state = accountsController.editing;
   const { account, group, grouped } = target;
   const cards = group ? group.accounts : [account];
   const current = cards.some((a) => a.isCurrent);
@@ -802,7 +708,7 @@ function cardBack(target) {
   done.onclick = () => finishEditing();
   head.append(title, done);
   node.append(head);
-  if (state.proxy) node.append(proxySection(state, proxyOwner(target)));
+  if (state.proxy) node.append(proxySection(state, P.proxyOwner(target)));
   if (account && !grouped && account.renewal) node.append(renewalSection(account));
   if (account && V.supportsSayHi(account, pool) && state.schedule)
     node.append(greetingSection(account, state));
@@ -853,7 +759,7 @@ function backHelp(text, error = false) {
 /// The proxy, saved with Done or Return.
 function proxySection(state, owner) {
   const draft = state.proxy;
-  const help = backHelp(state.proxyError || proxyHelp(owner), !!state.proxyError);
+  const help = backHelp(state.proxyError ? tr(state.proxyError) : proxyHelp(owner), !!state.proxyError);
   const url = el("input", "field");
   url.dataset.backField = "proxy-url";
   url.placeholder = proxyPlaceholder(owner);
@@ -1014,13 +920,13 @@ function withoutGreetingTime(times, time) {
 }
 /// Saves a greeting schedule, then shows it on the card being edited.
 async function saveGreeting(id, state, auto, times) {
+  const controller = accountsController;
   try {
-    await invoke("set_greeting_schedule", { pool: state.pool, id, auto, times });
-    state.schedule = { ...state.schedule, auto, times };
+    await controller.saveGreeting(state, id, auto, times);
   } catch (error) {
     notice(error, true);
   }
-  if (editing === state) renderEditing();
+  if (controller.editing === state) renderEditing();
 }
 /// The key a card's own refresh switches are saved under, as the core names
 /// it: an account's id, or `sub2api:<provider>` for a Sub2api provider's
@@ -1135,13 +1041,13 @@ function removalSection(state, cards, provider) {
       state.confirmRemove = true;
       renderEditing();
       setTimeout(() => {
-        if (editing !== state || !state.confirmRemove) return;
+        if (accountsController.editing !== state || !state.confirmRemove) return;
         state.confirmRemove = false;
         renderEditing();
       }, 3000);
       return;
     }
-    if (editing === state) editing = null;
+    accountsController.close(state);
     removeCards(cards, provider || cards[0].sourceTag === "SUB2API");
   };
   row.append(remove);
@@ -1292,8 +1198,8 @@ function accountCard(
   view = V.cardView(account, cardContext(), grouped),
   owner = { account },
 ) {
-  if (!collapsed && editing?.key === account.id) {
-    const target = flipTarget(account.id);
+  if (!collapsed && accountsController.editing?.key === account.id) {
+    const target = accountsController.flipTarget(account.id);
     if (target) return cardBack(target);
   }
   const controlsName = owner.group ? providerTitle(owner.group.accounts[0]) : view.full;
@@ -1474,7 +1380,7 @@ function weeklyNotice(row, lines) {
 /// the bottom right.
 function providerGroup(group) {
   const flipKey = `sub2api:${group.key}`;
-  if (!collapsed && editing?.key === flipKey) return cardBack({ group });
+  if (!collapsed && accountsController.editing?.key === flipKey) return cardBack({ group });
   const view = V.providerView(group, providerTitle(group.accounts[0]), cardContext());
   // Collapsed, the first account's row carries the provider's controls.
   const members = group.accounts.map((account, index) =>
@@ -2273,7 +2179,7 @@ function showAccountsPool(next) {
   const animate = selectedPage === "accounts";
   if (animate) slidePoolOut(direction);
   // Another pool's cards are shown; none of them is being edited.
-  editing = null;
+  accountsController.stopEditing();
   pool = next;
   fullRefreshAt = null;
   localStorage.setItem("copool.pool", pool);
@@ -2344,10 +2250,10 @@ $("accounts").addEventListener("contextmenu", (event) => {
   if (event.target.closest(".account-back, input, select, textarea")) return;
   // A provider's account without a menu of its own has its provider's.
   let node = event.target.closest("[data-flip-key]");
-  let target = node && flipTarget(node.dataset.flipKey);
+  let target = node && accountsController.flipTarget(node.dataset.flipKey);
   if (target?.grouped && !cardMenu(target).length) {
     node = node.parentElement.closest("[data-flip-key]");
-    target = node && flipTarget(node.dataset.flipKey);
+    target = node && accountsController.flipTarget(node.dataset.flipKey);
   }
   if (!target) return;
   event.preventDefault();
@@ -2355,7 +2261,7 @@ $("accounts").addEventListener("contextmenu", (event) => {
 });
 $("collapse-all").onclick = () => {
   // Collapsed cards have no settings side.
-  editing = null;
+  accountsController.stopEditing();
   collapsed = !collapsed;
   renderAccounts(accountsCache);
   syncButtons();
@@ -2803,10 +2709,10 @@ function hoveredEditableCard() {
   for (let i = hovered.length - 1; i >= 0; i--) {
     const node = hovered[i];
     const key = node.dataset.flipKey;
-    if (node.classList?.contains("account-back") || editing?.key === key || pendingEdit === key) {
+    if (node.classList?.contains("account-back") || accountsController.isEditing(key)) {
       return null;
     }
-    if (V.hasBack(flipTarget(key), pool)) return key;
+    if (V.hasBack(accountsController.flipTarget(key), pool)) return key;
   }
   return null;
 }
@@ -2863,7 +2769,7 @@ document.addEventListener("keydown", (event) => {
     // Back from a subpage first; on the accounts page, turn an edited card
     // back without saving, else dismiss like a menu.
     if (selectedPage !== "accounts") showPage("accounts");
-    else if (editing || pendingEdit) cancelEditing();
+    else if (accountsController.editing || accountsController.turning) cancelEditing();
     else invoke("hide_panel").catch(() => {});
   } else if (
     event.key === "Enter" &&

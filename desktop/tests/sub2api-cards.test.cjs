@@ -23,12 +23,12 @@ test("Sub2api cards group by the provider the core names, even before the provid
   providerControllers.antigravity.persisted = [
     { id: "0b9e-4f1a", name: "Relay", cachedAccounts: [] },
   ];
-  const scope = { pool: "claude", providerControllers };
+  const scope = { pool: "claude", providerControllers, P: require("../ui/presentation.js") };
   vm.createContext(scope);
-  const start = source.indexOf("function providerKey(");
+  const start = source.indexOf("/// The provider of a Sub2api card (presentation.js).");
   const end = source.indexOf("/// Removes an account, or all of a Sub2api provider's cards", start);
   assert(start >= 0 && end > start, "providerKey found");
-  vm.runInContext(source.slice(start, end), scope);
+  vm.runInContext(`${source.slice(start, end)}\nthis.providerKey = providerKey;`, scope);
   // A card's refresh key names its provider (refresh_plan.rs); the app
   // never reads the card's id for it.
   const card = (provider) => ({ id: "any", sourceTag: "SUB2API", refresh: { key: `sub2api:${provider}`, seconds: 300 } });

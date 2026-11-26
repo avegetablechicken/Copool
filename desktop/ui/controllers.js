@@ -250,10 +250,21 @@
   const SAY_HI_LOOKS = [10, 30, 90, 180];
   /// How long a card shows its token as just renewed.
   const RENEWED_SHOWN_MS = 2200;
+  /// A proxy as its card's back edits it: on, with its address; off for
+  /// "direct://".
+  function proxyDraft(proxyUrl) {
+    const direct = proxyUrl === "direct://";
+    return { enabled: !direct, url: direct ? "" : proxyUrl || "" };
+  }
+  /// The proxy saved for a draft: none as "direct://"; blank inherits.
+  function proxyValue(draft) {
+    return draft.enabled ? draft.url : "direct://";
+  }
   /// One pool's accounts and what each card has under way: its refresh, its
   /// hi and the refreshes that follow it, its renewal and the moment it
   /// shows as done, and which pool's windows its model switch shows. The
-  /// cards read it through `cardState`. `options.pool` names the pool;
+  /// cards read it through `cardState`. It also holds the card turned over
+  /// to edit it and its draft. `options.pool` names the pool;
   /// `options.clock` ({ now, sleep }) is the time it waits by.
   class Accounts {
     constructor(
@@ -281,6 +292,16 @@
       this.renewedIds = new Set();
       // Cards whose usage rows show their third-party pool (the model switch).
       this.thirdPartyIds = new Set();
+      // The card turned over to edit it, as a widget's, one at a time: its
+      // flip key (an account's id, or `sub2api:<provider>` for a provider's
+      // group) and its draft, which stays over renders: the proxy, its error
+      // and whether it is being saved, the greeting schedule once read, a
+      // time being added and a removal awaiting confirmation.
+      this.editing = null;
+      // The card being turned over, until its back shows, and the turn's
+      // number: a later turn, or a cancel, supersedes one under way.
+      this.turning = null;
+      this.turnGeneration = 0;
       this.pendingGeneration = 0;
       this.loadGeneration = 0;
       this.loginGeneration = 0;
@@ -403,6 +424,107 @@
         this.refreshingIds.delete(id);
         this.onUpdate();
       }
+    }
+    /// What a flip key names among the shown cards: an account, maybe one of
+    /// a Sub2api provider's, or a provider's group; null for none.
+    flipTarget(key) {
+      const accounts = this.visible;
+      if (key.startsWith("sub2api:")) {
+        const provider = key.slice("sub2api:".length);
+        const members = accounts.filter((a) => P.providerKey(a) === provider);
+        return members.length ? { group: { key: provider, accounts: members } } : null;
+      }
+      const account = accounts.find((a) => a.id === key);
+      if (!account) return null;
+      // A provider's only card is an ordinary card, as P.providerGroups shows it.
+      const provider = P.providerKey(account);
+      const grouped =
+        provider !== null && accounts.filter((a) => P.providerKey(a) === provider).length > 1;
+      return { account, grouped };
+    }
+    /// Whether a card is being edited, or turned over to be.
+    isEditing(key) {
+      return this.editing?.key === key || this.turning === key;
+    }
+    /// Starts turning a card over to edit it, superseding any other turn,
+    /// and reads its greeting schedule meanwhile (`failed` hears why it could
+    /// not). Null for a card being edited or turned already, or without a
+    /// back. Otherwise the function that, once the card is edge-on, shows its
+    /// back with its draft, unless a later turn or a cancel came first. The
+    /// card edited before is the caller's to turn back (`close`).
+    edit(key, failed = () => {}) {
+      if (this.isEditing(key)) return null;
+      const target = this.flipTarget(key);
+      if (!V.hasBack(target, this.pool)) return null;
+      const state = {
+        key,
+        proxy: target.grouped ? null : proxyDraft(P.proxyOwner(target).proxyUrl),
+        proxyError: null,
+        saving: false,
+        schedule: null,
+        adding: null,
+        confirmRemove: false,
+      };
+      const schedule =
+        target.account && V.supportsSayHi(target.account, this.pool)
+          ? this.invoke("greeting_schedule", { id: target.account.id }).catch((error) => {
+              failed(error);
+              return null;
+            })
+          : null;
+      const generation = ++this.turnGeneration;
+      this.turning = key;
+      return async () => {
+        state.schedule = await schedule;
+        if (generation !== this.turnGeneration) return;
+        this.turning = null;
+        this.editing = state;
+      };
+    }
+    /// Cancels a card's turn under way, whose back then never shows, and
+    /// gives the card being edited, for the caller to turn back and close.
+    cancelTurn() {
+      if (this.turning !== null) {
+        this.turning = null;
+        this.turnGeneration++;
+      }
+      return this.editing;
+    }
+    /// Ends editing `state` without saving, unless another card's editing
+    /// has taken its place.
+    close(state) {
+      if (this.editing === state) this.editing = null;
+    }
+    /// Ends any editing at once, as when other cards are shown.
+    stopEditing() {
+      const state = this.cancelTurn();
+      this.editing = null;
+      return state;
+    }
+    /// Saves the draft's proxy, when changed; false with its error, which
+    /// keeps the card open to correct it.
+    async saveProxyDraft(state) {
+      const target = this.flipTarget(state.key);
+      if (!target) return true;
+      const owner = P.proxyOwner(target);
+      const value = proxyValue(state.proxy);
+      if (value.trim() === (owner.proxyUrl || "").trim()) return true;
+      state.saving = true;
+      try {
+        await this.saveProxy(owner.id, value);
+        state.proxyError = null;
+        return true;
+      } catch (error) {
+        state.proxyError = String(error?.message ?? error);
+        return false;
+      } finally {
+        state.saving = false;
+      }
+    }
+    /// Saves an account's greeting schedule, then keeps it in the draft.
+    async saveGreeting(state, id, auto, times) {
+      await this.invoke("set_greeting_schedule", { id, auto, times });
+      state.schedule = { ...state.schedule, auto, times };
     }
     /// Says hi with an account, which starts its 5h window, then refreshes
     /// its card over the next minutes until the window shows: by these

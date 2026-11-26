@@ -35,7 +35,7 @@ test("hover and focus update details locally and ignore another pool", () => {
   const refresh = { key: "a", seconds: 180 };
   let target = { account: { id: "a", renewal: "always", tokenExpiresAt: Date.now() / 1000 + 3600, refresh } };
   const c = load({
-    flipTarget: () => target,
+    accountsController: { flipTarget: () => target },
     button: () => ({ setAttribute() {} }),
     invoke: () => assert.fail("Tooltips must not fetch schedules"),
   });

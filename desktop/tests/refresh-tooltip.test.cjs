@@ -57,6 +57,7 @@ test("Refreshing a provider's only account refreshes the entire provider", () =>
     refreshProvider: (group) => calls.push(["provider", group.key, group.accounts[0].id]),
     refreshView: () => Promise.resolve(),
     notice: () => {},
+    providerKey: P.providerKey,
   };
   // The cards shown, with the refresh keys the core gives them.
   context.accountsCache = [
@@ -65,7 +66,7 @@ test("Refreshing a provider's only account refreshes the entire provider", () =>
     { id: "official", refresh: { key: "official" } },
   ];
   vm.createContext(context);
-  vm.runInContext(body("providerKey") + body("refreshUsage"), context);
+  vm.runInContext(body("refreshUsage"), context);
   context.refreshUsage("claude-sub2api-team-7");
   context.refreshUsage("sub2api-work-42");
   context.refreshUsage("official");
