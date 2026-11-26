@@ -255,3 +255,45 @@ fn testAccountSummariesUseCurrentAccountIDAsSingleCurrentSource() {
         ["acct-1"]
     );
 }
+/// A remote node's data dir: each deploy uploads `accounts.json` with every
+/// account's proxy inline, while the node's own `settings.json` survives.
+#[test]
+fn uploadedAccountProxyReplacesTheOneTheNodeKept() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("accounts.json");
+    let settings_path = d.path().join("settings.json");
+    let upload = |proxy: &str| {
+        let mut a = account("a", "a");
+        a["proxyURL"] = proxy.into();
+        let store: AccountsStore = serde_json::from_value(json!({"accounts":[a]})).unwrap();
+        fs::write(&path, serde_json::to_vec_pretty(&store).unwrap()).unwrap();
+    };
+    upload("socks5://127.0.0.1:1080");
+    assert_eq!(
+        load_accounts(&path).unwrap().accounts[0].proxy_url,
+        "socks5://127.0.0.1:1080"
+    );
+    upload("http://127.0.0.1:8080");
+    assert_eq!(
+        load_accounts(&path).unwrap().accounts[0].proxy_url,
+        "http://127.0.0.1:8080"
+    );
+    assert_eq!(
+        load_settings(&settings_path).unwrap().account_proxy_urls["a"],
+        "http://127.0.0.1:8080"
+    );
+    assert!(!fs::read_to_string(&path).unwrap().contains("proxyURL"));
+    upload("");
+    assert_eq!(load_accounts(&path).unwrap().accounts[0].proxy_url, "");
+    assert_eq!(
+        load_settings(&settings_path).unwrap().account_proxy_urls["a"],
+        ""
+    );
+    // Once moved, the node's settings keep the proxy across restarts.
+    upload("http://127.0.0.1:8080");
+    load_accounts(&path).unwrap();
+    assert_eq!(
+        load_accounts(&path).unwrap().accounts[0].proxy_url,
+        "http://127.0.0.1:8080"
+    );
+}

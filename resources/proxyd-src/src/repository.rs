@@ -103,7 +103,20 @@ fn load_accounts_inner(path: &Path) -> Result<AccountsStore, String> {
     // Settings errors are deliberately outside the account-corruption recovery.
     let settings = settings_value(path)?;
     let map = proxies(&settings)?;
+    let raw: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    // A proxy written inline (an upload to a remote node, a legacy store) is
+    // newer than the one the settings kept, and replaces it as it moves there.
+    let inline_ids: Vec<&str> = raw["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("proxyURL").is_some() || row.get("proxyUrl").is_some())
+        .filter_map(|row| row.get("id").and_then(Value::as_str))
+        .collect();
     for account in &mut store.accounts {
+        if inline_ids.contains(&account.id.as_str()) {
+            continue;
+        }
         if let Some(proxy) = map.get(&account.id) {
             account.proxy_url = proxy.clone();
         }
@@ -111,7 +124,6 @@ fn load_accounts_inner(path: &Path) -> Result<AccountsStore, String> {
     if let Some(key) = settings.get("apiProxyApiKey").and_then(Value::as_str) {
         store.settings.api_proxy_api_key = Some(key.into());
     }
-    let raw: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let inline = raw["accounts"].as_array().is_some_and(|rows| {
         rows.iter()
             .any(|row| row.get("proxyURL").is_some() || row.get("proxyUrl").is_some())
