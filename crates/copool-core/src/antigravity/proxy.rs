@@ -1,5 +1,6 @@
 //! Adapts this pool's stored logins and Sub2api gateways to the local proxy.
 use super::{sub2api, Application, Renewal, Result, Stored};
+use crate::pool_login::antigravity::proxy_form;
 use crate::{
     models::{Pool, StoredAccount},
     pool_login,
@@ -16,12 +17,18 @@ impl Stored {
         }))
     }
 
+    /// The engine's account for the login in its proxy form, `auth`: named
+    /// as [`pool_login::antigravity::proxy_account_id`] says, else by its card.
     fn proxy_account(&self, auth: Value, proxy: &str, current: bool) -> Result<StoredAccount> {
+        let account_id =
+            pool_login::antigravity::proxy_account_id(&self.document, self.google_id.as_deref())
+                .unwrap_or_else(|| self.id.clone());
         let mut stored: StoredAccount = serde_json::from_value(json!({
-            "id": self.id, "label": self.label, "accountId": self.google_id.as_ref().unwrap_or(&self.id),
+            "id": self.id, "label": self.label, "accountId": account_id,
             "authJson": auth, "usage": self.usage, "planType": self.plan,
             "addedAt": self.added_at, "updatedAt": self.updated_at, "proxyURL": proxy,
-        })).map_err(|error| error.to_string())?;
+        }))
+        .map_err(|error| error.to_string())?;
         if current {
             stored.extra.insert("copoolCurrent".into(), true.into());
         }
@@ -31,29 +38,31 @@ impl Stored {
         Ok(stored)
     }
 
+    /// Takes a node's renewal of this login, `row`'s proxy form, if it is
+    /// one of the login uploaded (`generation`) and later than the one kept.
     fn adopt_node_renewal(&mut self, row: &Value, generation: &str) -> bool {
         let auth = &row["authJson"];
         let (Some(access), Some(expiry), Some(lifetime)) = (
-            auth["accessToken"].as_str(),
-            auth["expiresAt"].as_i64(),
-            auth["expiresIn"].as_i64(),
+            proxy_form::access_token(auth),
+            proxy_form::expires_at(auth),
+            proxy_form::lifetime(auth),
         ) else {
             return false;
         };
-        if auth["sourceGeneration"].as_str() != Some(generation)
-            || access.is_empty()
+        if proxy_form::source_generation(auth) != Some(generation)
             || lifetime <= 0
-            || pool_login::antigravity::access_token(&self.document).as_deref() == Some(access)
+            || pool_login::antigravity::access_token(&self.document).as_deref()
+                == Some(access.as_str())
             || expiry < pool_login::antigravity::expiry(&self.document).unwrap_or(0)
         {
             return false;
         }
         pool_login::antigravity::apply_renewal(
             &mut self.document,
-            access,
+            &access,
             expiry,
             lifetime,
-            auth["refreshToken"].as_str(),
+            proxy_form::refresh_token(auth).as_deref(),
         );
         self.usage_error = None;
         true
@@ -96,7 +105,7 @@ impl Application {
         storage
     }
 
-    fn antigravity_proxy_candidates(&self) -> Result<Vec<StoredAccount>> {
+    pub(super) fn antigravity_proxy_candidates(&self) -> Result<Vec<StoredAccount>> {
         let store = self.antigravity_load()?;
         let shared_proxy = self.account_proxy("")?;
         let api_key_mode = sub2api::api_key_mode(&self.antigravity_settings_path());
@@ -210,9 +219,8 @@ impl Application {
             if choice != Renewal::Never {
                 let refresh = pool_login::antigravity::refresh_token(&account.document)
                     .expect("checked login");
-                auth["sourceGeneration"] =
-                    refresh_generation(&refresh, auth["accessToken"].as_str().unwrap_or_default())
-                        .into();
+                let access = proxy_form::access_token(&auth).unwrap_or_default();
+                auth["sourceGeneration"] = refresh_generation(&refresh, &access).into();
                 auth["refreshToken"] = refresh.into();
             }
             auth["expiresAt"] = pool_login::antigravity::expiry(&account.document).into();

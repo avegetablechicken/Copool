@@ -124,6 +124,11 @@ pub(crate) fn account_id(document: &Value) -> Option<String> {
             super::non_empty(claims.get("sub").and_then(Value::as_str))
         })
 }
+/// The account Copool's proxy routes an Antigravity login as: the one the
+/// login names ([`account_id`]), else the Google id Copool stored for it.
+pub(crate) fn proxy_account_id(login: &Value, stored_google_id: Option<&str>) -> Option<String> {
+    account_id(login).or_else(|| super::non_empty(stored_google_id))
+}
 /// The Credential an Antigravity Login grants: its token's tokens and
 /// expiry, and the account the document names. What Copool stores of the
 /// account, given as `identity`, stands in for the document's root `email`
@@ -256,6 +261,51 @@ pub(crate) fn signed_in(tokens: &Value, now: i64) -> Result<Value> {
         document["id_token_email"] = email.into();
     }
     Ok(document)
+}
+
+/// The proxy form of an Antigravity login: not a Login, but what Copool's
+/// proxy keeps of one, locally and in a remote daemon's `accounts.json`,
+/// as a candidate's `authJson`. Its shape is what deployed daemons read and
+/// write, so it does not change:
+///
+/// - `accessToken`: the access token;
+/// - `project`: the Cloud Code project of its requests, once reported;
+/// - `refreshToken`: the refresh token, given only to a daemon allowed to
+///   renew the login;
+/// - `sourceGeneration`: which login uploaded to a daemon it was renewed
+///   from, so that only a renewal of the login still kept is taken back;
+/// - `expiresAt`: when the access token expires, in Unix **seconds**
+///   (unlike a Login's expiry, never milliseconds);
+/// - `expiresIn`: the access token's lifetime in seconds, as a renewal
+///   reported it.
+pub(crate) mod proxy_form {
+    use serde_json::Value;
+
+    pub(crate) fn access_token(auth: &Value) -> Option<String> {
+        super::super::non_empty(auth.get("accessToken").and_then(Value::as_str))
+    }
+    pub(crate) fn refresh_token(auth: &Value) -> Option<String> {
+        super::super::non_empty(auth.get("refreshToken").and_then(Value::as_str))
+    }
+    pub(crate) fn project(auth: &Value) -> Option<&str> {
+        auth.get("project").and_then(Value::as_str)
+    }
+    pub(crate) fn source_generation(auth: &Value) -> Option<&str> {
+        auth.get("sourceGeneration").and_then(Value::as_str)
+    }
+    /// When the access token expires (Unix seconds, a whole number).
+    pub(crate) fn expires_at(auth: &Value) -> Option<i64> {
+        auth.get("expiresAt").and_then(Value::as_i64)
+    }
+    /// When the access token expires (Unix milliseconds), as a Credential
+    /// keeps it.
+    pub(crate) fn expiry_ms(auth: &Value) -> Option<i64> {
+        expires_at(auth).map(|at| at.saturating_mul(1000))
+    }
+    /// The access token's lifetime (seconds, a whole number).
+    pub(crate) fn lifetime(auth: &Value) -> Option<i64> {
+        auth.get("expiresIn").and_then(Value::as_i64)
+    }
 }
 
 #[cfg(test)]
@@ -449,6 +499,64 @@ mod tests {
             expiry(&json!({"expiry": 100_000_000_000_i64})),
             Some(100_000_000)
         );
+    }
+
+    #[test]
+    fn the_proxy_form_reads_its_expiry_in_seconds() {
+        let auth = json!({
+            "accessToken": " a ", "refreshToken": "r", "project": "project-1",
+            "sourceGeneration": "g", "expiresAt": 1_783_850_400, "expiresIn": 3599
+        });
+        assert_eq!(proxy_form::access_token(&auth).as_deref(), Some("a"));
+        assert_eq!(proxy_form::refresh_token(&auth).as_deref(), Some("r"));
+        assert_eq!(proxy_form::project(&auth), Some("project-1"));
+        assert_eq!(proxy_form::source_generation(&auth), Some("g"));
+        assert_eq!(proxy_form::expires_at(&auth), Some(1_783_850_400));
+        assert_eq!(proxy_form::expiry_ms(&auth), Some(1_783_850_400_000));
+        assert_eq!(proxy_form::lifetime(&auth), Some(3599));
+        // Seconds, even past 1e11, where a Login's expiry is milliseconds.
+        let far = json!({"expiresAt": 100_000_000_000_i64});
+        assert_eq!(proxy_form::expires_at(&far), Some(100_000_000_000));
+        assert_eq!(proxy_form::expiry_ms(&far), Some(100_000_000_000_000));
+        // A login sent to a daemon not allowed to renew it, before a renewal.
+        let bare = json!({"accessToken": "a", "project": null, "expiresAt": null});
+        assert_eq!(proxy_form::refresh_token(&bare), None);
+        assert_eq!(proxy_form::project(&bare), None);
+        assert_eq!(proxy_form::source_generation(&bare), None);
+        assert_eq!(proxy_form::expires_at(&bare), None);
+        assert_eq!(proxy_form::lifetime(&bare), None);
+        assert_eq!(proxy_form::access_token(&json!({"accessToken": " "})), None);
+    }
+
+    #[test]
+    fn the_proxy_names_a_login_by_its_own_id_else_the_stored_one() {
+        let id_token = format!("h.{}.s", URL_SAFE_NO_PAD.encode(r#"{"sub":"google-sub"}"#));
+        let token = json!({"access_token": "a", "refresh_token": "r"});
+        for (login, stored, expected) in [
+            (
+                json!({"token": token, "google_id": "google-doc"}),
+                Some("google-stored"),
+                Some("google-doc"),
+            ),
+            (
+                json!({"token": token, "id_token": id_token}),
+                Some("google-stored"),
+                Some("google-sub"),
+            ),
+            (
+                json!({"token": token}),
+                Some("google-stored"),
+                Some("google-stored"),
+            ),
+            (json!({"token": token}), Some(" "), None),
+            (json!({"token": token}), None, None),
+        ] {
+            assert_eq!(
+                proxy_account_id(&login, stored).as_deref(),
+                expected,
+                "{login} {stored:?}"
+            );
+        }
     }
 
     #[test]

@@ -42,7 +42,7 @@ use crate::models::Pool;
 use crate::models::StoredAccount;
 use crate::models::UsageSnapshot;
 use crate::models::UsageWindow;
-use crate::pool_login::codex::extract_auth;
+use crate::pool_login::ProxyLogin;
 use crate::state::ApiProxyRuntimeHandle;
 use crate::state::ApiProxyRuntimeSnapshot;
 #[cfg(feature = "desktop")]
@@ -2439,32 +2439,24 @@ fn account_to_proxy_candidate(pool: Pool, account: StoredAccount) -> Option<Prox
     if !account.is_available() || account.awaiting_first_request() {
         return None;
     }
-    let extracted = match (pool, account.auth_json.get("copoolProvider")) {
-        (Pool::Codex, Some(provider)) => {
-            let mut auth = extract_auth(&account.auth_json).ok()?;
-            auth.access_token = provider["apiKey"].as_str()?.into();
-            auth
-        }
-        (Pool::Codex, None) => extract_auth(&account.auth_json).ok()?,
-        (Pool::Antigravity, provider) => crate::models::ExtractedAuth {
-            account_id: account.account_id.clone(),
-            access_token: crate::claude_api::text(
-                provider.map_or(&account.auth_json["accessToken"], |p| &p["apiKey"]),
-            )?,
-            ..Default::default()
-        },
-        (Pool::Claude, provider) => crate::models::ExtractedAuth {
-            access_token: match provider {
-                Some(provider) => provider["apiKey"].as_str()?.into(),
-                None => {
-                    crate::claude_api::text(&account.auth_json["claudeAiOauth"]["accessToken"])?
-                }
-            },
-            account_id: account.account_id.clone(),
-            ..Default::default()
-        },
+    // A Sub2api provider's route sends its key in place of a login's token.
+    let login = match (pool, account.auth_json.get("copoolProvider")) {
         // Copool serves no Grok proxy.
         (Pool::Grok, _) => return None,
+        (_, None) => crate::pool_login::proxy_login(pool, &account.auth_json).ok()?,
+        // Codex's route also names its account as a login does.
+        (Pool::Codex, Some(provider)) => ProxyLogin {
+            access_token: provider["apiKey"].as_str()?.into(),
+            ..crate::pool_login::proxy_login(pool, &account.auth_json).ok()?
+        },
+        (Pool::Antigravity, Some(provider)) => ProxyLogin {
+            access_token: crate::claude_api::text(&provider["apiKey"])?,
+            ..ProxyLogin::default()
+        },
+        (Pool::Claude, Some(provider)) => ProxyLogin {
+            access_token: provider["apiKey"].as_str()?.into(),
+            ..ProxyLogin::default()
+        },
     };
     let renews = account.renews();
     Some(ProxyCandidate {
@@ -2472,8 +2464,8 @@ fn account_to_proxy_candidate(pool: Pool, account: StoredAccount) -> Option<Prox
         is_preferred_current: false,
         id: account.id,
         label: account.label,
-        account_id: extracted.account_id,
-        access_token: extracted.access_token,
+        account_id: login.account_id.unwrap_or(account.account_id),
+        access_token: login.access_token,
         auth_json: account.auth_json,
         proxy_url: account.proxy_url,
         plan_type: account
@@ -2481,7 +2473,7 @@ fn account_to_proxy_candidate(pool: Pool, account: StoredAccount) -> Option<Prox
             .as_ref()
             .and_then(|usage| usage.plan_type.clone())
             .or(account.plan_type)
-            .or(extracted.plan_type),
+            .or(login.plan_type),
         added_at: account.added_at,
         usage: account.usage,
     })
@@ -2711,7 +2703,7 @@ async fn refresh_proxy_candidate_usage(
             Pool::Claude => {
                 crate::claude_api::fetch_usage(
                     &origin,
-                    &candidate.auth_json["claudeAiOauth"],
+                    crate::pool_login::claude::oauth(&candidate.auth_json),
                     &candidate.proxy_url,
                 )
                 .await
@@ -2866,8 +2858,11 @@ async fn refresh_proxy_candidate_auth(
                 }
                 Pool::Claude => {
                     let mut auth = current.auth_json.clone();
-                    crate::claude_api::renew(&mut auth["claudeAiOauth"], &current.proxy_url)
-                        .await?;
+                    crate::claude_api::renew(
+                        crate::pool_login::claude::oauth_mut(&mut auth),
+                        &current.proxy_url,
+                    )
+                    .await?;
                     auth
                 }
                 Pool::Grok => return Err("Grok accounts have no API proxy".into()),
@@ -2883,40 +2878,31 @@ async fn refresh_proxy_candidate_auth(
         }
     };
 
-    let extracted = match storage.pool {
-        Pool::Antigravity => crate::models::ExtractedAuth {
-            account_id: candidate.account_id.clone(),
-            access_token: crate::claude_api::text(&refreshed_auth_json["accessToken"])
-                .ok_or("Antigravity returned no access token")?,
-            ..Default::default()
-        },
-        Pool::Codex => extract_auth(&refreshed_auth_json).map_err(|error| {
-            format!(
-                "Failed to parse the account login after refresh: {}",
-                unlocalized(&error)
-            )
-        })?,
-        Pool::Claude => crate::models::ExtractedAuth {
-            access_token: crate::claude_api::text(
-                &refreshed_auth_json["claudeAiOauth"]["accessToken"],
-            )
-            .ok_or("Claude returned no access token")?,
-            account_id: candidate.account_id.clone(),
-            ..Default::default()
-        },
-        Pool::Grok => return Err("Grok accounts have no API proxy".into()),
-    };
+    let login =
+        crate::pool_login::proxy_login(storage.pool, &refreshed_auth_json).map_err(|error| {
+            match storage.pool {
+                Pool::Codex => format!(
+                    "Failed to parse the account login after refresh: {}",
+                    unlocalized(&error)
+                ),
+                Pool::Antigravity => "Antigravity returned no access token".into(),
+                Pool::Claude => "Claude returned no access token".into(),
+                Pool::Grok => error,
+            }
+        })?;
 
     Ok(ProxyCandidate {
         renews: candidate.renews,
         is_preferred_current: candidate.is_preferred_current,
         id: candidate.id.clone(),
         label: candidate.label.clone(),
-        account_id: extracted.account_id,
-        access_token: extracted.access_token,
+        account_id: login
+            .account_id
+            .unwrap_or_else(|| candidate.account_id.clone()),
+        access_token: login.access_token,
         auth_json: refreshed_auth_json,
         proxy_url: candidate.proxy_url.clone(),
-        plan_type: candidate.plan_type.clone().or(extracted.plan_type),
+        plan_type: candidate.plan_type.clone().or(login.plan_type),
         added_at: candidate.added_at,
         usage: candidate.usage.clone(),
     })
@@ -2949,8 +2935,8 @@ async fn persist_refreshed_candidate_auth(
             Pool::Claude => {
                 account.auth_json == *from
                     || crate::pool_login::claude::newer_login(
-                        &refreshed_auth_json["claudeAiOauth"],
-                        &account.auth_json["claudeAiOauth"],
+                        crate::pool_login::claude::oauth(refreshed_auth_json),
+                        crate::pool_login::claude::oauth(&account.auth_json),
                     )
             }
             Pool::Grok => false,
@@ -5399,6 +5385,59 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             candidates,
             [("never", false), ("always", true), ("always", true)]
         );
+    }
+
+    #[test]
+    fn candidates_take_the_login_and_the_account_through_pool_login() {
+        use crate::models::Pool;
+        let account = |account_id: &str, auth: serde_json::Value| -> super::StoredAccount {
+            serde_json::from_value(
+                json!({"id": "card", "label": "Card", "accountId": account_id,
+                "addedAt": 1, "updatedAt": 1, "authJson": auth}),
+            )
+            .unwrap()
+        };
+        let candidate = |pool, account| super::account_to_proxy_candidate(pool, account);
+        // Antigravity's proxy form names no account: the one stored with it.
+        let agy = candidate(
+            Pool::Antigravity,
+            account(
+                "google-stored",
+                json!({"accessToken": "agy-at", "project": "p", "expiresAt": 1_783_850_400}),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            (agy.access_token.as_str(), agy.account_id.as_str()),
+            ("agy-at", "google-stored")
+        );
+        assert!(candidate(
+            Pool::Antigravity,
+            account("g", json!({"token": {"access_token": "agy-at"}}))
+        )
+        .is_none());
+        // Claude's OAuth entry is also read by itself, at the root.
+        for auth in [
+            json!({"claudeAiOauth": {"accessToken": "claude-at", "refreshToken": "rt"}}),
+            json!({"accessToken": "claude-at", "refreshToken": "rt"}),
+        ] {
+            let claude = candidate(Pool::Claude, account("acct-alice", auth)).unwrap();
+            assert_eq!(
+                (claude.access_token.as_str(), claude.account_id.as_str()),
+                ("claude-at", "acct-alice")
+            );
+        }
+        // A provider's route sends its key.
+        let route = candidate(
+            Pool::Antigravity,
+            account("route", json!({"copoolProvider": {"apiKey": " sk-agy "}})),
+        )
+        .unwrap();
+        assert_eq!(
+            (route.access_token.as_str(), route.account_id.as_str()),
+            ("sk-agy", "route")
+        );
+        assert!(candidate(Pool::Grok, account("g", json!({"access_token": "x"}))).is_none());
     }
 
     #[tokio::test]

@@ -8,6 +8,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod grok;
 
+use crate::models::Pool;
 use serde_json::Value;
 
 /// What a Login grants, read the same way for every pool: its tokens, when
@@ -35,6 +36,43 @@ pub(crate) struct Identity {
     pub(crate) org_id: Option<String>,
     pub(crate) email: Option<String>,
     pub(crate) org_name: Option<String>,
+}
+
+/// What Copool's proxy sends upstream with a login, read from the document
+/// a candidate carries as its `authJson`: the pool's Login for Codex and
+/// Claude, [`antigravity::proxy_form`] for Antigravity.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProxyLogin {
+    pub(crate) access_token: String,
+    /// The account the document names; none when only what Copool stored
+    /// beside it does.
+    pub(crate) account_id: Option<String>,
+    pub(crate) plan_type: Option<String>,
+}
+
+/// The [`ProxyLogin`] of a `pool`'s candidate document: Codex's as Copool
+/// identifies the account ([`codex::extract_auth`]), Claude's from its
+/// `claudeAiOauth` entry ([`claude::oauth`]), Antigravity's from its proxy
+/// form. Grok has no API proxy.
+pub(crate) fn proxy_login(pool: Pool, auth: &Value) -> Result<ProxyLogin, String> {
+    let token_only = |access_token: Option<String>| {
+        access_token
+            .map(|access_token| ProxyLogin {
+                access_token,
+                ..ProxyLogin::default()
+            })
+            .ok_or_else(|| "Missing access token".to_owned())
+    };
+    match pool {
+        Pool::Codex => codex::extract_auth(auth).map(|auth| ProxyLogin {
+            access_token: auth.access_token,
+            account_id: Some(auth.account_id),
+            plan_type: auth.plan_type,
+        }),
+        Pool::Claude => token_only(claude::access_token(auth)),
+        Pool::Antigravity => token_only(antigravity::proxy_form::access_token(auth)),
+        Pool::Grok => Err("Grok accounts have no API proxy".into()),
+    }
 }
 
 /// A numeric timestamp from this value on is in milliseconds, below it in
@@ -100,6 +138,98 @@ pub(crate) fn non_empty(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_proxy_reads_each_pools_login() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        let jwt = |claims: Value| format!("h.{}.s", URL_SAFE_NO_PAD.encode(claims.to_string()));
+        let id_token = jwt(json!({"sub": "user-1", "email": "a@b.c",
+            "https://api.openai.com/auth": {"chatgpt_account_id": "acct-1", "chatgpt_plan_type": "pro"}}));
+        let found = |access: &str, account: Option<&str>, plan: Option<&str>| {
+            Ok(ProxyLogin {
+                access_token: access.into(),
+                account_id: account.map(Into::into),
+                plan_type: plan.map(Into::into),
+            })
+        };
+        let missing = || Err("Missing access token".to_owned());
+        for (name, pool, auth, expected) in [
+            (
+                "Codex's auth.json, naming its account and plan",
+                Pool::Codex,
+                json!({"tokens": {"access_token": "codex-at", "id_token": id_token}}),
+                found("codex-at", Some("acct-1"), Some("pro")),
+            ),
+            (
+                "Codex's tokens' own account",
+                Pool::Codex,
+                json!({"tokens": {"access_token": "codex-at", "id_token": id_token, "account_id": "acct-own"}}),
+                found("codex-at", Some("acct-own"), Some("pro")),
+            ),
+            (
+                "Claude's credentials document",
+                Pool::Claude,
+                json!({"claudeAiOauth": {"accessToken": "claude-at", "refreshToken": "rt", "expiresAt": 1}}),
+                found("claude-at", None, None),
+            ),
+            (
+                "Claude's OAuth entry by itself, read at its root",
+                Pool::Claude,
+                json!({"accessToken": " claude-at ", "refreshToken": "rt", "scope": "user:inference"}),
+                found("claude-at", None, None),
+            ),
+            (
+                "a Claude document whose entry is no object, read at its root",
+                Pool::Claude,
+                json!({"claudeAiOauth": null, "accessToken": "claude-at"}),
+                found("claude-at", None, None),
+            ),
+            (
+                "Claude's entry without a token",
+                Pool::Claude,
+                json!({"claudeAiOauth": {"accessToken": " ", "refreshToken": "rt"}}),
+                missing(),
+            ),
+            (
+                "Antigravity's proxy form",
+                Pool::Antigravity,
+                json!({"accessToken": "agy-at", "project": "p", "expiresAt": 1_783_850_400}),
+                found("agy-at", None, None),
+            ),
+            (
+                "an Antigravity Login, which is no proxy form",
+                Pool::Antigravity,
+                json!({"token": {"access_token": "agy-at", "refresh_token": "r"}}),
+                missing(),
+            ),
+            (
+                "Grok, which has no proxy",
+                Pool::Grok,
+                json!({"access_token": "grok-at"}),
+                Err("Grok accounts have no API proxy".into()),
+            ),
+        ] {
+            assert_eq!(proxy_login(pool, &auth), expected, "{name}");
+        }
+        assert!(proxy_login(Pool::Codex, &json!({"tokens": {"access_token": "at"}})).is_err());
+        // The Claude entry the proxy reads is the one its Credential is of,
+        // whose scope a `scope` string gives without a `scopes` list.
+        let root =
+            json!({"accessToken": "claude-at", "refreshToken": "rt", "scope": "user:inference"});
+        assert_eq!(claude::oauth(&root), &root);
+        let credential = claude::credential(&root, &Identity::default()).unwrap();
+        assert_eq!(
+            (credential.access.as_str(), credential.scope.as_deref()),
+            ("claude-at", Some("user:inference"))
+        );
+        let mut document = json!({"claudeAiOauth": root.clone(), "other": 1});
+        assert_eq!(claude::oauth(&document), &root);
+        claude::oauth_mut(&mut document)["accessToken"] = "renewed".into();
+        assert_eq!(document["claudeAiOauth"]["accessToken"], "renewed");
+        let mut entry = root.clone();
+        claude::oauth_mut(&mut entry)["accessToken"] = "renewed".into();
+        assert_eq!(entry["accessToken"], "renewed");
+    }
 
     #[test]
     fn expiries_read_seconds_milliseconds_fractions_and_rfc3339() {

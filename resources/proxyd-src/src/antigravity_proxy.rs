@@ -5,6 +5,7 @@ use super::{
     parse_json_request, read_current_api_key, send_over_candidates, sse_data_chunk, Outbound,
     ProxyCandidate, ProxyContext, SseDecoder,
 };
+use crate::pool_login::antigravity::proxy_form;
 use async_stream::stream;
 use axum::{
     body::{Body, Bytes},
@@ -191,7 +192,7 @@ pub(super) async fn forward(
             .bearer_auth(token)
             .header("user-agent", user_agent)
     };
-    let project = match candidate.auth_json["project"].as_str() {
+    let project = match proxy_form::project(&candidate.auth_json) {
         Some(project) => project.to_owned(),
         None => {
             let response = cloud("loadCodeAssist", agent())
@@ -336,16 +337,15 @@ pub(crate) fn cli_agent() -> String {
     )
 }
 
-/// The remote node keeps only the login fields it needs in accounts.json.
+/// Renews a login in its proxy form ([`proxy_form`]), the only form of it a
+/// remote node keeps in accounts.json.
 pub(crate) async fn renew_remote(
     auth: &Value,
     proxy: &str,
     network: &dyn crate::antigravity_cloud::Network,
 ) -> Result<Value, String> {
-    let refresh = auth["refreshToken"]
-        .as_str()
-        .ok_or("Missing Antigravity refresh token")?;
-    let new = crate::antigravity_cloud::renew_token(network, refresh, proxy).await?;
+    let refresh = proxy_form::refresh_token(auth).ok_or("Missing Antigravity refresh token")?;
+    let new = crate::antigravity_cloud::renew_token(network, &refresh, proxy).await?;
     let mut auth = auth.clone();
     auth["accessToken"] = new.access.into();
     auth["expiresAt"] = new.expires_at.into();

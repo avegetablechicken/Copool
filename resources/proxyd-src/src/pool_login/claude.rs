@@ -8,6 +8,30 @@ use serde_json::{json, Value};
 
 type Result<T> = std::result::Result<T, String>;
 
+/// A login's `claudeAiOauth` entry, which holds its tokens: the
+/// credentials document's, else the document itself, taken to be that
+/// entry by itself.
+pub(crate) fn oauth(login: &Value) -> &Value {
+    login
+        .get("claudeAiOauth")
+        .filter(|oauth| oauth.is_object())
+        .unwrap_or(login)
+}
+
+/// [`oauth`], to renew in place.
+pub(crate) fn oauth_mut(login: &mut Value) -> &mut Value {
+    if login.get("claudeAiOauth").is_some_and(Value::is_object) {
+        &mut login["claudeAiOauth"]
+    } else {
+        login
+    }
+}
+
+/// The access token of a login's [`oauth`] entry.
+pub(crate) fn access_token(login: &Value) -> Option<String> {
+    non_empty(oauth(login).get("accessToken").and_then(Value::as_str))
+}
+
 /// When the access token expires (Unix milliseconds, as Claude Code writes
 /// it), read as every pool's expiry is.
 pub(crate) fn expires_at_ms(oauth: &Value) -> Option<i64> {
@@ -183,10 +207,7 @@ pub(crate) fn exported_oauth(document: &Value) -> Option<&Value> {
 /// Claude Code keeps beside it in `oauthAccount`, given as `identity`
 /// ([`account_identity`]).
 pub(crate) fn credential(login: &Value, identity: &Identity) -> Result<OAuthCredential> {
-    let oauth = login
-        .get("claudeAiOauth")
-        .filter(|v| v.is_object())
-        .unwrap_or(login);
+    let oauth = oauth(login);
     let text = |key: &str| non_empty(oauth.get(key).and_then(Value::as_str));
     let access = text("accessToken").ok_or("Missing access token")?;
     let refresh = text("refreshToken").ok_or("Missing refresh token")?;

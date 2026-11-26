@@ -1899,6 +1899,129 @@ async fn a_remote_node_receives_only_released_logins_and_syncs_its_renewal() {
     assert_eq!(kept["accounts"][0]["authJson"]["accessToken"], "new-login");
 }
 
+#[tokio::test]
+async fn a_remote_node_reads_back_the_proxy_form_it_receives() {
+    use pool_login::antigravity::proxy_form;
+    let h = harness(true).await;
+    let now = now_unix_seconds();
+    h.app
+        .antigravity_import_json(&login_of("alice", "access-alice", now + 600).to_string())
+        .await
+        .unwrap();
+    let mut store = h.app.antigravity_load().unwrap();
+    let mut kept = store.accounts[0].clone();
+    kept.id = "never-renewed".into();
+    kept.renewal = Some(Renewal::Never);
+    store.accounts.push(kept);
+    h.app.antigravity_save(&store).unwrap();
+    let document = store.accounts[0].document.clone();
+    let node: Value =
+        serde_json::from_slice(&h.app.antigravity_remote_payload(None).await.unwrap()).unwrap();
+    let auth = &node["accounts"][0]["authJson"];
+    assert_eq!(
+        proxy_form::access_token(auth).as_deref(),
+        Some("access-alice")
+    );
+    assert_eq!(
+        proxy_form::refresh_token(auth).as_deref(),
+        Some("refresh-alice")
+    );
+    assert_eq!(proxy_form::project(auth), Some("project-1"));
+    assert!(proxy_form::source_generation(auth).is_some_and(|g| g.len() == 64));
+    // Seconds on the wire, the login's expiry in milliseconds read back.
+    assert_eq!(proxy_form::expires_at(auth), Some(now + 600));
+    assert_eq!(
+        proxy_form::expiry_ms(auth),
+        pool_login::antigravity::expiry_ms(&document)
+    );
+    assert_eq!(auth["expiresAt"], json!(now + 600));
+    // A node that may not renew the login gets no refresh token to renew it with.
+    let never = &node["accounts"][1]["authJson"];
+    assert_eq!(proxy_form::refresh_token(never), None);
+    assert_eq!(proxy_form::source_generation(never), None);
+    assert_eq!(
+        proxy_form::access_token(never).as_deref(),
+        Some("access-alice")
+    );
+    // The node's renewal is read back as it wrote it.
+    let renewed = crate::proxy_service::antigravity::renew_remote(auth, "", &*h.fake)
+        .await
+        .unwrap();
+    let lifetime = proxy_form::lifetime(&renewed).unwrap();
+    assert!(lifetime > 0);
+    let at = proxy_form::expires_at(&renewed).unwrap();
+    assert!((now + lifetime..=now_unix_seconds() + lifetime).contains(&at));
+    assert_eq!(
+        proxy_form::source_generation(&renewed),
+        proxy_form::source_generation(auth)
+    );
+    let mut synced = node.clone();
+    synced["accounts"][0]["authJson"] = renewed.clone();
+    h.app
+        .antigravity_remote_payload(Some(&synced))
+        .await
+        .unwrap();
+    let stored = h.app.antigravity_load().unwrap();
+    assert_eq!(
+        pool_login::antigravity::access_token(&stored.accounts[0].document),
+        proxy_form::access_token(&renewed)
+    );
+    assert_eq!(
+        pool_login::antigravity::expiry(&stored.accounts[0].document),
+        Some(at)
+    );
+}
+
+#[tokio::test]
+async fn the_proxy_names_a_login_by_its_own_google_id_else_the_stored_one() {
+    let h = harness(true).await;
+    for user in ["alice", "bob", "carol"] {
+        h.app
+            .antigravity_import_json(
+                &login_of(user, &format!("access-{user}"), later()).to_string(),
+            )
+            .await
+            .unwrap();
+    }
+    let mut store = h.app.antigravity_load().unwrap();
+    let mut ids = std::collections::HashMap::new();
+    for account in &mut store.accounts {
+        let access = pool_login::antigravity::access_token(&account.document).unwrap();
+        match access.as_str() {
+            "access-alice" => {
+                account.document["google_id"] = "google-login-alice".into();
+                account.google_id = Some("google-stored-alice".into());
+            }
+            "access-bob" => account.google_id = Some("google-stored-bob".into()),
+            _ => account.google_id = None,
+        }
+        ids.insert(access, account.id.clone());
+    }
+    h.app.antigravity_save(&store).unwrap();
+    let expected = [
+        ("access-alice", "google-login-alice".to_owned()),
+        ("access-bob", "google-stored-bob".to_owned()),
+        // Neither names the account: its card does.
+        ("access-carol", ids["access-carol"].clone()),
+    ];
+    let candidates = h.app.antigravity_proxy_candidates().unwrap();
+    let node: Value =
+        serde_json::from_slice(&h.app.antigravity_remote_payload(None).await.unwrap()).unwrap();
+    for (access, account_id) in expected {
+        let id = &ids[access];
+        let candidate = candidates.iter().find(|c| &c.id == id).unwrap();
+        assert_eq!(candidate.account_id, account_id, "{access}");
+        // A remote node's candidate is named the same.
+        let row = node["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == json!(id))
+            .unwrap();
+        assert_eq!(row["accountId"], json!(account_id), "{access}");
+    }
+}
+
 #[test]
 fn a_card_folded_into_its_google_account_brings_its_project() {
     let card = |id: &str, project: Option<&str>| -> Stored {

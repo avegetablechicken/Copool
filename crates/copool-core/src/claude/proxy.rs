@@ -296,7 +296,7 @@ impl Application {
         let mut store = self.claude_load()?;
         let mut changed = false;
         for found in remote["accounts"].as_array().into_iter().flatten() {
-            let oauth = &found["authJson"]["claudeAiOauth"];
+            let oauth = crate::pool_login::claude::oauth(&found["authJson"]);
             if let Some(account) = store.accounts.iter_mut().find(|a| {
                 found["id"].as_str() == Some(a.id.as_str())
                     && crate::pool_login::claude::newer_login(oauth, &a.oauth)
