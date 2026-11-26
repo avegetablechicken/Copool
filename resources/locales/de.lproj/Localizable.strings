@@ -130,8 +130,6 @@
 "accounts.card.remaining_resets_format" = "Zurücksetzungen: %@";
 "accounts.card.resets_unavailable_format" = "Zurücksetzungen: %@";
 "accounts.card.reset_expires_format" = "Läuft ab: %@";
-"accounts.card.token_expires_format" = "Token: %@";
-"accounts.card.token_expired" = "Token: abgelaufen";
 "accounts.card.token_expires.help" = "Das Zugriffstoken läuft am %@ ab und wird danach bei der nächsten Nutzungsaktualisierung automatisch erneuert.";
 "accounts.card.unlimited" = "Unbegrenzt";
 "accounts.card.switching" = "Wechsel läuft...";
@@ -610,3 +608,5 @@
 "error.grok.sub2api_no_models" = "Kein Grok-Modell für Sub2api: Weder die Modellliste von Grok Build noch das Sub2api-Gateway nennt eines";
 "error.grok.sub2api_models_taken" = "Jedes Grok-Modell in ~/.grok/config.toml verweist bereits auf eine selbst festgelegte Adresse; Copool ändert sie nicht und hat nicht zu Sub2api gewechselt";
 "accounts.window.sub2api_grok_weekly_upgrade" = "Aktualisieren Sie Sub2api auf 0.1.155 oder neuer, um sie anzuzeigen.";
+
+"accounts.refresh.interval_format" = "Alle %@ aktualisieren";

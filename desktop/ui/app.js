@@ -591,9 +591,37 @@ function taskIndicator(task, full) {
 /// card as a widget's.
 function editButton(key, name) {
   const control = button("", "info", "icon-btn card-edit", () => editCard(key));
-  control.title = tr("accounts.card.edit");
-  control.setAttribute("aria-label", `${control.title} ${name}`);
+  const cardPool = pool;
+  const update = () => {
+    if (pool !== cardPool) return;
+    control.title = cardDetails(flipTarget(key));
+  };
+  update();
+  control.onpointerenter = update;
+  control.onfocus = update;
+  control.setAttribute("aria-label", `${tr("accounts.card.edit")} ${name}`);
   return control;
+}
+/// Keep the tooltip to the proxy, token lifetime and configured refresh interval.
+function cardDetails(target) {
+  if (!target) return tr("accounts.card.edit");
+  const { account, grouped } = target;
+  const lines = [];
+  if (!grouped) {
+    const owner = proxyOwner(target);
+    const own = owner.proxyUrl?.trim();
+    const proxy = own || sharedProxy(owner);
+    lines.push(!proxy || proxy === "direct://" ? "direct" : `${tr("accounts.proxy.title")}: ${proxy}`);
+  }
+  if (account && !grouped && account.renewal) {
+    const token = tokenLabel(account);
+    if (token) lines.push(token);
+  }
+  const cards = target.group ? target.group.accounts : [account];
+  const refresh = preferences.refresh[pool];
+  const seconds = refresh.seconds * (cards.some((card) => card.isCurrent) ? 1 : refresh.fullEvery);
+  lines.push(tr("accounts.refresh.interval_format", P.formatInterval(seconds, locale)));
+  return lines.join("\n");
 }
 /// Usage warning, refresh and switch, at the card's bottom right as in the
 /// SwiftUI card, clear of long account names. A provider's group carries
@@ -1410,7 +1438,7 @@ function accountTags(account, view, grouped = false) {
     tags.append(el("span", "tag bad", tr("accounts.card.status.deactivated")));
   return tags;
 }
-/// The access token's remaining time, shown by the renewal button.
+/// The access token's remaining time in the card's details tooltip.
 function tokenLabel(account) {
   const expiry = P.tokenExpiry(
     account.tokenExpiresAt,
@@ -1419,8 +1447,8 @@ function tokenLabel(account) {
   );
   if (!expiry) return null;
   return expiry.expired
-    ? tr("accounts.card.token_expired")
-    : tr("accounts.card.token_expires_format", expiry.remaining);
+    ? tr("accounts.renewal.expired")
+    : tr("accounts.renewal.expires_format", expiry.remaining);
 }
 /// The earliest automatic refresh of these cards (Unix seconds), or null.
 function nextRefreshAt(accounts) {

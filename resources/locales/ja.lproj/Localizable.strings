@@ -130,8 +130,6 @@
 "accounts.card.remaining_resets_format" = "リセット：%@";
 "accounts.card.resets_unavailable_format" = "リセット：%@";
 "accounts.card.reset_expires_format" = "有効期限：%@";
-"accounts.card.token_expires_format" = "トークン：残り %@";
-"accounts.card.token_expired" = "トークン：期限切れ";
 "accounts.card.token_expires.help" = "アクセストークンの有効期限：%@。期限切れ後は使用量の更新時に自動で再発行されます。";
 "accounts.card.unlimited" = "無制限";
 "accounts.card.switching" = "切替中...";
@@ -630,3 +628,5 @@
 "error.grok.sub2api_no_models" = "Sub2api に送る Grok モデルがありません。Grok Build のモデル一覧にも Sub2api ゲートウェイにも見つかりません";
 "error.grok.sub2api_models_taken" = "~/.grok/config.toml のすべての Grok モデルが独自に設定されたアドレスを指しています。Copool はそれらを変更せず、Sub2api に切り替えませんでした";
 "accounts.window.sub2api_grok_weekly_upgrade" = "Sub2api を 0.1.155 以降に更新すると表示されます。";
+
+"accounts.refresh.interval_format" = "%@ごとに更新";

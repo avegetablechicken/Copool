@@ -130,8 +130,6 @@
 "accounts.card.remaining_resets_format" = "초기화: %@";
 "accounts.card.resets_unavailable_format" = "초기화: %@";
 "accounts.card.reset_expires_format" = "만료: %@";
-"accounts.card.token_expires_format" = "토큰: %@ 후 만료";
-"accounts.card.token_expired" = "토큰: 만료됨";
 "accounts.card.token_expires.help" = "액세스 토큰 만료 시각: %@. 만료 후 사용량을 새로 고칠 때 자동으로 갱신됩니다.";
 "accounts.card.unlimited" = "무제한";
 "accounts.card.switching" = "전환 중...";
@@ -630,3 +628,5 @@
 "error.grok.sub2api_no_models" = "Sub2api로 보낼 Grok 모델이 없습니다. Grok Build의 모델 목록과 Sub2api 게이트웨이 모두 모델을 알려 주지 않습니다";
 "error.grok.sub2api_models_taken" = "~/.grok/config.toml의 모든 Grok 모델이 이미 직접 설정한 주소를 가리키고 있습니다. Copool은 이를 변경하지 않으며 Sub2api로 전환하지 않았습니다";
 "accounts.window.sub2api_grok_weekly_upgrade" = "Sub2api를 0.1.155 이상으로 업그레이드하면 표시됩니다.";
+
+"accounts.refresh.interval_format" = "%@마다 새로고침";

@@ -130,8 +130,6 @@
 "accounts.card.remaining_resets_format" = "重置：%@ 次";
 "accounts.card.resets_unavailable_format" = "重置：%@";
 "accounts.card.reset_expires_format" = "过期时间：%@";
-"accounts.card.token_expires_format" = "令牌：%@后过期";
-"accounts.card.token_expired" = "令牌：已过期";
 "accounts.card.token_expires.help" = "访问令牌过期时间：%@，过期后刷新用量时自动续期。";
 "accounts.card.unlimited" = "无限制";
 "accounts.card.switching" = "切换中...";
@@ -640,3 +638,5 @@
 "error.grok.sub2api_no_models" = "没有可发往 Sub2api 的 Grok 模型：Grok Build 的模型列表和 Sub2api 网关都没有列出";
 "error.grok.sub2api_models_taken" = "~/.grok/config.toml 里每个 Grok 模型都已指向你自己设置的地址；Copool 不改动它们，未切换到 Sub2api";
 "accounts.window.sub2api_grok_weekly_upgrade" = "将 Sub2api 升级到 0.1.155 或更高版本后即可显示。";
+
+"accounts.refresh.interval_format" = "每%@刷新";
