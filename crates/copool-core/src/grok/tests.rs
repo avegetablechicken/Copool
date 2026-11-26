@@ -1429,23 +1429,24 @@ async fn switching_a_grok_account_triggers_opencode_sync_effect() {
     let target_path = opencode_path.clone();
     let calls = Arc::new(Mutex::new(0usize));
     let observed = calls.clone();
-    h.app.on_switch_effects(Arc::new(move |pool, prefs, auth| {
-        let target_path = target_path.clone();
-        let observed = observed.clone();
-        Box::pin(async move {
-            *observed.lock().unwrap() += 1;
-            assert_eq!(pool, Pool::Grok);
-            assert!(prefs.sync_opencode_openai_auth);
-            crate::platform::sync_opencode_grok(
-                auth.as_ref().unwrap(),
-                std::slice::from_ref(&target_path),
-            )?;
-            Ok(SwitchExecution {
-                opencode_synced: true,
-                ..Default::default()
+    h.app
+        .on_switch_effects(Arc::new(move |pool, prefs, credential| {
+            let target_path = target_path.clone();
+            let observed = observed.clone();
+            Box::pin(async move {
+                *observed.lock().unwrap() += 1;
+                assert_eq!(pool, Pool::Grok);
+                assert!(prefs.sync_opencode_openai_auth);
+                crate::platform::sync_opencode_grok(
+                    &credential.unwrap()?,
+                    std::slice::from_ref(&target_path),
+                )?;
+                Ok(SwitchExecution {
+                    opencode_synced: true,
+                    ..Default::default()
+                })
             })
-        })
-    }));
+        }));
 
     let execution = h.app.switch_account(Pool::Grok, &bob.id).await.unwrap();
     assert!(execution.opencode_synced);

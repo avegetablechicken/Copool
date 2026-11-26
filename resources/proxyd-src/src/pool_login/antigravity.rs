@@ -125,8 +125,12 @@ pub(crate) fn account_id(document: &Value) -> Option<String> {
         })
 }
 /// The Credential an Antigravity Login grants: its token's tokens and
-/// expiry, and the account the document names, else the one `identity`
-/// knows it by. One that names no account at all is refused: omp's
+/// expiry, and the account the document names. What Copool stores of the
+/// account, given as `identity`, stands in for the document's root `email`
+/// and `account_id` where it has no such member: the stored email follows
+/// the ID token's and precedes the document's nested ones, the stored id
+/// follows `google_id` and precedes the document's other ids and its ID
+/// token's subject. One that names no account at all is refused: omp's
 /// `antigravity-cli` keeps each account apart by its email or id.
 pub(crate) fn credential(
     login: &Value,
@@ -134,9 +138,21 @@ pub(crate) fn credential(
 ) -> Result<super::OAuthCredential> {
     let access = access_token(login).ok_or("Missing access token")?;
     let refresh = refresh_token(login).ok_or("Missing refresh token")?;
-    let fallback = |value: &Option<String>| super::non_empty(value.as_deref());
-    let email = email(login).or_else(|| fallback(&identity.email));
-    let account_id = account_id(login).or_else(|| fallback(&identity.account_id));
+    let mut named = login.clone();
+    if let Some(root) = named.as_object_mut() {
+        for (key, stored) in [
+            ("email", &identity.email),
+            ("account_id", &identity.account_id),
+        ] {
+            if let Some(stored) = super::non_empty(stored.as_deref()) {
+                root.entry(key).or_insert_with(|| stored.into());
+            }
+        }
+    }
+    // Else the root `email` as it stands, though it names no address.
+    let email =
+        email(&named).or_else(|| super::non_empty(named.get("email").and_then(Value::as_str)));
+    let account_id = account_id(&named);
     if email.is_none() && account_id.is_none() {
         return Err("Missing Antigravity account identity".into());
     }
@@ -340,14 +356,46 @@ mod tests {
                 ),
             ),
             (
-                "the ID token's subject when the document names no id",
+                "the stored id over the ID token's subject",
                 json!({"token": token(json!(1_783_850_400)), "id_token": id_token}),
                 stored.clone(),
                 expected(
                     1_783_850_400_000,
-                    Some("google-sub"),
+                    Some("google-stored"),
                     Some("Stored@Gmail.com"),
                 ),
+            ),
+            (
+                "the ID token's subject when nothing else names the account",
+                json!({"token": token(json!(1_783_850_400)), "id_token": id_token}),
+                Identity::default(),
+                expected(1_783_850_400_000, Some("google-sub"), None),
+            ),
+            (
+                "the document's root `account_id` and `email` over the stored ones",
+                json!({"token": token(json!(1_783_850_400)), "id_token": id_token, "account_id": "google-root", "email": "root@gmail.com"}),
+                stored.clone(),
+                expected(
+                    1_783_850_400_000,
+                    Some("google-root"),
+                    Some("root@gmail.com"),
+                ),
+            ),
+            (
+                "the stored id and email over the document's other places",
+                json!({"token": token(json!(1_783_850_400)), "accountId": "google-camel", "user": {"email": "user@gmail.com"}}),
+                stored.clone(),
+                expected(
+                    1_783_850_400_000,
+                    Some("google-stored"),
+                    Some("Stored@Gmail.com"),
+                ),
+            ),
+            (
+                "a root email naming no address, kept when nothing else names one",
+                json!({"token": token(json!(1_783_850_400)), "email": " alice "}),
+                stored.clone(),
+                expected(1_783_850_400_000, Some("google-stored"), Some("alice")),
             ),
             (
                 "the stored id and email when the document names neither",

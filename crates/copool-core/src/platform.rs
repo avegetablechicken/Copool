@@ -1,7 +1,7 @@
 //! Explicit desktop integrations. Never run by core tests or during account reads.
 use crate::{
     persistence::write_json,
-    pool_login::{self, codex, Identity, OAuthCredential},
+    pool_login::{codex, OAuthCredential},
     process,
     utils::now_unix_seconds,
     Pool, Preferences, SwitchExecution,
@@ -143,11 +143,6 @@ impl SyncAgent {
             Self::Omp => sync_omp_credential(credential, provider_key, targets),
         }
     }
-
-    fn sync_raw(self, pool: Pool, auth_json: &Value, targets: &[PathBuf]) -> Result<(), String> {
-        let credential = extract_oauth_credential(pool, auth_json)?;
-        self.sync_credential(pool, &credential, targets)
-    }
 }
 
 fn non_empty_trimmed(value: Option<&str>) -> Option<String> {
@@ -173,36 +168,6 @@ fn is_sqlite_path(path: &Path) -> bool {
                 "db" | "sqlite" | "sqlite3"
             )
         })
-}
-
-/// Splits what a pool hands `after_switch` into its Login and what Copool
-/// knows of the account beside it, and reads the Credential they grant.
-fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCredential, String> {
-    let text = |value: &Value, key: &str| non_empty_trimmed(value.get(key).and_then(Value::as_str));
-    match pool {
-        Pool::Codex => codex::credential(auth_json, &Identity::default()),
-        Pool::Grok => pool_login::grok::credential(auth_json, &Identity::default()),
-        Pool::Claude => {
-            // `{"claudeAiOauth": …, "oauthAccount": …}`, or the OAuth entry alone.
-            let account = auth_json.get("oauthAccount").unwrap_or(&Value::Null);
-            let identity = Identity {
-                account_id: text(account, "accountUuid"),
-                org_id: text(account, "organizationUuid"),
-                email: text(account, "emailAddress"),
-                org_name: text(account, "organizationName"),
-            };
-            pool_login::claude::credential(auth_json, &identity)
-        }
-        Pool::Antigravity => {
-            // The account's email and Google id, put beside the document's own.
-            let identity = Identity {
-                account_id: text(auth_json, "account_id"),
-                email: text(auth_json, "email"),
-                ..Identity::default()
-            };
-            pool_login::antigravity::credential(auth_json, &identity)
-        }
-    }
 }
 
 fn expand_tilde(raw: &str, home: Option<&Path>) -> PathBuf {
@@ -667,16 +632,25 @@ fn sync_opencode_paths(
     })
 }
 
-pub fn sync_opencode(auth_json: &Value, targets: &[PathBuf]) -> Result<(), String> {
-    SyncAgent::Opencode.sync_raw(Pool::Codex, auth_json, targets)
+#[cfg(test)]
+pub(crate) fn sync_opencode(
+    credential: &OAuthCredential,
+    targets: &[PathBuf],
+) -> Result<(), String> {
+    SyncAgent::Opencode.sync_credential(Pool::Codex, credential, targets)
 }
 
-pub fn sync_opencode_grok(document: &Value, targets: &[PathBuf]) -> Result<(), String> {
-    SyncAgent::Opencode.sync_raw(Pool::Grok, document, targets)
+#[cfg(test)]
+pub(crate) fn sync_opencode_grok(
+    credential: &OAuthCredential,
+    targets: &[PathBuf],
+) -> Result<(), String> {
+    SyncAgent::Opencode.sync_credential(Pool::Grok, credential, targets)
 }
 
-pub fn sync_pi(auth_json: &Value, targets: &[PathBuf]) -> Result<(), String> {
-    SyncAgent::Pi.sync_raw(Pool::Codex, auth_json, targets)
+#[cfg(test)]
+pub(crate) fn sync_pi(credential: &OAuthCredential, targets: &[PathBuf]) -> Result<(), String> {
+    SyncAgent::Pi.sync_credential(Pool::Codex, credential, targets)
 }
 
 fn pi_paths_from(
@@ -1274,8 +1248,9 @@ fn sync_omp_credential(
     )
 }
 
-pub fn sync_omp(auth_json: &Value, targets: &[PathBuf]) -> Result<(), String> {
-    SyncAgent::Omp.sync_raw(Pool::Codex, auth_json, targets)
+#[cfg(test)]
+pub(crate) fn sync_omp(credential: &OAuthCredential, targets: &[PathBuf]) -> Result<(), String> {
+    SyncAgent::Omp.sync_credential(Pool::Codex, credential, targets)
 }
 fn opencode_data_dir(home: Option<&Path>, xdg_data_home: Option<&str>) -> Option<PathBuf> {
     if let Some(xdg) = non_empty_trimmed(xdg_data_home) {
@@ -1561,19 +1536,21 @@ fn record_sync(outcome: Result<(), String>, synced: &mut bool, sync_error: &mut 
 }
 
 /// Side effects of a switch, reported as Swift's SwitchAccountExecutionResult:
-/// the switch itself has succeeded whatever fails here.
-pub async fn after_switch(
+/// the switch itself has succeeded whatever fails here. `credential` is
+/// what the login switched to grants, for the agents to sync; none for a
+/// provider's card, and an error, which each of them reports, for a login
+/// that grants none.
+pub(crate) async fn after_switch(
     pool: Pool,
     p: &Preferences,
-    auth: Option<&Value>,
+    credential: Option<Result<OAuthCredential, String>>,
 ) -> Result<SwitchExecution, String> {
     let mut result = SwitchExecution::default();
-    if let Some(auth) = auth {
+    if let Some(extracted) = credential {
         let sync_opencode_enabled = SyncAgent::Opencode.enabled(p, pool);
         let sync_pi_enabled = SyncAgent::Pi.enabled(p, pool);
         let sync_omp_enabled = SyncAgent::Omp.enabled(p, pool);
         if sync_opencode_enabled || sync_pi_enabled || sync_omp_enabled {
-            let extracted = extract_oauth_credential(pool, auth);
             if sync_opencode_enabled {
                 let outcome = match extracted.as_ref() {
                     Ok(cred) => match opencode_target().await {
@@ -1795,16 +1772,15 @@ mod tests {
         )
         .unwrap();
 
-        let id_token = fake_jwt(json!({"exp": 1_800_000_456_i64}));
-        let auth = json!({
-            "tokens": {
-                "access_token": "openai-access",
-                "refresh_token": "openai-refresh",
-                "id_token": id_token,
-                "account_id": "acct-42"
-            }
-        });
-        sync_opencode(&auth, std::slice::from_ref(&path)).unwrap();
+        let credential = OAuthCredential {
+            access: "openai-access".into(),
+            refresh: "openai-refresh".into(),
+            expires_ms: 1_800_000_456_000,
+            account_id: Some("acct-42".into()),
+            org_id: Some("acct-42".into()),
+            ..OAuthCredential::default()
+        };
+        sync_opencode(&credential, std::slice::from_ref(&path)).unwrap();
 
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["openai"]["type"], "oauth");
@@ -1838,12 +1814,13 @@ mod tests {
         )
         .unwrap();
 
-        let doc = json!({
-            "key": "grok-access-1",
-            "refresh_token": "grok-refresh-1",
-            "expires_at": "2026-11-26T12:00:00.000000Z"
-        });
-        sync_opencode_grok(&doc, std::slice::from_ref(&path)).unwrap();
+        let credential = OAuthCredential {
+            access: "grok-access-1".into(),
+            refresh: "grok-refresh-1".into(),
+            expires_ms: grok_expires_ms(),
+            ..OAuthCredential::default()
+        };
+        sync_opencode_grok(&credential, std::slice::from_ref(&path)).unwrap();
 
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["openai"]["access"], "openai-access");
@@ -1901,14 +1878,13 @@ mod tests {
             launch_codex_after_switch: true,
             ..Default::default()
         };
-        let doc = json!({
-            "key": "grok-access",
-            "refresh_token": "grok-refresh",
-            "expires_at": "2026-11-26T12:00:00Z"
-        });
-        let execution = after_switch(Pool::Grok, &grok_preferences, Some(&doc))
-            .await
-            .unwrap();
+        let execution = after_switch(
+            Pool::Grok,
+            &grok_preferences,
+            Some(Ok(grok_credential("alice", "grok-refresh"))),
+        )
+        .await
+        .unwrap();
         assert_eq!(execution, SwitchExecution::default());
         // OpenCode and pi do not take an Antigravity login, and OpenCode does
         // not take Claude; keep supported agents off so tests never touch home.
@@ -1918,13 +1894,20 @@ mod tests {
             sync_omp_auth: false,
             ..grok_preferences.clone()
         };
-        let doc = json!({
-            "token": {"access_token": "a", "refresh_token": "r"},
-            "id_token_email": "alice@gmail.com"
-        });
-        let execution = after_switch(Pool::Antigravity, &antigravity_preferences, Some(&doc))
-            .await
-            .unwrap();
+        let credential = OAuthCredential {
+            access: "a".into(),
+            refresh: "r".into(),
+            expires_ms: 1_780_000_000_000,
+            email: Some("alice@gmail.com".into()),
+            ..OAuthCredential::default()
+        };
+        let execution = after_switch(
+            Pool::Antigravity,
+            &antigravity_preferences,
+            Some(Ok(credential)),
+        )
+        .await
+        .unwrap();
         assert_eq!(execution, SwitchExecution::default());
 
         let claude_preferences = Preferences {
@@ -1936,59 +1919,94 @@ mod tests {
         let execution = after_switch(
             Pool::Claude,
             &claude_preferences,
-            Some(&sample_claude_doc("alice", "org-1", "rt-1")),
+            Some(Ok(claude_credential("alice", "org-1", "rt-1"))),
         )
         .await
         .unwrap();
         assert_eq!(execution, SwitchExecution::default());
     }
 
-    fn sample_claude_doc(name: &str, org: &str, refresh: &str) -> Value {
-        json!({
-            "claudeAiOauth": {
-                "accessToken": format!("sk-ant-oat-{name}"),
-                "refreshToken": refresh,
-                "expiresAt": 1_780_000_000_000_i64,
-                "scopes": ["user:inference"],
-                "subscriptionType": "max"
-            },
-            "oauthAccount": {
-                "accountUuid": format!("acct-{name}"),
-                "emailAddress": format!("{}@Example.com", name),
-                "organizationUuid": org,
-                "organizationName": format!("{name}'s Organization")
+    #[tokio::test]
+    async fn after_switch_reports_a_login_granting_no_credential_to_each_agent() {
+        // A login granting no Credential writes nothing, so no home is
+        // touched; Grok's switch neither restarts editors nor launches Codex.
+        let preferences = Preferences {
+            sync_opencode_openai_auth: true,
+            sync_pi_auth: true,
+            sync_omp_auth: true,
+            restart_editors_on_switch: false,
+            launch_codex_after_switch: false,
+            ..Default::default()
+        };
+        let error = "Missing refresh token".to_string();
+        let execution = after_switch(Pool::Grok, &preferences, Some(Err(error.clone())))
+            .await
+            .unwrap();
+        assert_eq!(
+            execution,
+            SwitchExecution {
+                opencode_sync_error: Some(error.clone()),
+                pi_sync_error: Some(error.clone()),
+                omp_sync_error: Some(error),
+                ..SwitchExecution::default()
             }
-        })
+        );
+        // A provider's card hands over none: no agent is synced.
+        let execution = after_switch(Pool::Grok, &preferences, None).await.unwrap();
+        assert_eq!(execution, SwitchExecution::default());
     }
 
-    fn sample_grok_doc(user: &str, refresh: &str) -> Value {
-        json!({
-            "key": format!("grok-access-{user}"),
-            "refresh_token": refresh,
-            "expires_at": "2026-11-26T12:00:00Z",
-            "user_id": format!("uid-{user}"),
-            "email": format!("{user}@x.example"),
-            "team_id": "team-shared"
-        })
+    /// The Credential of a Claude login: its account and organization
+    /// named after `name` and `org`, its email capitalized as Claude Code's
+    /// account may spell it.
+    fn claude_credential(name: &str, org: &str, refresh: &str) -> OAuthCredential {
+        OAuthCredential {
+            access: format!("sk-ant-oat-{name}"),
+            refresh: refresh.into(),
+            expires_ms: 1_780_000_000_000,
+            account_id: Some(format!("acct-{name}")),
+            org_id: Some(org.into()),
+            email: Some(format!("{name}@Example.com")),
+            org_name: Some(format!("{name}'s Organization")),
+            scope: Some("user:inference".into()),
+        }
+    }
+
+    fn grok_expires_ms() -> i64 {
+        chrono::DateTime::parse_from_rfc3339("2026-11-26T12:00:00Z")
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    /// The Credential of a Grok sign-in of `user`, its access token no JWT.
+    fn grok_credential(user: &str, refresh: &str) -> OAuthCredential {
+        OAuthCredential {
+            access: format!("grok-access-{user}"),
+            refresh: refresh.into(),
+            expires_ms: grok_expires_ms(),
+            account_id: Some(format!("uid-{user}")),
+            email: Some(format!("{user}@x.example")),
+            ..OAuthCredential::default()
+        }
     }
 
     #[test]
     fn sync_pi_writes_anthropic_and_xai_entries_beside_openai_codex() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("auth.json");
-        let codex = sample_codex_auth("a@example.com", "acct-1", "plus", 1_780_000_000, "rt-1");
+        let codex = codex_credential("a@example.com", "acct-1", "plus", 1_780_000_000, "rt-1");
         sync_pi(&codex, std::slice::from_ref(&path)).unwrap();
         SyncAgent::Pi
-            .sync_raw(
+            .sync_credential(
                 Pool::Claude,
-                &sample_claude_doc("alice", "org-1", "claude-rt"),
+                &claude_credential("alice", "org-1", "claude-rt"),
                 std::slice::from_ref(&path),
             )
             .unwrap();
         SyncAgent::Pi
-            .sync_raw(
+            .sync_credential(
                 Pool::Grok,
-                &sample_grok_doc("bob", "grok-rt"),
+                &grok_credential("bob", "grok-rt"),
                 std::slice::from_ref(&path),
             )
             .unwrap();
@@ -2040,12 +2058,12 @@ mod tests {
     fn sync_omp_keys_anthropic_by_email_and_organization() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("agent.db");
-        let sync = |doc: &Value| {
+        let sync = |credential: &OAuthCredential| {
             SyncAgent::Omp
-                .sync_raw(Pool::Claude, doc, std::slice::from_ref(&db_path))
+                .sync_credential(Pool::Claude, credential, std::slice::from_ref(&db_path))
                 .unwrap()
         };
-        sync(&sample_claude_doc("alice", "org-team", "rt-1"));
+        sync(&claude_credential("alice", "org-team", "rt-1"));
         let rows = omp_rows(&db_path, "anthropic");
         assert_eq!(rows.len(), 1);
         let (alice_id, data, key, cause) = &rows[0];
@@ -2061,14 +2079,14 @@ mod tests {
         assert_eq!(data["scope"], "user:inference");
 
         // A renewal of the same login updates its row in place.
-        sync(&sample_claude_doc("alice", "org-team", "rt-2"));
+        sync(&claude_credential("alice", "org-team", "rt-2"));
         let rows = omp_rows(&db_path, "anthropic");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, *alice_id);
         assert_eq!(rows[0].1["refresh"], "rt-2");
 
         // The same email in another organization is another subscription.
-        sync(&sample_claude_doc("alice", "org-personal", "rt-3"));
+        sync(&claude_credential("alice", "org-personal", "rt-3"));
         let rows = omp_rows(&db_path, "anthropic");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].3.as_deref(), Some(OMP_REPLACED_CAUSE));
@@ -2083,12 +2101,12 @@ mod tests {
     fn sync_omp_keys_xai_oauth_by_account_without_organization() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("agent.db");
-        let sync = |doc: &Value| {
+        let sync = |credential: &OAuthCredential| {
             SyncAgent::Omp
-                .sync_raw(Pool::Grok, doc, std::slice::from_ref(&db_path))
+                .sync_credential(Pool::Grok, credential, std::slice::from_ref(&db_path))
                 .unwrap()
         };
-        sync(&sample_grok_doc("alice", "rt-a1"));
+        sync(&grok_credential("alice", "rt-a1"));
         let rows = omp_rows(&db_path, "xai-oauth");
         assert_eq!(rows.len(), 1);
         let (alice_id, data, key, _) = &rows[0];
@@ -2098,14 +2116,14 @@ mod tests {
         assert_eq!(data["email"], "alice@x.example");
         assert!(data.get("orgId").is_none());
 
-        sync(&sample_grok_doc("alice", "rt-a2"));
+        sync(&grok_credential("alice", "rt-a2"));
         let rows = omp_rows(&db_path, "xai-oauth");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, *alice_id);
         assert_eq!(rows[0].1["refresh"], "rt-a2");
 
         // A teammate is another account: inserted, Alice's row disabled.
-        sync(&sample_grok_doc("bob", "rt-b1"));
+        sync(&grok_credential("bob", "rt-b1"));
         let rows = omp_rows(&db_path, "xai-oauth");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].3.as_deref(), Some(OMP_REPLACED_CAUSE));
@@ -2117,18 +2135,16 @@ mod tests {
     fn sync_omp_keys_antigravity_cli_by_account_else_email() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("agent.db");
-        let alice = json!({
-            "token": {
-                "access_token": "agy-access-alice",
-                "refresh_token": "agy-rt-a1",
-                "expiry": "2026-11-26T12:00:00Z"
-            },
-            "auth_method": "consumer",
-            "id_token_email": "Alice@Gmail.com",
-            "account_id": "google-sub-alice"
-        });
+        let alice = OAuthCredential {
+            access: "agy-access-alice".into(),
+            refresh: "agy-rt-a1".into(),
+            expires_ms: grok_expires_ms(),
+            account_id: Some("google-sub-alice".into()),
+            email: Some("Alice@Gmail.com".into()),
+            ..OAuthCredential::default()
+        };
         SyncAgent::Omp
-            .sync_raw(Pool::Antigravity, &alice, std::slice::from_ref(&db_path))
+            .sync_credential(Pool::Antigravity, &alice, std::slice::from_ref(&db_path))
             .unwrap();
         let rows = omp_rows(&db_path, "antigravity-cli");
         assert_eq!(rows.len(), 1);
@@ -2139,17 +2155,15 @@ mod tests {
         assert_eq!(rows[0].1["accountId"], "google-sub-alice");
 
         // Email-only grant (as `agy acp --login` often exports) keys by email.
-        let bob = json!({
-            "token": {
-                "access_token": "agy-access-bob",
-                "refresh_token": "agy-rt-b1",
-                "expiry": "2026-11-26T13:00:00Z"
-            },
-            "auth_method": "consumer",
-            "id_token_email": "Bob@Gmail.com"
-        });
+        let bob = OAuthCredential {
+            access: "agy-access-bob".into(),
+            refresh: "agy-rt-b1".into(),
+            expires_ms: grok_expires_ms() + 3_600_000,
+            email: Some("Bob@Gmail.com".into()),
+            ..OAuthCredential::default()
+        };
         SyncAgent::Omp
-            .sync_raw(Pool::Antigravity, &bob, std::slice::from_ref(&db_path))
+            .sync_credential(Pool::Antigravity, &bob, std::slice::from_ref(&db_path))
             .unwrap();
         let rows = omp_rows(&db_path, "antigravity-cli");
         assert_eq!(rows.len(), 2);
@@ -2158,13 +2172,16 @@ mod tests {
         assert_eq!(rows[1].3, None);
     }
 
-    fn sample_codex_auth(
+    /// The Credential of a ChatGPT login of `email` in workspace
+    /// `account_id`, its access token carrying the claims agents' rows are
+    /// told apart by.
+    fn codex_credential(
         email: &str,
         account_id: &str,
         plan_type: &str,
         exp_sec: i64,
         refresh: &str,
-    ) -> Value {
+    ) -> OAuthCredential {
         let access = fake_jwt(json!({
             "exp": exp_sec,
             "https://api.openai.com/auth": {
@@ -2175,23 +2192,16 @@ mod tests {
                 "email": email,
             }
         }));
-        let id = fake_jwt(json!({
-            "exp": exp_sec - 100,
-            "email": email,
-            "https://api.openai.com/auth": {
-                "chatgpt_account_id": account_id,
-                "chatgpt_plan_type": plan_type,
-            }
-        }));
-        json!({
-            "auth_mode": "chatgpt",
-            "tokens": {
-                "access_token": access,
-                "refresh_token": refresh,
-                "id_token": id,
-                "account_id": account_id,
-            }
-        })
+        OAuthCredential {
+            access,
+            refresh: refresh.into(),
+            expires_ms: exp_sec * 1000,
+            account_id: Some(account_id.into()),
+            org_id: Some(account_id.into()),
+            email: Some(email.into()),
+            org_name: Some(plan_type.to_ascii_lowercase()),
+            scope: None,
+        }
     }
 
     #[test]
@@ -2222,14 +2232,14 @@ mod tests {
         )
         .unwrap();
 
-        let auth = sample_codex_auth("Alice@Example.com", "acct-1", "Pro", 1_780_000_000, "rt-1");
+        let auth = codex_credential("Alice@Example.com", "acct-1", "Pro", 1_780_000_000, "rt-1");
         sync_opencode(&auth, std::slice::from_ref(&path)).unwrap();
 
         let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["anthropic"]["key"], "sk-ant");
         assert_eq!(written["openai"]["type"], "oauth");
         assert_eq!(written["openai"]["extra"], "keep");
-        assert_eq!(written["openai"]["access"], auth["tokens"]["access_token"]);
+        assert_eq!(written["openai"]["access"], auth.access);
         assert_eq!(written["openai"]["refresh"], "rt-1");
         assert_eq!(written["openai"]["expires"], 1_780_000_000_000i64);
         assert_eq!(written["openai"]["accountId"], "acct-1");
@@ -2246,17 +2256,14 @@ mod tests {
         )
         .unwrap();
 
-        let auth = sample_codex_auth("Alice@Example.com", "acct-1", "Pro", 1_780_000_000, "rt-1");
+        let auth = codex_credential("Alice@Example.com", "acct-1", "Pro", 1_780_000_000, "rt-1");
         sync_pi(&auth, std::slice::from_ref(&path)).unwrap();
 
         let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["anthropic"]["type"], "api_key");
         assert_eq!(written["anthropic"]["key"], "sk-ant");
         assert_eq!(written["openai-codex"]["type"], "oauth");
-        assert_eq!(
-            written["openai-codex"]["access"],
-            auth["tokens"]["access_token"]
-        );
+        assert_eq!(written["openai-codex"]["access"], auth.access);
         assert_eq!(written["openai-codex"]["refresh"], "rt-1");
         assert_eq!(written["openai-codex"]["expires"], 1_780_000_000_000i64);
         assert_eq!(written["openai-codex"]["accountId"], "acct-1");
@@ -2277,7 +2284,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("auth.json");
         std::fs::write(&path, "[]").unwrap();
-        let auth = sample_codex_auth("a@example.com", "acct-1", "plus", 1_780_000_000, "rt-1");
+        let auth = codex_credential("a@example.com", "acct-1", "plus", 1_780_000_000, "rt-1");
         assert!(sync_pi(&auth, std::slice::from_ref(&path)).is_err());
         assert!(sync_pi(&auth, &[]).is_err());
     }
@@ -2409,7 +2416,7 @@ mod tests {
     fn sync_omp_creates_fresh_db_with_expected_schema_and_payload() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("agent/agent.db");
-        let auth = sample_codex_auth("Alice@Example.com", "ws-1", "Plus", 1_780_000_000, "rt-a");
+        let auth = codex_credential("Alice@Example.com", "ws-1", "Plus", 1_780_000_000, "rt-a");
 
         sync_omp(&auth, std::slice::from_ref(&db_path)).unwrap();
 
@@ -2437,7 +2444,7 @@ mod tests {
 
         let data: Value = serde_json::from_str(&data_raw).unwrap();
         assert!(data.get("type").is_none());
-        assert_eq!(data["access"], auth["tokens"]["access_token"]);
+        assert_eq!(data["access"], auth.access);
         assert_eq!(data["refresh"], "rt-a");
         assert_eq!(data["expires"], 1_780_000_000_000i64);
         assert_eq!(data["accountId"], "ws-1");
@@ -2512,7 +2519,7 @@ mod tests {
         let rev0 = revision();
 
         // 1. First switch to Alice in Team workspace ws-team: inserts Alice, disables old api_key.
-        let alice1 = sample_codex_auth(
+        let alice1 = codex_credential(
             "alice@example.com",
             "ws-team",
             "team",
@@ -2538,7 +2545,7 @@ mod tests {
         drop(conn);
 
         // 3. Refreshing Alice's token updates her row in-place, preserving row id.
-        let alice2 = sample_codex_auth(
+        let alice2 = codex_credential(
             "alice@example.com",
             "ws-team",
             "team",
@@ -2562,7 +2569,7 @@ mod tests {
         drop(conn);
 
         // 4. Switching to Bob in the SAME Team workspace inserts a distinct row and disables Alice.
-        let bob = sample_codex_auth("bob@example.com", "ws-team", "team", 1_780_007_200, "rt-b1");
+        let bob = codex_credential("bob@example.com", "ws-team", "team", 1_780_007_200, "rt-b1");
         sync_omp(&bob, std::slice::from_ref(&db_path)).unwrap();
         let conn = Connection::open(&db_path).unwrap();
         let (bob_id, bob_key): (i64, Option<String>) = conn
@@ -2800,7 +2807,7 @@ mod tests {
         drop(conn);
 
         // 1. Switch to Alice in Team workspace ws-team.
-        let alice1 = sample_codex_auth(
+        let alice1 = codex_credential(
             "Alice@Example.com",
             "ws-team",
             "team",
@@ -2842,7 +2849,7 @@ mod tests {
                     "type": "oauth",
                     "methodID": "chatgpt-headless",
                     "refresh": "rt-a1",
-                    "access": alice1["tokens"]["access_token"],
+                    "access": alice1.access,
                     "expires": 1_780_000_000_000_i64,
                     "metadata": { "accountID": "ws-team", "custom": "keep" }
                 })
@@ -2853,7 +2860,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let alice2 = sample_codex_auth(
+        let alice2 = codex_credential(
             "Alice@Example.com",
             "ws-team",
             "team",
@@ -2871,7 +2878,7 @@ mod tests {
         assert_eq!(rows[1].2["metadata"]["custom"], "keep");
 
         // 4. Switching to Bob in the SAME Team workspace creates a separate row and deactivates Alice.
-        let bob = sample_codex_auth("bob@example.com", "ws-team", "team", 1_780_007_200, "rt-b1");
+        let bob = codex_credential("bob@example.com", "ws-team", "team", 1_780_007_200, "rt-b1");
         sync_opencode(&bob, std::slice::from_ref(&db_path)).unwrap();
         let rows = opencode_db_rows(&db_path, "openai");
         assert_eq!(rows.len(), 3);
@@ -2902,12 +2909,14 @@ mod tests {
             "email": "alice@x.example",
             "exp": 1_800_000_000_i64
         }));
-        let alice1 = json!({
-            "key": alice_access,
-            "refresh_token": "xai-rt-a1",
-            "user_id": "uid-alice",
-            "email": "Alice@x.example"
-        });
+        let alice1 = OAuthCredential {
+            access: alice_access,
+            refresh: "xai-rt-a1".into(),
+            expires_ms: 1_800_000_000_000,
+            account_id: Some("uid-alice".into()),
+            email: Some("Alice@x.example".into()),
+            ..OAuthCredential::default()
+        };
         sync_opencode_grok(&alice1, std::slice::from_ref(&db_path)).unwrap();
 
         let rows = opencode_db_rows(&db_path, "xai");
@@ -2926,12 +2935,14 @@ mod tests {
             "email": "alice@x.example",
             "exp": 1_800_003_600_i64
         }));
-        let alice2 = json!({
-            "key": alice_access2,
-            "refresh_token": "xai-rt-a2",
-            "user_id": "uid-alice",
-            "email": "alice@x.example"
-        });
+        let alice2 = OAuthCredential {
+            access: alice_access2,
+            refresh: "xai-rt-a2".into(),
+            expires_ms: 1_800_003_600_000,
+            account_id: Some("uid-alice".into()),
+            email: Some("alice@x.example".into()),
+            ..OAuthCredential::default()
+        };
         sync_opencode_grok(&alice2, std::slice::from_ref(&db_path)).unwrap();
         let rows = opencode_db_rows(&db_path, "xai");
         assert_eq!(rows.len(), 1);
@@ -2939,7 +2950,7 @@ mod tests {
         assert_eq!(rows[0].2["refresh"], "xai-rt-a2");
 
         // Switching to Bob adds a separate active xai row and deactivates Alice.
-        let bob = sample_grok_doc("bob", "xai-rt-b1");
+        let bob = grok_credential("bob", "xai-rt-b1");
         sync_opencode_grok(&bob, std::slice::from_ref(&db_path)).unwrap();
         let rows = opencode_db_rows(&db_path, "xai");
         assert_eq!(rows.len(), 2);
@@ -2975,9 +2986,9 @@ mod tests {
             .unwrap();
         let existing = omp_rows(&db_path, "anthropic")[0].0;
         SyncAgent::Omp
-            .sync_raw(
+            .sync_credential(
                 Pool::Claude,
-                &sample_claude_doc("alice", "org-team", "rt-new"),
+                &claude_credential("alice", "org-team", "rt-new"),
                 std::slice::from_ref(&db_path),
             )
             .unwrap();
@@ -3001,7 +3012,7 @@ mod tests {
                 params![json!({"type": "oauth", "access": old_access, "refresh": "old-refresh", "metadata": {"accountID": "ws-team"}}).to_string()],
             )
             .unwrap();
-        let alice = sample_codex_auth(
+        let alice = codex_credential(
             "Alice@Example.com",
             "ws-team",
             "team",
@@ -3019,7 +3030,7 @@ mod tests {
     fn sync_opencode_db_rejects_uninitialized_database() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("opencode.db");
-        let auth = sample_codex_auth("a@example.com", "acct-1", "plus", 1_780_000_000, "rt-1");
+        let auth = codex_credential("a@example.com", "acct-1", "plus", 1_780_000_000, "rt-1");
         assert!(sync_opencode(&auth, std::slice::from_ref(&missing))
             .unwrap_err()
             .contains("not found"));

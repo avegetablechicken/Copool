@@ -180,7 +180,8 @@ pub(crate) fn exported_oauth(document: &Value) -> Option<&Value> {
 /// The Credential a Claude Login grants: `claudeAiOauth`'s tokens, expiry
 /// and scopes (the document's own when it is that entry, a `scope` string
 /// for one without a `scopes` list), and the account and organization
-/// Claude Code keeps beside it in `oauthAccount`, given as `identity`.
+/// Claude Code keeps beside it in `oauthAccount`, given as `identity`
+/// ([`account_identity`]).
 pub(crate) fn credential(login: &Value, identity: &Identity) -> Result<OAuthCredential> {
     let oauth = login
         .get("claudeAiOauth")
@@ -199,6 +200,17 @@ pub(crate) fn credential(login: &Value, identity: &Identity) -> Result<OAuthCred
         org_name: identity.org_name.clone(),
         scope: granted_scope(oauth).or_else(|| text("scope")),
     })
+}
+
+/// Whose a login is, as Claude Code's `oauthAccount` beside it says.
+pub(crate) fn account_identity(account: &Value) -> Identity {
+    let field = |key: &str| non_empty(account.get(key).and_then(Value::as_str));
+    Identity {
+        account_id: field("accountUuid"),
+        org_id: field("organizationUuid"),
+        email: field("emailAddress"),
+        org_name: field("organizationName"),
+    }
 }
 
 /// `oauth` over the members a live login keeps beside it.
@@ -331,6 +343,18 @@ mod tests {
         for login in [oauth(json!({})), oauth(json!({"expiresAt": 0}))] {
             assert!(credential(&login, &identity).unwrap().expires_ms > 1_700_000_000_000);
         }
+        // The identity Claude Code's account gives, its blank members none.
+        let account = json!({
+            "accountUuid": "acct-alice", "organizationUuid": "org-team",
+            "emailAddress": "Alice@Example.com", "organizationName": "Alice's Organization",
+            "displayName": "Alice"
+        });
+        assert_eq!(account_identity(&account), identity);
+        assert_eq!(
+            account_identity(&json!({"accountUuid": " ", "emailAddress": 7})),
+            Identity::default()
+        );
+        assert_eq!(account_identity(&Value::Null), Identity::default());
         // Without the account, the login is of no one in particular.
         let unnamed = credential(&oauth(json!({"expiresAt": 1})), &Identity::default()).unwrap();
         assert_eq!((unnamed.account_id, unnamed.email), (None, None));

@@ -9,7 +9,7 @@ use crate::{
     models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
     persistence::write_json,
     pool::{Pool, PoolAccount},
-    pool_login::{self, grok::CREDENTIALS_INVALID},
+    pool_login::{self, grok::CREDENTIALS_INVALID, Identity},
     utils::now_unix_seconds,
 };
 use serde::{Deserialize, Serialize};
@@ -611,7 +611,8 @@ impl Application {
         self.grok_save(&store)?;
         drop(_lock);
         drop(_op);
-        self.after_switch(Pool::Grok, Some(&target.document)).await
+        let credential = pool_login::grok::credential(&target.document, &Identity::default());
+        self.after_switch(Pool::Grok, Some(credential)).await
     }
     /// Whether the account failed: its usage refused, or its token expired.
     pub(crate) async fn grok_login_failed(&self, id: &str) -> Result<bool> {

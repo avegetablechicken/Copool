@@ -41,7 +41,7 @@ pub(crate) async fn sign_in(code: &str, verifier: &str, redirect: &str) -> Resul
         now_unix_seconds(),
     )
 }
-use crate::pool_login::{self, antigravity::Document};
+use crate::pool_login::{self, antigravity::Document, Identity};
 use login::LiveStore;
 
 type Result<T> = std::result::Result<T, String>;
@@ -664,22 +664,13 @@ impl Application {
             self.antigravity.switches.fetch_add(1, Ordering::SeqCst);
             self.antigravity_save(&store)?;
         }
-        let mut synced = target.document;
-        if let Some(object) = synced.as_object_mut() {
-            if let Some(email) = target.email.as_deref().filter(|e| !e.trim().is_empty()) {
-                object.entry("email").or_insert_with(|| email.into());
-            }
-            if let Some(google_id) = target
-                .google_id
-                .as_deref()
-                .filter(|id| !id.trim().is_empty())
-            {
-                object
-                    .entry("account_id")
-                    .or_insert_with(|| google_id.into());
-            }
-        }
-        self.after_switch(Pool::Antigravity, Some(&synced)).await
+        let identity = Identity {
+            email: target.email,
+            account_id: target.google_id,
+            ..Identity::default()
+        };
+        let credential = pool_login::antigravity::credential(&target.document, &identity);
+        self.after_switch(Pool::Antigravity, Some(credential)).await
     }
     /// Whether the account failed: its usage refused, or its token expired.
     pub(crate) async fn antigravity_login_failed(&self, id: &str) -> Result<bool> {

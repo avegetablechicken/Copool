@@ -2,7 +2,10 @@ use crate::{
     models::*,
     persistence::write_json,
     pool::Pool,
-    pool_login::codex::{self, newer_login},
+    pool_login::{
+        codex::{self, newer_login},
+        Identity, OAuthCredential,
+    },
     proxy_service,
     state::AppState,
     store,
@@ -198,7 +201,7 @@ type SwitchEffect = Arc<
     dyn Fn(
             Pool,
             Preferences,
-            Option<Value>,
+            Option<Result<OAuthCredential>>,
         )
             -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SwitchExecution>> + Send>>
         + Send
@@ -462,24 +465,27 @@ impl Application {
         self.publish();
         Ok(())
     }
-    pub fn on_switch_effects(&self, effect: SwitchEffect) {
+    pub(crate) fn on_switch_effects(&self, effect: SwitchEffect) {
         *self.switch_effects.write().unwrap() = Some(effect);
     }
     pub fn enable_desktop_effects(&self) {
-        self.on_switch_effects(Arc::new(|pool, preferences, auth| {
-            Box::pin(async move {
-                crate::platform::after_switch(pool, &preferences, auth.as_ref()).await
-            })
+        self.on_switch_effects(Arc::new(|pool, preferences, credential| {
+            Box::pin(
+                async move { crate::platform::after_switch(pool, &preferences, credential).await },
+            )
         }));
     }
+    /// The switch's effects, given the Credential of the login switched to:
+    /// none for a provider's card, an error for a login that grants none,
+    /// which each agent to sync reports.
     pub(crate) async fn after_switch(
         &self,
         pool: Pool,
-        auth: Option<&Value>,
+        credential: Option<Result<OAuthCredential>>,
     ) -> Result<SwitchExecution> {
         let effect = self.switch_effects.read().unwrap().clone();
         if let Some(effect) = effect {
-            effect(pool, self.preferences()?, auth.cloned()).await
+            effect(pool, self.preferences()?, credential).await
         } else {
             Ok(SwitchExecution::default())
         }
@@ -540,7 +546,7 @@ impl Application {
                             if auth.get("copoolProvider").is_some() {
                                 None
                             } else {
-                                Some(auth)
+                                Some(codex::credential(&auth, &Identity::default()))
                             },
                         )
                         .await?;
@@ -1040,7 +1046,8 @@ impl Application {
         }
         drop(_lock);
         drop(_op);
-        self.after_switch(Pool::Codex, Some(&normalized)).await
+        let credential = codex::credential(&normalized, &Identity::default());
+        self.after_switch(Pool::Codex, Some(credential)).await
     }
     /// Whether the stored account failed: its usage refused, or its token
     /// expired.

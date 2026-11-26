@@ -1022,15 +1022,13 @@ async fn testTrayMenuModelAutoSmartSwitchWritesAuthAndLaunchesCodex() {
     .unwrap();
     let events = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
     let observed = events.clone();
-    app.on_switch_effects(std::sync::Arc::new(move |pool, settings, auth| {
+    app.on_switch_effects(std::sync::Arc::new(move |pool, settings, credential| {
         let observed = observed.clone();
         Box::pin(async move {
             assert_eq!(pool, Pool::Codex);
             observed.lock().unwrap().push((
                 settings.launch_codex_after_switch,
-                crate::pool_login::codex::extract_auth(&auth.unwrap())
-                    .unwrap()
-                    .account_id,
+                credential.unwrap().unwrap().account_id,
             ));
             Ok(Default::default())
         })
@@ -1042,7 +1040,7 @@ async fn testTrayMenuModelAutoSmartSwitchWritesAuthAndLaunchesCodex() {
             .as_deref(),
         Some("b")
     );
-    assert_eq!(*events.lock().unwrap(), [(true, "b".into())]);
+    assert_eq!(*events.lock().unwrap(), [(true, Some("b".into()))]);
     let auth: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(

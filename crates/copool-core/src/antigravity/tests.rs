@@ -1942,25 +1942,42 @@ async fn switching_hands_the_login_and_identity_to_the_switch_effects() {
 
     let seen = Arc::new(std::sync::Mutex::new(None));
     let observed = seen.clone();
-    h.app.on_switch_effects(Arc::new(move |pool, _, auth| {
-        let observed = observed.clone();
-        Box::pin(async move {
-            *observed.lock().unwrap() = Some((pool, auth));
-            Ok(SwitchExecution::default())
-        })
-    }));
+    h.app
+        .on_switch_effects(Arc::new(move |pool, _, credential| {
+            let observed = observed.clone();
+            Box::pin(async move {
+                *observed.lock().unwrap() = Some((pool, credential));
+                Ok(SwitchExecution::default())
+            })
+        }));
 
     h.app
         .switch_account(Pool::Antigravity, &alice_id)
         .await
         .unwrap();
-    let (pool, auth) = seen.lock().unwrap().take().unwrap();
+    let (pool, credential) = seen.lock().unwrap().take().unwrap();
     assert_eq!(pool, Pool::Antigravity);
-    let auth = auth.unwrap();
+    let credential = credential.unwrap().unwrap();
+    assert_eq!(credential.access, "access-alice");
+    assert_eq!(credential.email.as_deref(), Some("alice@gmail.com"));
+    assert_eq!(credential.account_id.as_deref(), Some("google-sub-alice"));
+
+    // A login naming no account, of an account Copool knows nothing of,
+    // hands over the error each agent to sync reports.
+    let bob_id = store
+        .accounts
+        .iter()
+        .find(|a| a.id != alice_id)
+        .unwrap()
+        .id
+        .clone();
+    h.app
+        .switch_account(Pool::Antigravity, &bob_id)
+        .await
+        .unwrap();
+    let (_, credential) = seen.lock().unwrap().take().unwrap();
     assert_eq!(
-        pool_login::antigravity::access_token(&auth).as_deref(),
-        Some("access-alice")
+        credential.unwrap().unwrap_err(),
+        "Missing Antigravity account identity"
     );
-    assert_eq!(auth["email"], "alice@gmail.com");
-    assert_eq!(auth["account_id"], "google-sub-alice");
 }
