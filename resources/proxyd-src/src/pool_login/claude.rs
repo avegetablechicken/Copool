@@ -2,15 +2,16 @@
 //! `claudeAiOauth` entry holds the tokens, their expiry and scopes and the
 //! subscription, with the account Claude Code keeps in `oauthAccount`.
 #![allow(dead_code)]
+use super::{credential_expiry, non_empty, Identity, OAuthCredential};
 use crate::claude_api::{number, text, SCOPES};
 use serde_json::{json, Value};
 
 type Result<T> = std::result::Result<T, String>;
 
+/// When the access token expires (Unix milliseconds, as Claude Code writes
+/// it), read as every pool's expiry is.
 pub(crate) fn expires_at_ms(oauth: &Value) -> Option<i64> {
-    oauth
-        .get("expiresAt")
-        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|ms| ms as i64)))
+    oauth.get("expiresAt").and_then(super::timestamp_ms)
 }
 
 pub(crate) fn expires_at(oauth: &Value) -> i64 {
@@ -168,12 +169,36 @@ pub(crate) fn exported_oauth(document: &Value) -> Option<&Value> {
     let invalid = !oauth.is_object()
         || text(&oauth["accessToken"]).is_none()
         || oauth.get("refreshToken").is_some_and(|v| text(v).is_none())
-        || oauth.get("expiresAt").is_some_and(|v| v.as_i64().is_none())
+        || oauth.get("expiresAt").is_some_and(|v| !v.is_number())
         || oauth.get("scopes").is_some_and(|v| {
             v.as_array()
                 .is_none_or(|items| items.iter().any(|v| !v.is_string()))
         });
     (!invalid).then_some(oauth)
+}
+
+/// The Credential a Claude Login grants: `claudeAiOauth`'s tokens, expiry
+/// and scopes (the document's own when it is that entry, a `scope` string
+/// for one without a `scopes` list), and the account and organization
+/// Claude Code keeps beside it in `oauthAccount`, given as `identity`.
+pub(crate) fn credential(login: &Value, identity: &Identity) -> Result<OAuthCredential> {
+    let oauth = login
+        .get("claudeAiOauth")
+        .filter(|v| v.is_object())
+        .unwrap_or(login);
+    let text = |key: &str| non_empty(oauth.get(key).and_then(Value::as_str));
+    let access = text("accessToken").ok_or("Missing access token")?;
+    let refresh = text("refreshToken").ok_or("Missing refresh token")?;
+    Ok(OAuthCredential {
+        access,
+        refresh,
+        expires_ms: credential_expiry(expires_at_ms(oauth)),
+        account_id: identity.account_id.clone(),
+        org_id: identity.org_id.clone(),
+        email: identity.email.clone(),
+        org_name: identity.org_name.clone(),
+        scope: granted_scope(oauth).or_else(|| text("scope")),
+    })
 }
 
 /// `oauth` over the members a live login keeps beside it.
@@ -235,6 +260,104 @@ mod tests {
         ] {
             assert_eq!(refresh_scope(&oauth), default, "{oauth}");
         }
+    }
+
+    #[test]
+    fn login_and_identity_give_the_credential() {
+        let identity = Identity {
+            account_id: Some("acct-alice".into()),
+            org_id: Some("org-team".into()),
+            email: Some("Alice@Example.com".into()),
+            org_name: Some("Alice's Organization".into()),
+        };
+        let expected = |expires_ms: i64, scope: Option<&str>| OAuthCredential {
+            access: "sk-ant-oat".into(),
+            refresh: "rt".into(),
+            expires_ms,
+            account_id: Some("acct-alice".into()),
+            org_id: Some("org-team".into()),
+            // As the account spells it.
+            email: Some("Alice@Example.com".into()),
+            org_name: Some("Alice's Organization".into()),
+            scope: scope.map(Into::into),
+        };
+        let oauth = |extra: Value| {
+            let mut oauth = json!({"accessToken": "sk-ant-oat", "refreshToken": "rt"});
+            oauth
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            oauth
+        };
+        for (name, login, credential_expected) in [
+            (
+                "a credentials document",
+                json!({"claudeAiOauth": oauth(json!({"expiresAt": 1_780_000_000_000_i64, "scopes": ["user:inference", "user:profile"]}))}),
+                expected(1_780_000_000_000, Some("user:inference user:profile")),
+            ),
+            (
+                "the OAuth entry by itself, read at its root",
+                oauth(json!({"expiresAt": 1_780_000_000_000_i64, "scopes": ["user:inference"]})),
+                expected(1_780_000_000_000, Some("user:inference")),
+            ),
+            (
+                "a `scope` string without a `scopes` list",
+                oauth(json!({"expiresAt": 1_780_000_000_000_i64, "scope": "user:inference"})),
+                expected(1_780_000_000_000, Some("user:inference")),
+            ),
+            (
+                "a fractional expiry in milliseconds",
+                oauth(json!({"expiresAt": 1_780_000_000_123.5})),
+                expected(1_780_000_000_123, None),
+            ),
+            (
+                "an expiry in seconds",
+                oauth(json!({"expiresAt": 1_780_000_000})),
+                expected(1_780_000_000_000, None),
+            ),
+            (
+                "an RFC 3339 expiry",
+                oauth(json!({"expiresAt": "2026-05-28T20:26:40Z"})),
+                expected(1_780_000_000_000, None),
+            ),
+        ] {
+            assert_eq!(
+                credential(&login, &identity),
+                Ok(credential_expected),
+                "{name}"
+            );
+        }
+        // No expiry, or none known: the default.
+        for login in [oauth(json!({})), oauth(json!({"expiresAt": 0}))] {
+            assert!(credential(&login, &identity).unwrap().expires_ms > 1_700_000_000_000);
+        }
+        // Without the account, the login is of no one in particular.
+        let unnamed = credential(&oauth(json!({"expiresAt": 1})), &Identity::default()).unwrap();
+        assert_eq!((unnamed.account_id, unnamed.email), (None, None));
+        for (login, error) in [
+            (
+                json!({"claudeAiOauth": {"refreshToken": "rt"}}),
+                "Missing access token",
+            ),
+            (
+                json!({"accessToken": "a", "refreshToken": " "}),
+                "Missing refresh token",
+            ),
+        ] {
+            assert_eq!(credential(&login, &identity).unwrap_err(), error);
+        }
+    }
+
+    #[test]
+    fn an_import_takes_a_fractional_expiry() {
+        let document =
+            json!({"claudeAiOauth": {"accessToken": "a", "expiresAt": 1_780_000_000_123.5}});
+        assert_eq!(
+            expires_at(exported_oauth(&document).unwrap()),
+            1_780_000_000_123
+        );
+        let text = json!({"claudeAiOauth": {"accessToken": "a", "expiresAt": "soon"}});
+        assert!(exported_oauth(&text).is_none());
     }
 
     #[test]

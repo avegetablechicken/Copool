@@ -26,15 +26,14 @@ pub(crate) fn access_token(document: &Value) -> Option<String> {
 pub(crate) fn refresh_token(document: &Value) -> Option<String> {
     text(document, "refresh_token")
 }
+/// When the access token expires (Unix milliseconds), read as every
+/// pool's expiry is.
+pub(crate) fn expiry_ms(document: &Value) -> Option<i64> {
+    document.get("expires_at").and_then(super::timestamp_ms)
+}
 /// When the access token expires (Unix seconds).
 pub(crate) fn expiry(document: &Value) -> Option<i64> {
-    let value = document.get("expires_at")?;
-    if let Some(text) = value.as_str() {
-        return chrono::DateTime::parse_from_rfc3339(text.trim())
-            .ok()
-            .map(|date| date.timestamp());
-    }
-    value.as_i64()
+    expiry_ms(document).map(super::seconds)
 }
 pub(crate) fn email(document: &Value) -> Option<String> {
     text(document, "email").filter(|email| email.contains('@'))
@@ -139,6 +138,33 @@ pub(crate) fn claims(token: &str) -> Map<String, Value> {
         })
         .unwrap_or_default()
 }
+/// The Credential a Grok Login grants: the sign-in's tokens (an
+/// `auth.json`'s, or a sign-in by itself), its expiry, else the access
+/// token's, and its user, else the access token's subject and email. Grok
+/// has no organization, and needs nothing outside the Login.
+pub(crate) fn credential(
+    login: &Value,
+    _identity: &super::Identity,
+) -> Result<super::OAuthCredential, String> {
+    let sign_in = sign_in_of(login);
+    let document = sign_in.as_ref().unwrap_or(login);
+    let access = access_token(document).ok_or("Missing access token")?;
+    let refresh = refresh_token(document).ok_or("Missing refresh token")?;
+    let access_claims = Value::Object(claims(&access));
+    let claim = |key: &str| super::non_empty(access_claims.get(key).and_then(Value::as_str));
+    let expires_ms = expiry_ms(document).or_else(|| super::jwt_exp_ms(&access_claims));
+    Ok(super::OAuthCredential {
+        expires_ms: super::credential_expiry(expires_ms),
+        // The xAI subject, as omp's `xai-oauth` keeps it in `accountId`.
+        account_id: user_id(document).or_else(|| claim("sub")),
+        email: email(document).or_else(|| claim("email").filter(|e| e.contains('@'))),
+        access,
+        refresh,
+        org_id: None,
+        org_name: None,
+        scope: None,
+    })
+}
 /// A browser sign-in's tokens as Grok Build keeps a sign-in.
 pub(crate) fn signed_in(tokens: &Value, now: i64) -> Result<Value, String> {
     let access = tokens["access_token"]
@@ -184,4 +210,93 @@ pub(crate) fn signed_in(tokens: &Value, now: i64) -> Result<Value, String> {
     document.insert("oidc_issuer".into(), ISSUER.into());
     document.insert("oidc_client_id".into(), CLIENT_ID.into());
     Ok(Value::Object(document))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use serde_json::json;
+
+    fn jwt(claims: Value) -> String {
+        format!("h.{}.s", URL_SAFE_NO_PAD.encode(claims.to_string()))
+    }
+
+    #[test]
+    fn login_and_identity_give_the_credential() {
+        use super::super::{Identity, OAuthCredential};
+        let expected = |access: &str, expires_ms: i64, user: Option<&str>, email: Option<&str>| {
+            OAuthCredential {
+                access: access.into(),
+                refresh: "rt".into(),
+                expires_ms,
+                account_id: user.map(Into::into),
+                email: email.map(Into::into),
+                ..OAuthCredential::default()
+            }
+        };
+        let claimed =
+            jwt(json!({"sub": "uid-claim", "email": "Claim@x.example", "exp": 1_800_000_123.5}));
+        for (name, login, credential_expected) in [
+            (
+                "a sign-in: its user, email as spelled, and RFC 3339 expiry",
+                json!({"key": claimed, "refresh_token": "rt", "expires_at": "2026-11-26T12:00:00.000000Z", "user_id": "uid-alice", "email": "Alice@x.example"}),
+                expected(
+                    &claimed,
+                    1_795_694_400_000,
+                    Some("uid-alice"),
+                    Some("Alice@x.example"),
+                ),
+            ),
+            (
+                "an auth.json, xAI's sign-in, the access token's fractional expiry and identity",
+                json!({
+                    "https://other.example::c": {"key": "other", "refresh_token": "rt-other"},
+                    "https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828": {"key": claimed, "refresh_token": "rt"},
+                }),
+                expected(
+                    &claimed,
+                    1_800_000_123_500,
+                    Some("uid-claim"),
+                    Some("Claim@x.example"),
+                ),
+            ),
+            (
+                "an expiry in seconds",
+                json!({"key": "opaque", "refresh_token": "rt", "expires_at": 1_800_000_000}),
+                expected("opaque", 1_800_000_000_000, None, None),
+            ),
+            (
+                "an expiry in milliseconds",
+                json!({"key": "opaque", "refresh_token": "rt", "expires_at": 1_800_000_000_000_i64}),
+                expected("opaque", 1_800_000_000_000, None, None),
+            ),
+        ] {
+            assert_eq!(
+                credential(&login, &Identity::default()),
+                Ok(credential_expected),
+                "{name}"
+            );
+        }
+        let unnamed = json!({"key": "opaque", "refresh_token": "rt"});
+        assert!(
+            credential(&unnamed, &Identity::default())
+                .unwrap()
+                .expires_ms
+                > 1_700_000_000_000
+        );
+        for (login, error) in [
+            (
+                json!({"refresh_token": "only-refresh"}),
+                "Missing access token",
+            ),
+            (json!({"key": "only-access"}), "Missing refresh token"),
+        ] {
+            assert_eq!(credential(&login, &Identity::default()).unwrap_err(), error);
+        }
+        assert_eq!(
+            expiry(&json!({"expires_at": 1_800_000_000_000_i64})),
+            Some(1_800_000_000)
+        );
+    }
 }

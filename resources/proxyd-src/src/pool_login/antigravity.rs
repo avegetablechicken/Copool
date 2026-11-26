@@ -84,24 +84,18 @@ pub(crate) fn access_token(document: &Value) -> Option<String> {
 pub(crate) fn refresh_token(document: &Value) -> Option<String> {
     first(document, &REFRESH_KEYS)
 }
-/// When the access token expires (Unix seconds): RFC 3339, as Go writes it,
-/// or a number of seconds or milliseconds.
-pub(crate) fn expiry(document: &Value) -> Option<i64> {
+/// When the access token expires (Unix milliseconds): RFC 3339, as Go
+/// writes it, or a number of seconds or milliseconds, read as every pool's
+/// expiry is.
+pub(crate) fn expiry_ms(document: &Value) -> Option<i64> {
     let token = token(document)?;
-    EXPIRY_KEYS.iter().find_map(|key| {
-        let value = token.get(*key)?;
-        if let Some(text) = value.as_str() {
-            return chrono::DateTime::parse_from_rfc3339(text.trim())
-                .ok()
-                .map(|date| date.timestamp());
-        }
-        let number = value.as_i64()?;
-        Some(if number > 100_000_000_000 {
-            number / 1000
-        } else {
-            number
-        })
-    })
+    EXPIRY_KEYS
+        .iter()
+        .find_map(|key| token.get(*key).and_then(super::timestamp_ms))
+}
+/// When the access token expires (Unix seconds).
+pub(crate) fn expiry(document: &Value) -> Option<i64> {
+    expiry_ms(document).map(super::seconds)
 }
 /// The email a document names, if any.
 pub(crate) fn email(document: &Value) -> Option<String> {
@@ -117,6 +111,45 @@ pub(crate) fn email(document: &Value) -> Option<String> {
     .map(str::trim)
     .filter(|email| email.contains('@'))
     .map(str::to_owned)
+}
+/// The Google account a document names: its own id, else its ID token's
+/// subject.
+pub(crate) fn account_id(document: &Value) -> Option<String> {
+    ["google_id", "account_id", "accountId", "googleId"]
+        .iter()
+        .find_map(|key| super::non_empty(document.get(*key).and_then(Value::as_str)))
+        .or_else(|| {
+            let id_token = document.get("id_token").and_then(Value::as_str)?;
+            let claims = super::codex::decode_jwt_payload(id_token).ok()?;
+            super::non_empty(claims.get("sub").and_then(Value::as_str))
+        })
+}
+/// The Credential an Antigravity Login grants: its token's tokens and
+/// expiry, and the account the document names, else the one `identity`
+/// knows it by. One that names no account at all is refused: omp's
+/// `antigravity-cli` keeps each account apart by its email or id.
+pub(crate) fn credential(
+    login: &Value,
+    identity: &super::Identity,
+) -> Result<super::OAuthCredential> {
+    let access = access_token(login).ok_or("Missing access token")?;
+    let refresh = refresh_token(login).ok_or("Missing refresh token")?;
+    let fallback = |value: &Option<String>| super::non_empty(value.as_deref());
+    let email = email(login).or_else(|| fallback(&identity.email));
+    let account_id = account_id(login).or_else(|| fallback(&identity.account_id));
+    if email.is_none() && account_id.is_none() {
+        return Err("Missing Antigravity account identity".into());
+    }
+    Ok(super::OAuthCredential {
+        access,
+        refresh,
+        expires_ms: super::credential_expiry(expiry_ms(login)),
+        account_id,
+        org_id: None,
+        email,
+        org_name: None,
+        scope: None,
+    })
 }
 /// Whether two documents are the same login: the same refresh token.
 pub(crate) fn same_login(a: &Value, b: &Value) -> bool {
@@ -150,7 +183,10 @@ pub(crate) fn apply_renewal(
         .unwrap_or("expiry");
     // A number stays a number of the same unit; otherwise RFC 3339 in UTC.
     let value = match token.get(expiry_key) {
-        Some(Value::Number(n)) if n.as_i64().is_some_and(|n| n > 100_000_000_000) => {
+        Some(Value::Number(n))
+            if n.as_f64()
+                .is_some_and(|n| n >= super::MILLISECONDS_FROM as f64) =>
+        {
             Value::from(expires_at * 1000)
         }
         Some(Value::Number(_)) => Value::from(expires_at),
@@ -270,6 +306,101 @@ mod tests {
         assert!(signed_in(&json!({"access_token": "a"}), 0).is_err());
         let unnamed = signed_in(&json!({"access_token": "a", "refresh_token": "r"}), 0).unwrap();
         assert!(unnamed.get("id_token_email").is_none());
+    }
+
+    #[test]
+    fn login_and_identity_give_the_credential() {
+        use super::super::{Identity, OAuthCredential};
+        let stored = Identity {
+            account_id: Some("google-stored".into()),
+            email: Some("Stored@Gmail.com".into()),
+            ..Identity::default()
+        };
+        let expected =
+            |expires_ms: i64, account: Option<&str>, email: Option<&str>| OAuthCredential {
+                access: "a".into(),
+                refresh: "r".into(),
+                expires_ms,
+                account_id: account.map(Into::into),
+                email: email.map(Into::into),
+                ..OAuthCredential::default()
+            };
+        let token =
+            |expiry: Value| json!({"access_token": "a", "refresh_token": "r", "expiry": expiry});
+        let id_token = format!("h.{}.s", URL_SAFE_NO_PAD.encode(r#"{"sub":"google-sub"}"#));
+        for (name, login, identity, credential_expected) in [
+            (
+                "the document's own id and email, kept as spelled, over the stored ones",
+                json!({"token": token(json!("2026-07-12T10:00:00Z")), "id_token_email": "Alice@Gmail.com", "google_id": "google-doc"}),
+                stored.clone(),
+                expected(
+                    1_783_850_400_000,
+                    Some("google-doc"),
+                    Some("Alice@Gmail.com"),
+                ),
+            ),
+            (
+                "the ID token's subject when the document names no id",
+                json!({"token": token(json!(1_783_850_400)), "id_token": id_token}),
+                stored.clone(),
+                expected(
+                    1_783_850_400_000,
+                    Some("google-sub"),
+                    Some("Stored@Gmail.com"),
+                ),
+            ),
+            (
+                "the stored id and email when the document names neither",
+                json!({"accessToken": "a", "refreshToken": "r", "expiresAt": 1_783_850_400_250_i64}),
+                stored.clone(),
+                expected(
+                    1_783_850_400_250,
+                    Some("google-stored"),
+                    Some("Stored@Gmail.com"),
+                ),
+            ),
+            (
+                "an email alone, and a fractional expiry in seconds",
+                json!({"token": token(json!(1_783_850_400.5)), "email": "bob@gmail.com"}),
+                Identity::default(),
+                expected(1_783_850_400_500, None, Some("bob@gmail.com")),
+            ),
+        ] {
+            assert_eq!(
+                credential(&login, &identity),
+                Ok(credential_expected),
+                "{name}"
+            );
+        }
+        for (login, error) in [
+            (
+                json!({"token": token(json!(1))}),
+                "Missing Antigravity account identity",
+            ),
+            (
+                json!({"token": {"refresh_token": "r"}, "email": "a@b.c"}),
+                "Missing access token",
+            ),
+            (
+                json!({"token": {"access_token": "a"}, "email": "a@b.c"}),
+                "Missing refresh token",
+            ),
+        ] {
+            assert_eq!(
+                credential(&login, &Identity::default()).unwrap_err(),
+                error,
+                "{login}"
+            );
+        }
+        // Seconds below 1e11, milliseconds from it.
+        assert_eq!(
+            expiry(&json!({"expiry": 99_999_999_999_i64})),
+            Some(99_999_999_999)
+        );
+        assert_eq!(
+            expiry(&json!({"expiry": 100_000_000_000_i64})),
+            Some(100_000_000)
+        );
     }
 
     #[test]
