@@ -15,6 +15,7 @@ use super::{Result, Store};
 use crate::{
     application::{Application, SwitchExecution},
     codex_config::Definition,
+    env_bridge::{self, Bridge, Expect},
     pool::Pool,
     sub2api::{self, Account, Member},
 };
@@ -184,7 +185,7 @@ pub(super) fn api_key_mode(path: &Path) -> bool {
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Left {
     settings: Option<Option<String>>,
-    env: Option<(PathBuf, Option<String>)>,
+    env: env_bridge::Changes,
 }
 /// Puts agy back on its login: `modelProvider` as it was before a provider
 /// set it, else none, and `.env` without Copool's block. Forgets the
@@ -197,16 +198,8 @@ pub(super) fn leave_api_key(path: &Path, store: &mut Store) -> Result<Left> {
     let record = store.settings_record.take();
     store.settings_provider = None;
     let settings = leave_settings(path, record, applied)?;
-    let env = env_path(path);
-    let env = match read_text(&env) {
-        Ok(Some(text)) if has_block(&text) => {
-            let left = without_block(&text);
-            put_text(&env, (!left.trim().is_empty()).then_some(&*left))
-                .ok()
-                .map(|()| (env, Some(text)))
-        }
-        _ => None,
-    };
+    // A block Copool cannot take out is left for the next switch to rewrite.
+    let env = BRIDGE.remove(&env_path(path)).unwrap_or_default();
     Ok(Left { settings, env })
 }
 fn leave_settings(
@@ -244,9 +237,7 @@ pub(super) fn restore_settings(path: &Path, left: Left) {
     if let Some(previous) = left.settings {
         let _ = put_text(path, previous.as_deref());
     }
-    if let Some((env, previous)) = left.env {
-        let _ = put_text(&env, previous.as_deref());
-    }
+    left.env.undo();
 }
 
 /// Gemini's `.env`, two levels above agy's settings: `~/.gemini/.env`.
@@ -259,144 +250,27 @@ pub(super) fn env_path(settings: &Path) -> PathBuf {
 }
 /// Copool's block in `.env`: the user's own lines above it stay, and the
 /// last assignment wins, to a shell and to dotenv alike.
-const BLOCK_START: &str = "# >>> Copool: agy's Sub2api provider (rewritten on each switch) >>>";
-const BLOCK_END: &str = "# <<< Copool <<<";
-fn has_block(text: &str) -> bool {
-    text.lines().any(|line| line.trim_end() == BLOCK_START)
-}
-/// The text without Copool's block and the blank line `with_block` put
-/// before it, its other lines as they were.
-fn without_block(text: &str) -> String {
-    let mut inside = false;
-    let mut kept: Vec<&str> = Vec::new();
-    for line in text.split_inclusive('\n') {
-        let trimmed = line.trim_end();
-        if trimmed == BLOCK_START {
-            inside = true;
-            if kept.last().is_some_and(|l| l.trim().is_empty()) {
-                kept.pop();
-            }
-        }
-        if !inside {
-            kept.push(line);
-        }
-        if trimmed == BLOCK_END {
-            inside = false;
-        }
-    }
-    kept.concat()
-}
-/// `.env` with Copool's block at its end, assigning agy's key from the
-/// provider's variable and its gateway, in the file's newlines.
-fn with_block(text: Option<&str>, variable: &str, gateway: &str) -> Result<String> {
-    let mut lines = vec![BLOCK_START.to_owned()];
+pub(super) const BRIDGE: Bridge = Bridge {
+    block_start: "# >>> Copool: agy's Sub2api provider (rewritten on each switch) >>>",
+    rc_comment: "# Copool: agy's Sub2api key and gateway, from Gemini's .env.",
+    rc_override: "COPOOL_ANTIGRAVITY_SHELL_RC",
+};
+/// The block's lines: agy's key from the provider's variable, expanded
+/// where the `.env` is loaded, after the user's own exports, and its
+/// gateway. `GEMINI_API_KEY` itself is the user's to export.
+fn bridge_lines(variable: &str, gateway: &str) -> Result<Vec<String>> {
     if !crate::proxy_integration::is_variable(variable) {
         return Err(API_KEY_VARIABLE_INVALID.into());
-    }
-    // Expanded where it is loaded, after the user's own exports;
-    // GEMINI_API_KEY itself is the user's to export.
-    if variable != API_KEY {
-        lines.push(format!("{API_KEY}=\"${{{variable}}}\""));
     }
     if !quotable(gateway) {
         return Err("Invalid Sub2api URL".into());
     }
+    let mut lines = Vec::new();
+    if variable != API_KEY {
+        lines.push(format!("{API_KEY}=\"${{{variable}}}\""));
+    }
     lines.push(format!("{BASE_URL}='{gateway}'"));
-    lines.push(BLOCK_END.to_owned());
-    let text = without_block(text.unwrap_or(""));
-    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
-    // A blank line sets the block off from the user's lines.
-    let separator = if text.is_empty() {
-        String::new()
-    } else if text.ends_with('\n') {
-        newline.to_owned()
-    } else {
-        newline.repeat(2)
-    };
-    Ok(format!("{text}{separator}{}{newline}", lines.join(newline)))
-}
-
-/// The lines a shell's startup file loads Gemini's `.env` with, exporting
-/// what it sets; zsh and bash both read them. Not when Copool asks what the
-/// user exports (`OWN_EXPORTS_ONLY`): a key assigned there from another
-/// variable is not a key the user exported under its name.
-fn rc_lines(env: &Path) -> Result<String> {
-    // Absolute: a relative one would load a `.env` wherever a shell starts.
-    let env = env
-        .to_str()
-        .filter(|p| env.is_absolute() && !p.contains('\'') && !p.contains(char::is_control))
-        .ok_or("Invalid .env path")?;
-    let own = crate::proxy_integration::OWN_EXPORTS_ONLY;
-    Ok(format!(
-        "# Copool: agy's Sub2api key and gateway, from Gemini's .env.\n\
-         [ -z \"${{{own}:-}}\" ] && [ -f '{env}' ] && {{ set -a; . '{env}'; set +a; }}\n"
-    ))
-}
-/// What `load_env_in` appended to a startup file, for `unload_env_in`:
-/// the file's length before, none when it was absent, and the text added.
-#[derive(Debug, PartialEq)]
-struct Appended {
-    before: Option<u64>,
-    text: String,
-}
-/// Has the startup file load `.env` last, after anything else it exports,
-/// unless it already ends so; none when nothing changed.
-fn load_env_in(rc: &Path, env: &Path) -> Result<Option<Appended>> {
-    use std::io::Write;
-    let lines = rc_lines(env)?;
-    let text = read_text(rc)?;
-    if text.as_deref().is_some_and(|t| t.ends_with(&lines)) {
-        return Ok(None);
-    }
-    let before = text.as_ref().map(|t| t.len() as u64);
-    let separator = match text.as_deref() {
-        None | Some("") => "",
-        Some(t) if t.ends_with('\n') => "\n",
-        Some(_) => "\n\n",
-    };
-    let text = format!("{separator}{lines}");
-    // Appended in place: the file keeps its mode and any link to it.
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(rc)
-        .and_then(|mut file| file.write_all(text.as_bytes()))
-        .map_err(|e| e.to_string())?;
-    Ok(Some(Appended { before, text }))
-}
-/// Takes back what `load_env_in` appended, while the file still ends with
-/// it as it was left: an edit made since, by the user or another program,
-/// stays whole.
-fn unload_env_in(rc: &Path, appended: &Appended) {
-    let Ok(Some(now)) = read_text(rc) else {
-        return;
-    };
-    let before = appended.before.unwrap_or(0);
-    if now.len() as u64 != before + appended.text.len() as u64 || !now.ends_with(&appended.text) {
-        return;
-    }
-    let _ = match appended.before {
-        None => std::fs::remove_file(rc),
-        Some(len) => std::fs::OpenOptions::new()
-            .write(true)
-            .open(rc)
-            .and_then(|file| file.set_len(len)),
-    };
-}
-/// What a provider's switch changed outside agy's settings, to take back
-/// when it fails.
-struct Changes {
-    env: PathBuf,
-    env_before: Option<String>,
-    rc: Option<(PathBuf, Appended)>,
-}
-impl Changes {
-    fn undo(&self) {
-        if let Some((rc, appended)) = &self.rc {
-            unload_env_in(rc, appended);
-        }
-        let _ = put_text(&self.env, self.env_before.as_deref());
-    }
+    Ok(lines)
 }
 
 impl Application {
@@ -553,26 +427,7 @@ impl Application {
     /// the shell may take seconds.
     async fn antigravity_exported(&self, names: &[&str], now: bool) -> Result<Vec<Option<String>>> {
         let environment = self.antigravity.environment.read().unwrap().clone();
-        let names: Vec<String> = names.iter().map(|&name| name.to_owned()).collect();
-        tokio::task::spawn_blocking(move || {
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
-            let mut values = environment(&names, now);
-            values.resize(names.len(), None);
-            values
-        })
-        .await
-        .map_err(|e| e.to_string())
-    }
-    /// Whether agy started from a terminal opened now has the gateway, and
-    /// the variable's value as its key.
-    async fn antigravity_env_loaded(&self, variable: &str, gateway: &str) -> Result<bool> {
-        let values = self
-            .antigravity_exported(&[BASE_URL, API_KEY, variable], true)
-            .await?;
-        let url = values[0]
-            .as_deref()
-            .map(|url| url.trim().trim_end_matches('/'));
-        Ok(url == Some(gateway) && values[1].is_some() && values[1] == values[2])
+        env_bridge::exported(environment, names, now).await
     }
     /// Assigns agy's key and gateway in Copool's block of Gemini's `.env`,
     /// and has the shell's startup file load it when a new shell does not
@@ -582,37 +437,22 @@ impl Application {
         settings: &Path,
         variable: &str,
         gateway: &str,
-    ) -> Result<Changes> {
-        let env = env_path(settings);
-        let env_before = read_text(&env)?;
-        put_text(
-            &env,
-            Some(&with_block(env_before.as_deref(), variable, gateway)?),
-        )?;
-        let mut changes = Changes {
-            env,
-            env_before,
-            rc: None,
-        };
-        let mut loaded = self.antigravity_env_loaded(variable, gateway).await;
-        if let (Ok(false), Some(rc)) = (&loaded, self.antigravity_shell_rc()) {
-            loaded = match load_env_in(&rc, &changes.env) {
-                Ok(Some(before)) => {
-                    changes.rc = Some((rc, before));
-                    self.antigravity_env_loaded(variable, gateway).await
-                }
-                // It loads the file last already: something else differs.
-                Ok(None) => Ok(false),
-                Err(error) => Err(error),
-            };
-        }
-        match loaded {
-            Ok(true) => Ok(changes),
-            other => {
-                changes.undo();
-                Err(other.err().unwrap_or_else(|| ENV_NOT_LOADED.into()))
-            }
-        }
+    ) -> Result<env_bridge::Changes> {
+        let lines = bridge_lines(variable, gateway)?;
+        let environment = self.antigravity.environment.read().unwrap().clone();
+        BRIDGE
+            .put(
+                &env_path(settings),
+                &lines,
+                self.antigravity_shell_rc(),
+                environment,
+                &[
+                    Expect::Address(BASE_URL, gateway),
+                    Expect::Same(API_KEY, variable),
+                ],
+                ENV_NOT_LOADED,
+            )
+            .await
     }
     /// Puts agy on the provider's gateway: its key and gateway in Gemini's
     /// `.env`, and `"modelProvider": "gemini"` in agy's settings, recording
@@ -691,6 +531,14 @@ impl Application {
 mod tests {
     use super::*;
 
+    const BLOCK_START: &str = BRIDGE.block_start;
+    const BLOCK_END: &str = "# <<< Copool <<<";
+    /// `.env` with Copool's block for the variable and gateway, as a switch
+    /// writes it.
+    fn with_block(text: Option<&str>, variable: &str, gateway: &str) -> Result<String> {
+        Ok(BRIDGE.with_block(text, &bridge_lines(variable, gateway)?))
+    }
+
     fn record(model_provider: Option<Value>) -> Store {
         Store {
             settings_record: Some(SettingsRecord { model_provider }),
@@ -712,7 +560,7 @@ mod tests {
                 let mut store = record(None);
                 let previous = leave_api_key(&path, &mut store).unwrap();
                 assert_eq!(previous.settings, Some(Some(applied.clone())));
-                assert_eq!(previous.env, None);
+                assert_eq!(previous.env, env_bridge::Changes::default());
                 assert!(store.settings_record.is_none() && store.settings_provider.is_none());
                 let left = std::fs::read_to_string(&path).unwrap();
                 // The format stays: its newlines, mark and key order.
@@ -844,17 +692,6 @@ mod tests {
             block(Some(&applied), API_KEY),
             format!("{own}\n{BLOCK_START}\nGOOGLE_GEMINI_BASE_URL='{url}'\n{BLOCK_END}\n")
         );
-        // Removed with its blank line; a blank line of the user's stays.
-        assert_eq!(without_block(&applied), own);
-        let spaced = format!("{own}\n");
-        assert_eq!(without_block(&block(Some(&spaced), "RELAY_KEY")), spaced);
-        // A `.env` of Copool's block alone starts with it.
-        assert!(block(None, "RELAY_KEY").starts_with(BLOCK_START));
-        // The file's newlines, after a last line without one.
-        assert_eq!(
-            block(Some("A=1\r\nB=2"), "RELAY_KEY"),
-            format!("A=1\r\nB=2\r\n\r\n{BLOCK_START}\r\nGEMINI_API_KEY=\"${{RELAY_KEY}}\"\r\nGOOGLE_GEMINI_BASE_URL='{url}'\r\n{BLOCK_END}\r\n")
-        );
         // Only a variable's name, never a key, and no address to escape.
         for invalid in ["sk-1", "1KEY", "A B", "${A}", ""] {
             assert_eq!(
@@ -887,83 +724,11 @@ mod tests {
     }
 
     #[test]
-    fn a_startup_file_loads_env_last_once_and_is_put_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let (rc, env) = (dir.path().join("zshrc"), dir.path().join(".env"));
-        let lines = rc_lines(&env).unwrap();
-        // Absent: created, then removed.
-        let before = load_env_in(&rc, &env).unwrap().unwrap();
-        assert_eq!(std::fs::read_to_string(&rc).unwrap(), lines);
-        assert_eq!(load_env_in(&rc, &env).unwrap(), None);
-        unload_env_in(&rc, &before);
-        assert!(!rc.exists());
-        for (text, separator) in [("", ""), ("a=1\n", "\n"), ("a=1", "\n\n")] {
-            fs_write(&rc, text);
-            let before = load_env_in(&rc, &env).unwrap().unwrap();
-            assert_eq!(
-                std::fs::read_to_string(&rc).unwrap(),
-                format!("{text}{separator}{lines}")
-            );
-            unload_env_in(&rc, &before);
-            assert_eq!(std::fs::read_to_string(&rc).unwrap(), text);
-        }
-        // Edited since, or created by another, it is left as it is now.
-        for text in [None, Some("a=1\n")] {
-            match text {
-                Some(text) => fs_write(&rc, text),
-                None => {
-                    let _ = std::fs::remove_file(&rc);
-                }
-            }
-            let appended = load_env_in(&rc, &env).unwrap().unwrap();
-            let mut edited = std::fs::read_to_string(&rc).unwrap();
-            edited.push_str("export MINE=1\n");
-            fs_write(&rc, &edited);
-            unload_env_in(&rc, &appended);
-            assert_eq!(std::fs::read_to_string(&rc).unwrap(), edited);
-        }
-        // Loaded earlier but exported over since: loaded last again.
-        fs_write(&rc, &format!("{lines}export GOOGLE_GEMINI_BASE_URL=x\n"));
-        assert!(load_env_in(&rc, &env).unwrap().is_some());
-        assert!(std::fs::read_to_string(&rc).unwrap().ends_with(&lines));
+    fn geminis_env_is_two_levels_above_agys_settings() {
         assert_eq!(
             env_path(Path::new("/h/.gemini/antigravity-cli/settings.json")),
             Path::new("/h/.gemini/.env")
         );
-        // Never a path a shell would take anywhere else, or break the line.
-        for env in [".env", "/h/it's/.env", "/h/a\rb/.env", "/h/a\nb/.env"] {
-            assert!(rc_lines(Path::new(env)).is_err(), "{env:?}");
-        }
-    }
-
-    /// The line loads `.env`, with an alias of another variable for agy's
-    /// key, in a shell started for the user, but not in one asked what the
-    /// user exports.
-    #[cfg(unix)]
-    #[test]
-    fn the_startup_line_loads_env_except_when_asked_for_the_users_own_exports() {
-        let dir = tempfile::tempdir().unwrap();
-        let env = dir.path().join(".env");
-        fs_write(&env, &with_block(None, "RELAY_A", "https://a").unwrap());
-        let run = |own_only: bool| {
-            let mut shell = std::process::Command::new("/bin/sh");
-            shell
-                .arg("-c")
-                .arg(format!(
-                    "{}printf %s \"$GEMINI_API_KEY\"",
-                    rc_lines(&env).unwrap()
-                ))
-                .env("RELAY_A", "key-a")
-                .env_remove("GEMINI_API_KEY");
-            if own_only {
-                shell.env(crate::proxy_integration::OWN_EXPORTS_ONLY, "1");
-            } else {
-                shell.env_remove(crate::proxy_integration::OWN_EXPORTS_ONLY);
-            }
-            String::from_utf8(shell.output().unwrap().stdout).unwrap()
-        };
-        assert_eq!(run(false), "key-a");
-        assert_eq!(run(true), "");
     }
 
     fn fs_write(path: &Path, text: &str) {

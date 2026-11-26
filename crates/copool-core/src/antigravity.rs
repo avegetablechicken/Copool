@@ -28,10 +28,10 @@ mod sub2api;
 
 pub(crate) use api::{sign_in_url, sub2api_usage, ultra_by_id, Network};
 
-/// Environment variables as agy would have them; with `now`, as agy started
-/// from a terminal opened now would, all from one shell, after Copool
-/// changed what it loads.
-type Environment = Arc<dyn Fn(&[&str], bool) -> Vec<Option<String>> + Send + Sync>;
+// Environment variables as agy would have them; with `now`, as agy started
+// from a terminal opened now would, all from one shell, after Copool
+// changed what it loads.
+use crate::env_bridge::Environment;
 
 /// A Google sign-in's login document, from its code.
 pub(crate) async fn sign_in(code: &str, verifier: &str, redirect: &str) -> Result<Value> {
@@ -107,7 +107,7 @@ impl Default for State {
                 vec![None; names.len()]
             })),
             #[cfg(not(test))]
-            shell_rc: std::sync::RwLock::new(shell_rc()),
+            shell_rc: std::sync::RwLock::new(sub2api::BRIDGE.shell_rc()),
             #[cfg(test)]
             shell_rc: Default::default(),
             lock: Default::default(),
@@ -126,30 +126,6 @@ fn settings_path() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".gemini/antigravity-cli/settings.json")))
         .unwrap_or_default()
-}
-/// The interactive startup file of the user's `$SHELL`, zsh's or bash's;
-/// none for another shell, or where Copool asks no shell. A smoke test
-/// names its own in `COPOOL_ANTIGRAVITY_SHELL_RC`.
-#[cfg(not(test))]
-fn shell_rc() -> Option<PathBuf> {
-    if let Some(rc) = std::env::var_os("COPOOL_ANTIGRAVITY_SHELL_RC").filter(|v| !v.is_empty()) {
-        return Some(rc.into());
-    }
-    if !cfg!(unix) {
-        return None;
-    }
-    let shell = PathBuf::from(std::env::var_os("SHELL")?);
-    let home = dirs::home_dir()?;
-    match shell.file_name()?.to_str()? {
-        "zsh" => Some(
-            std::env::var_os("ZDOTDIR")
-                .filter(|v| !v.is_empty())
-                .map_or(home, PathBuf::from)
-                .join(".zshrc"),
-        ),
-        "bash" => Some(home.join(".bashrc")),
-        _ => None,
-    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

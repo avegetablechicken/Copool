@@ -21,10 +21,10 @@ mod sub2api;
 
 pub(crate) use api::{sign_in_url, sub2api_usage, Network};
 
-/// Variables as Grok Build started from a terminal has them: with `now`, as a
-/// new shell exports them (including `~/.grok/.env`); otherwise the user's own
-/// exports alone (`OWN_EXPORTS_ONLY`).
-type Environment = Arc<dyn Fn(&[&str], bool) -> Vec<Option<String>> + Send + Sync>;
+// Variables as Grok Build started from a terminal has them: with `now`, as a
+// new shell exports them (including `~/.grok/.env`); otherwise the user's own
+// exports alone (`OWN_EXPORTS_ONLY`).
+use crate::env_bridge::Environment;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -89,7 +89,7 @@ impl Default for State {
                 vec![None; names.len()]
             })),
             #[cfg(not(test))]
-            shell_rc: std::sync::RwLock::new(shell_rc()),
+            shell_rc: std::sync::RwLock::new(sub2api::BRIDGE.shell_rc()),
             #[cfg(test)]
             shell_rc: Default::default(),
             lock: Default::default(),
@@ -110,30 +110,6 @@ fn auth_file_path() -> PathBuf {
         .or_else(|| dirs::home_dir().map(|home| home.join(".grok")))
         .unwrap_or_default()
         .join("auth.json")
-}
-/// The interactive startup file of the user's `$SHELL`, zsh's or bash's;
-/// none for another shell, or where Copool asks no shell. A smoke test
-/// names its own in `COPOOL_GROK_SHELL_RC`.
-#[cfg(not(test))]
-fn shell_rc() -> Option<PathBuf> {
-    if let Some(rc) = std::env::var_os("COPOOL_GROK_SHELL_RC").filter(|v| !v.is_empty()) {
-        return Some(rc.into());
-    }
-    if !cfg!(unix) {
-        return None;
-    }
-    let shell = PathBuf::from(std::env::var_os("SHELL")?);
-    let home = dirs::home_dir()?;
-    match shell.file_name()?.to_str()? {
-        "zsh" => Some(
-            std::env::var_os("ZDOTDIR")
-                .filter(|v| !v.is_empty())
-                .map_or(home, PathBuf::from)
-                .join(".zshrc"),
-        ),
-        "bash" => Some(home.join(".bashrc")),
-        _ => None,
-    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

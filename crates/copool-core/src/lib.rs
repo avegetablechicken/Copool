@@ -83,6 +83,8 @@ pub mod claude;
 
 mod antigravity;
 
+mod env_bridge;
+
 mod grok;
 
 mod greetings;

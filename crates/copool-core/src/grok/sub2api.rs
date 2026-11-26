@@ -13,6 +13,7 @@ use super::{api, Result, Store};
 use crate::{
     application::{Application, SwitchExecution},
     codex_config::Definition,
+    env_bridge::{self, Bridge, Expect},
     pool::Pool,
     sub2api::{self, Account, Member},
 };
@@ -195,154 +196,23 @@ fn put_value(table: &mut Table, key: &str, text: Option<&str>) {
 pub(super) fn env_path(config: &Path) -> PathBuf {
     config.with_file_name(".env")
 }
-/// Copool's block in `~/.grok/.env`: bridges a provider's custom variable to
-/// `XAI_API_KEY` for Grok Build's session-wide API-key mode.
-const BLOCK_START: &str =
-    "# >>> Copool: Grok Build's Sub2api provider (rewritten on each switch) >>>";
-const BLOCK_END: &str = "# <<< Copool <<<";
-fn has_block(text: &str) -> bool {
-    text.lines().any(|line| line.trim_end() == BLOCK_START)
+/// Copool's Env bridge for Grok Build: its block in `~/.grok/.env` bridges
+/// a provider's custom variable to `XAI_API_KEY` for Grok Build's
+/// session-wide API-key mode, loaded from the shell's startup file.
+pub(super) const BRIDGE: Bridge = Bridge {
+    block_start: "# >>> Copool: Grok Build's Sub2api provider (rewritten on each switch) >>>",
+    rc_comment: "# Copool: Grok Build's Sub2api key, from Grok's .env.",
+    rc_override: "COPOOL_GROK_SHELL_RC",
+};
+/// The block's line assigning `XAI_API_KEY` from the provider's variable.
+fn bridge_line(variable: &str) -> String {
+    format!("{XAI_KEY}=\"${{{variable}}}\"")
 }
 pub(super) fn env_has_block(text: Option<&str>) -> bool {
-    text.is_some_and(has_block)
+    BRIDGE.has_block(text)
 }
 pub(super) fn env_bridges_variable(text: Option<&str>, variable: &str) -> bool {
-    let Some(text) = text else {
-        return false;
-    };
-    let expected = format!("{XAI_KEY}=\"${{{variable}}}\"");
-    let mut inside = false;
-    for line in text.lines() {
-        let trimmed = line.trim_end();
-        if trimmed == BLOCK_START {
-            inside = true;
-            continue;
-        }
-        if trimmed == BLOCK_END {
-            inside = false;
-            continue;
-        }
-        if inside && trimmed == expected {
-            return true;
-        }
-    }
-    false
-}
-/// The text without Copool's block and the blank line `with_block` put
-/// before it, its other lines as they were.
-fn without_block(text: &str) -> String {
-    let mut inside = false;
-    let mut kept: Vec<&str> = Vec::new();
-    for line in text.split_inclusive('\n') {
-        let trimmed = line.trim_end();
-        if trimmed == BLOCK_START {
-            inside = true;
-            if kept.last().is_some_and(|l| l.trim().is_empty()) {
-                kept.pop();
-            }
-        }
-        if !inside {
-            kept.push(line);
-        }
-        if trimmed == BLOCK_END {
-            inside = false;
-        }
-    }
-    kept.concat()
-}
-/// `.env` with Copool's block at its end, assigning `XAI_API_KEY` from the
-/// provider's variable, in the file's newlines.
-fn with_block(text: Option<&str>, variable: &str) -> Result<String> {
-    if !crate::proxy_integration::is_variable(variable) {
-        return Err(API_KEY_VARIABLE_INVALID.into());
-    }
-    let lines = [
-        BLOCK_START.to_owned(),
-        format!("{XAI_KEY}=\"${{{variable}}}\""),
-        BLOCK_END.to_owned(),
-    ];
-    let text = without_block(text.unwrap_or(""));
-    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
-    let separator = if text.is_empty() {
-        String::new()
-    } else if text.ends_with('\n') {
-        newline.to_owned()
-    } else {
-        newline.repeat(2)
-    };
-    Ok(format!("{text}{separator}{}{newline}", lines.join(newline)))
-}
-/// The lines a shell's startup file loads Grok's `.env` with, exporting
-/// `XAI_API_KEY` from the provider's variable; skipped under `OWN_EXPORTS_ONLY`.
-fn rc_lines(env: &Path) -> Result<String> {
-    let env = env
-        .to_str()
-        .filter(|p| env.is_absolute() && !p.contains('\'') && !p.contains(char::is_control))
-        .ok_or("Invalid .env path")?;
-    let own = crate::proxy_integration::OWN_EXPORTS_ONLY;
-    Ok(format!(
-        "# Copool: Grok Build's Sub2api key, from Grok's .env.\n\
-         [ -z \"${{{own}:-}}\" ] && [ -f '{env}' ] && {{ set -a; . '{env}'; set +a; }}\n"
-    ))
-}
-#[derive(Debug, PartialEq)]
-struct Appended {
-    before: Option<u64>,
-    text: String,
-}
-fn load_env_in(rc: &Path, env: &Path) -> Result<Option<Appended>> {
-    use std::io::Write;
-    let lines = rc_lines(env)?;
-    let text = read_text(rc)?;
-    if text.as_deref().is_some_and(|t| t.ends_with(&lines)) {
-        return Ok(None);
-    }
-    let before = text.as_ref().map(|t| t.len() as u64);
-    let separator = match text.as_deref() {
-        None | Some("") => "",
-        Some(t) if t.ends_with('\n') => "\n",
-        Some(_) => "\n\n",
-    };
-    let text = format!("{separator}{lines}");
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(rc)
-        .and_then(|mut file| file.write_all(text.as_bytes()))
-        .map_err(|e| e.to_string())?;
-    Ok(Some(Appended { before, text }))
-}
-fn unload_env_in(rc: &Path, appended: &Appended) {
-    let Ok(Some(now)) = read_text(rc) else {
-        return;
-    };
-    let before = appended.before.unwrap_or(0);
-    if now.len() as u64 != before + appended.text.len() as u64 || !now.ends_with(&appended.text) {
-        return;
-    }
-    let _ = match appended.before {
-        None => std::fs::remove_file(rc),
-        Some(len) => std::fs::OpenOptions::new()
-            .write(true)
-            .open(rc)
-            .and_then(|file| file.set_len(len)),
-    };
-}
-/// What a provider's switch changed outside `config.toml`, to take back
-/// when a later step fails.
-struct EnvChanges {
-    env: Option<(PathBuf, Option<String>)>,
-    rc: Option<(PathBuf, Appended)>,
-}
-impl EnvChanges {
-    fn undo(&self) {
-        if let Some((rc, appended)) = &self.rc {
-            unload_env_in(rc, appended);
-        }
-        if let Some((env, previous)) = &self.env {
-            let _ = put_text(env, previous.as_deref());
-        }
-    }
+    BRIDGE.block_has_line(text, &bridge_line(variable))
 }
 
 fn gateway_models(body: &Value) -> Vec<String> {
@@ -530,7 +400,7 @@ pub(super) fn current_route<'a>(path: &Path, store: &'a Store) -> CurrentRoute<'
 /// What leaving the gateway changed, to be undone on a failed switch.
 pub(super) struct Left {
     text: Option<String>,
-    env: Option<(PathBuf, Option<String>)>,
+    env: env_bridge::Changes,
     record: Option<ConfigRecord>,
     provider: Option<String>,
 }
@@ -539,16 +409,8 @@ pub(super) struct Left {
 /// and the record is cleared.
 pub(super) fn leave_gateway(path: &Path, store: &mut Store) -> Result<Left> {
     let text = read_text(path)?;
-    let env = env_path(path);
-    let env_changed = match read_text(&env) {
-        Ok(Some(env_text)) if has_block(&env_text) => {
-            let left = without_block(&env_text);
-            put_text(&env, (!left.trim().is_empty()).then_some(&*left))
-                .ok()
-                .map(|()| (env, Some(env_text)))
-        }
-        _ => None,
-    };
+    // A block Copool cannot take out is left for the next switch to rewrite.
+    let env_changed = BRIDGE.remove(&env_path(path)).unwrap_or_default();
     let left = Left {
         text: text.clone(),
         env: env_changed,
@@ -575,9 +437,7 @@ pub(super) fn restore_left(path: &Path, store: &mut Store, left: Left) {
     if left.record.is_some() {
         let _ = put_text(path, left.text.as_deref());
     }
-    if let Some((env, previous)) = left.env {
-        let _ = put_text(&env, previous.as_deref());
-    }
+    left.env.undo();
     store.config_record = left.record;
     store.config_provider = left.provider;
 }
@@ -728,65 +588,27 @@ impl Application {
     /// shell may take seconds.
     async fn grok_exported(&self, names: &[&str], now: bool) -> Result<Vec<Option<String>>> {
         let environment = self.grok.environment.read().unwrap().clone();
-        let names: Vec<String> = names.iter().map(|&name| name.to_owned()).collect();
-        tokio::task::spawn_blocking(move || {
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
-            let mut values = environment(&names, now);
-            values.resize(names.len(), None);
-            values
-        })
-        .await
-        .map_err(|e| e.to_string())
-    }
-    /// Whether a new shell exports `XAI_API_KEY` with the provider variable's
-    /// value.
-    async fn grok_env_loaded(&self, variable: &str) -> Result<bool> {
-        let values = self.grok_exported(&[XAI_KEY, variable], true).await?;
-        Ok(values[0].is_some() && values[0] == values[1])
+        env_bridge::exported(environment, names, now).await
     }
     /// Bridges a custom provider variable to `XAI_API_KEY` in `~/.grok/.env`
     /// (loading it from `~/.zshrc` or `~/.bashrc` when needed), or clears any
     /// previous bridge when the provider uses `XAI_API_KEY` directly.
-    async fn grok_put_env(&self, config: &Path, variable: &str) -> Result<EnvChanges> {
+    async fn grok_put_env(&self, config: &Path, variable: &str) -> Result<env_bridge::Changes> {
         let env = env_path(config);
-        let env_before = read_text(&env)?;
         if variable == XAI_KEY {
-            if env_before.as_deref().is_some_and(has_block) {
-                let left = without_block(env_before.as_deref().unwrap_or(""));
-                put_text(&env, (!left.trim().is_empty()).then_some(&*left))?;
-                return Ok(EnvChanges {
-                    env: Some((env, env_before)),
-                    rc: None,
-                });
-            }
-            return Ok(EnvChanges {
-                env: None,
-                rc: None,
-            });
+            return BRIDGE.remove(&env);
         }
-        put_text(&env, Some(&with_block(env_before.as_deref(), variable)?))?;
-        let mut changes = EnvChanges {
-            env: Some((env.clone(), env_before)),
-            rc: None,
-        };
-        let mut loaded = self.grok_env_loaded(variable).await;
-        if let (Ok(false), Some(rc)) = (&loaded, self.grok_shell_rc()) {
-            loaded = match load_env_in(&rc, &env) {
-                Ok(Some(before)) => {
-                    changes.rc = Some((rc, before));
-                    self.grok_env_loaded(variable).await
-                }
-                Ok(None) => Ok(false),
-                Err(error) => Err(error),
-            };
-        }
-        match loaded {
-            Ok(true) => Ok(changes),
-            other => {
-                changes.undo();
-                Err(other.err().unwrap_or_else(|| ENV_NOT_LOADED.into()))
-            }
-        }
+        let environment = self.grok.environment.read().unwrap().clone();
+        BRIDGE
+            .put(
+                &env,
+                &[bridge_line(variable)],
+                self.grok_shell_rc(),
+                environment,
+                &[Expect::Same(XAI_KEY, variable)],
+                ENV_NOT_LOADED,
+            )
+            .await
     }
     /// Puts Grok Build's session on the provider's gateway: sets
     /// `cli_chat_proxy_base_url` and `xai_api_base_url` and pins
@@ -919,6 +741,11 @@ impl Application {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `.env` with Copool's block bridging the variable, as a switch writes it.
+    fn with_block(text: Option<&str>, variable: &str) -> Result<String> {
+        Ok(BRIDGE.with_block(text, &[bridge_line(variable)]))
+    }
 
     #[test]
     fn the_gateway_is_the_root_with_v1_and_admin_is_the_sub2api_in_it() {
@@ -1155,24 +982,15 @@ mod tests {
     }
 
     #[test]
-    fn env_block_and_shell_rc_loader_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let env = dir.path().join(".env");
-        let rc = dir.path().join(".zshrc");
-        let existing = "FOO=bar\n";
-        let written = with_block(Some(existing), "GROK_SUB2API_API_KEY").unwrap();
+    fn the_block_bridges_the_providers_variable_to_xai_api_key() {
+        let written = with_block(Some("FOO=bar\n"), "GROK_SUB2API_API_KEY").unwrap();
+        assert!(written.contains("\nXAI_API_KEY=\"${GROK_SUB2API_API_KEY}\"\n"));
         assert!(env_bridges_variable(Some(&written), "GROK_SUB2API_API_KEY"));
         assert!(!env_bridges_variable(Some(&written), "OTHER_KEY"));
-        assert_eq!(without_block(&written), existing);
-
-        put_text(&rc, Some("export GROK_SUB2API_API_KEY=secret\n")).unwrap();
-        let appended = load_env_in(&rc, &env).unwrap().unwrap();
-        assert!(load_env_in(&rc, &env).unwrap().is_none());
-        unload_env_in(&rc, &appended);
-        assert_eq!(
-            read_text(&rc).unwrap().as_deref(),
-            Some("export GROK_SUB2API_API_KEY=secret\n")
-        );
+        assert!(!env_bridges_variable(
+            Some("XAI_API_KEY=\"${OTHER_KEY}\"\n"),
+            "OTHER_KEY"
+        ));
     }
 
     #[test]
