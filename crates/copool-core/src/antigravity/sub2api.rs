@@ -525,7 +525,7 @@ impl Application {
             admin_base: sub2api::admin_base(admin)?,
             definition: Definition {
                 id: p.name.clone(),
-                base_url: Some(format!("{}/antigravity", p.base_url)),
+                base_url: Some(gateway(&p)?),
                 wire_api: None,
                 env_key: Some(API_KEY.into()),
                 requires_openai_auth: None,
@@ -631,8 +631,13 @@ impl Application {
             .find(|p| p.id == member.key)
             .ok_or("Account not found")?;
         let variable = key_variable(&provider);
-        // A variable nothing exports would leave agy without a key.
-        if self.antigravity_exported(&[variable], false).await?[0].is_none() {
+        // A variable nothing exports, or exports blank, would leave agy
+        // without a key.
+        let exported = self.antigravity_exported(&[variable], false).await?;
+        if !exported[0]
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+        {
             return Err(API_KEY_MISSING.into());
         }
         let path = self.antigravity_settings_path();

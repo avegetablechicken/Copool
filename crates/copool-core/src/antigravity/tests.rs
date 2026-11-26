@@ -1390,14 +1390,15 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     assert_eq!(fs::read_to_string(&settings).unwrap(), original);
     let writes = h.live.writes();
 
-    // Without agy's key, or with a shell that has another gateway even after
-    // loading the `.env` last, nothing changes.
+    // Without agy's key, with a blank one, or with a shell that has another
+    // gateway even after loading the `.env` last, nothing changes.
     for (exported, error) in [
-        (false, sub2api::API_KEY_MISSING),
-        (true, sub2api::ENV_NOT_LOADED),
+        (None, sub2api::API_KEY_MISSING),
+        (Some("  "), sub2api::API_KEY_MISSING),
+        (Some("sk-profile"), sub2api::ENV_NOT_LOADED),
     ] {
-        if exported {
-            export(sub2api::API_KEY, "sk-profile");
+        if let Some(key) = exported {
+            export(sub2api::API_KEY, key);
         }
         assert_eq!(
             h.app
