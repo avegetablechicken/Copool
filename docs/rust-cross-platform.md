@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-26（删除 Swift 数据兼容）：不再读取原版 Swift 应用（以及更早的 Tauri 版本）写下的数据格式，早期 Rust 版本的数据迁移与远程节点使用的格式不变。删除的兼容：`settings.json` 不存在时从 `accounts.json` 内的 `settings` 对象读取设置，并用账号内联的代理补全 `accountProxyURLs`（合并存储）；把 `settings.json` 中 Sub2api 提供方的 `cachedAccounts` 移入 `accounts.json`，以及迁移时保留的明文密码；不带 `providers` 列表的单个 `sub2APIProvider`（现视为没有提供方，不再报错）；提供方的 `legacyAdminBaseURL`，以及据此按 `config.toml` 换成 provider id、把明文密码移入钥匙串的启动迁移（启动时只保留为早期 Rust 补写 `hasAPIToken` 标记，改名为 `mark_kept_tunnel_token`）；账号库的旧拼写 `current_selection` 与 `currentSelection.accountId`，以及账号的 `teamAlias`（团队名只取 `teamName`）。Codex 的本地 API 代理 key 此前已不再从 Swift 的旧位置搬迁（见上一条 Codex 记录）：只在旧位置保存过 key、从未有过 `api-proxy.key` 的用户会得到一个新 key。行为变化：全新安装启动时不再预先写出空的 `accounts.json` 与 `settings.json`，首次保存时才写。另删去不属于数据格式的遗留：部署时对 `src-tauri/proxyd/Cargo.toml` 的回退查找、共享源码中从未启用的 `desktop` 特性代码（旧 Tauri 版的 `AppHandle` 入口），以及 11 种语言中已无代码使用、仍写着 `src-tauri` 或 “Swift proxy” 的四条错误文案。daemon 可执行文件、远程单元与默认数据目录 `~/.codex-tools-proxyd` 沿用 daemon 本身的名称，未改。导入账号文件（`{"accounts":[…]}`）的入口保留，它对任何账号文件都适用，新增测试确认只导入各项的登录。删除了只测试 Swift 格式的移植测试。已用单元测试与 daemon 检查验证，未在运行的 app 中验证。
+
 2026-11-26（卡片进行中的任务）：每张卡片进行中的事情改由所在池的 `Accounts` 控制器（`desktop/ui/controllers.js`）一处持有：刷新、打招呼的两个阶段（已发送、已收到回复）及回复后直到 5 小时窗口出现为止的跟进刷新、立即续期及续期完成后短暂显示的标记、模型开关所选显示的池。卡片经 `cardState(id)` 读取，形状与 `card-view.js` 的 `ui(id)` 相同（其中原先的 `greeting` 字段并入 `hi === "sent"`）；`app.js` 不再保存这些全局状态，只根据结果显示提示。打招呼的结果为 `"started"`、`"not_started"`，卡片忙时为 `false`。行为变化：打招呼期间两次刷新之间只重新读取该卡片所在池的账号，不再顺带刷新代理状态与下次全量刷新时间（此前读取的是当前显示的池，打招呼期间切换池时读错池子）；打招呼结束后调用方照旧刷新整个视图。卡片翻面编辑也移入同一控制器：正在编辑哪张卡、翻转中的那一次（后一次翻转或 Escape 会取消它）、编辑草稿（代理及其错误与保存状态、问候计划、正在添加的时间、删除确认），以及读取问候计划、保存代理草稿与问候计划；`flipTarget` 等纯数据函数随之移入，`providerKey`、`proxyOwner` 移入 `presentation.js`。`app.js` 只保留翻转动画、键盘处理与卡片背面的绘制，切换池子或折叠列表时调用控制器结束编辑。打招呼、续期与编辑的测试改为以假的 `invoke` 与时钟直接测试控制器，不再切取 `app.js` 的这些源码（键盘处理与背面各区块的绘制仍按源码切取测试）。已用单元测试验证（前端测试在 CRLF 副本下也通过），未在运行的 app 中验证。
 
 2026-11-26（Codex 并入登录账号库）：分两步。其一，Codex 的本地 API 代理改为与 Claude、Antigravity 相同的做法：不再读写 `accounts.json`，候选账号由池子给出（Codex 使用官方 provider 且代理不只承载 API 时标出当前账号），上游拒绝的令牌由池子续期（`codex_renew_login`），续期后的登录写回存储与 `auth.json`；代理不再自行刷新用量（此前当前账号每 10 秒、全部账号约每 60 秒），由刷新计划统一安排；代理成功转发后的故障切换不变；删去 `sync_refreshed_auth` 与 Swift 时代代理 key 自 `accounts.json` 的搬迁。其二，Codex 的账号改存于 `codex-accounts.json`，经 `crates/copool-core/src/codex_pool.rs` 作为 `login_store` 的第三个适配器：Live login 为 `auth.json`（写入时保留其中的 `OPENAI_API_KEY`），账号按 principal 与工作区区分，登录的新旧按 `last_refresh` 判断；工作区停用由存储层记录（`standing`），删除已停用的账号时保留为已删除并记入工作区目录；工作区目录、Sub2api 提供方、浏览器授权导入、远程节点同步都改读新存储。首次启动时若新文件不存在，便把 `accounts.json` 的账号（含 `settings.json` 中各账号的代理、续期选择、等待首次请求、停用与删除状态、当前账号）、提供方与工作区目录复制过去，并以登录本身为准更新工作区、邮箱、套餐与团队名；`accounts.json` 原样保留，供降级后的旧版本读取（启动时也不再改写它，此前每次读取都会把账号代理移回设置）。不再写入 `currentSelection`、`version`、`usageStateUpdatedAt` 等只为 Swift 格式保留的字段，列出卡片时也不再重新解析登录并写回存储。行为变化：切换时只在 `auth.json` 是号池以外的登录时才备份到 `auth-before-switch.json`（此前每次都覆盖备份），写入失败时一并把 `config.toml` 切回原 provider；导入后若开启“导入后立即请求”，Codex 也与其他池一样立即刷新；Codex 也适用“读不到 Live login 时不续期正在使用的账号”；代理续期后的写回不再受“只承载 API”限制（refresh token 会轮换，不写回会让 Codex 的登录失效）；账号存储损坏时报错，不再静默备份后清空。共用测试 `login_store::suite` 也以 Codex 的 fixture 运行；新增迁移与工作区停用的测试。另：Claude、Antigravity 的代理在应用未共享时仍以 Codex 的数据目录为默认存储位置，本次未处理。已用单元测试验证，未在运行的 app 中验证。
@@ -203,7 +205,7 @@ python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（
 
 ## 已实现
 
-- 导入本机 Codex 登录、单个/批量认证 JSON、Swift/Rust 账号文件及 Refresh Token。
+- 导入本机 Codex 登录、单个/批量认证 JSON、账号文件（`{"accounts":[…]}`）及 Refresh Token。
 - 同一工作区下按登录主体区分账号；重复导入更新认证信息。
 - 账号名称和出站代理编辑、删除、切换，切换前备份原本机登录。
 - 五小时/每周用量刷新、额度显示、手动智能切换与定时自动切换。
@@ -235,11 +237,11 @@ Claude 池保存在数据目录的 `claude-accounts.json`；在 macOS 上（隔�
 
 可使用 `COPOOL_DATA_DIR` 指定独立账号库。Codex 认证文件遵循 `CODEX_HOME/auth.json` 或 `~/.codex/auth.json`；测试时可通过 `COPOOL_CODEX_AUTH_FILE` 指定独立认证文件，不必修改开发工具自身的环境目录。
 
-启动不会自动迁移或修改 Swift 数据。在“导入账号”中选择原版 `~/Library/Application Support/CodexToolsSwift/accounts.json`。导入逐项验证，整批验证成功后才写入；重复账号保留本地 ID。账号附加字段保留，但原版全局设置、Sub2api 缓存和工作区目录不会迁移，原文件不会修改。
+Copool 不读取原版 Swift 应用的数据目录、钥匙串条目与数据格式。“导入账号”可选择账号文件（`{"accounts":[…]}`，如早期版本的 `accounts.json` 或远程节点的快照），只导入每项的登录（`authJson`），名称、代理和其他字段不导入，原文件不会修改。导入逐项验证，整批验证成功后才写入；重复账号保留本地 ID。
 
-原版 `settings.json` 中独立保存的 `accountProxyURLs` 需要在新版本中逐账号配置。登录凭据保存在本地账号库，Unix 权限为 `0600`；不是系统钥匙串加密存储。Windows 使用当前用户数据目录及其 ACL，不额外宣称实现了独立凭据 ACL。
+登录凭据保存在本地账号库，Unix 权限为 `0600`；不是系统钥匙串加密存储。Windows 使用当前用户数据目录及其 ACL，不额外宣称实现了独立凭据 ACL。
 
-“切换账号”是唯一正常账号操作中会替换当前 Codex 登录文件的操作；上一份登录保存为 `auth-before-switch.json`。删除账号不删除当前 Codex 登录。损坏的账号文件会报错并保留原内容，不会自动重置为空。临时文件与目标文件位于同一目录，使用跨平台原子替换。
+“切换账号”是唯一正常账号操作中会替换当前 Codex 登录文件的操作；上一份登录保存为 `auth-before-switch.json`。删除账号不删除当前 Codex 登录。各池的账号文件损坏时报错并保留原内容，不会自动重置为空；远程节点上 daemon 的 `accounts.json` 损坏时，先备份为 `accounts.corrupt-<时间>-<id>.json`，再重置为空。临时文件与目标文件位于同一目录，使用跨平台原子替换。
 
 ### Claude 原生提供商切换
 
@@ -276,7 +278,7 @@ Claude 池保存在数据目录的 `claude-accounts.json`；在 macOS 上（隔�
 
 原版 Swift 测试在移除前已全部盘点：337 项以原测试名（`Suite.testName`）移植到 `crates/copool-core` 与 `desktop/tests`，13 项随 Coport 风格面板退役（542 点网格与 iOS 列数、用量圆环的圆点阈值、玻璃凹槽配色、工具栏用量显示切换——只在设置页切换）。工具栏、细进度条、折叠行悬停、公网访问模式与状态、远程服务器详情与日志由同一组展示模型渲染并通过对应的原版测试。用量窗口按 OpenQuota 的规则按时长识别：只显示 5h（18000 秒）与周额度（604800 秒），无时长的窗口按位置兜底，其他时长（如免费计划的 30 天）不显示；只有每周限额的账号 5h 显示“无数据 / 重置时间不可用”，不再借用每周或 Codex Spark 的窗口；排序时把没有 5h 限额视为 5h 无约束。用量回归测试 `crates/copool-core/src/usage_regression_tests.rs` 覆盖原版请求头、`/api/codex/usage` 的重置次数路径、默认官方地址及回环 `chatgpt_base_url`。
 
-核心测试使用临时目录和合成凭据，覆盖同工作区多主体、重复导入、批量失败回滚、损坏文件保护、Swift 附加字段、账号选择、文件替换与权限、代理鉴权/密钥轮换/停止以及原代理引擎的请求转换和 SSE 回归测试。
+核心测试使用临时目录和合成凭据，覆盖同工作区多主体、重复导入、批量失败回滚、损坏文件保护、账号选择、文件替换与权限、代理鉴权/密钥轮换/停止以及原代理引擎的请求转换和 SSE 回归测试。
 
 本机验证 macOS 编译、45 项核心测试及回环代理行为，并使用临时目录和合成账号检查原生窗口、展开/折叠卡片、代理页、设置页和 Retina 图标。Windows/Linux 原生构建需通过三平台 CI 或对应机器验证。未使用真实账号验证在线 OAuth、额度接口或上游付费请求，也未发布此版本。
 

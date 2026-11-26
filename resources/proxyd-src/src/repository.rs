@@ -1,4 +1,6 @@
-//! Shared account/settings transactions, including legacy Swift data migrations.
+//! Shared account/settings transactions: the account store and the settings
+//! beside it, which keeps each account's proxy and the Codex providers' cached
+//! accounts out of it.
 use crate::{models::AccountsStore, settings::Settings};
 use serde_json::{json, Value};
 use std::{
@@ -39,13 +41,7 @@ fn settings_value(account_path: &Path) -> Result<Value, String> {
         }
         return Ok(value);
     }
-    let mut value = serde_json::to_value(Settings::default()).map_err(|e| e.to_string())?;
-    if let Ok(legacy) = read(account_path) {
-        if let Some(settings) = legacy.get("settings").and_then(Value::as_object) {
-            value.as_object_mut().unwrap().extend(settings.clone());
-        }
-    }
-    Ok(value)
+    serde_json::to_value(Settings::default()).map_err(|e| e.to_string())
 }
 fn proxies(settings: &Value) -> Result<BTreeMap<String, String>, String> {
     settings
@@ -208,76 +204,17 @@ fn without_caches(settings: &Settings) -> Result<Value, String> {
 pub(crate) fn load_settings(path: &Path) -> Result<Settings, String> {
     let _guard = FILES.lock().map_err(|_| "Account store lock poisoned")?;
     let account_path = sibling(path, "accounts.json")?;
-    let raw = settings_value(&account_path)?;
-    let mut settings: Settings = serde_json::from_value(raw.clone()).map_err(|e| e.to_string())?;
-    let absent_settings = !path.exists();
-    let mut store = load_accounts_inner(&account_path)?;
-    settings.account_proxy_urls = proxies(&settings_value(&account_path)?)?;
-    if absent_settings {
-        for account in &store.accounts {
-            settings
-                .account_proxy_urls
-                .entry(account.id.clone())
-                .or_insert_with(|| account.proxy_url.clone());
-        }
-    }
-    let mut cache = cache_from(&store);
-    let mut migration = absent_settings;
+    let mut settings: Settings =
+        serde_json::from_value(settings_value(&account_path)?).map_err(|e| e.to_string())?;
+    // The Codex providers' cached accounts are kept in the account store.
+    let cache = cache_from(&load_accounts_inner(&account_path)?);
     for provider in &mut settings.sub2_api_provider.providers {
-        let legacy = raw
-            .pointer("/sub2APIProvider/providers")
+        provider.cached_accounts = cache
+            .get(&provider.id)
             .and_then(Value::as_array)
-            .and_then(|rows| {
-                rows.iter().find(|row| {
-                    row["id"].as_str() == Some(&provider.id)
-                        || row["providerID"]
-                            .as_str()
-                            .is_some_and(|id| id.trim().eq_ignore_ascii_case(&provider.provider_id))
-                })
-            })
-            .or_else(|| {
-                raw.get("sub2APIProvider")
-                    .filter(|v| v.get("providers").is_none())
-            });
-        if legacy.is_some_and(|v| v.get("cachedAccounts").is_some()) {
-            cache.insert(
-                provider.id.clone(),
-                Value::Array(provider.cached_accounts.clone()),
-            );
-            migration = true;
-        } else {
-            provider.cached_accounts = cache
-                .get(&provider.id)
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-        }
+            .cloned()
+            .unwrap_or_default();
         *provider = provider.normalized();
-    }
-    if migration {
-        store.extra.insert("cachedAccounts".into(), cache.into());
-        write(&account_path, &account_document(&store)?)?;
-        let mut persisted = without_caches(&settings)?;
-        // Do not discard credentials already present in a legacy file during a
-        // cache-only migration. Explicit Settings serialization never writes them.
-        if let Some(rows) = persisted
-            .pointer_mut("/sub2APIProvider/providers")
-            .and_then(Value::as_array_mut)
-        {
-            for row in rows {
-                if let Some(provider) = settings
-                    .sub2_api_provider
-                    .providers
-                    .iter()
-                    .find(|p| row["id"].as_str() == Some(&p.id))
-                {
-                    if !provider.password.is_empty() {
-                        row["password"] = provider.password.clone().into();
-                    }
-                }
-            }
-        }
-        write(path, &persisted)?;
     }
     Ok(settings)
 }

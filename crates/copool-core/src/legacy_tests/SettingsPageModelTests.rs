@@ -163,38 +163,6 @@ async fn testSettingsPageAddsAndSavesArbitrarySub2APIProviderConfigurations() {
     assert!(saved.iter().all(|p| p.base_url.is_empty()));
     assert!(!app.codex_config_path().exists());
 }
-#[test]
-fn testLegacySub2APIConfigurationUsesCodexBaseURLDuringMigration() {
-    let (_dir, app, secrets) = fixture();
-    config(
-        &app,
-        &[
-            ("my", "https://my-sub2.test:6060"),
-            ("ShareCoder", "https://sharecoder.test"),
-        ],
-        "my",
-    );
-    let mut settings = serde_json::to_value(app.configuration().unwrap()).unwrap();
-    let id = "5A4B3C2D-0000-4000-8000-000000000001";
-    settings["sub2APIProvider"] = json!({"confirmedProviderIDs":["ShareCoder","my"],"providers":[{"id":id,"providerID":"my","username":"admin@example.test","password":"secret","legacyAdminBaseURL":"https://sharecoder.test/api/v1","importedAccountIDs":[42],"cachedAccounts":[cached(42,"my",20.)]}]});
-    std::fs::write(
-        app.paths.data_dir.join("settings.json"),
-        serde_json::to_vec(&settings).unwrap(),
-    )
-    .unwrap();
-    app.migrate_provider_credentials().unwrap();
-    let saved = app.configuration().unwrap();
-    let p = &saved.sub2_api_provider.providers[0];
-    assert_eq!(p.provider_id, "ShareCoder");
-    assert_eq!(p.password, "");
-    assert_eq!(secrets.get(&p.id).unwrap().as_deref(), Some("secret"));
-    assert_eq!(p.legacy_admin_base_url, "");
-    assert_eq!(p.cached_accounts[0]["providerID"], "ShareCoder");
-    assert_eq!(
-        saved.sub2_api_provider.confirmed_provider_ids,
-        ["ShareCoder", "my"]
-    );
-}
 #[tokio::test]
 async fn testAccountsPageRestoresCachedSub2APIAccountsWithoutNetwork() {
     let (_dir, app, secrets) = fixture();
@@ -742,7 +710,7 @@ async fn testSavedCloudflareTokenIsMarkedWithoutBeingReturned() {
             .clone()
     };
     // A token saved before the mark existed is marked once.
-    app.migrate_provider_credentials().unwrap();
+    app.mark_kept_tunnel_token().unwrap();
     assert_eq!(cloudflared()["hasAPIToken"], true);
     assert!(cloudflared().get("apiToken").is_none());
     // Saving without typing the token again keeps it, and the mark.

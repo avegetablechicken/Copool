@@ -57,10 +57,10 @@ impl Application {
             .flatten()
             .is_some_and(|token| !token.is_empty())
     }
-    pub(crate) fn migrate_provider_credentials(&self) -> Result<()> {
+    /// Marks whether a named tunnel saved before the mark existed keeps its
+    /// token.
+    pub(crate) fn mark_kept_tunnel_token(&self) -> Result<()> {
         let mut settings = self.configuration()?;
-        let mut changed = false;
-        // A named tunnel saved before the token was marked as kept.
         if let Some(cloudflared) = settings
             .proxy_configuration
             .get_mut("cloudflared")
@@ -76,29 +76,6 @@ impl Application {
                 "hasAPIToken".into(),
                 self.has_cloudflare_token(Pool::Codex).into(),
             );
-            changed = true;
-        }
-        for p in &mut settings.sub2_api_provider.providers {
-            if !p.legacy_admin_base_url.is_empty() {
-                if let Some(id) = codex_config::matching_provider(
-                    &p.legacy_admin_base_url,
-                    &self.codex_config_path(),
-                ) {
-                    p.provider_id = id.clone();
-                    for cached in &mut p.cached_accounts {
-                        cached["providerID"] = id.clone().into();
-                    }
-                }
-                p.legacy_admin_base_url.clear();
-                changed = true;
-            }
-            if !p.password.is_empty() {
-                self.secrets.set(&p.id, &p.password)?;
-                p.password.clear();
-                changed = true;
-            }
-        }
-        if changed {
             self.persist_configuration(&settings)?;
         }
         Ok(())
@@ -675,52 +652,6 @@ mod tests {
                 .password,
             "secret"
         );
-    }
-
-    #[test]
-    fn a_swift_era_provider_and_caches_kept_in_the_settings_move_too() {
-        for (settings, accounts) in [
-            // The single provider of the Swift app, its password inline.
-            (
-                json!({"sub2APIProvider": {"isEnabled": true, "providerID": "my",
-                    "adminBaseURL": "https://sub2.test/api/v1", "username": "admin@example.test",
-                    "password": "secret", "allowInsecureTLS": false}}),
-                json!({"accounts": []}),
-            ),
-            // Caches the settings kept inline.
-            (
-                json!({"sub2APIProvider": {"providers": [{"id": ID, "providerID": "my",
-                    "username": "admin@example.test", "importedAccountIDs": [42],
-                    "cachedAccounts": [cached(42)]}]}}),
-                json!({"accounts": []}),
-            ),
-        ] {
-            let swift = settings["sub2APIProvider"].get("providers").is_none();
-            let earlier = Earlier::new(settings, accounts);
-            if !swift {
-                earlier.secrets.set(ID, "secret").unwrap();
-            }
-            let _app = earlier.open();
-            let legacy = earlier.earlier_view().0.providers;
-            let p = &earlier.file(crate::codex_pool::FILE)["providers"][0];
-            assert_eq!(p["id"], legacy[0].id.as_str());
-            assert_eq!((&p["name"], &p["baseURL"]), (&json!("my"), &json!("")));
-            assert!(p.get("legacyAdminBaseURL").is_none());
-            assert!(p.get("password").is_none());
-            assert_eq!(
-                earlier
-                    .secret(&sub2api::password_secret(Pool::Codex, &legacy[0].id))
-                    .as_deref(),
-                Some("secret")
-            );
-            if swift {
-                // Its admin URL was the Codex provider's: no override.
-                assert_eq!(p["adminBaseURL"], "");
-            } else {
-                assert_eq!(p["cachedAccounts"][0]["id"], 42);
-                assert_eq!(legacy[0].cached_accounts.len(), 1);
-            }
-        }
     }
 
     #[tokio::test]

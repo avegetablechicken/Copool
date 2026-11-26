@@ -146,23 +146,6 @@ pub fn definitions(path: &Path) -> Vec<Definition> {
     }
     result
 }
-pub fn matching_provider(url: &str, path: &Path) -> Option<String> {
-    let origin = |raw: &str| {
-        reqwest::Url::parse(raw)
-            .ok()
-            .map(|u| u.origin().ascii_serialization())
-    };
-    let target = origin(url)?;
-    let matches = definitions(path)
-        .into_iter()
-        .filter(|d| d.base_url.as_deref().and_then(origin).as_deref() == Some(&target))
-        .collect::<Vec<_>>();
-    if matches.len() == 1 {
-        Some(matches[0].id.clone())
-    } else {
-        None
-    }
-}
 fn unquoted(line: &str, wanted: char) -> Option<usize> {
     let mut quote = None;
     let mut escaped = false;

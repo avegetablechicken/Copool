@@ -14,7 +14,7 @@ pub(crate) struct AccountsStore {
     #[serde(default)]
     pub(crate) accounts: Vec<StoredAccount>,
     #[serde(default)]
-    #[serde(rename = "currentSelection", alias = "current_selection")]
+    #[serde(rename = "currentSelection")]
     pub(crate) current_selection: Option<CurrentAccountSelection>,
     #[serde(default)]
     pub(crate) settings: AppSettings,
@@ -46,7 +46,6 @@ pub(crate) struct StoredAccount {
     pub(crate) email: Option<String>,
     pub(crate) account_id: String,
     pub(crate) plan_type: Option<String>,
-    pub(crate) team_alias: Option<String>,
     pub(crate) auth_json: Value,
     pub(crate) added_at: i64,
     pub(crate) updated_at: i64,
@@ -61,7 +60,7 @@ pub(crate) struct StoredAccount {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CurrentAccountSelection {
-    #[serde(rename = "cardId", alias = "accountId")]
+    #[serde(rename = "cardId")]
     pub(crate) account_id: String,
     pub(crate) selected_at: i64,
     #[serde(rename = "sourceDeviceID", alias = "sourceDeviceId")]
@@ -637,12 +636,11 @@ impl StoredAccount {
                 .unwrap_or("active")
                 .into(),
             source_tag: None,
-            team_name: self.team_alias.clone().or_else(|| {
-                self.extra
-                    .get("teamName")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            }),
+            team_name: self
+                .extra
+                .get("teamName")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             available: self.is_available(),
             proxy_url: self.proxy_url.clone(),
             id: self.id.clone(),

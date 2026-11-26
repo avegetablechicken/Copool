@@ -51,14 +51,10 @@ fn testSub2APIProviderConfigurationRoundTripsWithoutPassword() {
     assert!(!encoded.contains("secret"));
 }
 #[test]
-fn testLegacySingleConfigurationMigratesWithoutImplicitConfirmation() {
+fn testProvidersWithoutAListAreNone() {
+    // An earlier app's single provider is not read.
     let config:Providers=serde_json::from_value(json!({"isEnabled":true,"providerID":"my","adminBaseURL":"https://sub2.test/api/v1","username":"admin@example.com","password":"secret","allowInsecureTLS":false})).unwrap();
-    assert_eq!(config.providers[0].provider_id, "my");
-    assert_eq!(
-        config.providers[0].legacy_admin_base_url,
-        "https://sub2.test/api/v1"
-    );
-    assert!(config.confirmed_provider_ids.is_empty());
+    assert_eq!(config, Providers::default());
 }
 #[test]
 fn testCompleteSub2APICredentialsEnableConnectionRegardlessOfLegacyToggle() {

@@ -134,16 +134,6 @@ fn testCodexModelProviderDefinitionsIncludeProfileRootProviderWithoutDefinition(
     assert!(definitions(&path).iter().any(|p| p.id == "profile-sub2api"));
 }
 #[test]
-fn testCodexProviderResolverMatchesLegacyAdminURLForMigration() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path,"model_provider = \"my\"\n[model_providers.my]\nbase_url = \"https://local-sub2.test:6060\"\n[model_providers.ShareCoder]\nbase_url = \"https://sharecoder.test\"\n").unwrap();
-    assert_eq!(
-        matching_provider("https://sharecoder.test/api/v1", &path).as_deref(),
-        Some("ShareCoder")
-    );
-}
-#[test]
 fn testCodexModelProviderSwitchServiceUpdatesRootProviderAndPreservesTables() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

@@ -291,7 +291,6 @@
 "tray.account.current_prefix" = "Actual · ";
 "tray.account.line.format" = "%@%@ | 5h %@ | 1w %@";
 
-"error.app.repo_root_not_found" = "No se puede localizar la raíz del repositorio (falta src-tauri/proxyd/Cargo.toml).";
 "error.accounts.account_not_found_for_update" = "No se encontró la cuenta de destino para actualizar";
 "error.accounts.account_not_found_for_switch" = "No se encontró la cuenta de destino para cambiar";
 "error.accounts.add_account_timeout" = "Se agotó el tiempo de espera para completar el inicio de sesión en el navegador. Inténtalo de nuevo.";
@@ -387,13 +386,10 @@
 "error.remote.no_usable_accounts_for_deploy" = "No se encontraron cuentas utilizables para el despliegue remoto. Importa o autoriza primero al menos una cuenta.";
 "error.remote.build_proxyd_failed" = "No se pudo compilar proxyd remoto";
 "error.remote.proxyd_not_found_after_build" = "No se encontró el binario proxyd después de la compilación";
-"error.remote.unavailable_missing_proxyd_source" = "El despliegue remoto no está disponible en esta compilación porque no se encontró src-tauri/proxyd/Cargo.toml.";
 "error.remote.ssh_command_failed_format" = "El comando SSH falló: %@";
 "error.remote.scp_failed_format" = "SCP falló: %@";
 "error.proxy_runtime.invalid_port_format" = "Invalid proxy port: %@";
-"error.proxy_runtime.start_swift_proxy_failed_format" = "Failed to start Swift proxy: %@";
 "error.proxy_runtime.start_failed" = "Proxy start failed";
-"error.proxy_runtime.health_check_failed" = "Swift proxy failed health check";
 "error.proxy_runtime.unsupported_route" = "Proxy only supports GET /health, GET /v1/models, POST /v1/chat/completions, POST /v1/responses";
 "error.proxy_runtime.no_accounts_available" = "No accounts available for proxy. Add and authorize at least one account first.";
 "error.proxy_runtime.all_accounts_unavailable" = "All accounts are unavailable. Please retry later.";

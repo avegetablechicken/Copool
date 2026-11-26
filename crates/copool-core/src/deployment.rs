@@ -4,12 +4,9 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-const CURRENT: &str = "resources/proxyd-src/proxyd/Cargo.toml";
+const MANIFEST: &str = "resources/proxyd-src/proxyd/Cargo.toml";
 pub fn manifest(root: &Path) -> Option<PathBuf> {
-    [CURRENT, "src-tauri/proxyd/Cargo.toml"]
-        .iter()
-        .map(|p| root.join(p))
-        .find(|p| p.is_file())
+    Some(root.join(MANIFEST)).filter(|p| p.is_file())
 }
 pub fn find_root(start: &Path) -> Option<PathBuf> {
     let start = if start.is_file() {

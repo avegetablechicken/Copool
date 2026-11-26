@@ -21,8 +21,6 @@ pub struct Provider {
     pub cached_accounts: Vec<Value>,
     #[serde(rename = "adminBaseURL")]
     pub admin_base_url: String,
-    #[serde(rename = "legacyAdminBaseURL")]
-    pub legacy_admin_base_url: String,
 }
 impl Default for Provider {
     fn default() -> Self {
@@ -36,7 +34,6 @@ impl Default for Provider {
             imported_account_ids: vec![],
             cached_accounts: vec![],
             admin_base_url: String::new(),
-            legacy_admin_base_url: String::new(),
         }
     }
 }
@@ -47,7 +44,6 @@ impl Provider {
         value.username = self.username.trim().into();
         value.proxy_url = self.proxy_url.trim().into();
         value.admin_base_url = self.admin_base_url.trim().trim_matches('/').into();
-        value.legacy_admin_base_url = self.legacy_admin_base_url.trim().trim_matches('/').into();
         value.imported_account_ids.retain(|id| *id > 0);
         value.imported_account_ids.sort();
         value.imported_account_ids.dedup();
@@ -77,13 +73,12 @@ impl Provider {
             || !self.imported_account_ids.is_empty()
             || !self.cached_accounts.is_empty()
             || !self.admin_base_url.trim().is_empty()
-            || !self.legacy_admin_base_url.trim().is_empty()
     }
 }
 impl Serialize for Provider {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let p = self.normalized();
-        json!({"id":p.id,"providerID":p.provider_id,"username":p.username,"allowInsecureTLS":p.allow_insecure_tls,"proxyURL":p.proxy_url,"importedAccountIDs":p.imported_account_ids,"cachedAccounts":p.cached_accounts,"adminBaseURL":p.admin_base_url,"legacyAdminBaseURL":p.legacy_admin_base_url}).serialize(serializer)
+        json!({"id":p.id,"providerID":p.provider_id,"username":p.username,"allowInsecureTLS":p.allow_insecure_tls,"proxyURL":p.proxy_url,"importedAccountIDs":p.imported_account_ids,"cachedAccounts":p.cached_accounts,"adminBaseURL":p.admin_base_url}).serialize(serializer)
     }
 }
 /// The Codex providers an earlier version kept in the settings, which this
@@ -151,18 +146,10 @@ impl<'de> Deserialize<'de> for Providers {
                 .unwrap_or(json!([])),
         )
         .map_err(serde::de::Error::custom)?;
-        let providers = if let Some(v) = value.get("providers") {
-            serde_json::from_value(v.clone()).map_err(serde::de::Error::custom)?
-        } else {
-            let mut provider: Provider =
-                serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
-            provider.legacy_admin_base_url = provider.admin_base_url.clone();
-            provider.admin_base_url.clear();
-            if provider.has_content() {
-                vec![provider]
-            } else {
-                vec![]
-            }
+        // None without a list of them, as in an earlier app's settings.
+        let providers = match value.get("providers") {
+            Some(v) => serde_json::from_value(v.clone()).map_err(serde::de::Error::custom)?,
+            None => vec![],
         };
         Ok(Self {
             confirmed_provider_ids: ids,

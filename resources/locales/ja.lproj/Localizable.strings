@@ -291,7 +291,6 @@
 "tray.account.current_prefix" = "現在 · ";
 "tray.account.line.format" = "%@%@ | 5h %@ | 1w %@";
 
-"error.app.repo_root_not_found" = "リポジトリのルートを特定できません（src-tauri/proxyd/Cargo.toml が見つかりません）。";
 "error.accounts.account_not_found_for_update" = "更新対象のアカウントが見つかりません";
 "error.accounts.account_not_found_for_switch" = "切替対象のアカウントが見つかりません";
 "error.accounts.add_account_timeout" = "ブラウザでのサインイン待機がタイムアウトしました。再試行してください。";
@@ -390,13 +389,10 @@
 "error.remote.no_usable_accounts_for_deploy" = "リモートデプロイに利用可能なアカウントがありません。先に少なくとも1つのアカウントをインポートまたは認証してください。";
 "error.remote.build_proxyd_failed" = "リモート用 proxyd のビルドに失敗しました";
 "error.remote.proxyd_not_found_after_build" = "ビルド後に proxyd バイナリが見つかりません";
-"error.remote.unavailable_missing_proxyd_source" = "このビルドでは src-tauri/proxyd/Cargo.toml が見つからないため、リモートデプロイ機能は利用できません。";
 "error.remote.ssh_command_failed_format" = "SSH コマンドに失敗しました: %@";
 "error.remote.scp_failed_format" = "SCP に失敗しました: %@";
 "error.proxy_runtime.invalid_port_format" = "無効なプロキシポートです: %@";
-"error.proxy_runtime.start_swift_proxy_failed_format" = "Swift プロキシの起動に失敗しました: %@";
 "error.proxy_runtime.start_failed" = "プロキシの起動に失敗しました";
-"error.proxy_runtime.health_check_failed" = "Swift プロキシがヘルスチェックに失敗しました";
 "error.proxy_runtime.unsupported_route" = "プロキシがサポートするのは GET /health、GET /v1/models、POST /v1/chat/completions、POST /v1/responses のみです";
 "error.proxy_runtime.no_accounts_available" = "プロキシに利用可能なアカウントがありません。少なくとも1つのアカウントを追加して認証してください。";
 "error.proxy_runtime.all_accounts_unavailable" = "すべてのアカウントが利用不可です。しばらくして再試行してください。";

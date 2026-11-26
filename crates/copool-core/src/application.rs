@@ -435,7 +435,7 @@ impl Application {
             this: Default::default(),
             _instance_lock: instance_lock,
         };
-        app.migrate_provider_credentials()?;
+        app.mark_kept_tunnel_token()?;
         crate::codex_pool::migrate(&app.paths)?;
         app.migrate_codex_providers()?;
         app.preferences()?;

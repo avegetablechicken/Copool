@@ -5,11 +5,6 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
-#[cfg(feature = "desktop")]
-use tauri::AppHandle;
-#[cfg(feature = "desktop")]
-use tauri::Manager;
-
 use crate::auth::read_current_codex_auth_optional;
 use crate::models::AccountsStore;
 use crate::models::StoredAccount;
@@ -18,22 +13,8 @@ use crate::utils::now_unix_seconds;
 use crate::utils::set_private_permissions;
 use crate::utils::short_account;
 
-#[cfg(feature = "desktop")]
-pub(crate) fn load_store(app: &AppHandle) -> Result<AccountsStore, String> {
-    load_store_from_path(&account_store_path(app)?)
-}
-
-#[cfg(feature = "desktop")]
-pub(crate) fn save_store(app: &AppHandle, store: &AccountsStore) -> Result<(), String> {
-    save_store_to_path(&account_store_path(app)?, store)
-}
-
 /// Syncs the current login at startup:
 /// if `~/.codex/auth.json` exists and its account is not listed, it is added to the store.
-#[cfg(feature = "desktop")]
-pub(crate) fn sync_current_auth_account_on_startup(app: &AppHandle) -> Result<(), String> {
-    sync_current_auth_account_on_startup_in_path(&account_store_path(app)?)
-}
 
 pub(crate) fn load_store_from_path(path: &Path) -> Result<AccountsStore, String> {
     crate::repository::load_accounts(path)
@@ -78,7 +59,6 @@ pub(crate) fn sync_current_auth_account_on_startup_in_path(path: &Path) -> Resul
         email: extracted.email,
         account_id: extracted.account_id,
         plan_type: extracted.plan_type,
-        team_alias: None,
         auth_json,
         added_at: now,
         updated_at: now,
@@ -90,15 +70,6 @@ pub(crate) fn sync_current_auth_account_on_startup_in_path(path: &Path) -> Resul
     store.accounts.push(stored);
     save_store_to_path(path, &store)?;
     Ok(())
-}
-
-#[cfg(feature = "desktop")]
-fn account_store_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Unable to locate the app data directory: {e}"))?;
-    Ok(account_store_path_from_data_dir(&dir))
 }
 
 pub(crate) fn account_store_path_from_data_dir(data_dir: &Path) -> PathBuf {

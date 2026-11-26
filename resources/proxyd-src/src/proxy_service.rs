@@ -30,11 +30,6 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-#[cfg(feature = "desktop")]
-use tauri::AppHandle;
-#[cfg(feature = "desktop")]
-use tauri::Manager;
-
 use crate::auth::refresh_chatgpt_auth_tokens;
 use crate::auth::write_active_codex_auth;
 use crate::models::ApiProxyStatus;
@@ -45,8 +40,6 @@ use crate::models::UsageWindow;
 use crate::pool_login::ProxyLogin;
 use crate::state::ApiProxyRuntimeHandle;
 use crate::state::ApiProxyRuntimeSnapshot;
-#[cfg(feature = "desktop")]
-use crate::state::AppState;
 use crate::store::account_store_path_from_data_dir;
 use crate::store::load_store_from_path;
 use crate::store::save_store_to_path;
@@ -308,27 +301,6 @@ pub(crate) fn new_proxy_storage_context(
     }
 }
 
-#[cfg(feature = "desktop")]
-fn app_proxy_storage_context(
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<ProxyStorageContext, String> {
-    Ok(new_proxy_storage_context(
-        app_data_dir(app)?,
-        state.store_lock.clone(),
-        true,
-    ))
-}
-
-#[cfg(feature = "desktop")]
-pub(crate) async fn get_api_proxy_status_internal(
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<ApiProxyStatus, String> {
-    let storage = app_proxy_storage_context(app, state)?;
-    get_api_proxy_status_with_runtime(&storage, &state.api_proxy).await
-}
-
 pub(crate) async fn get_api_proxy_status_with_runtime(
     storage: &ProxyStorageContext,
     runtime_slot: &tokio::sync::Mutex<Option<ApiProxyRuntimeHandle>>,
@@ -365,16 +337,6 @@ async fn available_candidate_count(
         .iter()
         .filter(|c| cooldowns.get(&c.id).is_none_or(|until| *until <= now))
         .count() as i64
-}
-
-#[cfg(feature = "desktop")]
-pub(crate) async fn start_api_proxy_internal(
-    app: &AppHandle,
-    state: &AppState,
-    preferred_port: Option<u16>,
-) -> Result<ApiProxyStatus, String> {
-    let storage = app_proxy_storage_context(app, state)?;
-    start_api_proxy_with_runtime(&storage, &state.api_proxy, preferred_port, "127.0.0.1").await
 }
 
 pub(crate) async fn start_api_proxy_with_runtime(
@@ -510,15 +472,6 @@ pub(crate) async fn start_api_proxy_with_runtime(
     Ok(status)
 }
 
-#[cfg(feature = "desktop")]
-pub(crate) async fn stop_api_proxy_internal(
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<ApiProxyStatus, String> {
-    let storage = app_proxy_storage_context(app, state)?;
-    stop_api_proxy_with_runtime(&storage, &state.api_proxy).await
-}
-
 pub(crate) async fn stop_api_proxy_with_runtime(
     storage: &ProxyStorageContext,
     runtime_slot: &tokio::sync::Mutex<Option<ApiProxyRuntimeHandle>>,
@@ -552,15 +505,6 @@ pub(crate) async fn stop_api_proxy_with_runtime(
         Some(read_current_api_key(&handle.api_key)),
         snapshot.last_error,
     ))
-}
-
-#[cfg(feature = "desktop")]
-pub(crate) async fn refresh_api_proxy_key_internal(
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<ApiProxyStatus, String> {
-    let storage = app_proxy_storage_context(app, state)?;
-    refresh_api_proxy_key_with_runtime(&storage, &state.api_proxy).await
 }
 
 pub(crate) async fn refresh_api_proxy_key_with_runtime(
@@ -3323,13 +3267,6 @@ fn api_proxy_key_path(storage: &ProxyStorageContext) -> Result<PathBuf, String> 
 /// Only the Codex proxy's key was once kept in its account store.
 fn keeps_legacy_key(storage: &ProxyStorageContext) -> bool {
     storage.pool == Pool::Codex && storage.read_store
-}
-
-#[cfg(feature = "desktop")]
-fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map_err(|error| format!("Unable to locate the app data directory: {error}"))
 }
 
 fn read_current_api_key(shared: &Arc<RwLock<String>>) -> String {

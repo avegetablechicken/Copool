@@ -119,10 +119,7 @@ pub(crate) fn migrate(paths: &Paths) -> Result<()> {
                 own: Own {
                     workspace_id: account.account_id.clone(),
                     principal_id: account.principal_id.clone(),
-                    team_name: account
-                        .team_alias
-                        .clone()
-                        .or_else(|| text(account, "teamName")),
+                    team_name: text(account, "teamName"),
                 },
                 proxy_url: account.proxy_url.clone(),
                 added_at: account.added_at,
@@ -1019,6 +1016,46 @@ mod tests {
         }
     }
     crate::login_store::login_store_suite!(super::Fixture);
+
+    /// An account file's document (`{"accounts": [...]}`, as an earlier
+    /// version or a remote node keeps it) imports each account's login,
+    /// `authJson`, and nothing else of it.
+    #[tokio::test]
+    async fn an_account_files_logins_are_imported_without_the_rest() {
+        use crate::login_store::suite::Fixture as _;
+        let pool = Fixture::open(false).await;
+        let expires = now_unix_seconds() + 3600;
+        let document = json!({"version": 1, "currentAccountId": "b", "accounts": [
+            {"id": "a", "label": "Kept label", "proxyURL": "socks5://127.0.0.1:1080",
+                "authJson": Fixture::login("alice", "access-alice", expires)},
+            {"id": "b", "authJson": Fixture::login("bob", "access-bob", expires)}]});
+        let app = pool.app();
+        assert_eq!(
+            app.codex_import_json(&document.to_string()).await.unwrap(),
+            2
+        );
+        let store = app.codex_load().unwrap();
+        let mut emails: Vec<_> = store
+            .accounts
+            .iter()
+            .filter_map(|a| a.email.clone())
+            .collect();
+        emails.sort();
+        assert_eq!(emails, ["alice@example.test", "bob@example.test"]);
+        let alice = store
+            .accounts
+            .iter()
+            .find(|a| a.email.as_deref() == Some("alice@example.test"))
+            .unwrap();
+        assert_ne!(alice.id, "a");
+        assert_ne!(alice.label, "Kept label");
+        assert_eq!(alice.proxy_url, "");
+        assert_eq!(store.current_account_id, None);
+        // An entry without a usable login fails the whole document.
+        let broken = json!({"accounts": [{"authJson": Fixture::no_login()}]});
+        assert!(app.codex_import_json(&broken.to_string()).await.is_err());
+        assert_eq!(app.codex_load().unwrap().accounts.len(), 2);
+    }
 
     /// The accounts `accounts.json` kept move to the pool's file once, as
     /// they were: their workspace, standing, renewal choice and wait, the

@@ -46,7 +46,7 @@ fn testLegacyAccountProxyMigratesToSettingsAndCanBeCleared() {
     );
 }
 #[test]
-fn testSub2APICacheMigratesAndSurvivesStaleAccountStoreSave() {
+fn testSub2APICacheIsKeptInTheAccountStoreAndSurvivesStaleAccountStoreSave() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("accounts.json");
     let settings_path = d.path().join("settings.json");
@@ -70,7 +70,7 @@ fn testSub2APICacheMigratesAndSurvivesStaleAccountStoreSave() {
         },
         ..Default::default()
     };
-    write(&settings_path, &serde_json::to_value(&settings).unwrap());
+    save_settings(&settings_path, &settings).unwrap();
     assert_eq!(load_settings(&settings_path).unwrap(), settings);
     assert!(!fs::read_to_string(&settings_path)
         .unwrap()
@@ -178,24 +178,6 @@ fn testLoadStoreBacksUpInvalidStoreAndResetsPrimaryStore() {
     corruption(b"{\"version\":1,\"accounts\":[");
 }
 #[test]
-fn testLoadStoreDecodesLegacyIdentityShapeWithoutPrincipalOrSelectionKey() {
-    let d = tempfile::tempdir().unwrap();
-    let path = d.path().join("accounts.json");
-    write(
-        &path,
-        &json!({"version":1,"accounts":[account("acct-1","legacy-account")],"currentSelection":{"accountId":"legacy-account","selectedAt":123,"sourceDeviceID":"device-a"},"settings":serde_json::to_value(Settings::default()).unwrap()}),
-    );
-    let store = load_accounts(&path).unwrap();
-    assert_eq!(store.accounts.len(), 1);
-    assert!(store.accounts[0].principal_id.is_none());
-    assert!(store.extra.get("currentAccountId").is_none());
-    assert_eq!(
-        store.current_selection.as_ref().unwrap().account_id,
-        "legacy-account"
-    );
-    assert!(store.account_summaries().iter().all(|a| !a.is_current));
-}
-#[test]
 fn testLoadStoreUsesCurrentAccountIDAsSingleCurrentSource() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("accounts.json");
@@ -244,45 +226,6 @@ fn testStoreRoundTripsWorkspaceDirectoryEntries() {
     assert_eq!(
         load_accounts(&path).unwrap().extra["workspaceDirectory"],
         entries
-    );
-}
-#[test]
-fn testLoadSettingsMigratesLegacyMergedStoreIntoSeparateFiles() {
-    let d = tempfile::tempdir().unwrap();
-    let path = d.path().join("accounts.json");
-    let settings_path = d.path().join("settings.json");
-    let mut settings = Settings {
-        launch_at_startup: true,
-        launch_codex_after_switch: false,
-        auto_smart_switch: true,
-        sync_opencode_openai_auth: true,
-        restart_editors_on_switch: true,
-        restart_editor_targets: vec!["cursor".into()],
-        auto_start_api_proxy: true,
-        locale: "en".into(),
-        ..Default::default()
-    };
-    let mut a = account("acct-1", "legacy-account");
-    a["proxyURL"] = "".into();
-    write(
-        &path,
-        &json!({"accounts":[a],"currentSelection":{"accountId":"legacy-account","selectedAt":123,"sourceDeviceID":"device-a"},"settings":settings}),
-    );
-    settings
-        .account_proxy_urls
-        .insert("acct-1".into(), "".into());
-    let loaded = load_settings(&settings_path).unwrap();
-    assert_eq!(loaded, settings);
-    assert_eq!(
-        serde_json::from_value::<Settings>(read(&settings_path)).unwrap(),
-        settings
-    );
-    let store = load_accounts(&path).unwrap();
-    assert_eq!(store.accounts[0].id, "acct-1");
-    assert_eq!(store.accounts[0].account_id, "legacy-account");
-    assert_eq!(
-        store.current_selection.unwrap().account_id,
-        "legacy-account"
     );
 }
 #[test]

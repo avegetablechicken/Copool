@@ -303,7 +303,6 @@
 "tray.account.current_prefix" = "当前 · ";
 "tray.account.line.format" = "%@%@ | 5h %@ | 1w %@";
 
-"error.app.repo_root_not_found" = "无法定位仓库根目录，缺少 src-tauri/proxyd/Cargo.toml";
 "error.accounts.account_not_found_for_update" = "找不到要更新的账号";
 "error.accounts.account_not_found_for_switch" = "找不到要切换的账号";
 "error.accounts.add_account_timeout" = "等待浏览器登录完成超时，请重试";
@@ -414,14 +413,11 @@
 "error.remote.no_usable_accounts_for_deploy" = "远程部署未检测到可用账号，请先导入或授权至少一个账号。";
 "error.remote.build_proxyd_failed" = "构建远程 proxyd 失败";
 "error.remote.proxyd_not_found_after_build" = "构建完成但未找到 proxyd 二进制";
-"error.remote.unavailable_missing_proxyd_source" = "当前构建未包含远程 proxyd 所需资源，远程部署功能不可用。";
 "error.remote.ssh_command_failed_format" = "SSH 命令失败: %@";
 "error.remote.scp_failed_format" = "SCP 失败: %@";
 
 "error.proxy_runtime.invalid_port_format" = "代理端口无效: %@";
-"error.proxy_runtime.start_swift_proxy_failed_format" = "启动 Swift 代理失败: %@";
 "error.proxy_runtime.start_failed" = "代理启动失败";
-"error.proxy_runtime.health_check_failed" = "Swift 代理未通过健康检查";
 "error.proxy_runtime.unsupported_route" = "当前反代只支持 GET /health、GET /v1/models、POST /v1/chat/completions、POST /v1/responses";
 "error.proxy_runtime.no_accounts_available" = "暂无可用于代理的账号，请先添加并授权账号";
 "error.proxy_runtime.all_accounts_unavailable" = "所有账号均不可用，请稍后重试。";
