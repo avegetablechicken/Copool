@@ -346,7 +346,7 @@ async fn testHealthAndModelsEndpoints() {
         seen.lock().unwrap().clone(),
         [(
             "/backend-api/codex/models?client_version=0.166.0".to_owned(),
-            "Bearer test-only".to_owned(),
+            "Bearer access-a-a".to_owned(),
             "a".to_owned(),
             "0.166.0".to_owned(),
         )]

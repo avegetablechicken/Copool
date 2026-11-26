@@ -616,7 +616,8 @@ impl Application {
             })
             .await?;
         if let Some(reported) = renew_now {
-            *reported = used.renewed;
+            // A renewal the tool made meanwhile serves as one.
+            *reported = used.renewed || used.adopted;
         }
         used.outcome.map(|_| ())
     }

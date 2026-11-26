@@ -12,8 +12,9 @@ fn jwt(claims: Value) -> String {
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
     )
 }
+/// A Codex login of `principal` to `workspace`, with tokens of its own.
 fn auth(principal: &str, workspace: &str) -> Value {
-    json!({"auth_mode":"chatgpt","tokens":{"access_token":"test-only","refresh_token":"refresh-test","id_token":jwt(json!({"sub":principal,"email":format!("{principal}@example.test"),"https://api.openai.com/auth":{"chatgpt_account_id":workspace,"chatgpt_plan_type":"pro"}})),"account_id":workspace}})
+    json!({"auth_mode":"chatgpt","tokens":{"access_token":format!("access-{principal}-{workspace}"),"refresh_token":format!("refresh-{principal}-{workspace}"),"id_token":jwt(json!({"sub":principal,"email":format!("{principal}@example.test"),"https://api.openai.com/auth":{"chatgpt_account_id":workspace,"chatgpt_plan_type":"pro"}})),"account_id":workspace}})
 }
 fn account(id: &str, week: f64, hour: f64, current: bool) -> AccountSummary {
     let a:StoredAccount=serde_json::from_value(json!({"id":id,"label":id,"accountId":id,"authJson":auth(id,id),"addedAt":0,"updatedAt":0,"usage":{"fetchedAt":0,"fiveHour":{"usedPercent":hour,"windowSeconds":18000},"oneWeek":{"usedPercent":week,"windowSeconds":604800}}})).unwrap();

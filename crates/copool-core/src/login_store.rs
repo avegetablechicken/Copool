@@ -224,6 +224,42 @@ pub(crate) trait LoginPool: Sync {
         proxy: &str,
     ) -> impl Future<Output = Result<Self::Renewed>> + Send;
     fn apply(renewed: &Self::Renewed, document: &mut Value);
+
+    /// Puts back, once the store is read, what the pool keeps of its
+    /// accounts elsewhere (Claude's vault): nothing by default.
+    fn opened(&self, _store: &mut Self::Store) -> Result<()> {
+        Ok(())
+    }
+    /// The store as its file keeps it, what the pool keeps elsewhere put
+    /// there first: all of it by default.
+    fn sealed(&self, store: &Self::Store) -> Result<Value> {
+        serde_json::to_value(store).map_err(|e| e.to_string())
+    }
+    /// The tool's lock on renewing its Live login, held from a renewal's
+    /// reread of the Live login until the renewal reaches it, so that the
+    /// tool and Copool never both spend one refresh token: none by default.
+    fn renewal_lock(&self) -> impl Future<Output = Result<Option<Box<dyn RenewalLock>>>> + Send {
+        async { Ok(None) }
+    }
+}
+
+/// A tool's lock on renewing its login, while held.
+pub(crate) trait RenewalLock: Send {
+    /// An error once another program may be renewing too.
+    fn held(&self) -> Result<()>;
+}
+
+/// How a renewal gave a fresh token.
+enum Renewing {
+    Renewed,
+    /// The tool renewed the login while the renewal waited for its lock.
+    Adopted,
+}
+
+/// Whether two documents share a token.
+fn shares_token<P: LoginPool>(a: &Value, b: &Value) -> bool {
+    let same = |token: fn(&Value) -> Option<String>| token(a).is_some() && token(a) == token(b);
+    same(P::access_token) || same(P::refresh_token)
 }
 
 /// What a usage request said of the token it was given.
@@ -260,15 +296,17 @@ impl<P: LoginPool> Logins<P> {
         self.0.app().paths.data_dir.join(P::FILE)
     }
     pub(crate) fn load(&self) -> Result<P::Store> {
-        match fs::read(self.path()) {
+        let mut store = match fs::read(self.path()) {
             Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| format!("Invalid {} account store: {e}", P::NAME)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(P::Store::default()),
-            Err(e) => Err(e.to_string()),
-        }
+                .map_err(|e| format!("Invalid {} account store: {e}", P::NAME))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => P::Store::default(),
+            Err(e) => return Err(e.to_string()),
+        };
+        self.0.opened(&mut store)?;
+        Ok(store)
     }
     pub(crate) fn save(&self, store: &P::Store) -> Result<()> {
-        write_json(&self.path(), store)?;
+        write_json(&self.path(), &self.0.sealed(store)?)?;
         self.0.app().publish();
         Ok(())
     }
@@ -344,19 +382,31 @@ impl<P: LoginPool> Logins<P> {
     }
     /// Follows the Live login: its account becomes current, and a newer
     /// generation of it is adopted. None read leaves the selection as last
-    /// seen. Returns whether the store changed.
+    /// seen, as does a login holding another account's tokens: read while a
+    /// switch wrote it, it pairs one account's tokens with another's name.
+    /// Returns whether the store changed.
     pub(crate) fn follow_live(store: &mut P::Store, live: Option<&P::Login>) -> bool {
         let Some(live) = live else {
             return false;
         };
+        let document = P::document(live);
+        let accounts = P::accounts(store);
+        let found = accounts.iter().position(|a| P::same_account(a, document));
+        if let Some(i) = found {
+            let others = accounts.iter().enumerate().filter(|(j, _)| *j != i);
+            if others
+                .into_iter()
+                .any(|(_, a)| shares_token::<P>(&a.document, document))
+            {
+                return false;
+            }
+        }
         let mut changed = false;
-        let current = P::accounts_mut(store)
-            .iter_mut()
-            .find(|a| P::same_account(a, P::document(live)))
-            .map(|account| {
-                changed |= Self::adopt(account, live);
-                account.id.clone()
-            });
+        let current = found.map(|i| {
+            let account = &mut P::accounts_mut(store)[i];
+            changed |= Self::adopt(account, live);
+            account.id.clone()
+        });
         if *P::current(store) != current {
             *P::current(store) = current;
             changed = true;
@@ -567,6 +617,9 @@ impl<P: LoginPool> Logins<P> {
             if target.standing.is_some() {
                 return Err("Account is deactivated or hidden".into());
             }
+            if P::access_token(&target.document).is_none() {
+                return Err("The account holds no tokens".into());
+            }
             if let Some(live) = live.as_ref().filter(|_| P::current(&mut store).is_none()) {
                 write_json(&self.0.app().paths.data_dir.join(backup), P::document(live))?;
             }
@@ -632,15 +685,37 @@ impl<P: LoginPool> Logins<P> {
     /// Renews the document's access token, then gives the renewal to the
     /// Live login when it holds this login: an issuer that rotates refresh
     /// tokens stops honoring the one the tool holds. Not while the Live
-    /// login the account may be cannot be read.
-    async fn renew(&self, document: &mut Value, proxy: &str, live_unreadable: bool) -> Result<()> {
+    /// login the account may be cannot be read. All of it under the tool's
+    /// renewal lock, if any; a later generation the tool renewed while the
+    /// lock was awaited serves instead.
+    async fn renew(
+        &self,
+        account: &Account<P::Own>,
+        document: &mut Value,
+        proxy: &str,
+        live_unreadable: bool,
+        now: i64,
+    ) -> Result<Renewing> {
         if live_unreadable {
             return Err(P::LIVE_UNREADABLE.into());
+        }
+        let lock = self.0.renewal_lock().await?;
+        if let Some(live) = self
+            .live_renewal(account, document, now)
+            .await
+            .filter(|live| P::newer(live, document))
+        {
+            *document = live;
+            return Ok(Renewing::Adopted);
+        }
+        if let Some(lock) = &lock {
+            lock.held()?;
         }
         let before = document.clone();
         let renewed = self.0.renew(document, proxy).await?;
         self.write_back(&renewed, &before, document).await;
-        Ok(())
+        drop(lock);
+        Ok(Renewing::Renewed)
     }
     /// Puts a renewal in the Live login, in its own form, when it still
     /// holds the login renewed (`before`, with the same refresh token) and
@@ -701,8 +776,13 @@ impl<P: LoginPool> Logins<P> {
         let mut adopted = false;
         let outcome: Result<Option<T>> = async {
             if forced {
-                self.renew(&mut document, proxy, unreadable).await?;
-                renewed = true;
+                match self
+                    .renew(account, &mut document, proxy, unreadable, now)
+                    .await?
+                {
+                    Renewing::Renewed => renewed = true,
+                    Renewing::Adopted => adopted = true,
+                }
                 return Ok(None);
             }
             let expired = P::expiry(&document).is_some_and(|e| e <= now + EXPIRY_MARGIN)
@@ -715,8 +795,13 @@ impl<P: LoginPool> Logins<P> {
                     if !may_renew {
                         return Err(RENEWAL_OFF.into());
                     }
-                    self.renew(&mut document, proxy, unreadable).await?;
-                    renewed = true;
+                    match self
+                        .renew(account, &mut document, proxy, unreadable, now)
+                        .await?
+                    {
+                        Renewing::Renewed => renewed = true,
+                        Renewing::Adopted => adopted = true,
+                    }
                 }
             }
             match ask(document.clone()).await {
@@ -739,8 +824,13 @@ impl<P: LoginPool> Logins<P> {
             if !may_renew {
                 return Err(RENEWAL_OFF.into());
             }
-            self.renew(&mut document, proxy, unreadable).await?;
-            renewed = true;
+            match self
+                .renew(account, &mut document, proxy, unreadable, now)
+                .await?
+            {
+                Renewing::Renewed => renewed = true,
+                Renewing::Adopted => adopted = true,
+            }
             match ask(document.clone()).await {
                 Asked::Answered(answer) => Ok(Some(answer)),
                 Asked::Refused => Err(P::SIGN_IN_EXPIRED.into()),
