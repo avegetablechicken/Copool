@@ -28,6 +28,7 @@ pub use application::{
     SwitchExecution,
 };
 pub use models::{AccountSummary, ApiProxyStatus, CreditSnapshot, UsageSnapshot, UsageWindow};
+mod codex_pool;
 mod login_store;
 mod plan_tags;
 mod pool;

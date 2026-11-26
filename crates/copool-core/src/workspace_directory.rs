@@ -1,6 +1,4 @@
-use crate::{
-    application::Application, pool_login::codex, repository, utils::now_unix_seconds, workspaces,
-};
+use crate::{application::Application, pool_login::codex, utils::now_unix_seconds, workspaces};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 fn normalized(id: &str) -> String {
@@ -36,21 +34,21 @@ impl Application {
         self.accounts(crate::Pool::Codex).await
     }
     pub(crate) async fn reconcile_workspace_names(&self, force: bool) -> Result<(), String> {
-        let snapshot = repository::load_accounts(&self.paths.store())?;
+        let snapshot = self.codex_load()?;
         for account in snapshot.accounts {
-            if !account.is_available() || account.awaiting_first_request() {
+            if account.standing.is_some() || account.first_request_pending {
                 continue;
             }
             if !force
                 && account
-                    .extra
-                    .get("teamName")
-                    .and_then(Value::as_str)
+                    .own
+                    .team_name
+                    .as_deref()
                     .is_some_and(|n| !n.trim().is_empty())
             {
                 continue;
             }
-            let Ok(extracted) = codex::extract_auth(&account.auth_json) else {
+            let Ok(extracted) = codex::extract_auth(&account.document) else {
                 continue;
             };
             if !["team", "business", "enterprise"].contains(
@@ -76,65 +74,52 @@ impl Application {
             let Some(name) = metadata
                 .iter()
                 .find(|m| {
-                    normalized(&m.account_id) == normalized(&account.account_id) && visible(m)
+                    normalized(&m.account_id) == normalized(&account.own.workspace_id) && visible(m)
                 })
                 .and_then(|m| m.workspace_name.as_ref())
             else {
                 continue;
             };
-            self.mutate_accounts(|store| {
-                if let Some(current) = store.accounts.iter_mut().find(|a| a.id == account.id) {
-                    current.extra.insert("teamName".into(), name.trim().into());
-                }
-                Ok(())
-            })
-            .await?;
-            self.publish();
+            self.codex_logins()
+                .change(|store| {
+                    if let Some(current) = store.accounts.iter_mut().find(|a| a.id == account.id) {
+                        current.own.team_name = Some(name.trim().into());
+                    }
+                    Ok(())
+                })
+                .await?;
         }
         Ok(())
     }
     pub async fn workspace_directory(&self) -> Result<Vec<Value>, String> {
-        let _lock = self.state.store_lock.lock().await;
-        Ok(repository::load_accounts(&self.paths.store())?
-            .extra
-            .get("workspaceDirectory")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
+        Ok(self.codex_load()?.workspace_directory)
     }
     pub async fn dismiss_workspace(&self, id: &str) -> Result<(), String> {
         // A blank id matches every row that carries no workspace key.
         if normalized(id).is_empty() {
             return Ok(());
         }
-        let _op = self.operations.lock().await;
-        self.mutate_accounts(|store| {
-            if let Some(rows) = store
-                .extra
-                .get_mut("workspaceDirectory")
-                .and_then(Value::as_array_mut)
-            {
-                for row in rows {
+        self.codex_logins()
+            .change(|store| {
+                for row in &mut store.workspace_directory {
                     if normalized(row["workspaceId"].as_str().unwrap_or_default()) == normalized(id)
                     {
                         row["visibility"] = "deleted".into();
                     }
                 }
-            }
-            Ok(())
-        })
-        .await
-        .map(|_| ())
+                Ok(())
+            })
+            .await
     }
     pub async fn sync_workspace_directory(&self) -> Result<Vec<Value>, String> {
-        let snapshot = repository::load_accounts(&self.paths.store())?;
+        let snapshot = self.codex_load()?;
         let mut discoveries = BTreeMap::new();
         let mut did_fetch = false;
         for account in &snapshot.accounts {
-            if !account.is_available() || account.awaiting_first_request() {
+            if account.standing.is_some() || account.first_request_pending {
                 continue;
             }
-            let Ok(extracted) = codex::extract_auth(&account.auth_json) else {
+            let Ok(extracted) = codex::extract_auth(&account.document) else {
                 continue;
             };
             if !["team", "business", "enterprise"].contains(
@@ -159,27 +144,21 @@ impl Application {
                 discoveries.entry(normalized(&row.account_id)).or_insert((
                     row,
                     account.email.clone(),
-                    account.plan_type.clone(),
+                    account.plan.clone(),
                 ));
             }
         }
         if !did_fetch {
             return self.workspace_directory().await;
         }
-        let _op = self.operations.lock().await;
-        let store = self.mutate_accounts(|store| {
+        self.codex_logins().change(|store| {
             let authorized: BTreeSet<_> = store
                 .accounts
                 .iter()
-                .filter(|a| a.is_available())
-                .map(|a| normalized(&a.account_id))
+                .filter(|a| a.standing.is_none())
+                .map(|a| normalized(&a.own.workspace_id))
                 .collect();
-            let mut entries: BTreeMap<String, Value> = store
-                .extra
-                .get("workspaceDirectory")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
+            let mut entries: BTreeMap<String, Value> = std::mem::take(&mut store.workspace_directory)
                 .into_iter()
                 .map(|v| (normalized(v["workspaceId"].as_str().unwrap_or_default()), v))
                 .collect();
@@ -204,13 +183,9 @@ impl Application {
                     .unwrap_or_default()
                     .to_lowercase()
             });
-            store.extra.insert("workspaceDirectory".into(), rows.into());
-            Ok(())
+            store.workspace_directory = rows.clone();
+            Ok(rows)
         })
-.await?;
-        Ok(store.extra["workspaceDirectory"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default())
+        .await
     }
 }

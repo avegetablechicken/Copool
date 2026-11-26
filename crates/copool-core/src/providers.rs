@@ -14,7 +14,6 @@ use crate::{
     utils::now_unix_seconds,
 };
 use serde_json::Value;
-use std::path::Path;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -136,7 +135,7 @@ impl Application {
         if selected.is_official() {
             return Ok(None);
         }
-        Ok(codex_providers(&self.paths.store())?
+        Ok(codex_providers(&self.paths)?
             .into_iter()
             .find(|p| p.name.eq_ignore_ascii_case(&selected.id))
             .map(|p| p.id))
@@ -158,11 +157,14 @@ impl Application {
         let legacy = settings.sub2_api_provider.providers.clone();
         if !legacy.is_empty() {
             let records: Vec<ProviderRecord> = legacy.iter().map(migrated_codex_provider).collect();
-            let records = serde_json::to_value(records).map_err(|e| e.to_string())?;
-            repository::mutate_accounts(&self.paths.store(), |store| {
-                store.extra.entry(CODEX_PROVIDERS).or_insert(records);
-                Ok(())
-            })?;
+            let mut store = crate::codex_pool::load(&self.paths)?;
+            if store.providers.is_empty() {
+                store.providers = records;
+                crate::persistence::write_json(
+                    &self.paths.data_dir.join(crate::codex_pool::FILE),
+                    &store,
+                )?;
+            }
         }
         let copied = legacy.iter().try_for_each(|p| {
             let key = sub2api::password_secret(Pool::Codex, &p.id);
@@ -428,21 +430,12 @@ impl Application {
             .unwrap_or(0))
     }
 }
-/// Where the Codex pool's account store keeps its providers.
-const CODEX_PROVIDERS: &str = "providers";
 /// Set in the settings once their Codex providers were copied to the account
 /// store.
 const CODEX_PROVIDERS_MIGRATED: &str = "codexProvidersMigrated";
-/// The Codex pool's providers, as the account store at `store` keeps them.
-pub(crate) fn codex_providers(store: &Path) -> Result<Vec<ProviderRecord>> {
-    stored_codex_providers(&repository::load_accounts(store)?)
-}
-fn stored_codex_providers(store: &crate::models::AccountsStore) -> Result<Vec<ProviderRecord>> {
-    store
-        .extra
-        .get(CODEX_PROVIDERS)
-        .map_or(Ok(vec![]), |v| serde_json::from_value(v.clone()))
-        .map_err(|e| e.to_string())
+/// The Codex pool's providers, as its account store keeps them.
+pub(crate) fn codex_providers(paths: &crate::Paths) -> Result<Vec<ProviderRecord>> {
+    Ok(crate::codex_pool::load(paths)?.providers)
 }
 /// A Codex provider the settings kept, as the account store keeps it: named
 /// after its `config.toml` provider, with its cached accounts.
@@ -472,27 +465,16 @@ impl Adapter for CodexAdapter<'_> {
     type Provider = ProviderRecord;
     const POOL: Pool = Pool::Codex;
     fn load_providers(&self) -> Result<Vec<ProviderRecord>> {
-        codex_providers(&self.0.paths.store())
+        codex_providers(&self.0.paths)
     }
     async fn edit_providers<T: Send>(
         &self,
         edit: impl FnOnce(&mut Vec<ProviderRecord>) -> Result<T> + Send,
     ) -> Result<T> {
-        let _op = self.0.operations.lock().await;
-        let mut result = None;
         self.0
-            .mutate_accounts(|store| {
-                let mut providers = stored_codex_providers(store)?;
-                result = Some(edit(&mut providers)?);
-                store.extra.insert(
-                    CODEX_PROVIDERS.into(),
-                    serde_json::to_value(providers).map_err(|e| e.to_string())?,
-                );
-                Ok(())
-            })
-            .await?;
-        self.0.publish();
-        result.ok_or_else(|| "The Codex providers were not edited".into())
+            .codex_logins()
+            .change(|store| edit(&mut store.providers))
+            .await
     }
     fn prepare(&self, draft: &mut ProviderRecord) -> Result<()> {
         // The gateway is the one `config.toml` names, read on every use.
@@ -637,7 +619,7 @@ mod tests {
         earlier.secrets.set(ID, "secret").unwrap();
         let before = earlier.earlier_view();
         let app = earlier.open();
-        let providers = earlier.file("accounts.json")["providers"].clone();
+        let providers = earlier.file(crate::codex_pool::FILE)["providers"].clone();
         assert_eq!(
             providers,
             json!([{"id": ID, "name": "my", "baseURL": "", "adminBaseURL": "https://admin.test/api/v1",
@@ -720,7 +702,7 @@ mod tests {
             }
             let _app = earlier.open();
             let legacy = earlier.earlier_view().0.providers;
-            let p = &earlier.file("accounts.json")["providers"][0];
+            let p = &earlier.file(crate::codex_pool::FILE)["providers"][0];
             assert_eq!(p["id"], legacy[0].id.as_str());
             assert_eq!((&p["name"], &p["baseURL"]), (&json!("my"), &json!("")));
             assert!(p.get("legacyAdminBaseURL").is_none());
@@ -760,10 +742,10 @@ mod tests {
         .await
         .unwrap();
         drop(app);
-        let stored = earlier.file("accounts.json")["providers"].clone();
+        let stored = earlier.file(crate::codex_pool::FILE)["providers"].clone();
         let settings = earlier.file("settings.json");
         drop(earlier.open());
-        assert_eq!(earlier.file("accounts.json")["providers"], stored);
+        assert_eq!(earlier.file(crate::codex_pool::FILE)["providers"], stored);
         assert_eq!(earlier.file("settings.json"), settings);
         assert_eq!(
             earlier
@@ -784,7 +766,7 @@ mod tests {
         )
         .unwrap();
         drop(earlier.open());
-        assert_eq!(earlier.file("accounts.json")["providers"], stored);
+        assert_eq!(earlier.file(crate::codex_pool::FILE)["providers"], stored);
         assert_eq!(
             earlier.file("settings.json")["codexProvidersMigrated"],
             true
@@ -814,6 +796,6 @@ mod tests {
             serde_json::from_slice(&std::fs::read(paths.data_dir.join("settings.json")).unwrap())
                 .unwrap();
         assert_eq!(settings["codexProvidersMigrated"], true);
-        assert!(codex_providers(&paths.store()).unwrap().is_empty());
+        assert!(codex_providers(&paths).unwrap().is_empty());
     }
 }

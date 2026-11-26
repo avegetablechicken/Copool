@@ -32,7 +32,7 @@ async fn save(app: &Application, form: Value) -> ProviderRecord {
 }
 /// The Codex providers as stored.
 fn stored(app: &Application) -> Vec<ProviderRecord> {
-    crate::providers::codex_providers(&app.paths.store()).unwrap()
+    crate::providers::codex_providers(&app.paths).unwrap()
 }
 fn named(app: &Application, name: &str) -> ProviderRecord {
     stored(app).into_iter().find(|p| p.name == name).unwrap()
@@ -576,12 +576,8 @@ async fn testSmartSwitchIncludesSub2APIProviderCandidate() {
     put(&app, |providers| providers.push(p.clone())).await;
     let mut local = super::stored("local", "local", "local");
     local["usage"] = json!({"fetchedAt":now_unix_seconds(),"fiveHour":{"usedPercent":50,"windowSeconds":18000},"oneWeek":{"usedPercent":80,"windowSeconds":604800}});
-    let store = crate::repository::load_accounts(&app.paths.store()).unwrap();
-    super::save_fixture(
-        &app,
-        json!({"accounts":[local],"cachedAccounts":store.extra["cachedAccounts"],
-            "providers":store.extra["providers"]}),
-    );
+    let providers = app.codex_load().unwrap().providers;
+    super::save_fixture(&app, json!({"accounts":[local], "providers":providers}));
     app.smart_switch(Pool::Codex).await.unwrap();
     assert_eq!(
         crate::codex_config::resolve_path(&app.codex_config_path()).id,

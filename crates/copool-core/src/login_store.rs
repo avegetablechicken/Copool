@@ -1,7 +1,7 @@
 //! The account store of a pool whose logins Copool keeps in a file of its
-//! own and whose tool signs in with one Live login: Grok (Grok Build's
-//! `auth.json`) and Antigravity (agy's item in the system's credential
-//! store). The store follows the Live login, imports logins, deletes and
+//! own and whose tool signs in with one Live login: Codex (its `auth.json`),
+//! Grok (Grok Build's `auth.json`) and Antigravity (agy's item in the
+//! system's credential store). The store follows the Live login, imports logins, deletes and
 //! edits accounts, makes the switch's write to the Live login, and renews
 //! tokens: it uses the Live login's renewal when the tool made one, and
 //! puts its own back there. Each pool supplies only its facts, as a
@@ -14,14 +14,14 @@
 //! user to allow it, and a read taken before a switch is not followed after
 //! it. A pool without accounts never reads its Live login.
 //!
-//! Every pool is meant to keep its accounts here; two have yet to:
-//! - Codex: its local API proxy still reads and writes `accounts.json`,
-//!   renews logins and refreshes usage itself. It first asks the pool for
-//!   candidates and renewals as the other pools' proxies do.
-//! - Claude: an account keeps several generations of its login, told apart
-//!   by Claude's refusals rather than by expiry. Once Claude Code's refresh
-//!   lock is known to make them unneeded, the login (its tokens and its
-//!   `oauthAccount`), the vault and that lock fit as its pool's facts.
+//! An account its issuer deactivated stays listed so ([`Standing`]); deleted,
+//! it stays hidden, for the pool to remember the workspace gone.
+//!
+//! Every pool is meant to keep its accounts here; Claude has yet to: an
+//! account keeps several generations of its login, told apart by Claude's
+//! refusals rather than by expiry. Once Claude Code's refresh lock is known
+//! to make them unneeded, the login (its tokens and its `oauthAccount`), the
+//! vault and that lock fit as its pool's facts.
 use crate::{
     application::Application,
     models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
@@ -85,6 +85,20 @@ pub(crate) struct Account<O> {
     /// The user's choice of whether to renew the tokens; none for the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) renewal: Option<Renewal>,
+    /// Deactivated by its issuer, or deleted once it was; none for an
+    /// account in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) standing: Option<Standing>,
+}
+/// Why an account can no longer be used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Standing {
+    /// Its issuer reports it deactivated: it stays listed so.
+    Deactivated,
+    /// Deleted while deactivated: kept, hidden, so that its workspace is
+    /// known to be gone.
+    Deleted,
 }
 /// What a pool adds to its accounts when it adds nothing.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -179,8 +193,24 @@ pub(crate) trait LoginPool: Sync {
     /// When the access token expires, in seconds.
     fn expiry(document: &Value) -> Option<i64>;
     fn email(document: &Value) -> Option<String>;
+    /// The label of a new account: its email, unless the pool names it
+    /// otherwise.
+    fn name(document: &Value) -> Option<String> {
+        Self::email(document)
+    }
     /// Whether two documents are generations of one login.
     fn same_login(a: &Value, b: &Value) -> bool;
+    /// Whether `a` is a later generation than `b`: by default, its access
+    /// token lasts longer.
+    fn newer(a: &Value, b: &Value) -> bool {
+        Self::expiry(a).unwrap_or(0) > Self::expiry(b).unwrap_or(0)
+    }
+    /// Whether a request's error says the account was deactivated.
+    fn deactivated(_error: &str) -> bool {
+        false
+    }
+    /// What the pool adds to the account's card.
+    fn summarize(_account: &Account<Self::Own>, _summary: &mut AccountSummary) {}
     /// Whether a login is the account's.
     fn same_account(account: &Account<Self::Own>, document: &Value) -> bool {
         Self::same_login(&account.document, document)
@@ -195,8 +225,6 @@ pub(crate) trait LoginPool: Sync {
         document: &mut Value,
         proxy: &str,
     ) -> impl Future<Output = Result<Self::Renewed>> + Send;
-    /// The renewal's access token and its expiry, in seconds.
-    fn renewed(renewed: &Self::Renewed) -> (&str, i64);
     fn apply(renewed: &Self::Renewed, document: &mut Value);
 }
 
@@ -249,12 +277,17 @@ impl<P: LoginPool> Logins<P> {
 
     /// The account's card.
     pub(crate) fn summary(account: &Account<P::Own>, current: bool) -> AccountSummary {
-        AccountSummary {
-            display_status: "list".into(),
-            workspace_status: "active".into(),
+        let (display, workspace) = match account.standing {
+            None => ("list", "active"),
+            Some(Standing::Deactivated) => ("deactivated", "deactivated"),
+            Some(Standing::Deleted) => ("deleted", "deactivated"),
+        };
+        let mut summary = AccountSummary {
+            display_status: display.into(),
+            workspace_status: workspace.into(),
             source_tag: None,
             team_name: None,
-            available: true,
+            available: account.standing.is_none(),
             proxy_url: account.proxy_url.clone(),
             id: account.id.clone(),
             label: account.label.clone(),
@@ -274,6 +307,27 @@ impl<P: LoginPool> Logins<P> {
             refresh: None,
             outdated_sub2api_version: None,
             tags: Default::default(),
+        };
+        P::summarize(account, &mut summary);
+        summary
+    }
+    /// Records a usage request's outcome in the account, as
+    /// [`Account::record`]; an error saying the account was deactivated
+    /// marks it so, and usage marks it in use again unless deleted.
+    pub(crate) fn record_usage(
+        account: &mut Account<P::Own>,
+        outcome: &Result<Option<UsageSnapshot>>,
+        now: i64,
+    ) {
+        account.record(outcome, now);
+        match outcome {
+            Ok(Some(_)) if account.standing == Some(Standing::Deactivated) => {
+                account.standing = None;
+            }
+            Err(error) if P::deactivated(error) && account.standing.is_none() => {
+                account.standing = Some(Standing::Deactivated);
+            }
+            _ => {}
         }
     }
 
@@ -281,8 +335,9 @@ impl<P: LoginPool> Logins<P> {
     /// renewed. Returns whether it did.
     fn adopt(account: &mut Account<P::Own>, login: &P::Login) -> bool {
         let document = P::document(login);
-        let newer = P::expiry(document).unwrap_or(0) > P::expiry(&account.document).unwrap_or(0);
-        if !newer || P::access_token(document) == P::access_token(&account.document) {
+        let same_tokens = P::access_token(document) == P::access_token(&account.document)
+            && P::refresh_token(document) == P::refresh_token(&account.document);
+        if !P::newer(document, &account.document) || same_tokens {
             return false;
         }
         P::keep(account, login.clone());
@@ -342,6 +397,7 @@ impl<P: LoginPool> Logins<P> {
         let _lock = self.0.locks().store.lock().await;
         let mut store = self.load()?;
         let email = P::email(P::document(&login));
+        let name = P::name(P::document(&login));
         let found = P::accounts_mut(&mut store)
             .iter_mut()
             .find(|a| P::same_account(a, P::document(&login)));
@@ -350,6 +406,10 @@ impl<P: LoginPool> Logins<P> {
                 P::keep(existing, login);
                 existing.updated_at = now;
                 existing.usage_error = None;
+                // Signed in again: in use, unless the user deleted it.
+                if existing.standing == Some(Standing::Deactivated) {
+                    existing.standing = None;
+                }
                 if let Some(email) = email {
                     existing.label = email.clone();
                     existing.email = Some(email);
@@ -360,7 +420,7 @@ impl<P: LoginPool> Logins<P> {
                 let id = uuid::Uuid::new_v4().to_string();
                 let mut account = Account {
                     id: id.clone(),
-                    label: email.clone().unwrap_or_else(|| P::UNNAMED.into()),
+                    label: name.unwrap_or_else(|| P::UNNAMED.into()),
                     email,
                     document: Value::Null,
                     own: P::Own::default(),
@@ -372,6 +432,7 @@ impl<P: LoginPool> Logins<P> {
                     plan: None,
                     first_request_pending: defer,
                     renewal: None,
+                    standing: None,
                 };
                 P::keep(&mut account, login);
                 P::accounts_mut(&mut store).push(account);
@@ -410,15 +471,36 @@ impl<P: LoginPool> Logins<P> {
         let (id, waiting) = self.upsert(live, true).await?;
         Ok((!waiting).then_some(id))
     }
-    pub(crate) async fn delete(&self, id: &str) -> Result<()> {
+    /// Changes the store under its lock, saving it.
+    pub(crate) async fn change<T>(
+        &self,
+        change: impl FnOnce(&mut P::Store) -> Result<T>,
+    ) -> Result<T> {
+        let _lock = self.0.locks().store.lock().await;
+        let mut store = self.load()?;
+        let changed = change(&mut store)?;
+        self.save(&store)?;
+        Ok(changed)
+    }
+    /// Removes an account. A deactivated one stays, deleted, for `kept` to
+    /// record where the pool keeps track of what is gone.
+    pub(crate) async fn delete(
+        &self,
+        id: &str,
+        kept: impl FnOnce(&mut P::Store, usize),
+    ) -> Result<()> {
         let _lock = self.0.locks().store.lock().await;
         let mut store = self.load()?;
         let accounts = P::accounts_mut(&mut store);
-        let before = accounts.len();
-        accounts.retain(|a| a.id != id);
-        if accounts.len() == before {
+        let Some(index) = accounts.iter().position(|a| a.id == id) else {
             return Err("Account not found".into());
+        };
+        if accounts[index].standing == Some(Standing::Deactivated) {
+            accounts[index].standing = Some(Standing::Deleted);
+            kept(&mut store, index);
+            return self.save(&store);
         }
+        accounts.remove(index);
         if P::current(&mut store).as_deref() == Some(id) {
             *P::current(&mut store) = None;
         }
@@ -484,6 +566,9 @@ impl<P: LoginPool> Logins<P> {
                 .find(|a| a.id == id)
                 .ok_or("Account not found")?
                 .clone();
+            if target.standing.is_some() {
+                return Err("Account is deactivated or hidden".into());
+            }
             if let Some(live) = live.as_ref().filter(|_| P::current(&mut store).is_none()) {
                 write_json(&self.0.app().paths.data_dir.join(backup), P::document(live))?;
             }
@@ -556,26 +641,29 @@ impl<P: LoginPool> Logins<P> {
         }
         let before = document.clone();
         let renewed = self.0.renew(document, proxy).await?;
-        self.write_back(&renewed, &before).await;
+        self.write_back(&renewed, &before, document).await;
         Ok(())
     }
     /// Puts a renewal in the Live login, in its own form, when it still
     /// holds the login renewed (`before`, with the same refresh token) and
-    /// no token lasting longer; never another login or a newer token.
+    /// no later generation than the renewal (`after`); never another login
+    /// or a newer token.
     /// Silent: no authorization UI, and a failure only logged, for the
     /// store keeps the renewal.
-    async fn write_back(&self, renewed: &P::Renewed, before: &Value) {
-        let (access, expires_at) = P::renewed(renewed);
+    async fn write_back(&self, renewed: &P::Renewed, before: &Value, after: &Value) {
+        let access = P::access_token(after);
         let outcome: Result<()> = async {
             let Some(mut live) = self.0.read_live(KeychainAccess::Background).await? else {
                 return Ok(());
             };
             let document = P::document(&live);
+            // Still the generation renewed, or one the renewal outlasts.
+            let holds_before = P::access_token(document) == P::access_token(before);
             if !P::same_login(document, before)
                 // The tool renewed it from another refresh token meanwhile.
                 || P::refresh_token(document) != P::refresh_token(before)
-                || P::expiry(document).unwrap_or(0) > expires_at
-                || P::access_token(document).as_deref() == Some(access)
+                || !holds_before && P::newer(document, after)
+                || P::access_token(document) == access
             {
                 return Ok(());
             }
@@ -591,7 +679,7 @@ impl<P: LoginPool> Logins<P> {
         }
     }
 
-    /// Asks with the account's access token, renewing it as its renewal
+    /// Asks with the account's login, renewing its token as its renewal
     /// allows; `forced` only renews it, whatever the choice. A token expired
     /// or refused gives way first to the one the tool renewed, if any; a
     /// refused one is renewed once.
@@ -604,7 +692,7 @@ impl<P: LoginPool> Logins<P> {
         ask: Ask,
     ) -> Used<T>
     where
-        Ask: Fn(String) -> Asking,
+        Ask: Fn(Value) -> Asking,
         Asking: Future<Output = Asked<T>>,
     {
         let account = &begun.account;
@@ -613,7 +701,6 @@ impl<P: LoginPool> Logins<P> {
         let may_renew = forced || Renewal::of(account.renewal) != Renewal::Never;
         let mut renewed = false;
         let mut adopted = false;
-        let token = |document: &Value| P::access_token(document).unwrap_or_default();
         let outcome: Result<Option<T>> = async {
             if forced {
                 self.renew(&mut document, proxy, unreadable).await?;
@@ -634,7 +721,7 @@ impl<P: LoginPool> Logins<P> {
                     renewed = true;
                 }
             }
-            match ask(token(&document)).await {
+            match ask(document.clone()).await {
                 Asked::Answered(answer) => return Ok(Some(answer)),
                 Asked::Failed(error) => return Err(error),
                 Asked::Refused if renewed => return Err(P::SIGN_IN_EXPIRED.into()),
@@ -645,7 +732,7 @@ impl<P: LoginPool> Logins<P> {
             if let Some(live) = self.live_renewal(account, &document, now).await {
                 document = live;
                 adopted = true;
-                match ask(token(&document)).await {
+                match ask(document.clone()).await {
                     Asked::Answered(answer) => return Ok(Some(answer)),
                     Asked::Failed(error) => return Err(error),
                     Asked::Refused => {}
@@ -656,7 +743,7 @@ impl<P: LoginPool> Logins<P> {
             }
             self.renew(&mut document, proxy, unreadable).await?;
             renewed = true;
-            match ask(token(&document)).await {
+            match ask(document.clone()).await {
                 Asked::Answered(answer) => Ok(Some(answer)),
                 Asked::Refused => Err(P::SIGN_IN_EXPIRED.into()),
                 Asked::Failed(error) => Err(error),
@@ -694,7 +781,7 @@ impl<P: LoginPool> Logins<P> {
         let stored = &mut P::accounts_mut(&mut store)[index];
         if used.renewed
             || (used.adopted && stored.document == begun.account.document)
-            || P::expiry(&used.document) > P::expiry(&stored.document)
+            || P::newer(&used.document, &stored.document)
         {
             stored.document = used.document.clone();
         }

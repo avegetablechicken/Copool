@@ -745,9 +745,9 @@ mod tests {
         assert_eq!(c.admin_base, "https://later.example.com/api/v1");
         assert_eq!(c.definition.id, "Later");
         // Kept in the Codex account store, keyed by id.
-        let store = crate::repository::load_accounts(&app.paths.store()).unwrap();
-        assert_eq!(store.extra["providers"][0]["id"], id.as_str());
-        assert_eq!(store.extra["providers"][0]["name"], "Later");
+        let store = app.codex_load().unwrap();
+        assert_eq!(store.providers[0].id, id);
+        assert_eq!(store.providers[0].name, "Later");
     }
 
     #[test]

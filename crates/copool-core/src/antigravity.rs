@@ -231,9 +231,6 @@ impl LoginPool for AntigravityLogins<'_> {
     async fn renew(&self, document: &mut Value, proxy: &str) -> Result<Renewed> {
         renew(&*self.0.antigravity_network(), document, proxy).await
     }
-    fn renewed(renewed: &Renewed) -> (&str, i64) {
-        (&renewed.access, renewed.expires_at)
-    }
     fn apply(renewed: &Renewed, document: &mut Value) {
         renewed.apply(document);
     }
@@ -456,7 +453,7 @@ impl Application {
         Ok(count)
     }
     pub(crate) async fn antigravity_delete_account(&self, id: &str) -> Result<()> {
-        self.antigravity_logins().delete(id).await
+        self.antigravity_logins().delete(id, |_, _| {}).await
     }
     pub(crate) async fn antigravity_edit_accounts(
         &self,
@@ -554,7 +551,8 @@ impl Application {
         let now = now_unix_seconds();
         let asking = proxy.as_str();
         let used = logins
-            .use_token(&begun, forced, &proxy, now, |token| async move {
+            .use_token(&begun, forced, &proxy, now, |document| async move {
+                let token = pool_login::antigravity::access_token(&document).unwrap_or_default();
                 asked(fetch_usage(network, &token, asking, now).await)
             })
             .await;
@@ -610,7 +608,7 @@ impl Application {
                     stored.own.project = Some(project);
                 }
                 let kept = stored.usage.as_ref().and_then(|u| u.credits.clone());
-                stored.record(&used.outcome, now);
+                Logins::<AntigravityLogins>::record_usage(stored, &used.outcome, now);
                 if let (Ok(Some(_)), Some(usage)) = (&used.outcome, stored.usage.as_mut()) {
                     usage.credits = credits.unwrap_or(kept);
                 }

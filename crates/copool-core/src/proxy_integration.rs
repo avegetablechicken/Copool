@@ -1,13 +1,5 @@
-use crate::{
-    application::Paths,
-    codex_config,
-    models::{CurrentAccountSelection, StoredAccount},
-    persistence::write_json,
-    pool_login::codex,
-    repository,
-    utils::now_unix_seconds,
-};
-use serde_json::{json, Value};
+use crate::{application::Paths, codex_config, models::StoredAccount};
+use serde_json::json;
 use std::fs;
 
 fn api_key(definition: &codex_config::Definition, paths: &Paths) -> Option<String> {
@@ -234,7 +226,7 @@ pub(crate) fn candidates_with_keys(
     paths: &Paths,
     resolve_key: impl Fn(&codex_config::Definition) -> Option<String>,
 ) -> Result<Vec<StoredAccount>, String> {
-    let providers = crate::providers::codex_providers(&paths.store())?;
+    let providers = crate::providers::codex_providers(paths)?;
     let config = paths.codex_auth.with_file_name("config.toml");
     let defs = codex_config::definitions(&config);
     let current = codex_config::resolve_path(&config);
@@ -283,90 +275,6 @@ pub(crate) fn candidates_with_keys(
     }
     Ok(result)
 }
-/// The pool's logins as the proxy's candidates: the one Codex uses marked
-/// current, unless Codex is on a provider or the proxy only hosts the API.
-pub(crate) fn login_candidates(paths: &Paths) -> Result<Vec<StoredAccount>, String> {
-    let store = repository::load_accounts(&paths.store())?;
-    let settings = repository::load_settings(&paths.data_dir.join("settings.json"))?;
-    let official =
-        codex_config::resolve_path(&paths.codex_auth.with_file_name("config.toml")).is_official();
-    let current = store
-        .extra
-        .get("currentAccountId")
-        .and_then(Value::as_str)
-        .filter(|_| official && !settings.local_proxy_host_api_only);
-    Ok(store
-        .accounts
-        .into_iter()
-        .map(|mut account| {
-            if current == Some(account.id.as_str()) {
-                account.extra.insert("copoolCurrent".into(), true.into());
-            }
-            account
-        })
-        .collect())
-}
-pub(crate) fn select(paths: &Paths, id: &str, auth_json: &Value) -> Result<bool, String> {
-    let settings = repository::load_settings(&paths.data_dir.join("settings.json"))?;
-    if settings.local_proxy_host_api_only {
-        return Ok(false);
-    }
-    let config = paths.codex_auth.with_file_name("config.toml");
-    if let Some(provider) = auth_json.get("copoolProvider") {
-        let id = provider["id"].as_str().ok_or("Invalid provider")?;
-        if !codex_config::resolve_path(&config)
-            .id
-            .eq_ignore_ascii_case(id)
-        {
-            codex_config::switch(&config, id)?;
-            return Ok(true);
-        }
-        return Ok(false);
-    }
-    let before = repository::load_accounts(&paths.store())?;
-    let current_auth = fs::read(&paths.codex_auth)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-    let same_identity = current_auth
-        .as_ref()
-        .and_then(|v| codex::account_identity(v).ok())
-        == codex::account_identity(auth_json).ok();
-    if before.extra.get("currentAccountId").and_then(Value::as_str) == Some(id)
-        && codex_config::resolve_path(&config).is_official()
-        && same_identity
-    {
-        return Ok(false);
-    }
-    repository::mutate_accounts(&paths.store(), |store| {
-        if !store.accounts.iter().any(|a| a.id == id) {
-            return Err("Account was removed".into());
-        }
-        if !codex_config::resolve_path(&config).is_official() {
-            codex_config::switch(&config, "openai")?;
-        }
-        let mut normalized = codex::normalized_auth_for_write(auth_json.clone())?;
-        if normalized.get("OPENAI_API_KEY").is_none_or(Value::is_null) {
-            if let Some(key) = current_auth
-                .as_ref()
-                .and_then(|v| v.get("OPENAI_API_KEY"))
-                .filter(|v| !v.is_null())
-            {
-                normalized["OPENAI_API_KEY"] = key.clone();
-            }
-        }
-        write_json(&paths.codex_auth, &normalized)?;
-        store.extra.insert("currentAccountId".into(), id.into());
-        store.current_selection = Some(CurrentAccountSelection {
-            account_id: id.into(),
-            selected_at: now_unix_seconds(),
-            source_device_id: "rust-local".into(),
-            account_key: None,
-        });
-        Ok(())
-    })
-    .map(|_| true)
-}
-
 #[cfg(test)]
 mod refresh_tests {
     use super::*;

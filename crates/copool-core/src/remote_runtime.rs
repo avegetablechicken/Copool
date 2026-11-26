@@ -149,16 +149,7 @@ impl Application {
                 }
                 self.claude_remote_payload()
             }
-            Pool::Codex => {
-                let _lock = self.state.store_lock.lock().await;
-                if let Some(rows) = snapshot {
-                    let mut store = crate::store::load_store_from_path(&self.paths.store())?;
-                    if remote::adopt_newer_logins(&mut store.accounts, rows) {
-                        self.persist_accounts(&store)?;
-                    }
-                }
-                remote::accounts_payload(&self.paths.store(), snapshot)
-            }
+            Pool::Codex => self.codex_remote_payload(snapshot).await,
         }
     }
     pub async fn save_remote(

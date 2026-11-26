@@ -217,9 +217,6 @@ impl LoginPool for GrokLogins<'_> {
     async fn renew(&self, document: &mut Value, proxy: &str) -> Result<Renewed> {
         renew(&*self.0.grok_network(), document, proxy).await
     }
-    fn renewed(renewed: &Renewed) -> (&str, i64) {
-        (&renewed.access, renewed.expires_at)
-    }
     fn apply(renewed: &Renewed, document: &mut Value) {
         renewed.apply(document);
     }
@@ -444,7 +441,7 @@ impl Application {
         Ok(count)
     }
     pub(crate) async fn grok_delete_account(&self, id: &str) -> Result<()> {
-        self.grok_logins().delete(id).await
+        self.grok_logins().delete(id, |_, _| {}).await
     }
     pub(crate) async fn grok_edit_accounts(
         &self,
@@ -507,7 +504,8 @@ impl Application {
         let now = now_unix_seconds();
         let asked = proxy.as_str();
         let used = logins
-            .use_token(&begun, forced, &proxy, now, |token| async move {
+            .use_token(&begun, forced, &proxy, now, |document| async move {
+                let token = pool_login::grok::access_token(&document).unwrap_or_default();
                 fetch_usage(network, &token, asked, now).await
             })
             .await;
@@ -540,7 +538,7 @@ impl Application {
                 if let Some(plan) = plan {
                     stored.plan = Some(plan);
                 }
-                stored.record(&used.outcome, now);
+                Logins::<GrokLogins>::record_usage(stored, &used.outcome, now);
             })
             .await?;
         if let Some(reported) = renew_now {

@@ -42,8 +42,12 @@ fn fixture() -> (tempfile::TempDir, crate::Application) {
 fn stored(id: &str, principal: &str, workspace: &str) -> serde_json::Value {
     json!({"id":id,"label":id,"email":format!("{principal}@example.test"),"accountId":workspace,"authJson":auth(principal,workspace),"addedAt":1,"updatedAt":1,"principalId":principal})
 }
+/// Gives the Codex pool the accounts of an `accounts.json`, as the
+/// migration to its own store reads them.
 fn save_fixture(app: &crate::Application, value: serde_json::Value) {
     crate::persistence::write_json(&app.paths.data_dir.join("accounts.json"), &value).unwrap();
+    let _ = std::fs::remove_file(app.paths.data_dir.join(crate::codex_pool::FILE));
+    crate::codex_pool::migrate(&app.paths).unwrap();
 }
 
 mod RemoteServerConfigurationTests;

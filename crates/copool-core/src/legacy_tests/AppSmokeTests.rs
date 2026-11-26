@@ -76,12 +76,8 @@ async fn testAccountsPageSmartSwitchUpdatesCurrentStateAndAuth() {
         "second"
     );
     assert_eq!(
-        crate::repository::load_accounts(&app.paths.store())
-            .unwrap()
-            .current_selection
-            .unwrap()
-            .account_id,
-        "second"
+        app.codex_load().unwrap().current_account_id.as_deref(),
+        Some("second")
     );
 }
 #[tokio::test]

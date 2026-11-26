@@ -8,9 +8,10 @@ async fn testImportCurrentAuthKeepsDistinctPrincipalsForSameAccountID() {
         crate::persistence::write_json(&app.paths.codex_auth, &auth(p, "shared-account")).unwrap();
         app.import_current(Pool::Codex).await.unwrap();
     }
-    let saved: Value =
-        serde_json::from_slice(&std::fs::read(app.paths.data_dir.join("accounts.json")).unwrap())
-            .unwrap();
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(app.paths.data_dir.join(crate::codex_pool::FILE)).unwrap(),
+    )
+    .unwrap();
     let mut keys = saved["accounts"]
         .as_array()
         .unwrap()
@@ -19,7 +20,7 @@ async fn testImportCurrentAuthKeepsDistinctPrincipalsForSameAccountID() {
             format!(
                 "{}|{}",
                 a["principalId"].as_str().unwrap(),
-                a["accountId"].as_str().unwrap()
+                a["workspaceId"].as_str().unwrap()
             )
         })
         .collect::<Vec<_>>();
@@ -72,11 +73,11 @@ async fn testListAccountsFollowsAuthChangedOutsideCopool() {
     let accounts = app.accounts(Pool::Codex).await.unwrap();
     assert_eq!(accounts.iter().filter(|a| a.is_current).count(), 1);
     assert_eq!(accounts.iter().find(|a| a.is_current).unwrap().id, "acct-2");
-    let saved: Value =
-        serde_json::from_slice(&std::fs::read(app.paths.data_dir.join("accounts.json")).unwrap())
-            .unwrap();
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(app.paths.data_dir.join(crate::codex_pool::FILE)).unwrap(),
+    )
+    .unwrap();
     assert_eq!(saved["currentAccountId"], "acct-2");
-    assert_eq!(saved["currentSelection"]["cardId"], "acct-2");
 }
 #[tokio::test]
 async fn testListAccountsMarksNoneCurrentForUnknownAuth() {
@@ -105,14 +106,14 @@ async fn testImportCurrentAuthPrefersExactPrincipalMatchOverLegacyWildcardRow() 
     )
     .unwrap();
     app.import_current(Pool::Codex).await.unwrap();
-    let saved: Value =
-        serde_json::from_slice(&std::fs::read(app.paths.data_dir.join("accounts.json")).unwrap())
-            .unwrap();
+    let saved: Value = serde_json::from_slice(
+        &std::fs::read(app.paths.data_dir.join(crate::codex_pool::FILE)).unwrap(),
+    )
+    .unwrap();
     let accounts = saved["accounts"].as_array().unwrap();
     assert_eq!(accounts.len(), 2);
     // The import updated the exact principal's row, not the legacy one.
     let updated = |id: &str| accounts.iter().find(|a| a["id"] == id).unwrap()["updatedAt"] != 1;
     assert!(updated("exact"));
     assert!(!updated("legacy"));
-    assert!(accounts.iter().find(|a| a["id"] == "legacy").unwrap()["email"].is_null());
 }

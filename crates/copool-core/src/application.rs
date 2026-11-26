@@ -1,15 +1,10 @@
 use crate::{
     models::*,
-    persistence::write_json,
     platform::SyncAgent,
     pool::Pool,
-    pool_login::{
-        codex::{self, newer_login},
-        Identity, OAuthCredential,
-    },
+    pool_login::{codex, Identity, OAuthCredential},
     proxy_service,
     state::AppState,
-    store,
     utils::now_unix_seconds,
 };
 use serde::{Deserialize, Serialize};
@@ -343,8 +338,11 @@ pub struct Application {
     pub(crate) state: AppState,
     pub(crate) operations: Mutex<()>,
     proxy_operations: Mutex<()>,
-    /// Serializes renewals of logins the Codex proxy's upstream refused.
-    codex_renewals: Mutex<()>,
+    pub(crate) codex: crate::login_store::Locks,
+    /// Reads of Codex's `auth.json` answer this late with what was there
+    /// when asked.
+    #[cfg(test)]
+    pub(crate) codex_live_read_delay_ms: std::sync::atomic::AtomicU64,
     pub(crate) greetings_inflight: std::sync::Mutex<std::collections::BTreeSet<String>>,
     switch_effects: Arc<std::sync::RwLock<Option<SwitchEffect>>>,
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
@@ -412,8 +410,6 @@ impl Application {
         file.try_lock()
             .map_err(|_| "This Copool data directory is already in use")?;
         let instance_lock = InstanceLock { file };
-        // Recover malformed account JSON only after a private backup succeeds.
-        store::load_store_from_path(&paths.store())?;
         let network = Arc::new(crate::account_network::Network {
             codex_config: paths.codex_auth.with_file_name("config.toml"),
         });
@@ -425,7 +421,9 @@ impl Application {
             state: AppState::default(),
             operations: Mutex::new(()),
             proxy_operations: Mutex::new(()),
-            codex_renewals: Mutex::new(()),
+            codex: Default::default(),
+            #[cfg(test)]
+            codex_live_read_delay_ms: Default::default(),
             greetings_inflight: Default::default(),
             switch_effects: Arc::new(std::sync::RwLock::new(None)),
             refreshing: Default::default(),
@@ -438,6 +436,7 @@ impl Application {
             _instance_lock: instance_lock,
         };
         app.migrate_provider_credentials()?;
+        crate::codex_pool::migrate(&app.paths)?;
         app.migrate_codex_providers()?;
         app.preferences()?;
         Ok(app)
@@ -476,20 +475,6 @@ impl Application {
         if let Some(callback) = self.changes.read().unwrap().as_ref() {
             callback();
         }
-    }
-    /// Edits the account store under the lock its other writers, the proxy
-    /// included, hold across their load and save.
-    pub(crate) async fn mutate_accounts(
-        &self,
-        edit: impl FnOnce(&mut AccountsStore) -> Result<()>,
-    ) -> Result<AccountsStore> {
-        let _lock = self.state.store_lock.lock().await;
-        crate::repository::mutate_accounts(&self.paths.store(), edit)
-    }
-    pub(crate) fn persist_accounts(&self, accounts: &AccountsStore) -> Result<()> {
-        store::save_store_to_path(&self.paths.store(), accounts)?;
-        self.publish();
-        Ok(())
     }
     pub(crate) fn on_switch_effects(&self, effect: SwitchEffect) {
         *self.switch_effects.write().unwrap() = Some(effect);
@@ -539,7 +524,7 @@ impl Application {
         storage.refresh_usage = false;
         let paths = self.paths.clone();
         storage.provider_candidates = Some(Arc::new(move || {
-            let mut candidates = crate::proxy_integration::login_candidates(&paths)?;
+            let mut candidates = crate::codex_pool::proxy_candidates(&paths)?;
             candidates.extend(crate::proxy_integration::candidates(&paths)?);
             Ok(candidates)
         }));
@@ -554,46 +539,26 @@ impl Application {
                         .await
                 })
             }));
+            // A failover the proxy made switches Codex to the account that
+            // answered.
+            let pool = Arc::downgrade(&app);
+            storage.on_selected = Some(Arc::new(move |id, auth| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let Some(app) = pool.upgrade() else {
+                        return Ok(());
+                    };
+                    if app.codex_follow_proxy(&id, &auth).await? {
+                        let credential = auth
+                            .get("copoolProvider")
+                            .is_none()
+                            .then(|| codex::credential(&auth, &Identity::default()));
+                        app.after_switch(Pool::Codex, credential).await?;
+                    }
+                    Ok(())
+                })
+            }));
         }
-        let paths = self.paths.clone();
-        let changes = self.changes.clone();
-        let effects = self.switch_effects.clone();
-        let store_lock = self.state.store_lock.clone();
-        storage.on_selected = Some(Arc::new(move |id, auth| {
-            let paths = paths.clone();
-            let changes = changes.clone();
-            let effects = effects.clone();
-            let store_lock = store_lock.clone();
-            Box::pin(async move {
-                let selected = {
-                    let _lock = store_lock.lock().await;
-                    crate::proxy_integration::select(&paths, &id, &auth)?
-                };
-                if selected {
-                    if let Some(callback) = changes.read().unwrap().as_ref() {
-                        callback();
-                    }
-                    let effect = effects.read().unwrap().clone();
-                    if let Some(effect) = effect {
-                        let settings = crate::repository::load_settings(
-                            &paths.data_dir.join("settings.json"),
-                        )?;
-                        let preferences = Preferences::from_settings(settings)?;
-                        effect(
-                            Pool::Codex,
-                            preferences,
-                            if auth.get("copoolProvider").is_some() {
-                                None
-                            } else {
-                                Some(codex::credential(&auth, &Identity::default()))
-                            },
-                        )
-                        .await?;
-                    }
-                }
-                Ok(())
-            })
-        }));
         storage
     }
     pub fn preferences(&self) -> Result<Preferences> {
@@ -717,675 +682,6 @@ impl Application {
             return Ok(account_proxy.trim().to_owned());
         }
         Ok(self.preferences()?.account_proxy_url.trim().to_owned())
-    }
-    fn current_auth(&self) -> Result<Option<Value>> {
-        match fs::read(&self.paths.codex_auth) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|e| format!("Invalid Codex auth: {e}")),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-    /// The Codex pool, following the login Codex uses in auth.json.
-    pub(crate) async fn codex_accounts(&self) -> Result<Vec<AccountSummary>> {
-        let _lock = self.state.store_lock.lock().await;
-        let mut store = store::load_store_from_path(&self.paths.store())?;
-        let before = serde_json::to_value(&store).map_err(|e| e.to_string())?;
-        for account in &mut store.accounts {
-            if let Ok(extracted) = codex::extract_auth(&account.auth_json) {
-                account.account_id = extracted.account_id;
-                if extracted.email.is_some() {
-                    account.email = extracted.email;
-                }
-                if extracted.principal_id.is_some() {
-                    account.principal_id = extracted.principal_id;
-                }
-                if extracted.plan_type.is_some() {
-                    account.plan_type = extracted.plan_type;
-                }
-                if let Some(name) = extracted.team_name {
-                    account.extra.insert("teamName".into(), name.into());
-                }
-            }
-        }
-        // auth.json may be changed outside Copool; the login Codex actually uses wins over
-        // the stored selection. A missing or unreadable login keeps the stored selection.
-        let live = self.current_auth().ok().flatten();
-        let current = live.as_ref().and_then(|v| identity(v).ok());
-        if let Some(current) = &current {
-            let matches = |a: &StoredAccount| identity(&a.auth_json).ok().as_ref() == Some(current);
-            let stored_id = store.extra.get("currentAccountId").and_then(Value::as_str);
-            if !store
-                .accounts
-                .iter()
-                .any(|a| Some(a.id.as_str()) == stored_id && matches(a))
-            {
-                match store
-                    .accounts
-                    .iter()
-                    .find(|a| matches(a))
-                    .map(|a| a.id.clone())
-                {
-                    Some(id) => {
-                        store.extra.insert("currentAccountId".into(), id.into());
-                    }
-                    None => {
-                        store.extra.remove("currentAccountId");
-                    }
-                }
-            }
-        }
-        if let Some(current_id) = store.extra.get("currentAccountId").and_then(Value::as_str) {
-            if let Some(account) = store.accounts.iter().find(|a| a.id == current_id) {
-                if let (Some(selection), Ok((workspace, principal))) =
-                    (&mut store.current_selection, identity(&account.auth_json))
-                {
-                    selection.account_id = current_id.to_owned();
-                    selection.account_key = Some(format!("{principal}|{workspace}"));
-                }
-            }
-        }
-        if serde_json::to_value(&store).map_err(|e| e.to_string())? != before {
-            self.persist_accounts(&store)?;
-        }
-        let selected = store
-            .extra
-            .get("currentAccountId")
-            .and_then(Value::as_str)
-            .filter(|id| store.accounts.iter().any(|a| a.id == *id))
-            .map(str::to_owned);
-        let mut summaries: Vec<_> = store
-            .accounts
-            .iter()
-            .map(|a| {
-                let mut summary = a.to_summary(None);
-                summary.is_current = selected.as_ref().is_some_and(|id| *id == a.id);
-                summary.renewal = Some(a.renewal().as_str().into());
-                // Codex renews the login it uses in auth.json; until a refresh
-                // adopts it, that token's expiry is the one in effect.
-                if let Some(live) = live.as_ref().filter(|l| newer_login(l, &a.auth_json)) {
-                    summary.token_expires_at =
-                        codex::access_token_expiry(live).and_then(crate::models::displayed_expiry);
-                }
-                summary
-            })
-            .collect();
-        let provider = crate::codex_config::resolve_path(&self.codex_config_path());
-        if !provider.is_official() {
-            for a in &mut summaries {
-                a.is_current = false;
-            }
-        }
-        // Sub2api cards are current while Codex uses their provider.
-        let current = self.codex_provider_in_use()?;
-        summaries.extend(self.provider_cards(Pool::Codex, current.as_deref())?);
-        crate::ranking::sort_for_display(&mut summaries);
-        Ok(summaries)
-    }
-    /// Imports the login Codex uses.
-    pub(crate) async fn codex_import_current(&self) -> Result<usize> {
-        let value = self
-            .current_auth()?
-            .ok_or("Codex auth.json not found; log in with Codex first")?;
-        let count = self
-            .codex_import_json(&serde_json::to_string(&value).map_err(|e| e.to_string())?)
-            .await?;
-        self.reconcile_workspace_names(true).await?;
-        Ok(count)
-    }
-    /// Accept auth.json, arrays of auth documents, or a Swift/Rust accounts.json.
-    /// Validate the complete batch before changing the destination; keep metadata.
-    pub(crate) async fn codex_import_json(&self, content: &str) -> Result<usize> {
-        let value: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
-        let entries: Vec<Value> = if let Some(accounts) = value.get("accounts") {
-            accounts
-                .as_array()
-                .ok_or("accounts must be an array")?
-                .clone()
-        } else if let Some(values) = value.as_array() {
-            values.clone()
-        } else {
-            vec![value]
-        };
-        let now = now_unix_seconds();
-        let mut incoming = Vec::new();
-        for entry in entries {
-            let document = codex::normalize_imported_auth_json(
-                entry.get("authJson").unwrap_or(&entry).clone(),
-            );
-            let extracted = codex::extract_auth(&document)?;
-            if extracted.access_token.trim().is_empty() || extracted.account_id.trim().is_empty() {
-                return Err("Empty access token or account ID".into());
-            }
-            let mut account = if entry.get("authJson").is_some() {
-                serde_json::from_value::<StoredAccount>(entry)
-                    .map_err(|e| format!("Invalid stored account: {e}"))?
-            } else {
-                StoredAccount {
-                    extra: Default::default(),
-                    id: uuid::Uuid::new_v4().to_string(),
-                    label: extracted
-                        .email
-                        .clone()
-                        .unwrap_or_else(|| extracted.account_id.clone()),
-                    email: extracted.email.clone(),
-                    account_id: extracted.account_id.clone(),
-                    plan_type: extracted.plan_type,
-                    team_alias: None,
-                    auth_json: document.clone(),
-                    added_at: now,
-                    updated_at: now,
-                    usage: None,
-                    usage_error: None,
-                    principal_id: None,
-                    proxy_url: String::new(),
-                }
-            };
-            // Trust the auth document, not externally supplied account IDs.
-            account.principal_id = extracted.principal_id;
-            if let Some(name) = extracted.team_name {
-                account.extra.insert("teamName".into(), name.into());
-            }
-            account.account_id = extracted.account_id;
-            account.auth_json = document;
-            account.updated_at = now;
-            validate_proxy(&account.proxy_url)?;
-            incoming.push(account);
-        }
-        let defer = !self.preferences()?.request_new_accounts;
-        let _op = self.operations.lock().await;
-        let _lock = self.state.store_lock.lock().await;
-        let mut saved = store::load_store_from_path(&self.paths.store())?;
-        let count = incoming.len();
-        for mut account in incoming {
-            let key = identity(&account.auth_json)?;
-            if let Some(existing) = saved
-                .accounts
-                .iter_mut()
-                .find(|a| identity(&a.auth_json).ok().as_ref() == Some(&key))
-            {
-                existing.auth_json = account.auth_json;
-                existing.updated_at = now;
-                if account.usage.is_some() || account.usage_error.is_some() {
-                    existing.usage = account.usage;
-                    existing.usage_error = account.usage_error;
-                } else {
-                    existing.usage_error = None;
-                }
-                for key in ["teamName", "usageStateUpdatedAt"] {
-                    if let Some(value) = account.extra.get(key).filter(|v| !v.is_null()) {
-                        existing.extra.insert(key.into(), value.clone());
-                    }
-                }
-                existing
-                    .extra
-                    .insert("workspaceStatus".into(), "active".into());
-                existing.extra.insert("displayStatus".into(), "list".into());
-            } else {
-                // External IDs may collide with another principal's local ID.
-                account.id = uuid::Uuid::new_v4().to_string();
-                if defer {
-                    account
-                        .extra
-                        .insert(crate::models::FIRST_REQUEST_PENDING.into(), true.into());
-                }
-                saved.accounts.push(account);
-            }
-        }
-        let authorized: Vec<_> = saved
-            .accounts
-            .iter()
-            .filter(|a| a.is_available())
-            .map(|a| a.account_id.trim().to_lowercase())
-            .collect();
-        if let Some(rows) = saved
-            .extra
-            .get_mut("workspaceDirectory")
-            .and_then(Value::as_array_mut)
-        {
-            rows.retain(|v| {
-                !authorized.contains(
-                    &v["workspaceId"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .trim()
-                        .to_lowercase(),
-                )
-            });
-        }
-        self.persist_accounts(&saved)?;
-        Ok(count)
-    }
-    /// Edits the stored accounts under the locks the store's writers hold.
-    pub(crate) async fn codex_edit_accounts(
-        &self,
-        edit: impl FnOnce(&mut [&mut dyn crate::pool::PoolAccount]) -> Result<bool>,
-    ) -> Result<()> {
-        let _op = self.operations.lock().await;
-        let _lock = self.state.store_lock.lock().await;
-        let mut saved = store::load_store_from_path(&self.paths.store())?;
-        let changed = {
-            let mut accounts: Vec<&mut dyn crate::pool::PoolAccount> = saved
-                .accounts
-                .iter_mut()
-                .map(|a| a as &mut dyn crate::pool::PoolAccount)
-                .collect();
-            edit(&mut accounts)?
-        };
-        if changed {
-            self.persist_accounts(&saved)?;
-        }
-        Ok(())
-    }
-    /// Removes an account; a deactivated workspace's stays listed as deleted.
-    pub(crate) async fn codex_delete_account(&self, id: &str) -> Result<()> {
-        let _op = self.operations.lock().await;
-        let _lock = self.state.store_lock.lock().await;
-        let mut saved = store::load_store_from_path(&self.paths.store())?;
-        if !saved.accounts.iter().any(|a| a.id == id) {
-            return Err("Account not found".into());
-        }
-        if let Some(account) = saved.accounts.iter_mut().find(|a| {
-            a.id == id
-                && a.extra.get("displayStatus").and_then(Value::as_str) == Some("deactivated")
-        }) {
-            account
-                .extra
-                .insert("displayStatus".into(), "deleted".into());
-            let workspace = account.account_id.clone();
-            let entry = serde_json::json!({"workspaceId":workspace,"workspaceName":account.extra.get("teamName"),"email":account.email,"planType":account.plan_type,"kind":"workspace","source":"deactivated","status":"deactivated","visibility":"deleted","lastSeenAt":now_unix_seconds(),"lastStatusCheckedAt":now_unix_seconds()});
-            let rows = saved
-                .extra
-                .entry("workspaceDirectory")
-                .or_insert(serde_json::json!([]))
-                .as_array_mut()
-                .ok_or("Invalid workspace directory")?;
-            if let Some(old) = rows.iter_mut().find(|v| v["workspaceId"] == workspace) {
-                old["visibility"] = "deleted".into();
-            } else {
-                rows.push(entry);
-            }
-            return self.persist_accounts(&saved);
-        }
-        saved.accounts.retain(|a| a.id != id);
-        self.persist_accounts(&saved)
-    }
-    /// Gives Codex this account's login, or a Sub2api card's provider.
-    pub(crate) async fn codex_switch_account(&self, id: &str) -> Result<SwitchExecution> {
-        if crate::sub2api::is_card(Pool::Codex, id) {
-            let (provider, account) = self.card(Pool::Codex, id)?;
-            if !account.status.eq_ignore_ascii_case("active") {
-                return Err("Account is deactivated".into());
-            }
-            let _op = self.operations.lock().await;
-            // Codex selects the `config.toml` provider it is named after.
-            crate::codex_config::switch(&self.codex_config_path(), &provider.name)?;
-            self.publish();
-            drop(_op);
-            let mut execution = self.after_switch(Pool::Codex, None).await?;
-            execution.provider = Some(provider.name);
-            return Ok(execution);
-        }
-        let _op = self.operations.lock().await;
-        let _lock = self.state.store_lock.lock().await;
-        let mut saved = store::load_store_from_path(&self.paths.store())?;
-        let account = saved
-            .accounts
-            .iter()
-            .find(|a| a.id == id)
-            .ok_or("Account not found")?
-            .clone();
-        if !account.is_available() {
-            return Err("Account is deactivated or hidden".into());
-        }
-        let normalized = codex::normalized_auth_for_write(account.auth_json.clone())?;
-        let previous = self.current_auth()?;
-        if let Some(previous) = &previous {
-            write_json(
-                &self.paths.data_dir.join("auth-before-switch.json"),
-                previous,
-            )?;
-        }
-        if !crate::codex_config::resolve_path(&self.codex_config_path()).is_official() {
-            crate::codex_config::switch(&self.codex_config_path(), "openai")?;
-        }
-        write_json(&self.paths.codex_auth, &normalized)?;
-        saved.extra.insert("currentAccountId".into(), id.into());
-        let (workspace, principal) = identity(&normalized)?;
-        saved.current_selection = Some(CurrentAccountSelection {
-            account_id: id.into(),
-            selected_at: now_unix_seconds(),
-            source_device_id: "rust-local".into(),
-            account_key: Some(format!("{principal}|{workspace}")),
-        });
-        if let Err(error) = self.persist_accounts(&saved) {
-            let rollback = if let Some(previous) = previous {
-                write_json(&self.paths.codex_auth, &previous)
-            } else {
-                fs::remove_file(&self.paths.codex_auth).map_err(|e| e.to_string())
-            };
-            rollback.map_err(|rollback| format!("{error}; auth rollback failed: {rollback}"))?;
-            return Err(error);
-        }
-        drop(_lock);
-        drop(_op);
-        let credential = codex::credential(&normalized, &Identity::default());
-        self.after_switch(Pool::Codex, Some(credential)).await
-    }
-    /// Renews a login the proxy's upstream refused (`rejected`, its access
-    /// token), and returns the account's login in the proxy's form. A login
-    /// already renewed since is returned as it is.
-    async fn codex_renew_login(&self, id: &str, rejected: &str) -> Result<Value> {
-        let _op = self.codex_renewals.lock().await;
-        let account = |app: &Self| -> Result<StoredAccount> {
-            store::load_store_from_path(&app.paths.store())?
-                .accounts
-                .into_iter()
-                .find(|a| a.id == id)
-                .ok_or_else(|| "Account not found".into())
-        };
-        let before = account(self)?;
-        let access = codex::extract_auth(&before.auth_json).map(|a| a.access_token);
-        if access.as_deref() != Ok(rejected) {
-            return Ok(before.auth_json);
-        }
-        if !before.renews() {
-            return Err(crate::models::RENEWAL_OFF.into());
-        }
-        let mut renewed = false;
-        let result = self
-            .codex_refresh_account(id, true, Some(&mut renewed))
-            .await;
-        if !renewed {
-            result?;
-        }
-        Ok(account(self)?.auth_json)
-    }
-    /// Whether the stored account failed: its usage refused, or its token
-    /// expired.
-    pub(crate) async fn codex_login_failed(&self, id: &str) -> Result<bool> {
-        let _lock = self.state.store_lock.lock().await;
-        let saved = store::load_store_from_path(&self.paths.store())?;
-        let account = saved
-            .accounts
-            .iter()
-            .find(|a| a.id == id)
-            .ok_or("Account not found")?;
-        Ok(account.usage_error.is_some()
-            || codex::access_token_expiry(&account.auth_json)
-                .is_some_and(|at| at <= now_unix_seconds()))
-    }
-    /// One hi with this account's login, without switching to it.
-    pub(crate) async fn codex_hello(&self, id: &str) -> Result<crate::pool::Hello> {
-        let account = {
-            let _lock = self.state.store_lock.lock().await;
-            store::load_store_from_path(&self.paths.store())?
-                .accounts
-                .into_iter()
-                .find(|a| a.id == id)
-                .ok_or("Account not found")?
-        };
-        let plan = account
-            .usage
-            .as_ref()
-            .and_then(|u| u.plan_type.as_deref())
-            .filter(|p| !p.trim().is_empty())
-            .or(account.plan_type.as_deref())
-            .unwrap_or_default();
-        if !plan.trim().eq_ignore_ascii_case("plus") {
-            return Err(SAY_HI_REQUIRES_PLUS.into());
-        }
-        let live = self
-            .current_auth()
-            .ok()
-            .flatten()
-            .filter(|live| newer_login(live, &account.auth_json));
-        let auth = live.as_ref().unwrap_or(&account.auth_json);
-        let expired = codex::access_token_expiry(auth).is_some_and(|at| at <= now_unix_seconds());
-        let result = if expired {
-            Err("Provided authentication token is expired".into())
-        } else {
-            let base = crate::usage::chatgpt_base_origin(
-                crate::codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
-            );
-            proxy_service::say_hi(&base, auth, &self.account_proxy(&account.proxy_url)?).await
-        };
-        // An explicit greeting never preflights or skips based on usage.
-        match result {
-            Ok(()) => Ok(crate::pool::Hello::Said),
-            Err(error) if crate::account_network::expired_error(&error) => {
-                Ok(crate::pool::Hello::Expired(error))
-            }
-            Err(error) => Err(error),
-        }
-    }
-    /// With `renew_now`, only the tokens are renewed, even when unexpired or
-    /// renewal is off; usage is not asked for, nor shown as refreshing, and
-    /// whether the store kept the renewal is reported.
-    pub(crate) async fn codex_refresh_account(
-        &self,
-        id: &str,
-        force: bool,
-        renew_now: Option<&mut bool>,
-    ) -> Result<()> {
-        let forced = renew_now.is_some();
-        let _activity = (!forced).then(|| self.begin_refresh(id));
-        // Read a snapshot, perform IO without locks, then merge into the latest store.
-        // Proxy edits, manual switches and account removal must remain responsive.
-        let account = {
-            let _lock = self.state.store_lock.lock().await;
-            store::load_store_from_path(&self.paths.store())?
-                .accounts
-                .into_iter()
-                .find(|a| a.id == id)
-                .ok_or("Account not found")?
-        };
-        if account.awaiting_first_request() {
-            return Ok(());
-        }
-        if !force
-            && account
-                .usage
-                .as_ref()
-                .is_some_and(|u| now_unix_seconds() - u.fetched_at < 25)
-        {
-            return Ok(());
-        }
-        // Codex rotates the refresh token of the login it uses in auth.json;
-        // the stored copy of that account is spent once the live one is newer.
-        let mut selected = self
-            .current_auth()
-            .ok()
-            .flatten()
-            .filter(|live| newer_login(live, &account.auth_json))
-            .unwrap_or_else(|| account.auth_json.clone());
-        let proxy = self.account_proxy(&account.proxy_url)?;
-        let mut retried = false;
-        let result = loop {
-            let auth_json = &selected;
-            let attempt = if forced {
-                match self.network.refresh(auth_json, &proxy).await {
-                    Ok(auth) => Ok((auth, None)),
-                    Err(message) => Err(crate::account_network::FetchFailure {
-                        auth: auth_json.clone(),
-                        message,
-                    }),
-                }
-            } else {
-                crate::account_network::fetch(
-                    self.network.as_ref(),
-                    auth_json,
-                    &proxy,
-                    now_unix_seconds(),
-                    account.renews(),
-                )
-                .await
-                .map(|(auth, usage)| (auth, Some(usage)))
-            };
-            let Err(failure) = &attempt else {
-                break attempt;
-            };
-            if retried
-                || failure.auth != selected
-                || !crate::account_network::expired_error(&failure.message)
-            {
-                break attempt;
-            }
-            // A different process can rotate the login while usage or renewal
-            // is in flight. Re-read both copies before recording a sign-in error.
-            let saved = {
-                let _lock = self.state.store_lock.lock().await;
-                store::load_store_from_path(&self.paths.store())?
-            };
-            let Some(target) = saved.accounts.iter().find(|a| a.id == id) else {
-                break attempt;
-            };
-            let mut replacement = &failure.auth;
-            if newer_login(&target.auth_json, replacement) {
-                replacement = &target.auth_json;
-            }
-            let disk = self.current_auth().ok().flatten();
-            if let Some(login) = disk.as_ref().filter(|v| newer_login(v, replacement)) {
-                replacement = login;
-            }
-            if replacement["tokens"] == failure.auth["tokens"] {
-                break attempt;
-            }
-            selected = replacement.clone();
-            retried = true;
-        };
-        let auth_json = &selected;
-        let renewed = match &result {
-            Ok((auth, _)) | Err(crate::account_network::FetchFailure { auth, .. }) => {
-                auth != auth_json
-            }
-        };
-        let _lock = self.state.store_lock.lock().await;
-        let mut saved = store::load_store_from_path(&self.paths.store())?;
-        let current = saved.extra.get("currentAccountId").and_then(Value::as_str) == Some(id);
-        let mut live_write = None;
-        if let Some(target) = saved.accounts.iter_mut().find(|a| a.id == id) {
-            target.updated_at = now_unix_seconds();
-            target
-                .extra
-                .insert("usageStateUpdatedAt".into(), target.updated_at.into());
-            match &result {
-                Ok((auth, value)) => {
-                    // A renewal alone leaves the usage as it was.
-                    if let Some(value) = value {
-                        target.usage = Some(value.clone());
-                        target.usage_error = None;
-                        target
-                            .extra
-                            .insert("workspaceStatus".into(), "active".into());
-                        if target.extra.get("displayStatus").and_then(Value::as_str)
-                            != Some("deleted")
-                        {
-                            target.extra.insert("displayStatus".into(), "list".into());
-                        }
-                    }
-                    // Tokens the proxy or another refresh rotated during the request
-                    // are newer than the snapshot; only a newer refresh or adoption
-                    // made here replaces them.
-                    if auth != &account.auth_json
-                        && (target.auth_json == account.auth_json
-                            || newer_login(auth, &target.auth_json))
-                    {
-                        target.auth_json = auth.clone();
-                    }
-                    let extracted = crate::pool_login::codex::extract_auth(auth)?;
-                    if let Some(name) = extracted.team_name {
-                        target.extra.insert("teamName".into(), name.into());
-                    }
-                    target.plan_type = extracted.plan_type.or(target.plan_type.clone());
-                    target.email = extracted.email.or(target.email.clone());
-                    target.principal_id = extracted.principal_id;
-                    // Only refresh the login Codex is still using; never revert a switch
-                    // made outside Copool to the stored selection.
-                    if current
-                        && auth != auth_json
-                        && self
-                            .current_auth()
-                            .ok()
-                            .flatten()
-                            .as_ref()
-                            .and_then(|v| identity(v).ok())
-                            == identity(auth).ok()
-                    {
-                        live_write = Some(auth);
-                    }
-                }
-                Err(crate::account_network::FetchFailure { auth, message }) => {
-                    // A refresh that succeeded before the request failed has already
-                    // spent the stored copy, so keep the rotated login even though the
-                    // usage call did not answer.
-                    if auth != &account.auth_json
-                        && (target.auth_json == account.auth_json
-                            || newer_login(auth, &target.auth_json))
-                    {
-                        target.auth_json = auth.clone();
-                    }
-                    if current
-                        && auth != auth_json
-                        && self
-                            .current_auth()
-                            .ok()
-                            .flatten()
-                            .as_ref()
-                            .and_then(|v| identity(v).ok())
-                            == identity(auth).ok()
-                    {
-                        live_write = Some(auth);
-                    }
-                    target.usage_error = Some(if crate::account_network::expired_error(message) {
-                        "error.accounts.sign_in_expired".into()
-                    } else {
-                        message.clone()
-                    });
-                    if crate::account_network::deactivated(message) {
-                        target
-                            .extra
-                            .insert("workspaceStatus".into(), "deactivated".into());
-                        if target.extra.get("displayStatus").and_then(Value::as_str)
-                            != Some("deleted")
-                        {
-                            target
-                                .extra
-                                .insert("displayStatus".into(), "deactivated".into());
-                        }
-                    }
-                }
-            }
-            self.persist_accounts(&saved)?;
-        }
-        // Written only once the store keeps the rotated tokens, and with the
-        // store's check of their generation: only over the login they were
-        // renewed from, or an older one. A request answered late must not
-        // replace a login renewed since.
-        let kept = |auth: &Value| {
-            saved
-                .accounts
-                .iter()
-                .any(|a| a.id == id && a.auth_json == *auth)
-        };
-        if let Some(reported) = renew_now {
-            let (Ok((auth, _)) | Err(crate::account_network::FetchFailure { auth, .. })) = &result;
-            *reported = renewed && kept(auth);
-        }
-        if let Some(auth) = live_write.filter(|auth| kept(auth)) {
-            let renewable = self.current_auth().ok().flatten().is_some_and(|disk| {
-                identity(&disk).ok() == identity(auth).ok()
-                    && codex::renewal_replaces(auth, auth_json, &disk)
-            });
-            if renewable {
-                write_json(
-                    &self.paths.codex_auth,
-                    &crate::pool_login::codex::normalized_auth_for_write(auth.clone())?,
-                )?;
-            }
-        }
-        result.map(|_| ()).map_err(|failure| failure.message)
     }
     /// The pool's API proxy, as the engine runs it for that pool.
     pub(crate) fn proxy_storage(&self, pool: Pool) -> proxy_service::ProxyStorageContext {
@@ -1530,6 +826,7 @@ pub(crate) fn eligible(a: &AccountSummary) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::write_json;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use serde_json::json;
     fn document(principal: &str) -> Value {
@@ -1718,8 +1015,8 @@ mod tests {
         let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
         app.switch_account(Pool::Codex, &id).await.unwrap();
         let stored_token = || {
-            let store = store::load_store_from_path(&app.paths.store()).unwrap();
-            store.accounts[0].auth_json["tokens"]["refresh_token"].clone()
+            let store = app.codex_load().unwrap();
+            store.accounts[0].document["tokens"]["refresh_token"].clone()
         };
         let live = |token: &str, refreshed: &str| {
             let mut live = login.clone();
@@ -1779,8 +1076,8 @@ mod tests {
         );
         let renewed = renew(id.clone(), "test-only".into()).await.unwrap();
         assert_eq!(renewed["tokens"]["access_token"], "refreshed-test-only");
-        let stored = store::load_store_from_path(&app.paths.store()).unwrap();
-        assert_eq!(stored.accounts[0].auth_json, renewed);
+        let stored = app.codex_load().unwrap();
+        assert_eq!(stored.accounts[0].document, renewed);
         let live: Value =
             serde_json::from_slice(&fs::read(&app.paths.codex_auth).unwrap()).unwrap();
         assert_eq!(live["tokens"]["access_token"], "refreshed-test-only");
@@ -1821,8 +1118,8 @@ mod tests {
         };
         let (result, ()) = tokio::join!(app.refresh_usage(Pool::Codex, &id), rotate);
         result.unwrap();
-        let saved = store::load_store_from_path(&app.paths.store()).unwrap();
-        assert_eq!(saved.accounts[0].auth_json, login);
+        let saved = app.codex_load().unwrap();
+        assert_eq!(saved.accounts[0].document, login);
         assert!(saved.accounts[0].usage_error.is_none());
         assert!(saved.accounts[0].usage.is_some());
     }
@@ -1967,7 +1264,8 @@ mod tests {
         app.switch_account(Pool::Codex, &accounts[1].id)
             .await
             .unwrap();
-        assert!(app.paths.data_dir.join("auth-before-switch.json").exists());
+        // The login left is the pool's own: nothing to keep aside.
+        assert!(!app.paths.data_dir.join("auth-before-switch.json").exists());
     }
     #[tokio::test]
     async fn smart_switch_reports_no_target_and_keeps_an_equally_good_current_account() {
@@ -2018,7 +1316,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn invalid_batch_is_atomic_and_corruption_has_a_private_backup() {
+    async fn an_invalid_batch_imports_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(&dir);
         app.import_json(Pool::Codex, &document("alice").to_string())
@@ -2029,29 +1327,6 @@ mod tests {
             .await
             .is_err());
         assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 1);
-        fs::write(app.paths.store(), b"broken").unwrap();
-        assert!(app.accounts(Pool::Codex).await.unwrap().is_empty());
-        let backup = fs::read_dir(&app.paths.data_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("accounts.corrupt-")
-            })
-            .unwrap();
-        assert_eq!(fs::read(backup.path()).unwrap(), b"broken");
-    }
-    #[tokio::test]
-    async fn migration_preserves_swift_metadata() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = app(&dir);
-        let entry = json!({"id":"old-id", "label":"Alice", "accountId":"shared-team", "authJson":document("alice"), "addedAt":1, "updatedAt":1, "workspaceName":"Research", "workspaceDirectory":[{"workspaceId":"x"}]});
-        app.import_json(Pool::Codex, &json!({"accounts":[entry]}).to_string())
-            .await
-            .unwrap();
-        let saved: Value = serde_json::from_slice(&fs::read(app.paths.store()).unwrap()).unwrap();
-        assert_eq!(saved["accounts"][0]["workspaceName"], "Research");
     }
     #[tokio::test]
     async fn account_order_round_trips_and_tolerates_a_bad_value() {

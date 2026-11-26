@@ -40,20 +40,11 @@ fn setup_provider(app: &Application, id: &str, base: &str, profile: bool) -> Pro
 }
 /// Puts a provider in the Codex account store, in place of one with its id.
 fn store_provider(app: &Application, p: &ProviderRecord) {
-    crate::repository::mutate_accounts(&app.paths.store(), |store| {
-        let mut providers: Vec<ProviderRecord> = store
-            .extra
-            .get("providers")
-            .map(|v| serde_json::from_value(v.clone()).unwrap())
-            .unwrap_or_default();
-        providers.retain(|v| v.id != p.id);
-        providers.push(p.clone());
-        store
-            .extra
-            .insert("providers".into(), serde_json::to_value(providers).unwrap());
-        Ok(())
-    })
-    .unwrap();
+    let mut store = crate::codex_pool::load(&app.paths).unwrap();
+    store.providers.retain(|v| v.id != p.id);
+    store.providers.push(p.clone());
+    crate::persistence::write_json(&app.paths.data_dir.join(crate::codex_pool::FILE), &store)
+        .unwrap();
 }
 #[tokio::test]
 async fn testLoadCandidatesIncludesImportedSub2APIProviderUsingLoginShellFallback() {
@@ -158,6 +149,7 @@ async fn testModelProviderCandidateUsesProviderResponsesEndpointWithoutChatGPTAc
 #[tokio::test]
 async fn testRecordSuccessfulProviderCandidateUsesProviderSwitchHandler() {
     let (_dir, app) = fixture();
+    let app = app.into_shared();
     setup_provider(&app, "my", "https://unused.invalid/v1", true);
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
@@ -178,6 +170,7 @@ async fn testRecordSuccessfulProviderCandidateUsesProviderSwitchHandler() {
 #[tokio::test]
 async fn testRecordSuccessfulCandidateCallsStoreChangeHandler() {
     let (_dir, app) = fixture();
+    let app = app.into_shared();
     save_fixture(&app, json!({"accounts":[stored("a","a","a")]}));
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
@@ -193,6 +186,7 @@ async fn testRecordSuccessfulCandidateCallsStoreChangeHandler() {
 #[tokio::test]
 async fn testRecordSuccessfulCandidateUsesSuccessfulCandidateAsCurrentSelection() {
     let (_dir, app) = fixture();
+    let app = app.into_shared();
     save_fixture(
         &app,
         json!({"accounts":[stored("a","a","a"),stored("b","b","b")],"currentAccountId":"a"}),
@@ -200,9 +194,10 @@ async fn testRecordSuccessfulCandidateUsesSuccessfulCandidateAsCurrentSelection(
     app.proxy_storage(Pool::Codex).on_selected.unwrap()("b".into(), super::auth("b", "b"))
         .await
         .unwrap();
-    let store = crate::repository::load_accounts(&app.paths.store()).unwrap();
-    assert_eq!(store.extra["currentAccountId"], "b");
-    assert_eq!(store.current_selection.unwrap().account_id, "b");
+    assert_eq!(
+        app.codex_load().unwrap().current_account_id.as_deref(),
+        Some("b")
+    );
     let auth: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(
@@ -219,11 +214,17 @@ async fn testHostAPIOnlyDisablesCurrentAuthSyncAfterSuccessfulProxyResponse() {
     let mut settings = app.configuration().unwrap();
     settings.local_proxy_host_api_only = true;
     app.persist_configuration(&settings).unwrap();
-    assert!(!proxy_integration::select(&app.paths, "a", &super::auth("a", "a")).unwrap());
+    assert!(!app
+        .codex_follow_proxy("a", &super::auth("a", "a"))
+        .await
+        .unwrap());
     assert!(!app.paths.codex_auth.exists());
     settings.local_proxy_host_api_only = false;
     app.persist_configuration(&settings).unwrap();
-    assert!(proxy_integration::select(&app.paths, "a", &super::auth("a", "a")).unwrap());
+    assert!(app
+        .codex_follow_proxy("a", &super::auth("a", "a"))
+        .await
+        .unwrap());
     assert!(app.paths.codex_auth.exists());
 }
 #[tokio::test]
@@ -239,15 +240,13 @@ async fn testHostAPIOnlyRecordsActiveCandidateWithoutSwitchingSelection() {
     let state = app.proxy_status(Pool::Codex).await.unwrap();
     assert_eq!(state.active_account_id.as_deref(), Some("a"));
     assert!(!app.paths.codex_auth.exists());
-    assert!(crate::repository::load_accounts(&app.paths.store())
-        .unwrap()
-        .current_selection
-        .is_none());
+    assert!(app.codex_load().unwrap().current_account_id.is_none());
     app.stop_proxy(Pool::Codex).await.unwrap();
 }
 #[tokio::test]
 async fn testRepeatedSuccessForCurrentAccountDoesNotResyncSelection() {
     let (_dir, app) = fixture();
+    let app = app.into_shared();
     save_fixture(&app, json!({"accounts":[stored("a","a","a")]}));
     let counter = Arc::new(AtomicUsize::new(0));
     let count = counter.clone();
@@ -265,6 +264,7 @@ async fn testRepeatedSuccessForCurrentAccountDoesNotResyncSelection() {
 #[tokio::test]
 async fn testRepeatedSuccessForCurrentProviderDoesNotResyncProvider() {
     let (_dir, app) = fixture();
+    let app = app.into_shared();
     setup_provider(&app, "my", "https://unused.invalid/v1", false);
     let before = std::fs::read(app.codex_config_path()).unwrap();
     let counter = Arc::new(AtomicUsize::new(0));

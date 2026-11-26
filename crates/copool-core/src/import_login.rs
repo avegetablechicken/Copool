@@ -1,8 +1,8 @@
 use crate::{
-    account_network, models::StoredAccount, pool_login::codex, repository, utils::now_unix_seconds,
-    Application,
+    account_network, codex_pool::CodexLogins, login_store::LoginPool, pool_login::codex,
+    utils::now_unix_seconds, Application,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 impl Application {
     /// Complete a single authenticated import without selecting it as current.
     pub async fn import_authorized(
@@ -11,66 +11,51 @@ impl Application {
         workspace: Option<&str>,
         consent: &[Value],
     ) -> Result<usize, String> {
-        let mut document = codex::normalized_auth_for_write(document)?;
-        let mut extracted = codex::extract_auth(&document)?;
+        let document = codex::normalized_auth_for_write(document)?;
+        let extracted = codex::extract_auth(&document)?;
         if workspace.is_some_and(|id| id != extracted.account_id) {
             return Err("error.oauth.workspace_mismatch".into());
         }
-        let identity = codex::account_identity(&document)?;
-        let store = repository::load_accounts(&self.paths.store())?;
-        let existing = store
-            .accounts
-            .iter()
-            .find(|a| codex::account_identity(&a.auth_json).ok().as_ref() == Some(&identity));
-        let proxy = existing.map(|a| a.proxy_url.clone()).unwrap_or_default();
-        // Requests go through the account's own proxy, else the shared one.
-        let request_proxy = self.account_proxy(&proxy)?;
+        let same = |a: &crate::codex_pool::Stored| CodexLogins::same_login(&a.document, &document);
+        let store = self.codex_load()?;
+        let existing = store.accounts.iter().find(|a| same(a)).cloned();
         // A new account waits for a manual refresh unless the user opted in.
-        let contact = existing.is_some_and(|a| !a.awaiting_first_request())
+        let contact = existing.as_ref().is_some_and(|a| !a.first_request_pending)
             || (existing.is_none() && self.preferences()?.request_new_accounts);
-        let fetched = if contact {
-            Some(
-                account_network::fetch(
-                    self.network.as_ref(),
-                    &document,
-                    &request_proxy,
-                    now_unix_seconds(),
-                    existing.is_none_or(|a| a.renews()),
-                )
-                .await,
-            )
-        } else {
-            None
-        };
-        let (usage, usage_error) = match fetched {
-            None => (None, None),
-            Some(result) => match result {
-                Ok((refreshed, usage)) => {
-                    document = refreshed;
-                    extracted = codex::extract_auth(&document)?;
-                    (Some(usage), None)
-                }
-                Err(account_network::FetchFailure { message, .. })
-                    if account_network::deactivated(&message) =>
-                {
+        self.codex_logins().import(vec![document.clone()]).await?;
+        let account = self
+            .codex_load()?
+            .accounts
+            .into_iter()
+            .find(|a| same(a))
+            .ok_or("The login was not imported")?;
+        if contact {
+            if let Err(error) = self.codex_refresh_account(&account.id, true, None).await {
+                if account_network::deactivated(&error) {
+                    // A deactivated workspace joins only as seen.
+                    if existing.is_none() {
+                        self.codex_logins()
+                            .change(|store| {
+                                store.accounts.retain(|a| a.id != account.id);
+                                if store.current_account_id.as_deref() == Some(account.id.as_str())
+                                {
+                                    store.current_account_id = None;
+                                }
+                                Ok(())
+                            })
+                            .await?;
+                    }
                     self.mark_pending_deactivated(&extracted.account_id).await?;
                     return Err("error.accounts.workspace_deactivated".into());
                 }
-                Err(account_network::FetchFailure { auth, message }) => {
-                    // Keep the rotated login: the refresh already spent the old one.
-                    document = auth;
-                    extracted = codex::extract_auth(&document)?;
-                    (None, Some(message))
-                }
-            },
-        };
+            }
+        }
         let mut name = workspace
             .and_then(|id| {
                 store
-                    .extra
-                    .get("workspaceDirectory")
-                    .and_then(Value::as_array)
-                    .and_then(|rows| rows.iter().find(|v| v["workspaceId"] == id))
+                    .workspace_directory
+                    .iter()
+                    .find(|v| v["workspaceId"] == id)
                     .and_then(|v| v["workspaceName"].as_str())
                     .map(str::to_owned)
             })
@@ -86,11 +71,15 @@ impl Application {
                     .as_str(),
             )
         {
-            if let Ok(rows) = self
-                .network
-                .workspaces(&extracted.access_token, &request_proxy)
-                .await
-            {
+            let token = self
+                .codex_load()?
+                .accounts
+                .into_iter()
+                .find(|a| a.id == account.id)
+                .and_then(|a| codex::extract_auth(&a.document).ok())
+                .map_or(extracted.access_token.clone(), |e| e.access_token);
+            let proxy = self.account_proxy(&account.proxy_url)?;
+            if let Ok(rows) = self.network.workspaces(&token, &proxy).await {
                 if let Some(row) = rows.iter().find(|row| {
                     row.account_id.eq_ignore_ascii_case(&extracted.account_id)
                         && crate::workspace_directory::visible(row)
@@ -100,26 +89,30 @@ impl Application {
             }
         }
         let now = now_unix_seconds();
-        let mut account:StoredAccount=serde_json::from_value(json!({"id":uuid::Uuid::new_v4().to_string(),"label":extracted.email.clone().unwrap_or(extracted.account_id.clone()),"email":extracted.email,"accountId":extracted.account_id,"planType":extracted.plan_type,"authJson":document,"addedAt":now,"updatedAt":now,"usage":usage,"usageError":usage_error,"teamName":name,"usageStateUpdatedAt":now,"workspaceStatus":"active","displayStatus":"list"})).map_err(|e|e.to_string())?;
-        account.proxy_url = proxy;
-        let count = self
-            .codex_import_json(&serde_json::to_string(&account).map_err(|e| e.to_string())?)
-            .await?;
-        if !consent.is_empty() {
-            let _op = self.operations.lock().await;
-            self.mutate_accounts(|store| {
+        self.codex_logins()
+            .change(|store| {
+                if let Some(name) = name {
+                    if let Some(kept) = store.accounts.iter_mut().find(|a| a.id == account.id) {
+                        kept.own.team_name = Some(name);
+                    }
+                }
                 let authorized: Vec<_> = store
                     .accounts
                     .iter()
-                    .filter(|a| a.is_available())
-                    .map(|a| a.account_id.to_lowercase())
+                    .filter(|a| a.standing.is_none())
+                    .map(|a| a.own.workspace_id.to_lowercase())
                     .collect();
-                let rows = store
-                    .extra
-                    .entry("workspaceDirectory")
-                    .or_insert(json!([]))
-                    .as_array_mut()
-                    .ok_or("Invalid workspace directory")?;
+                let rows = &mut store.workspace_directory;
+                // The authorized workspace is no longer only seen.
+                rows.retain(|v| {
+                    !authorized.contains(
+                        &v["workspaceId"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .trim()
+                            .to_lowercase(),
+                    )
+                });
                 for item in consent {
                     let Some(id) = item["workspaceId"]
                         .as_str()
@@ -148,25 +141,21 @@ impl Application {
                 Ok(())
             })
             .await?;
-        }
-        self.publish();
-        Ok(count)
+        Ok(1)
     }
     async fn mark_pending_deactivated(&self, id: &str) -> Result<(), String> {
-        self.mutate_accounts(|store| {
-            if let Some(rows) = store
-                .extra
-                .get_mut("workspaceDirectory")
-                .and_then(Value::as_array_mut)
-            {
-                if let Some(row) = rows.iter_mut().find(|v| v["workspaceId"] == id) {
+        self.codex_logins()
+            .change(|store| {
+                if let Some(row) = store
+                    .workspace_directory
+                    .iter_mut()
+                    .find(|v| v["workspaceId"] == id)
+                {
                     row["status"] = "deactivated".into();
                     row["lastStatusCheckedAt"] = now_unix_seconds().into();
                 }
-            }
-            Ok(())
-        })
-        .await
-        .map(|_| ())
+                Ok(())
+            })
+            .await
     }
 }
