@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const invoke = (command, args = {}) =>
   window.__TAURI__.core.invoke(command, args);
 const P = window.CopoolPresentation;
+const V = window.CopoolCardView;
 let collapsed = false;
 let selectedPage = "accounts";
 let switchingId = null;
@@ -369,17 +370,32 @@ const METER_HEIGHT = 4; // .meter in style.css
 function usageMode() {
   return preferences?.usageDisplay || "used";
 }
-/// A window's reset time in `mode`: the date and time, or the time left.
-function resetLabel(view, mode) {
-  if (view.notStarted) return tr("accounts.window.not_started");
-  if (!view.available || view.resetAt == null)
-    return tr("accounts.window.reset_unavailable");
-  if (mode === "exact")
-    return tr("accounts.window.reset_at_format", view.reset);
-  const countdown = P.resetCountdown(view.resetAt, Date.now() / 1000, locale, view.clockOffsetSeconds);
-  return countdown.soon
-    ? tr("accounts.window.resets_soon")
-    : tr("accounts.window.resets_in_format", countdown.remaining);
+/// The context card-view.js decides the cards in: the pool shown, the
+/// display preferences and what each card has under way.
+function cardContext(now = Date.now() / 1000) {
+  const controller = accountsController;
+  return {
+    pool,
+    mode: usageMode(),
+    resetDisplay,
+    collapsed,
+    locale,
+    tr,
+    now,
+    refresh: preferences?.refresh?.[pool],
+    accountProxy: (preferences?.accountProxyUrl || "").trim(),
+    switchingId,
+    adding: controller.adding,
+    authorizing: controller.authorizing,
+    ui: (id) => ({
+      refreshing: controller.refreshingIds.has(id) || controller.remoteRefreshingIds.has(id),
+      greeting: controller.sayingHiIds.has(id),
+      hi: sayingHi.get(id) ?? null,
+      renewing: controller.renewingIds.has(id),
+      renewed: renewedIds.has(id),
+      thirdParty: thirdPartyShown.has(id),
+    }),
+  };
 }
 function toggleResetDisplay() {
   resetDisplay = resetDisplay === "countdown" ? "exact" : "countdown";
@@ -387,16 +403,12 @@ function toggleResetDisplay() {
   renderAccounts(accountsCache);
 }
 const meterWindows = new WeakMap();
-function usagePaceTooltip(window, now = Date.now() / 1000) {
-  const message = P.usagePaceMessage(window, now, locale);
-  return message ? tr(message.key, ...message.args) : "";
-}
 function refreshMeterPace(track, now) {
   const window = meterWindows.get(track);
   const tone = P.usageTone(window, now);
   track.classList.toggle("high", tone === "high");
   track.classList.toggle("full", tone === "full");
-  const title = usagePaceTooltip(window, now);
+  const title = V.paceTitle(window, { locale, tr, now });
   if (track.title !== title) track.title = title;
 }
 function refreshVisibleMeterPace() {
@@ -405,14 +417,15 @@ function refreshVisibleMeterPace() {
   for (const track of $("accounts").querySelectorAll(".meter"))
     refreshMeterPace(track, now);
 }
-function usageWindow(view, title, tone) {
-  const remaining = usageMode() === "remaining";
+/// A card's usage row (card-view.js): its label, meter, value and reset.
+function usageWindow(usage) {
+  const { window: view, title } = usage;
   const track = el(
     "div",
     `meter${view.available && view.tone ? ` ${view.tone}` : ""}`,
   );
   meterWindows.set(track, view.paceWindow);
-  track.title = usagePaceTooltip(view.paceWindow);
+  track.title = V.paceTitle(view.paceWindow, { locale, tr });
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", title);
   if (view.available)
@@ -430,41 +443,30 @@ function usageWindow(view, title, tone) {
   fill.style.width = `${metrics.fillScale * 100}%`;
   fill.style.minWidth = `${metrics.grooveHeight}px`;
   track.append(fill);
-  const primary = remaining
-    ? "accounts.window.remaining_format"
-    : "accounts.window.used_format";
-  const known = view.available && view.resetAt != null;
   // A known reset time switches between both forms and shows the other one
   // on hover, as in OpenQuota.
-  const reset = known
+  const reset = usage.resettable
     ? button("", null, "usage-reset", toggleResetDisplay)
     : el("span", "usage-reset");
-  reset.textContent = resetLabel(view, resetDisplay);
-  if (known)
+  reset.textContent = usage.reset;
+  if (usage.resettable)
     reset.addEventListener("mouseenter", () => {
-      reset.title = resetLabel(
+      reset.title = V.resetLabel(
         view,
         resetDisplay === "countdown" ? "exact" : "countdown",
+        { locale, tr, now: Date.now() / 1000 },
       );
     });
-  const row = el("div", `usage ${tone}${view.available ? "" : " no-data"}`);
+  const row = el("div", `usage ${usage.tone}${view.available ? "" : " no-data"}`);
   row.append(
     el("span", "usage-label", title),
     track,
-    el(
-      "span",
-      "usage-value",
-      view.available
-        ? tr(primary, `${view.primaryPercent}%`)
-        : tr("accounts.window.no_data"),
-    ),
+    el("span", "usage-value", usage.value),
     reset,
   );
-  return row;
+  return weeklyNotice(row, usage.notice);
 }
-function compactUsage(value, label) {
-  const rounded = P.roundDisplayPercent(value, usageMode());
-  const text = rounded === null ? "--" : `${rounded}%`;
+function compactUsage({ label, text }) {
   const node = el("span", "usage-value");
   node.append(`${label} `, el("b", "", text));
   node.setAttribute("aria-label", `${label}: ${text}`);
@@ -562,23 +564,8 @@ async function renewNow(account) {
     notice(error, true);
   }
 }
-/// A hi or renewal under way, or just done, which takes the place of the
-/// card's refresh button: its glyph, tooltip and whether it is done.
-function cardTask(account) {
-  const phase = sayingHi.get(account.id);
-  if (phase) {
-    const prefix = {
-      codex: "accounts.card.codex_say_hi",
-      antigravity: "accounts.card.antigravity_say_hi",
-    }[pool] || "accounts.card.say_hi";
-    return { glyph: `say-hi-${phase}`, title: tr(`${prefix}.${phase}`), done: phase === "received" };
-  }
-  if (accountsController.renewingIds.has(account.id))
-    return { glyph: "renewal", title: tr("accounts.renewal.renewing"), done: false };
-  if (renewedIds.has(account.id))
-    return { glyph: "renewal-done", title: tr("accounts.notice.token_renewed"), done: true };
-  return null;
-}
+/// A hi or renewal under way, or just done (card-view.js), in the place of
+/// the card's refresh button.
 function taskIndicator(task, full) {
   const node = el("span", `icon-btn card-task ${task.done ? "done" : "running"}`);
   node.append(icon(task.glyph));
@@ -594,137 +581,13 @@ function editButton(key, name) {
   const cardPool = pool;
   const update = () => {
     if (pool !== cardPool) return;
-    control.title = cardDetails(flipTarget(key));
+    control.title = V.details(flipTarget(key), cardContext());
   };
   update();
   control.onpointerenter = update;
   control.onfocus = update;
   control.setAttribute("aria-label", `${tr("accounts.card.edit")} ${name}`);
   return control;
-}
-/// Keep the tooltip to the proxy, token lifetime and configured refresh interval.
-function cardDetails(target) {
-  if (!target) return tr("accounts.card.edit");
-  const { account, grouped } = target;
-  const lines = [];
-  if (!grouped) {
-    const owner = proxyOwner(target);
-    const own = owner.proxyUrl?.trim();
-    const proxy = own || sharedProxy(owner);
-    lines.push(!proxy || proxy === "direct://" ? "direct" : `${tr("accounts.proxy.title")}: ${proxy}`);
-  }
-  if (account && !grouped && account.renewal) {
-    const token = tokenLabel(account);
-    if (token) lines.push(token);
-  }
-  const cards = target.group ? target.group.accounts : [account];
-  const refresh = preferences.refresh[pool];
-  const seconds = refresh.seconds * (cards.some((card) => card.isCurrent) ? 1 : refresh.fullEvery);
-  lines.push(tr("accounts.refresh.interval_format", P.formatInterval(seconds, locale)));
-  return lines.join("\n");
-}
-/// Usage warning, refresh and switch, at the card's bottom right as in the
-/// SwiftUI card, clear of long account names. A provider's group carries
-/// its usage warnings, refresh and switch together.
-function accountControls(account, full, view, grouped = false) {
-  const actions = el("span", "block-aside");
-  const reauthenticate = P.needsReauthentication(
-    account,
-    tr("error.accounts.sign_in_expired"),
-  );
-  const refreshing =
-    accountsController.refreshingIds.has(account.id) ||
-    accountsController.remoteRefreshingIds.has(account.id);
-  // The usage error is hidden while the card refreshes, as in AccountCardView.
-  if (!grouped && !collapsed && account.usageError && !refreshing) {
-    const warning = button("", "warning", "icon-btn error-indicator", () =>
-      notice(account.usageError, true),
-    );
-    warning.title = tr(account.usageError);
-    warning.setAttribute("aria-label", warning.title);
-    actions.append(warning);
-  }
-  // An expired sign-in replaces refresh and switch with "Sign in again",
-  // which pins the workspace only for a named team, as in the SwiftUI card.
-  if (reauthenticate) {
-    const signInAgain = button(
-      collapsed ? "" : tr("accounts.card.sign_in_again"),
-      "reauthenticate",
-      collapsed ? "icon-btn card-reauth" : "btn quiet card-reauth",
-      () => signIn(account.workspaceTag ? account.accountId : null, "reauthenticate"),
-    );
-    signInAgain.title = tr("accounts.card.sign_in_again");
-    signInAgain.setAttribute("aria-label", `${signInAgain.title} ${full}`);
-    signInAgain.disabled = accountsController.adding || !!accountsController.authorizing;
-    actions.append(signInAgain);
-    return actions;
-  }
-  // A hi or renewal shows in the refresh button's place while it lasts; a
-  // provider's account, refreshed with its provider, shows it alone.
-  const task = cardTask(account);
-  if (grouped) {
-    if (task) actions.append(taskIndicator(task, full));
-    return actions;
-  }
-  if (task) actions.append(taskIndicator(task, full));
-  else {
-    const refresh = button("", "refresh", "icon-btn card-refresh", () =>
-      refreshUsage(account.id),
-    );
-    refresh.setAttribute("aria-label", `${tr("common.refresh_usage")} ${full}`);
-    refreshTooltip(refresh, tr("common.refresh_usage"), () => account.nextRefreshAt);
-    refresh.classList.toggle("spinning", refreshing);
-    refresh.disabled =
-      accountsController.sayingHiIds.has(account.id) ||
-      accountsController.renewingIds.has(account.id);
-    actions.append(refresh);
-  }
-  if (!account.isCurrent) {
-    const control = button("", "switch", "icon-btn card-switch", () =>
-      switchAccount(account),
-    );
-    control.dataset.id = account.id;
-    control.dataset.available = String(account.available);
-    control.title = tr("accounts.card.switch_to_this");
-    control.setAttribute("aria-label", `${control.title} ${full}`);
-    actions.append(control);
-  }
-  return actions;
-}
-/// Claude subscriptions and official Codex Plus cards can start an idle window.
-function canSayHi(account) {
-  return fiveHourIdle(account, pool, helloTarget(account)) && supportsSayHi(account);
-}
-/// The one pool a hi greets on a card with a model switch: the third party's
-/// when chosen (true), else its own (false); null on a card without one,
-/// whose hi greets each idle pool.
-function helloTarget(account) {
-  const usage = account.usage;
-  if (!usage?.thirdPartyFiveHour && !usage?.thirdPartyOneWeek) return null;
-  const view = P.card(account, false, "used", String);
-  return hasThirdParty(view) ? showsThirdParty(view, account.id) : null;
-}
-function supportsSayHi(account) {
-  if (pool === "claude") return true;
-  // Grok has no five-hour window to start.
-  if (pool === "grok") return false;
-  // An Antigravity provider's cards say no hi, as Codex's.
-  if (pool === "antigravity") return account.sourceTag !== "SUB2API";
-  const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
-  return account.sourceTag !== "SUB2API" && plan === "plus";
-}
-/// Known usage with no future reset indicates an idle window; Antigravity's
-/// third-party (Claude) pool has its own, idle as well when reported so.
-/// A hi to one pool alone (`target`, as helloTarget) looks at its window.
-function fiveHourIdle(account, cardPool = pool, target = null) {
-  if (!account.usage) return false;
-  const now = Date.now() / 1000;
-  const idle = (window) => !(window?.resetAt > now);
-  const third = account.usage.thirdPartyFiveHour;
-  if (target === true) return !!third && idle(third);
-  if (target === false) return idle(account.usage.fiveHour);
-  return idle(account.usage.fiveHour) ||
-    (cardPool === "antigravity" && !!third && idle(third));
 }
 /// Both pools use the same delayed usage checks after the model replies.
 const SAY_HI_LOOKS = [10, 30, 90, 180];
@@ -740,11 +603,11 @@ async function sayHi(account) {
   const controller = accountsController;
   const targetPool = pool;
   // The model the card's switch shows, if it has one, alone.
-  const target = helloTarget(account);
+  const target = V.helloTarget(account, cardContext());
   const shown = () => {
     const card = controller.accounts.find((a) => a.id === account.id);
     // The card's pool's windows, whichever pool is shown meanwhile.
-    return !card || (!!card.usage && !fiveHourIdle(card, targetPool, target));
+    return !card || (!!card.usage && !V.fiveHourIdle(card, targetPool, target, Date.now() / 1000));
   };
   if (sayingHi.has(account.id)) return;
   sayingHi.set(account.id, "sent");
@@ -803,10 +666,6 @@ function flipTarget(key) {
     provider !== null && accounts.filter((a) => providerKey(a) === provider).length > 1;
   return { account, grouped };
 }
-/// A provider's account has only its greetings to edit.
-function hasBack(target) {
-  return !!target && (!!target.group || !target.grouped || supportsSayHi(target.account));
-}
 /// The proxy edited: the account's own, or its provider's for a group.
 function proxyOwner(target) {
   return target.group ? target.group.accounts[0] : target.account;
@@ -837,7 +696,7 @@ function proxyPlaceholder(owner) {
 async function editCard(key) {
   if (collapsed || editing?.key === key || pendingEdit === key) return;
   const target = flipTarget(key);
-  if (!hasBack(target)) return;
+  if (!V.hasBack(target, pool)) return;
   const state = {
     key,
     pool,
@@ -848,7 +707,7 @@ async function editCard(key) {
     confirmRemove: false,
   };
   const schedule =
-    target.account && supportsSayHi(target.account)
+    target.account && V.supportsSayHi(target.account, pool)
       ? invoke("greeting_schedule", { pool, id: target.account.id }).catch((error) => {
           notice(error, true);
           return null;
@@ -1004,7 +863,7 @@ function cardBack(target) {
   node.append(head);
   if (state.proxy) node.append(proxySection(state, proxyOwner(target)));
   if (account && !grouped && account.renewal) node.append(renewalSection(account));
-  if (account && supportsSayHi(account) && state.schedule)
+  if (account && V.supportsSayHi(account, pool) && state.schedule)
     node.append(greetingSection(account, state));
   if (!grouped) node.append(refreshSection(current, refreshKey(target)));
   if (!grouped) node.append(removalSection(state, cards, !!group));
@@ -1131,7 +990,7 @@ function greetingSection(account, state) {
     backButton(
       tr("accounts.say_hi.now"),
       () => sayHi(account).then(refreshView).catch((error) => notice(error, true)),
-      busy || !canSayHi(account),
+      busy || !V.canSayHi(account, cardContext()),
     ),
   );
   // Greeting when the 5h window is idle and at set times are separate:
@@ -1355,225 +1214,130 @@ function removalSection(state, cards, provider) {
   return row;
 }
 /// A card's menu, at the pointer: editing it, then what its buttons do and
-/// what it has no button for, and its removal.
+/// what it has no button for, and its removal (card-view.js lists them).
 function cardMenu(target) {
-  const { account, group, grouped } = target;
-  const items = [];
-  if (!collapsed && hasBack(target))
-    items.push({ label: tr("accounts.card.edit"), run: () => editCard(group ? `sub2api:${group.key}` : account.id) });
-  if (account && grouped) {
-    if (supportsSayHi(account))
-      items.push({
-        label: tr("accounts.say_hi.now"),
-        disabled: !canSayHi(account) || sayingHi.has(account.id),
-        run: () => sayHi(account).then(refreshView).catch((error) => notice(error, true)),
-      });
-    return items;
-  }
-  if (items.length) items.push({ separator: true });
-  const cards = group ? group.accounts : [account];
-  const busy = cards.some(
-    (a) =>
-      accountsController.refreshingIds.has(a.id) ||
-      accountsController.remoteRefreshingIds.has(a.id) ||
-      accountsController.sayingHiIds.has(a.id) ||
-      accountsController.renewingIds.has(a.id),
-  );
-  items.push({
-    label: tr("common.refresh_usage"),
-    disabled: busy,
-    run: () => (group ? refreshProvider(group) : refreshUsage(account.id)),
-  });
-  if (account && supportsSayHi(account))
-    items.push({
-      label: tr("accounts.say_hi.now"),
-      disabled: busy || !canSayHi(account) || sayingHi.has(account.id),
-      run: () => sayHi(account).then(refreshView).catch((error) => notice(error, true)),
-    });
-  if (account?.renewal)
-    items.push({ label: tr("accounts.renewal.now"), disabled: busy, run: () => renewNow(account) });
-  // A Grok provider can reapply its config after an app or gateway update.
-  const canReapply = pool === "grok" && cards[0]?.sourceTag === "SUB2API";
-  if (canReapply || !cards.some((a) => a.isCurrent)) {
-    const target = group ? switchTarget(group) : account;
-    items.push({
-      label: tr("accounts.card.switch_to_this"),
-      disabled: target.available === false || switchingId !== null,
-      run: () => switchAccount(target),
-    });
-  }
-  const name = group ? providerTitle(group.accounts[0]) : account.email || account.label;
-  items.push(
-    { separator: true },
-    {
-      label: tr("common.remove"),
-      destructive: true,
-      run: () => confirmRemoval(cards, name, !!group || account.sourceTag === "SUB2API"),
-    },
-  );
-  return items;
+  return cardView(target)
+    .actions.filter((action) => action.menu)
+    .map((action) =>
+      action.kind === "separator"
+        ? { separator: true }
+        : { ...action.menu, run: actionHandler(action, target) },
+    );
 }
-/// The plan tag. The core names it (plan_tags.rs): Codex treats an unknown
-/// plan as Team; the other pools show none until the plan is known.
-function planTag(account) {
-  return account.planTag ? el("span", "tag plan", account.planTag.label) : "";
+/// The view of the card a flip key names (flipTarget): an account's, maybe
+/// one of a provider's, or a provider's group.
+function cardView(target, context = cardContext()) {
+  return target.group
+    ? V.providerView(target.group, providerTitle(target.group.accounts[0]), context)
+    : V.cardView(target.account, context, !!target.grouped);
+}
+/// What a card's action does, for its account or its provider's group.
+function actionHandler(action, { account, group }) {
+  const cards = group ? group.accounts : [account];
+  switch (action.kind) {
+    case "warning":
+      return () => notice(action.message, true);
+    case "reauthenticate":
+      return () => signIn(action.workspace, "reauthenticate");
+    case "edit":
+      return () => editCard(group ? `sub2api:${group.key}` : account.id);
+    case "refresh":
+      return () => (group ? refreshProvider(group) : refreshUsage(account.id));
+    case "say-hi":
+      return () => sayHi(account).then(refreshView).catch((error) => notice(error, true));
+    case "renew":
+      return () => renewNow(account);
+    case "switch":
+      return () => switchAccount(cards.find((a) => a.id === action.id));
+    case "remove":
+      return () => confirmRemoval(cards, action.name, action.sub2api);
+    default:
+      return () => {};
+  }
 }
 /// The plan tag's tier color on the card or row holding it.
-function setPlanAccent(node, account) {
-  if (account.planTag) node.dataset.accent = account.planTag.accent;
+function setPlanAccent(node, view) {
+  if (view.accent) node.dataset.accent = view.accent;
 }
-function accountTags(account, view, grouped = false) {
-  const tags = el("span", "account-tags");
-  tags.append(planTag(account));
-  // A provider's group carries its SUB2API and CURRENT tags once.
-  if (account.workspaceTag && !grouped)
-    tags.append(el("span", "tag muted", account.workspaceTag));
-  if (account.isCurrent && !grouped)
-    tags.append(el("span", "tag good", tr("accounts.card.current")));
-  // Imported but not yet requested upstream: refreshing the card sends the
-  // first request, after its proxy is set.
-  if (account.awaitingFirstRequest) {
-    const waiting = el("span", "tag muted", tr("accounts.card.awaiting_first_request"));
-    waiting.title = tr("accounts.card.awaiting_first_request.help");
-    tags.append(waiting);
+/// A card's tags: its plan (named by the core, plan_tags.rs), workspace,
+/// CURRENT and status.
+function cardTags(tags) {
+  const node = el("span", "account-tags");
+  for (const tag of tags) {
+    const span = el("span", tag.className, tag.text);
+    if (tag.title) span.title = tag.title;
+    node.append(span);
   }
-  if (view.status === "deactivated")
-    tags.append(el("span", "tag bad", tr("accounts.card.status.deactivated")));
-  return tags;
-}
-/// The access token's remaining time in the card's details tooltip.
-function tokenLabel(account) {
-  const expiry = P.tokenExpiry(
-    account.tokenExpiresAt,
-    Date.now() / 1000,
-    locale,
-  );
-  if (!expiry) return null;
-  return expiry.expired
-    ? tr("accounts.renewal.expired")
-    : tr("accounts.renewal.expires_format", expiry.remaining);
-}
-/// The earliest automatic refresh of these cards (Unix seconds), or null.
-function nextRefreshAt(accounts) {
-  const times = accounts
-    .map((account) => account.nextRefreshAt)
-    .filter(Number.isFinite);
-  return times.length ? Math.min(...times) : null;
+  return node;
 }
 /// A refresh button's tooltip, followed by how long until the automatic
 /// refresh at `nextAt()`; worked out again as the pointer enters.
 function refreshTooltip(target, base, nextAt) {
   const update = () => {
-    const next = P.refreshCountdown(nextAt(), Date.now() / 1000, locale);
-    target.title = !next
-      ? base
-      : `${base}\n${
-          next.due
-            ? tr("accounts.refresh.next_due")
-            : tr("accounts.refresh.next_format", next.remaining)
-        }`;
+    target.title = V.refreshTitle(base, nextAt(), { locale, tr });
   };
   update();
   target.onpointerenter = update;
 }
-/// Refresh and switch for a whole Sub2api provider, which its cards share:
-/// switching to any of them selects the provider.
-function providerControls(group, title, current) {
-  const actions = el("span", "block-aside");
-  const ids = group.accounts.map((a) => a.id);
-  const refreshing = ids.some(
-    (id) =>
-      accountsController.refreshingIds.has(id) ||
-      accountsController.remoteRefreshingIds.has(id),
-  );
-  if (!collapsed && !refreshing) {
-    const errors = [
-      ...new Set(group.accounts.map((a) => a.usageError).filter(Boolean).map((e) => tr(e))),
-    ];
-    if (errors.length) {
-      const message = errors.join("\n");
-      const warning = button("", "warning", "icon-btn error-indicator", () =>
-        notice(message, true),
+/// A card's buttons at its bottom right, clear of long account names, as
+/// in the SwiftUI card: its usage warning, then Sign in again, or its hi or
+/// renewal under way or refresh, and its switch. `owner` is the account or
+/// provider's group they act for, `full` its name.
+function cardControls(actions, full, owner) {
+  const node = el("span", "block-aside");
+  for (const action of actions) {
+    const shown = action.button;
+    if (shown?.place !== "footer") continue;
+    const run = actionHandler(action, owner);
+    if (action.kind === "warning") {
+      const warning = button("", "warning", "icon-btn error-indicator", run);
+      warning.title = shown.title;
+      warning.setAttribute("aria-label", shown.title);
+      node.append(warning);
+    } else if (action.kind === "reauthenticate") {
+      const signInAgain = button(
+        shown.label,
+        "reauthenticate",
+        shown.compact ? "icon-btn card-reauth" : "btn quiet card-reauth",
+        run,
       );
-      warning.title = message;
-      warning.setAttribute("aria-label", message);
-      actions.append(warning);
+      signInAgain.title = shown.title;
+      signInAgain.setAttribute("aria-label", `${shown.title} ${full}`);
+      signInAgain.disabled = shown.disabled;
+      node.append(signInAgain);
+    } else if (action.kind === "task") {
+      node.append(taskIndicator(shown, full));
+    } else if (action.kind === "refresh") {
+      const refresh = button("", "refresh", "icon-btn card-refresh", run);
+      refresh.setAttribute("aria-label", `${shown.label} ${full}`);
+      refreshTooltip(refresh, shown.label, () => shown.nextAt);
+      refresh.classList.toggle("spinning", shown.spinning);
+      refresh.disabled = shown.disabled;
+      node.append(refresh);
+    } else if (action.kind === "switch") {
+      const control = button("", "switch", "icon-btn card-switch", run);
+      control.dataset.id = action.id;
+      control.dataset.available = String(shown.available);
+      control.title = shown.title;
+      control.setAttribute("aria-label", `${shown.title} ${full}`);
+      node.append(control);
     }
   }
-  const refresh = button("", "refresh", "icon-btn card-refresh", () =>
-    refreshProvider(group),
-  );
-  refresh.setAttribute("aria-label", `${tr("common.refresh_usage")} ${title}`);
-  refreshTooltip(refresh, tr("common.refresh_usage"), () =>
-    nextRefreshAt(group.accounts),
-  );
-  refresh.classList.toggle("spinning", refreshing);
-  refresh.disabled = ids.some((id) => accountsController.sayingHiIds.has(id));
-  actions.append(refresh);
-  if (!current) {
-    const target = switchTarget(group);
-    const control = button("", "switch", "icon-btn card-switch", () =>
-      switchAccount(target),
-    );
-    control.dataset.id = target.id;
-    control.dataset.available = String(
-      group.accounts.some((a) => a.available !== false),
-    );
-    control.title = tr("accounts.card.switch_to_this");
-    control.setAttribute("aria-label", `${control.title} ${title}`);
-    actions.append(control);
-  }
-  return actions;
+  return node;
 }
-/// The card a provider's switch goes through: any active one will do.
-function switchTarget(group) {
-  return group.accounts.find((a) => a.available !== false) || group.accounts[0];
-}
-/// Without resets (Antigravity and Grok, which have none), the credits alone.
-function accountBalanceText(usage, credits, inventory = P.resetInventory(usage), resets = true) {
+/// The footer's credits and resets with their expiry tooltips, and the
+/// notice of resets other than full ones, which opens a popover.
+function accountBalanceText(footer) {
   const footerText = el("span", "account-footer-text");
-  const details = P.balanceTooltips(usage);
-  const expiry = (at) => at == null
-    ? tr("accounts.card.expiry_unknown")
-    : tr("accounts.card.reset_expires_format", P.formatReset(at, locale));
-  const creditText = el("span", "account-credits", tr("accounts.card.credits_format", credits));
-  const creditValue = String(credits ?? "").trim();
-  const hasCredits = creditValue !== "" && creditValue !== "--"
-    && (!/\d/.test(creditValue) || /[1-9]/.test(creditValue));
-  if (hasCredits) {
-    creditText.title = details.creditDates.length
-      ? details.creditDates.map(expiry).join("\n") : expiry(null);
-  }
-  if (!resets) {
-    footerText.append(creditText);
-    return footerText;
-  }
-  const resetCount = el("span", "account-resets", tr(
-    inventory.count !== null
-      ? "accounts.card.remaining_resets_format" : "accounts.card.resets_unavailable_format",
-    inventory.count ?? "--",
-  ));
-  if (inventory.count !== null) {
-    if (inventory.count > 0) {
-      resetCount.title = details.resetDates.length
-        ? details.resetDates.map(({ at, count }) => `${expiry(at)}${count > 1 ? ` × ${count}` : ""}`).join("\n")
-        : expiry(null);
-    }
-    if (usage?.resetsLastConfirmedAt != null) {
-      const confirmed = tr("accounts.card.resets_last_confirmed_format",
-        P.formatReset(usage.resetsLastConfirmedAt, locale));
-      resetCount.title = resetCount.title ? `${resetCount.title}\n${confirmed}` : confirmed;
-    }
-  }
-  footerText.append(creditText, " · ", resetCount);
-  if (inventory.warning) {
-    const kinds = {
-      full: "accounts.card.reset_full", fable: "accounts.card.reset_fable",
-      partial: "accounts.card.reset_partial", unknown: "accounts.card.reset_unknown",
-    };
-    const lines = details.types.map(
-      ({ kind, count, at }) => `${tr(kinds[kind])} × ${count} · ${expiry(at)}`,
-    );
+  const credits = el("span", "account-credits", footer.credits.text);
+  if (footer.credits.title) credits.title = footer.credits.title;
+  footerText.append(credits);
+  if (!footer.resets) return footerText;
+  const resets = el("span", "account-resets", footer.resets.text);
+  if (footer.resets.title) resets.title = footer.resets.title;
+  footerText.append(" · ", resets);
+  if (footer.warning) {
+    const lines = footer.warning;
     const warning = button("", "reset-notice", "reset-warning", () => showResetPopover(warning, lines, true));
     warning.type = "button";
     warning.setAttribute("aria-label", lines.join("\n"));
@@ -1585,40 +1349,34 @@ function accountBalanceText(usage, credits, inventory = P.resetInventory(usage),
   return footerText;
 }
 
-function accountCard(account, grouped = false) {
+/// An account's card, or its row when the list is collapsed, painted from
+/// its view (card-view.js). A collapsed provider's first row carries the
+/// provider's controls (`owner` its group).
+function accountCard(
+  account,
+  grouped = false,
+  view = V.cardView(account, cardContext(), grouped),
+  owner = { account },
+) {
   if (!collapsed && editing?.key === account.id) {
     const target = flipTarget(account.id);
     if (target) return cardBack(target);
   }
-  const full = account.email || account.accountId || account.label;
-  const view = P.card(account, collapsed, usageMode(), (epoch) =>
-    P.formatReset(epoch, locale),
-  );
+  const controlsName = owner.group ? providerTitle(owner.group.accounts[0]) : view.full;
   if (collapsed) {
-    const interaction = P.collapsedInteraction({
-      collapsed,
-      current: account.isCurrent,
-      switching: switchingId === account.id,
-      hovered: false,
-    });
-    const row = el(
-      "div",
-      `account-row${!grouped && account.isCurrent ? " current running" : ""}`,
-    );
-    row.classList.toggle("can-reveal", !grouped && interaction.canReveal);
-    row.classList.toggle("revealed", !grouped && interaction.visible);
-    setPlanAccent(row, account);
+    const row = el("div", `account-row${view.row.current ? " current running" : ""}`);
+    row.classList.toggle("can-reveal", view.row.canReveal);
+    row.classList.toggle("revealed", view.row.revealed);
+    setPlanAccent(row, view);
     const name = el("span", "account-row-name", view.name);
-    name.title = full;
-    const secondCompactLabel =
-      hasMonthlyWindow() && !view.oneWeek.available && view.oneMonth.available ? "1m" : "1w";
+    name.title = view.full;
     row.append(
-      el("span", grouped ? "" : "dot"),
+      el("span", view.row.dot ? "dot" : ""),
       name,
-      planTag(account) || el("span", "tag plan placeholder"),
-      compactUsage(view.compact[0], "5h"),
-      compactUsage(view.compact[1], secondCompactLabel),
-      accountControls(account, full, view, grouped),
+      view.plan ? el("span", "tag plan", view.plan) : el("span", "tag plan placeholder"),
+      compactUsage(view.compact[0]),
+      compactUsage(view.compact[1]),
+      cardControls(view.actions, controlsName, owner),
     );
     if (!grouped) row.dataset.reorderHandle = "";
     row.dataset.cardId = account.id;
@@ -1629,42 +1387,30 @@ function accountCard(account, grouped = false) {
     grouped ? "div" : "section",
     grouped
       ? "account-member"
-      : `block account${account.isCurrent ? " current" : ""}`,
+      : `block account${view.current ? " current" : ""}`,
   );
-  setPlanAccent(card, account);
+  setPlanAccent(card, view);
   card.dataset.cardId = account.id;
   card.dataset.flipKey = account.id;
   const head = el("div", "block-head");
-  // The CURRENT tag alone marks the active account, as in the SwiftUI card.
   const name = el("div", "account-name");
-  const title = el("span", "block-title", full);
-  title.title = full;
+  const title = el("span", "block-title", view.full);
+  title.title = view.full;
   name.append(title);
-  const tags = accountTags(account, view, grouped);
-  head.append(tags);
+  head.append(cardTags(view.tags));
   const models = modelSwitch(view, account.id);
-  // A provider's account without a plan tag or switch has no tag row; its
-  // name's line is then its first.
-  const headed = !(grouped && !tags.childElementCount && !models);
   // The edit button takes the free end of the first line, before the switch.
-  if (hasBack({ account, grouped }))
-    (headed ? head : name).append(editButton(account.id, full));
+  if (view.actions.some((action) => action.button?.place === "head"))
+    (view.headed ? head : name).append(editButton(account.id, view.full));
   if (models) head.append(models);
   // A card is dragged by its tags and name, as OpenQuota by its header.
   if (!grouped) head.dataset.reorderHandle = name.dataset.reorderHandle = "";
-  // A negative reset count is unavailable, as in AccountCardPresentation.
-  // Sub2api cards keep their credits, which their usage reports.
-  const credits =
-    view.credits === "unlimited" ? tr("accounts.card.unlimited") : view.credits;
-  const inventory = P.resetInventory(account.usage);
   const footer = el("div", "account-footer");
-  // Only Codex and Claude report banked resets; Antigravity and Grok show credits alone.
-  const footerText = accountBalanceText(account.usage, credits, inventory, pool === "codex" || pool === "claude");
-  footer.append(footerText, accountControls(account, full, view, grouped));
+  footer.append(accountBalanceText(view.footer), cardControls(view.actions, controlsName, owner));
   card.append(
-    ...(headed ? [head] : []),
+    ...(view.headed ? [head] : []),
     name,
-    ...usageWindows(view, account.id),
+    ...view.rows.map(usageWindow),
     footer,
   );
   return card;
@@ -1674,19 +1420,6 @@ function accountCard(account, grouped = false) {
 const thirdPartyShown = new Set();
 /// The account whose model switch was just clicked, while its card renders.
 let modelsSwapped = null;
-/// The third-party pool's model: Antigravity's other than Gemini, Claude.
-const THIRD_PARTY_MODEL = "Claude";
-/// The model of a pool's own windows.
-function ownModel() {
-  return { codex: "Codex", claude: "Claude", antigravity: "Gemini", grok: "Grok" }[pool];
-}
-/// Whether a card reports a third-party pool beside its own.
-function hasThirdParty(view) {
-  return view.thirdPartyFiveHour.available || view.thirdPartyOneWeek.available;
-}
-function showsThirdParty(view, accountId) {
-  return hasThirdParty(view) && thirdPartyShown.has(accountId);
-}
 /// A model's mark for the model switch: its pool's from the pool switch, and
 /// Gemini's spark (Simple Icons, CC0) in its gradient.
 function modelBrand(model) {
@@ -1713,11 +1446,8 @@ function modelBrand(model) {
 /// tag row: both models' marks stacked, the shown model's in front and the
 /// other's faded behind it, which a click brings to the front.
 function modelSwitch(view, accountId) {
-  if (!hasThirdParty(view)) return null;
-  const third = showsThirdParty(view, accountId);
-  const [label, other] = third
-    ? [THIRD_PARTY_MODEL, ownModel()]
-    : [ownModel(), THIRD_PARTY_MODEL];
+  if (!view.models) return null;
+  const { shown: label, other, thirdParty: third } = view.models;
   const swapped = modelsSwapped === accountId;
   const control = button("", null, `model-switch${swapped ? " swapped" : ""}`, () => {
     if (third) thirdPartyShown.delete(accountId);
@@ -1795,50 +1525,10 @@ function slideMeters(list, before) {
     });
   }
 }
-/// A card's usage rows: five hours and the week. Codex Free cards that report
-/// a 30-day monthly quota show Monthly (omitting empty Session/Weekly rows).
-/// Claude cards that report Fable quota add its weekly row beneath them. An
-/// Antigravity card's are Gemini's. A card's third-party pool, once reported
-/// and chosen (modelSwitch), shows instead.
-/// The weekly rows of a Sub2api too old to report them say so when clicked.
-/// Whether the pool's accounts may have a monthly window: Codex Free, and a
-/// Grok plan whose allowance lasts a month.
-function hasMonthlyWindow() {
-  return pool === "codex" || pool === "grok";
-}
-function usageWindows(view, accountId) {
-  const five = tr("accounts.window.five_hour"), week = tr("accounts.window.one_week");
-  const rows = (fiveHour, oneWeek) => [
-    usageWindow(fiveHour, five, "five-hour"),
-    weeklyNotice(usageWindow(oneWeek, week, "one-week"), view.outdatedSub2api),
-  ];
-  if (showsThirdParty(view, accountId))
-    return rows(view.thirdPartyFiveHour, view.thirdPartyOneWeek);
-  const shown = rows(view.fiveHour, view.oneWeek);
-  if (hasMonthlyWindow() && view.oneMonth.available) {
-    const month = usageWindow(view.oneMonth, tr("accounts.window.one_month"), "one-month");
-    if (!view.oneWeek.available) {
-      return view.fiveHour.available
-        ? [usageWindow(view.fiveHour, five, "five-hour"), month]
-        : [month];
-    }
-    shown.push(month);
-  }
-  if (pool === "claude" && view.fableOneWeek.available) {
-    shown.push(usageWindow(view.fableOneWeek, tr("accounts.window.fable"), "fable"));
-  }
-  return shown;
-}
-/// A weekly row's notice that its Sub2api `version` reports no weekly usage.
-function weeklyNotice(row, version) {
-  if (!version) return row;
-  // Each pool's weekly usage came with its own Sub2api release.
-  const lines = [
-    tr("accounts.window.sub2api_weekly_unavailable_format", version),
-    tr(pool === "grok"
-      ? "accounts.window.sub2api_grok_weekly_upgrade"
-      : "accounts.window.sub2api_weekly_upgrade"),
-  ];
+/// A weekly row's notice that its Sub2api reports no weekly usage: `lines`
+/// (card-view.js) open in a popover.
+function weeklyNotice(row, lines) {
+  if (!lines) return row;
   const notice = button("", "reset-notice", "reset-warning", () =>
     showResetPopover(notice, lines, true),
   );
@@ -1854,45 +1544,34 @@ function weeklyNotice(row, version) {
 /// account's card has them: editing at the top right, refresh and switch at
 /// the bottom right.
 function providerGroup(group) {
-  const title = providerTitle(group.accounts[0]);
-  const source = el("span", "tag muted", P.clean(group.accounts[0].sourceTag) || "SUB2API");
-  // A provider's cards are current together.
-  const current = group.accounts.some((a) => a.isCurrent);
   const flipKey = `sub2api:${group.key}`;
   if (!collapsed && editing?.key === flipKey) return cardBack({ group });
-  const members = group.accounts.map((account) => accountCard(account, true));
+  const view = V.providerView(group, providerTitle(group.accounts[0]), cardContext());
+  // Collapsed, the first account's row carries the provider's controls.
+  const members = group.accounts.map((account, index) =>
+    accountCard(
+      account,
+      true,
+      view.members[index],
+      view.members[index].controls === "provider" ? { group } : { account },
+    ),
+  );
   if (collapsed) {
-    // No head row: the first account's row carries the provider's dot and
-    // its refresh and switch, as a single account's row does.
-    const first = members[0];
-    const target = switchTarget(group);
-    const interaction = P.collapsedInteraction({
-      collapsed,
-      current,
-      switching: switchingId === target.id,
-      hovered: false,
-    });
-    first.classList.toggle("current", current);
-    first.classList.toggle("running", current);
-    first.classList.toggle("can-reveal", interaction.canReveal);
-    first.classList.toggle("revealed", interaction.visible);
-    first.firstElementChild.replaceWith(el("span", "dot"));
-    first.lastElementChild.replaceWith(providerControls(group, title, current));
     const wrapper = el("div", "account-row-group");
     wrapper.dataset.reorderHandle = "";
     wrapper.dataset.flipKey = flipKey;
     wrapper.append(...members);
     return wrapper;
   }
+  // A provider's cards are current together.
   const block = el(
     "section",
-    `block account account-group${current ? " current" : ""}`,
+    `block account account-group${view.current ? " current" : ""}`,
   );
   const head = el("div", "block-head");
-  const name = el("span", "block-title", title);
-  name.title = title;
-  head.append(name, source);
-  if (current) head.append(el("span", "tag good", tr("accounts.card.current")));
+  const name = el("span", "block-title", view.title);
+  name.title = view.title;
+  head.append(name, ...view.tags.map((tag) => el("span", tag.className, tag.text)));
   head.dataset.reorderHandle = "";
   block.dataset.flipKey = flipKey;
   const list = el("div", "account-group-members");
@@ -1900,9 +1579,9 @@ function providerGroup(group) {
   const footer = el("div", "account-footer");
   footer.append(
     el("span", "account-footer-text"),
-    providerControls(group, title, current),
+    cardControls(view.actions, view.title, { group }),
   );
-  head.append(editButton(flipKey, title));
+  head.append(editButton(flipKey, view.title));
   block.append(head, list, footer);
   return block;
 }
@@ -1935,25 +1614,14 @@ document.addEventListener(
 );
 function renderAccounts(accounts) {
   if (reorderingAccounts) return;
+  const context = cardContext();
   const renderState = [
     accounts,
     // Relative times change without new data.
-    accounts.map(tokenLabel),
+    accounts.map((account) => V.tokenLabel(account, context)),
     resetDisplay,
     resetDisplay === "countdown" &&
-      accounts.map((account) => {
-        const view = P.card(account, false, "used", String);
-        return [
-          view.fiveHour,
-          view.oneWeek,
-          view.oneMonth,
-          view.fableOneWeek,
-          view.thirdPartyFiveHour,
-          view.thirdPartyOneWeek,
-        ].map((w) =>
-          resetLabel(w, "countdown"),
-        );
-      }),
+      accounts.map((account) => V.cardView(account, context).rows.map((row) => row.reset)),
     collapsed,
     [...thirdPartyShown],
     locale,
@@ -3214,7 +2882,7 @@ function hoveredEditableCard() {
     if (node.classList?.contains("account-back") || editing?.key === key || pendingEdit === key) {
       return null;
     }
-    if (hasBack(flipTarget(key))) return key;
+    if (V.hasBack(flipTarget(key), pool)) return key;
   }
   return null;
 }

@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { Accounts } = require("../ui/controllers.js");
+const V = require("../ui/card-view.js");
 
 // The application's pool routing with the real accounts controller.
 // Windows checkouts may end lines with CRLF; the slices below look for LF.
@@ -98,17 +99,13 @@ for (const target of ["claude", "codex"]) {
   });
 }
 
-test("the card footer no longer shows the token expiry; the card's back does", () => {
-  /// A function's source, from its start to `end`, both found.
-  const slice = (name, end) => {
-    const start = source.indexOf(`function ${name}(`);
-    assert(start >= 0, `${name} found`);
-    const stop = source.indexOf(end, start);
-    assert(stop > start, `${name}'s end found`);
-    return source.slice(start, stop);
-  };
-  assert(!slice("accountCard", "\nfunction ").includes("tokenLabel("));
-  assert.match(slice("renewalSection", "\n}\n"), /P\.tokenExpiry\(account\.tokenExpiresAt/);
+// The card's front no longer shows the token expiry (card-view.test.cjs).
+test("the card's back shows the token expiry", () => {
+  const start = source.indexOf("function renewalSection(");
+  assert(start >= 0, "renewalSection found");
+  const stop = source.indexOf("\n}\n", start);
+  assert(stop > start, "renewalSection's end found");
+  assert.match(source.slice(start, stop), /P\.tokenExpiry\(account\.tokenExpiresAt/);
 });
 
 
@@ -138,41 +135,12 @@ test("saying hi goes to the Claude pool, locks the card's refresh without spinni
     assert.equal(locales.split(`"${key}"`).length - 1, 11, `${key} in every locale`);
 });
 
-test("say hi now requires an idle window while scheduling stays available", () => {
-  const start = source.indexOf("function fiveHourIdle(");
-  const end = source.indexOf("\n}\n", start);
-  assert(start >= 0 && end > start, "fiveHourIdle found");
-  const scope = { Date, pool: "claude" };
-  const idle = vm.runInNewContext(`(${source.slice(start, end + 2)})`, scope);
-  const now = Date.now() / 1000;
-  assert.equal(idle({ usage: null }), false, "usage not yet known");
-  assert.equal(idle({ usage: {} }), true, "no window");
-  assert.equal(idle({ usage: { fiveHour: { usedPercent: 0, resetAt: null } } }), true);
-  assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now - 60 } } }), true, "ended");
-  assert.equal(idle({ usage: { fiveHour: { usedPercent: 3, resetAt: now + 60 } } }), false);
-  // Antigravity: either pool's idle window will do; only a reported one counts.
-  const started = { usedPercent: 3, resetAt: now + 60 };
-  const quiet = { usedPercent: 0, resetAt: null };
-  const both = (fiveHour, thirdPartyFiveHour) => ({ usage: { fiveHour, thirdPartyFiveHour } });
-  assert.equal(idle(both(started, quiet)), false, "other pools ignore the third-party window");
-  scope.pool = "antigravity";
-  assert.equal(idle(both(started, quiet)), true, "Claude's window idle");
-  assert.equal(idle(both(quiet, started)), true, "Gemini's window idle");
-  assert.equal(idle(both(started, started)), false);
-  assert.equal(idle(both(started, undefined)), false, "no Claude pool reported");
-  // A hi under way takes the refresh button's place.
-  assert.match(source, /const task = cardTask\(account\);/);
-});
 
 test("both pools refresh immediately after a reply, then only until the window shows", async () => {
   const start = source.indexOf("const SAY_HI_LOOKS =");
   const end = source.indexOf("/// The card turned over to edit it");
   assert(start >= 0 && end > start, "sayHi found");
   // [refreshes before the window shows, or the second another refresh shows it]
-  const idleStart = source.indexOf("function fiveHourIdle(");
-  const idleEnd = source.indexOf("\n}\n", idleStart);
-  assert(idleStart >= 0 && idleEnd > idleStart, "fiveHourIdle found");
-  const fiveHourIdle = source.slice(idleStart, idleEnd + 3);
   for (const target of ["claude", "codex", "antigravity"]) {
     for (const [shownAfter, shownAt, expected] of [
       [0, Infinity, { refreshes: 1, slept: 0, notices: [["accounts.notice.said_hi", false]] }],
@@ -213,14 +181,16 @@ test("both pools refresh immediately after a reply, then only until the window s
         accountsController,
         pool: target,
         refreshView: async () => phases.push(scope.pending.get("a")),
-        helloTarget: () => null,
+        // The idle rule is card-view.js's; the card shows no model switch.
+        V: { ...V, helloTarget: () => null },
+        cardContext: () => ({}),
         setTimeout: (resolve, ms) => ((clock += ms), show(), resolve()),
         tr: (key) => key,
         notice: (message, error = false) => notices.push([message, error]),
       };
       vm.createContext(scope);
       vm.runInContext(
-        `${fiveHourIdle}${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`,
+        `${source.slice(start, end)}\nthis.run = sayHi; this.pending = sayingHi;`,
         scope,
       );
       await scope.run({ id: "a" });
@@ -238,9 +208,7 @@ test("both pools refresh immediately after a reply, then only until the window s
 test("an Antigravity hi waits for both windows while another pool is shown", async () => {
   const start = source.indexOf("const SAY_HI_LOOKS =");
   const end = source.indexOf("/// The card turned over to edit it");
-  const idleStart = source.indexOf("function fiveHourIdle(");
-  const idleEnd = source.indexOf("\n}\n", idleStart);
-  assert(start >= 0 && end > start && idleStart >= 0 && idleEnd > idleStart, "sayHi found");
+  assert(start >= 0 && end > start, "sayHi found");
   let clock = Date.now();
   let refreshes = 0;
   const notices = [];
@@ -267,14 +235,15 @@ test("an Antigravity hi waits for both windows while another pool is shown", asy
       },
     },
     refreshView: async () => {},
-    helloTarget: () => null,
+    V: { ...V, helloTarget: () => null },
+    cardContext: () => ({}),
     setTimeout: (resolve, ms) => ((clock += ms), resolve()),
     tr: (key) => key,
     notice: (message, error = false) => notices.push([message, error]),
   };
   vm.createContext(scope);
   vm.runInContext(
-    `${source.slice(idleStart, idleEnd + 3)}${source.slice(start, end)}\nthis.run = sayHi;`,
+    `${source.slice(start, end)}\nthis.run = sayHi;`,
     scope,
   );
   await scope.run({ id: "a" });
@@ -285,9 +254,7 @@ test("an Antigravity hi waits for both windows while another pool is shown", asy
 test("A card's model switch sends its hi to the chosen pool alone, and waits for its window", async () => {
   const start = source.indexOf("const SAY_HI_LOOKS =");
   const end = source.indexOf("/// The card turned over to edit it");
-  const idleStart = source.indexOf("function fiveHourIdle(");
-  const idleEnd = source.indexOf("\n}\n", idleStart);
-  assert(start >= 0 && end > start && idleStart >= 0 && idleEnd > idleStart, "sayHi found");
+  assert(start >= 0 && end > start, "sayHi found");
   for (const target of [true, false]) {
     let clock = Date.now();
     let refreshes = 0;
@@ -312,14 +279,15 @@ test("A card's model switch sends its hi to the chosen pool alone, and waits for
         },
       },
       refreshView: async () => {},
-      helloTarget: () => target,
+      V: { ...V, helloTarget: () => target },
+      cardContext: () => ({}),
       setTimeout: (resolve, ms) => ((clock += ms), resolve()),
       tr: (key) => key,
       notice: (message, error = false) => notices.push([message, error]),
     };
     vm.createContext(scope);
     vm.runInContext(
-      `${source.slice(idleStart, idleEnd + 3)}${source.slice(start, end)}\nthis.run = sayHi;`,
+      `${source.slice(start, end)}\nthis.run = sayHi;`,
       scope,
     );
     await scope.run({ id: "a" });
@@ -329,23 +297,11 @@ test("A card's model switch sends its hi to the chosen pool alone, and waits for
   }
 });
 
-test("A chosen pool's hi goes to say_hi with it, and its window alone decides idleness", async () => {
+test("A chosen pool's hi goes to say_hi with it", async () => {
   const { model, calls } = fixture("antigravity");
   assert.equal(await model.sayHi("a", true), true);
   assert.deepEqual(calls.find(([name]) => name === "say_hi"), ["say_hi", { id: "a", thirdParty: true, pool: "antigravity" }]);
-  const start = source.indexOf("function fiveHourIdle(");
-  const end = source.indexOf("\n}\n", start);
-  assert(start >= 0 && end > start, "fiveHourIdle found");
-  const idle = vm.runInNewContext(`(${source.slice(start, end + 2)})`, { Date, pool: "antigravity" });
-  const now = Date.now() / 1000;
-  const started = { usedPercent: 3, resetAt: now + 60 };
-  const quiet = { usedPercent: 0, resetAt: null };
-  const card = (fiveHour, thirdPartyFiveHour) => ({ usage: { fiveHour, thirdPartyFiveHour } });
-  assert.equal(idle(card(started, quiet), "antigravity", true), true);
-  assert.equal(idle(card(started, quiet), "antigravity", false), false);
-  assert.equal(idle(card(quiet, started), "antigravity", true), false);
-  assert.equal(idle(card(quiet, started), "antigravity", false), true);
-  assert.equal(idle(card(quiet, undefined), "antigravity", true), false, "no third-party pool");
+  // Its window alone decides idleness (card-view.test.cjs).
 });
 
 test("Codex Plus greetings route to their own account command", async () => {
@@ -355,21 +311,3 @@ test("Codex Plus greetings route to their own account command", async () => {
   assert(onlyTo(calls, "codex"));
 });
 
-test("Codex greetings are limited to idle official Plus cards", () => {
-  const start = source.indexOf("function canSayHi(");
-  const end = source.indexOf("/// Both pools", start);
-  const scope = { pool: "codex", Date };
-  vm.createContext(scope);
-  vm.runInContext(source.slice(start, end), scope);
-  const card = { planType: "plus", usage: {} };
-  assert.equal(scope.canSayHi(card), true);
-  assert.equal(scope.canSayHi({ ...card, usage: null }), false);
-  assert.equal(scope.canSayHi({ ...card, sourceTag: "SUB2API" }), false);
-  for (const planType of ["pro", "free", "team", ""]) {
-    assert.equal(scope.canSayHi({ ...card, planType }), false);
-  }
-  assert.equal(scope.canSayHi({ ...card, usage: { planType: "pro" } }), false);
-  assert.equal(scope.canSayHi({ ...card, usage: { fiveHour: { resetAt: Date.now() / 1000 + 100 } } }), false);
-  scope.pool = "claude";
-  assert.equal(scope.canSayHi({ ...card, planType: "max" }), true);
-});

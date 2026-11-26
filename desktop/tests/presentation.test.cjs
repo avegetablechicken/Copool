@@ -2,19 +2,6 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const P = require("../ui/presentation.js");
 const legacy = (suite, name, fn) => test(`${suite}.${name}`, fn);
-const a = {
-  accountId: "account-1",
-  email: "dev@example.com",
-  planType: "business",
-  teamName: "workspace-a",
-  isCurrent: true,
-  usage: {
-    planType: "business",
-    fiveHour: { usedPercent: 27.2, resetAt: 1763216000 },
-    oneWeek: { usedPercent: 52.6 },
-    credits: { balance: "128", unlimited: false },
-  },
-};
 legacy(
   "AccountSummaryPresentationTests",
   "testWorkspaceDisplayNameNormalizationTrimsWhitespaceAndDropsEmptyValues",
@@ -23,61 +10,13 @@ legacy(
     assert.equal(P.clean(" \n "), null);
   },
 );
-legacy(
-  "AccountCardPresentationTests",
-  "testCollapsedPresentationUsesShortEmail",
-  () => {
-    const c = P.card(a, true);
-    assert.equal(c.name, "dev");
-    assert.equal(c.credits, "128");
-    assert.deepEqual(c.compact, [27.2, 52.6]);
-  },
-);
-legacy(
-  "AccountCardPresentationTests",
-  "testExpandedPresentationFallsBackToMissingWindowDefaults",
-  () => {
-    const c = P.card({
-      accountId: "account-2",
-      usage: { credits: { unlimited: true } },
-    });
-    assert.equal(c.name, "account-2");
-    assert.equal(c.credits, "unlimited");
-    assert.equal(c.fiveHour.progressPercent, 100);
-    assert.equal(c.fiveHour.reset, "--");
-  },
-);
-legacy(
-  "AccountCardPresentationTests",
-  "testPresentationShowsDeactivatedStatusTag",
-  () =>
-    assert.equal(
-      P.card({ ...a, workspaceStatus: "deactivated" }).status,
-      "deactivated",
-    ),
-);
-legacy(
-  "AccountCardPresentationTests",
-  "testRemainingModeUsesRemainingForProgressAndCompactPercent",
-  () => {
-    const c = P.card(
-      {
-        ...a,
-        usage: { fiveHour: { usedPercent: 72 }, oneWeek: { usedPercent: 30 } },
-      },
-      false,
-      "remaining",
-    );
-    assert.equal(c.fiveHour.progressPercent, 28);
-    assert.equal(c.fiveHour.primaryPercent, 28);
-    assert.equal(c.fiveHour.secondaryPercent, 72);
-    assert.deepEqual(c.compact, [28, 70]);
-    assert.equal(
-      P.formatReset(1763216000, "en_US", "Asia/Shanghai"),
-      "11/15/25, 22:13:20",
-    );
-  },
-);
+// A card's own presentation is card-view.js's (card-view.test.cjs).
+test("A reset date shows in the given locale and time zone", () => {
+  assert.equal(
+    P.formatReset(1763216000, "en_US", "Asia/Shanghai"),
+    "11/15/25, 22:13:20",
+  );
+});
 legacy(
   "AccountCardInteractionPresentationTests",
   "testMacOSHoverControlsCollapsedOverlayVisibility",
@@ -214,16 +153,6 @@ legacy(
     assert.equal(m.visibleFillWidth, m.rawFillWidth);
   },
 );
-test("A missing usage window has no data", () => {
-  const c = P.card({
-    accountId: "weekly-only",
-    usage: { oneWeek: { usedPercent: 38, resetAt: 1763216000 } },
-  });
-  assert.equal(c.fiveHour.available, false);
-  assert.equal(c.fiveHour.reset, "--");
-  assert.equal(c.compact[0], null);
-  assert.equal(c.oneWeek.available, true);
-});
 test("token expiry shows the largest whole unit left, or expired", () => {
   const now = 1_800_000_000;
   assert.equal(P.tokenExpiry(null, now), null);
@@ -273,9 +202,6 @@ test("A reset counts down as OpenQuota shows it, soon within five minutes", () =
   assert.equal(left(2 * 86400 + 3 * 3600).remaining, "2d 3h");
   assert.equal(left(86400).remaining, "1d 0h");
   assert.equal(left(3 * 3600 + 20 * 60, "zh-Hans").remaining, "3小时20分钟");
-  const view = P.card({ usage: { fiveHour: { usedPercent: 1, resetAt: now } } });
-  assert.equal(view.fiveHour.resetAt, now);
-  assert.equal(view.oneWeek.resetAt, null);
 });
 test("A provider's cards gather where its first card stands", () => {
   // A provider with a single card (q) keeps an ordinary card.
@@ -315,10 +241,8 @@ test("Server UTC corrects either direction of local clock skew", () => {
   const now = Date.parse("2026-10-30T18:52:00Z") / 1000;
   const reset = Date.parse("2026-10-31T07:40:00+08:00") / 1000;
   for (const offset of [6 * 3600, -6 * 3600, 0]) {
-    const view = P.card({ usage: { fiveHour: { usedPercent: 2, resetAt: reset, clockOffsetSeconds: offset } } }).fiveHour;
-    assert.equal(view.resetAt, reset);
-    assert.equal(P.resetCountdown(view.resetAt, now - offset, "en", view.clockOffsetSeconds).remaining, "4h 48m");
-    assert.equal(P.resetCountdown(view.resetAt, now - offset + 60, "en", view.clockOffsetSeconds).remaining, "4h 47m");
+    assert.equal(P.resetCountdown(reset, now - offset, "en", offset).remaining, "4h 48m");
+    assert.equal(P.resetCountdown(reset, now - offset + 60, "en", offset).remaining, "4h 47m");
   }
   assert.equal(P.resetCountdown(reset, now, "en", null).remaining, "4h 48m");
 });
@@ -343,10 +267,6 @@ test("Usage colors follow OpenQuota pacing and fallback boundaries", () => {
   const window = quota(46, .5);
   assert.equal(P.usageTone(window, now), "high");
   assert.equal(P.usageTone(window, now+1000), "");
-  // A card's tone, as of now, is the same in either mode.
-  const live = { ...window, resetAt: Date.now() / 1000 + 5000 };
-  for (const mode of ["used", "remaining"])
-    assert.equal(P.windowPresentation(live, mode).tone, "high", mode);
 });
 
 test("Usage bar tooltips report estimated time to exhaustion, not excess percent", () => {
@@ -383,43 +303,7 @@ test("menu bar keyboard navigation moves on with plain left and right", () => {
   }
 });
 
-test("card presentation formats Claude Fable usage window when reported", () => {
-  const account = {
-    email: "alice@example.com",
-    planType: "max 20x",
-    usage: {
-      fiveHour: { usedPercent: 10, windowSeconds: 18000, resetAt: 1_800_010_000 },
-      oneWeek: { usedPercent: 25, windowSeconds: 604800, resetAt: 1_800_500_000 },
-      fableOneWeek: { usedPercent: 42, windowSeconds: 604800, resetAt: 1_800_600_000, clockOffsetSeconds: 12 },
-    },
-  };
-  const used = P.card(account, false, "used", (epoch) => `at:${epoch}`);
-  assert.equal(used.fableOneWeek.available, true);
-  assert.equal(used.fableOneWeek.primaryPercent, 42);
-  assert.equal(used.fableOneWeek.reset, "at:1800600000");
-  assert.equal(used.fableOneWeek.clockOffsetSeconds, 12);
-  const remaining = P.card(account, false, "remaining", (epoch) => `at:${epoch}`);
-  assert.equal(remaining.fableOneWeek.primaryPercent, 58);
-  const absent = P.card({ ...account, usage: { fiveHour: account.usage.fiveHour } }, false, "used", String);
-  assert.equal(absent.fableOneWeek.available, false);
-
-  const freeMonthly = P.card(
-    {
-      email: "free@example.com",
-      planType: "free",
-      usage: { oneMonth: { usedPercent: 40, windowSeconds: 2592000, resetAt: 1_802_000_000 } },
-    },
-    false,
-    "remaining",
-    (epoch) => `at:${epoch}`,
-  );
-  assert.equal(freeMonthly.oneMonth.available, true);
-  assert.equal(freeMonthly.oneMonth.primaryPercent, 60);
-  assert.equal(freeMonthly.oneMonth.reset, "at:1802000000");
-  assert.deepEqual(freeMonthly.compact, [null, 60]);
-});
-
-test("Used percent floors and remaining percent ceils across cards and compact mode", () => {
+test("Used percent floors and remaining percent ceils", () => {
   for (const [usedPercent, wantUsed, wantRemaining] of [
     [0, 0, 100],
     [0.1, 0, 100],
@@ -430,14 +314,6 @@ test("Used percent floors and remaining percent ceils across cards and compact m
     [100, 100, 0],
   ]) {
     const window = { usedPercent };
-    const usedView = P.windowPresentation(window, "used");
-    const remView = P.windowPresentation(window, "remaining");
-    assert.equal(usedView.primaryPercent, wantUsed);
-    assert.equal(usedView.secondaryPercent, wantRemaining);
-    assert.equal(usedView.progressPercent, wantUsed);
-    assert.equal(remView.primaryPercent, wantRemaining);
-    assert.equal(remView.secondaryPercent, wantUsed);
-    assert.equal(remView.progressPercent, wantRemaining);
     assert.equal(P.roundDisplayPercent(P.displayPercent(window, "used"), "used"), wantUsed);
     assert.equal(
       P.roundDisplayPercent(P.displayPercent(window, "remaining"), "remaining"),
@@ -450,21 +326,4 @@ test("Used percent floors and remaining percent ceils across cards and compact m
     key: "accounts.window.pace_spent",
     args: [],
   });
-});
-test("an unused five-hour window shows its 0% as not started", () => {
-  const view = (usage) => P.card({ ...a, usage: { ...a.usage, ...usage } }, false, "used");
-  const idle = view({ fiveHour: { usedPercent: 0, resetAt: null, windowSeconds: 18000 } });
-  assert.equal(idle.fiveHour.notStarted, true);
-  assert.equal(idle.fiveHour.available, true);
-  assert.equal(idle.fiveHour.primaryPercent, 0);
-  // A started window, any usage, a missing window or a weekly window is not.
-  for (const fiveHour of [
-    { usedPercent: 0, resetAt: 1763216000 },
-    { usedPercent: 1, resetAt: null },
-    undefined,
-  ])
-    assert.equal(view({ fiveHour }).fiveHour.notStarted, false);
-  assert.equal(view({ oneWeek: { usedPercent: 0, resetAt: null } }).oneWeek.notStarted, false);
-  const antigravity = view({ thirdPartyFiveHour: { usedPercent: 0, resetAt: null } });
-  assert.equal(antigravity.thirdPartyFiveHour.notStarted, true);
 });

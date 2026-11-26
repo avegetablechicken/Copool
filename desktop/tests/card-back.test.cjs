@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const V = require("../ui/card-view.js");
 
 // Windows checkouts may end lines with CRLF; the markers below are one line.
 const source = fs
@@ -35,7 +36,12 @@ function editor(accounts, extra = {}) {
       },
     },
     providerKey: (a) => /^sub2api-(.+)-\d+$/.exec(a.id)?.[1] ?? null,
-    supportsSayHi: (a) => a.sourceTag !== "SUB2API",
+    // Any non-Sub2api card greets here.
+    V: {
+      ...V,
+      supportsSayHi: (a) => a.sourceTag !== "SUB2API",
+      hasBack: (t) => !!t && (!!t.group || !t.grouped || t.account.sourceTag !== "SUB2API"),
+    },
     tr: (key, ...args) => [key, ...args].join(" "),
     renderAccounts: () => rendered.push(scope.editing),
     ...extra,
@@ -100,12 +106,12 @@ test("a provider's group edits its provider's proxy, saved once through its firs
   const group = scope.flipTarget("sub2api:team");
   assert.deepEqual(group.group.accounts.map((a) => a.id), ["sub2api-team-1", "sub2api-team-2"]);
   assert.equal(scope.proxyOwner(group).id, "sub2api-team-1");
-  assert.equal(scope.hasBack(group), true);
+  assert.equal(V.hasBack(group, scope.pool), true);
   // Its accounts have no proxy of their own; with no greetings, no back.
   const member = scope.flipTarget("sub2api-team-2");
   assert.equal(member.grouped, true);
-  assert.equal(scope.hasBack(member), false);
-  assert.equal(scope.hasBack(scope.flipTarget("solo")), true);
+  assert.equal(V.hasBack(member, scope.pool), false);
+  assert.equal(V.hasBack(scope.flipTarget("solo"), scope.pool), true);
   assert.equal(scope.flipTarget("gone"), null);
   scope.editing = { key: "sub2api:team", proxy: { enabled: false, url: "" } };
   await scope.saveProxyDraft(scope.editing);
@@ -117,7 +123,7 @@ test("a provider's only card turns over as an ordinary card, to its proxy", asyn
   const { scope, saved } = editor([card, { id: "solo", proxyUrl: "" }]);
   const target = scope.flipTarget(card.id);
   assert.equal(target.grouped, false);
-  assert.equal(scope.hasBack(target), true);
+  assert.equal(V.hasBack(target, scope.pool), true);
   scope.editing = { key: card.id, proxy: { enabled: false, url: "" } };
   await scope.saveProxyDraft(scope.editing);
   assert.deepEqual(saved, [["sub2api-team-1", "direct://"]]);
@@ -318,89 +324,62 @@ test("greeting times are added in order once and removed by value", async () => 
   assert.equal(state.schedule.auto, true);
 });
 
-const task = between("/// A hi or renewal under way, or just done", "function taskIndicator(");
-test("a hi or renewal takes the refresh button's place: under way, then done", () => {
+// Which items a card's menu has is card-view.js's (card-view.test.cjs);
+// here, what they run.
+const menu = between("/// A card's menu, at the pointer", "/// The plan tag's tier color");
+test("a card's menu runs its card's actions, a provider's for its group", () => {
+  const calls = [];
+  const record = (name) => (...args) => (calls.push([name, ...args.map((a) => a?.id ?? a)]), Promise.resolve());
   const scope = {
-    pool: "codex",
-    sayingHi: new Map(),
-    renewedIds: new Set(),
-    accountsController: { renewingIds: new Set() },
-    tr: (key) => key,
-  };
-  vm.createContext(scope);
-  vm.runInContext(task, scope);
-  const card = { id: "a" };
-  assert.equal(scope.cardTask(card), null);
-  scope.sayingHi.set("a", "sent");
-  assert.deepEqual({ ...scope.cardTask(card) }, {
-    glyph: "say-hi-sent", title: "accounts.card.codex_say_hi.sent", done: false,
-  });
-  scope.sayingHi.set("a", "received");
-  assert.equal(scope.cardTask(card).done, true);
-  scope.sayingHi.clear();
-  scope.accountsController.renewingIds.add("a");
-  assert.deepEqual({ ...scope.cardTask(card) }, {
-    glyph: "renewal", title: "accounts.renewal.renewing", done: false,
-  });
-  scope.accountsController.renewingIds.clear();
-  scope.renewedIds.add("a");
-  assert.deepEqual({ ...scope.cardTask(card) }, {
-    glyph: "renewal-done", title: "accounts.notice.token_renewed", done: true,
-  });
-});
-
-const menu = between("/// A card's menu, at the pointer", "/// The plan tag.");
-test("a card's menu edits it, then refreshes, greets, renews, switches and removes it", () => {
-  const scope = {
-    pool: "codex",
-    collapsed: false,
-    switchingId: null,
-    sayingHi: new Map(),
-    accountsController: {
-      refreshingIds: new Set(),
-      remoteRefreshingIds: new Set(),
-      sayingHiIds: new Set(),
-      renewingIds: new Set(),
-    },
-    hasBack: (target) => !!target.group || !target.grouped || target.account.sourceTag !== "SUB2API",
-    supportsSayHi: (a) => a.sourceTag !== "SUB2API",
-    canSayHi: () => true,
+    V,
+    cardContext: () => ({ pool: "codex", locale: "en", tr: (key) => key, collapsed: false }),
     providerTitle: () => "Team",
-    switchTarget: (group) => group.accounts[0],
-    tr: (key) => key,
+    editCard: record("editCard"),
+    refreshUsage: record("refreshUsage"),
+    refreshProvider: (group) => calls.push(["refreshProvider", group.key]),
+    sayHi: record("sayHi"),
+    refreshView: record("refreshView"),
+    renewNow: record("renewNow"),
+    switchAccount: record("switchAccount"),
+    confirmRemoval: (cards, name, sub2api) => calls.push(["confirmRemoval", cards.map((a) => a.id), name, sub2api]),
+    notice: record("notice"),
+    signIn: record("signIn"),
   };
   vm.createContext(scope);
   vm.runInContext(menu, scope);
-  const labels = (target) =>
-    Array.from(scope.cardMenu(target), (item) => (item.separator ? "—" : item.label));
-  const account = { id: "a", email: "a@example.com", renewal: "always", isCurrent: false };
-  assert.deepEqual(labels({ account }), [
-    "accounts.card.edit", "—", "common.refresh_usage", "accounts.say_hi.now",
-    "accounts.renewal.now", "accounts.card.switch_to_this", "—", "common.remove",
+  const run = (target) =>
+    Array.from(scope.cardMenu(target), (item) => {
+      if (item.separator) return "—";
+      const before = calls.length;
+      item.run();
+      return [item.label, ...calls.slice(before)];
+    });
+  const account = { id: "a", email: "a@example.com", planType: "plus", renewal: "always", isCurrent: false, usage: {} };
+  assert.deepEqual(JSON.parse(JSON.stringify(run({ account }))), [
+    ["accounts.card.edit", ["editCard", "a"]],
+    "—",
+    ["common.refresh_usage", ["refreshUsage", "a"]],
+    ["accounts.say_hi.now", ["sayHi", "a"]],
+    ["accounts.renewal.now", ["renewNow", "a"]],
+    ["accounts.card.switch_to_this", ["switchAccount", "a"]],
+    "—",
+    ["common.remove", ["confirmRemoval", ["a"], "a@example.com", false]],
   ]);
   assert.equal(scope.cardMenu({ account }).at(-1).destructive, true);
-  // The card in use has no switch; collapsed cards no editing.
-  scope.collapsed = true;
-  assert.deepEqual(labels({ account: { ...account, isCurrent: true, renewal: null } }), [
-    "common.refresh_usage", "accounts.say_hi.now", "—", "common.remove",
+  // A provider's group: its provider's refresh, switch through an active
+  // card and removal.
+  const group = { key: "team", accounts: [
+    { id: "sub2api-team-1", sourceTag: "SUB2API", available: false },
+    { id: "sub2api-team-2", sourceTag: "SUB2API" },
+  ] };
+  assert.deepEqual(JSON.parse(JSON.stringify(run({ group }))), [
+    ["accounts.card.edit", ["editCard", "sub2api:team"]],
+    "—",
+    ["common.refresh_usage", ["refreshProvider", "team"]],
+    ["accounts.card.switch_to_this", ["switchAccount", "sub2api-team-2"]],
+    "—",
+    ["common.remove", ["confirmRemoval", ["sub2api-team-1", "sub2api-team-2"], "Team", true]],
   ]);
-  scope.collapsed = false;
-  // A provider's group: its provider's refresh, switch and removal.
-  const member = { id: "sub2api-team-1", sourceTag: "SUB2API", isCurrent: false };
-  assert.deepEqual(labels({ group: { key: "team", accounts: [member] } }), [
-    "accounts.card.edit", "—", "common.refresh_usage", "accounts.card.switch_to_this",
-    "—", "common.remove",
-  ]);
-  // A provider's account that cannot greet has no menu of its own.
-  assert.deepEqual(labels({ account: member, grouped: true }), []);
-  const currentGroup = { group: { key: "team", accounts: [{ ...member, isCurrent: true }] } };
-  assert(!labels(currentGroup).includes("accounts.card.switch_to_this"));
-  scope.pool = "grok";
-  assert(labels(currentGroup).includes("accounts.card.switch_to_this"));
-  // Busy, its refresh, greeting and renewal wait.
-  scope.accountsController.renewingIds.add("a");
-  const busy = scope.cardMenu({ account });
-  assert(busy.filter((item) => item.label && item.label !== "accounts.card.edit" && item.label !== "common.remove" && item.label !== "accounts.card.switch_to_this").every((item) => item.disabled));
 });
 
 test("refresh intervals offer the one set and speed up to a fifth, no sooner than 30 s", () => {
@@ -553,7 +532,8 @@ function cardFields() {
   const scope = {
     sayingHi: new Map(),
     accountsController: { refreshingIds: new Set(), remoteRefreshingIds: new Set() },
-    canSayHi: () => true,
+    V: { canSayHi: () => true },
+    cardContext: () => ({}),
     tr: (key) => key,
     el: (...args) => {
       const field = node(...args);

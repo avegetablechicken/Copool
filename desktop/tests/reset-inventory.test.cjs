@@ -68,7 +68,10 @@ test("Balance expiry tooltips handle Codex, unknown dates, and stale credits", (
 });
 
 test("Credits and resets keep expiry tooltips while the notice opens a popover", () => {
+  // What the footer says is card-view.js's (card-view.test.cjs); here, how
+  // app.js paints it.
   const fs = require("node:fs"), vm = require("node:vm");
+  const V = require("../ui/card-view.js");
   // Windows checkout uses CRLF; function boundaries below use LF.
   const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8").replace(/\r\n/g, "\n");
   const start = source.indexOf("function accountBalanceText(");
@@ -78,23 +81,22 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   const el = (tag, className, text = "") => ({tag, className, textContent: text, children: [],
     append(...nodes) {this.children.push(...nodes);}, setAttribute(name, value) {this[name] = value;}});
   let opened;
-  const context = {P, el, icon: (name) => ({icon: name}), locale: "en",
+  const context = {el, icon: (name) => ({icon: name}),
     button: (label, glyph, className, onclick) => Object.assign(el("button", className), {onclick}),
-    showResetPopover: (trigger, lines, wrapping) => {opened = {trigger, lines, wrapping};},
-    tr: (key, ...args) => `${key}:${args.join(",")}`};
+    showResetPopover: (trigger, lines, wrapping) => {opened = {trigger, lines, wrapping};}};
   vm.createContext(context);vm.runInContext(fn, context);
+  const tr = (key, ...args) => `${key}:${args.join(",")}`;
+  const paint = (usage, pool = "codex") =>
+    context.accountBalanceText(V.cardView({id: "a", usage}, {pool, locale: "en", tr}).footer);
   const future = Math.floor(Date.now()/1000) + 86400;
-  const later = future + 86400;
-  const footer = context.accountBalanceText({credits: {expiries: [future]},
-    resetGrants: [
-      grant("full", 1, future),
-      grant("fable", 1, future),
-      grant("fable", 1, later),
-      grant("fable", 1, later),
-      grant("partial", 1, null),
-    ]}, "5");
+  const footer = paint({credits: {balance: "5", expiries: [future]},
+    resetGrants: [grant("full", 1, future), grant("fable", 1, future), grant("partial", 1, null)]});
   const [credits, separator, resets, notice] = footer.children;
+  assert.equal(credits.className, "account-credits");
+  assert.match(credits.textContent, /credits_format:5$/);
   assert.match(credits.title, /reset_expires_format/);
+  assert.equal(separator, " · ");
+  assert.equal(resets.className, "account-resets");
   assert.match(resets.title, /reset_expires_format/);
   assert.equal(resets.children.length, 0);
   assert.equal(notice.tag, "button");
@@ -105,52 +107,18 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   notice.onclick();
   assert.equal(opened.trigger, notice);
   assert.equal(opened.wrapping, true);
-  const expected = [
-    `accounts.card.reset_full: × 1 · accounts.card.reset_expires_format:${P.formatReset(future, "en")}`,
-    `accounts.card.reset_fable: × 1 · accounts.card.reset_expires_format:${P.formatReset(future, "en")}`,
-    `accounts.card.reset_fable: × 2 · accounts.card.reset_expires_format:${P.formatReset(later, "en")}`,
-    "accounts.card.reset_partial: × 1 · accounts.card.expiry_unknown:",
-  ].join("\n");
-  assert.equal(opened.lines.join("\n"), expected);
-  assert.equal(notice["aria-label"], expected);
+  assert.equal(opened.lines.length, 3);
+  assert.equal(notice["aria-label"], opened.lines.join("\n"));
   assert.equal(footer.title, undefined);
-  assert.doesNotMatch(resets.title, /last_confirmed/);
-  const cached = context.accountBalanceText({remainingResetCount: 2, resetExpiries: [1, future],
-    resetsLastConfirmedAt: 100}, "--").children[2];
-  assert.match(cached.textContent, /remaining_resets_format:1$/);
-  assert.match(cached.title, /reset_expires_format/);
-  assert.match(cached.title, /resets_last_confirmed_format/);
-  const unavailable = context.accountBalanceText({}, "--");
+  // Without tooltips, none is set.
+  const unavailable = paint({});
   assert.equal(unavailable.children[0].title, undefined);
   assert.equal(unavailable.children[2].title, undefined);
-  const unavailableWithDates = context.accountBalanceText({credits: {expiries: [future]},
-    resetsLastConfirmedAt: 100}, "--");
-  assert.equal(unavailableWithDates.children[0].title, undefined);
-  assert.equal(unavailableWithDates.children[2].title, undefined);
-  const zero = context.accountBalanceText({credits: {balance: "$0.00"}, remainingResetCount: 0}, "$0.00");
-  assert.equal(zero.children[0].title, undefined);
-  assert.equal(zero.children[2].title, undefined);
-  const zeroConfirmed = context.accountBalanceText({credits: {balance: "0"},
-    remainingResetCount: 0, resetsLastConfirmedAt: 100}, "0");
-  assert.equal(zeroConfirmed.children[0].title, undefined);
-  assert.match(zeroConfirmed.children[2].title, /^accounts\.card\.resets_last_confirmed_format:/);
-  const unknownDates = context.accountBalanceText({credits: {balance: "5"}, remainingResetCount: 2}, "5");
-  assert.match(unknownDates.children[0].title, /expiry_unknown/);
-  assert.match(unknownDates.children[2].title, /expiry_unknown/);
-  // Antigravity and Grok: their credits alone, even with resets in the usage.
-  const creditsOnly = context.accountBalanceText({credits: {balance: "1000"},
-    resetGrants: [grant("partial", 1, future)]}, "1000", undefined, false);
+  assert.equal(unavailable.children.length, 3);
+  // Antigravity and Grok: their credits alone.
+  const creditsOnly = paint({credits: {balance: "1000"}, resetGrants: [grant("partial", 1, future)]}, "grok");
   assert.equal(creditsOnly.children.length, 1);
   assert.equal(creditsOnly.children[0].className, "account-credits");
-  assert.match(creditsOnly.children[0].textContent, /credits_format:1000$/);
-  assert.match(creditsOnly.children[0].title, /expiry_unknown/);
-  const grokZeroCredits = context.accountBalanceText({credits: {balance: "$0.00"}}, "$0.00", undefined, false);
-  assert.equal(grokZeroCredits.children.length, 1);
-  assert.match(grokZeroCredits.children[0].textContent, /credits_format:\$0\.00$/);
-  assert.equal(grokZeroCredits.children[0].title, undefined);
-  const noCreditsOnly = context.accountBalanceText({}, "--", undefined, false);
-  assert.equal(noCreditsOnly.children[0].title, undefined);
-  assert.match(source, /accountBalanceText\(account\.usage, credits, inventory, pool === "codex" \|\| pool === "claude"\)/);
 });
 
 

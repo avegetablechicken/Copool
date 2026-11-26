@@ -252,74 +252,6 @@
       ? { key: "accounts.window.pace_soon", args: [] }
       : { key: "accounts.window.pace_in", args: [countdown.remaining] };
   }
-  function windowPresentation(
-    window,
-    mode = "used",
-    formatDate = (value) => formatReset(value),
-    startsOnUse = false,
-  ) {
-    const used = Math.floor(displayPercent(window, "used", 100));
-    return {
-      // A missing window (e.g. no five-hour limit) has no data to show.
-      available: displayPercent(window) !== null,
-      // A five-hour window starts on first use. Unused, it has a real 0% but no
-      // reset; a countdown would read as an open window, as in OpenQuota.
-      notStarted: startsOnUse && displayPercent(window) === 0 && window?.resetAt == null,
-      tone: usageTone(window),
-      paceWindow: window,
-      progressPercent: mode === "remaining" ? 100 - used : used,
-      primaryKind: mode,
-      primaryPercent: mode === "remaining" ? 100 - used : used,
-      secondaryPercent: mode === "remaining" ? used : 100 - used,
-      reset: window?.resetAt != null ? formatDate(window.resetAt) : "--",
-      resetAt: window?.resetAt ?? null,
-      clockOffsetSeconds: window?.clockOffsetSeconds ?? null,
-    };
-  }
-  /// A card's view. Its plan and workspace tags come with the account
-  /// (`planTag`, `workspaceTag`), as the core names them.
-  function card(account, collapsed = false, mode = "used", formatDate) {
-    const name =
-      clean(account.email) || clean(account.accountId) || clean(account.label) || "";
-    const credits = account.usage?.credits;
-    return {
-      name:
-        collapsed && name.includes("@")
-          ? name.slice(0, name.indexOf("@"))
-          : name,
-      status:
-        account.workspaceStatus === "deactivated" || account.available === false
-          ? "deactivated"
-          : null,
-      credits: credits?.unlimited
-        ? "unlimited"
-        : credits?.balance == null
-          ? "--"
-          : Number.isFinite(Number(credits.balance))
-            ? String(Math.round(Number(credits.balance)))
-            : credits.balance,
-      fiveHour: windowPresentation(account.usage?.fiveHour, mode, formatDate, true),
-      oneWeek: windowPresentation(account.usage?.oneWeek, mode, formatDate),
-      // Codex Free's 30-day monthly window, shown only when reported.
-      oneMonth: windowPresentation(account.usage?.oneMonth, mode, formatDate),
-      // Claude's weekly Fable window, shown only on accounts that report it.
-      fableOneWeek: windowPresentation(account.usage?.fableOneWeek, mode, formatDate),
-      // Antigravity's third-party (Claude) pool.
-      thirdPartyFiveHour: windowPresentation(
-        account.usage?.thirdPartyFiveHour,
-        mode,
-        formatDate,
-        true,
-      ),
-      thirdPartyOneWeek: windowPresentation(account.usage?.thirdPartyOneWeek, mode, formatDate),
-      // The Sub2api version too old to report the card's weekly usage.
-      outdatedSub2api: clean(account.outdatedSub2apiVersion) || null,
-      compact: [
-        displayPercent(account.usage?.fiveHour, mode),
-        displayPercent(account.usage?.oneWeek ?? account.usage?.oneMonth, mode),
-      ],
-    };
-  }
   function collapsedInteraction({ collapsed, current, switching, hovered }) {
     return {
       canHover: collapsed && !current,
@@ -795,7 +727,6 @@
     preferredLocale,
     displayPercent,
     roundDisplayPercent,
-    windowPresentation,
     usageTone,
     usagePaceMessage,
     formatReset,
@@ -805,7 +736,6 @@
     refreshChoices,
     fastRefreshSeconds,
     resetCountdown,
-    card,
     actions,
     collapsedInteraction,
     progressMetrics,

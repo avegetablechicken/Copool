@@ -36,8 +36,9 @@ legacy(
   "testSourceLocalizationKeysExistInAllLocales",
   () => {
     // Every file that resolves keys has to be scanned, not just the first two:
-    // features.js and presentation.js render most of the settings and proxy text.
-    const source = ["index.html", "app.js", "features.js", "presentation.js"]
+    // features.js and presentation.js render most of the settings and proxy text,
+    // card-view.js the cards'.
+    const source = ["index.html", "app.js", "features.js", "presentation.js", "card-view.js"]
       .map((name) => fs.readFileSync(path.join(root, "desktop/ui", name), "utf8"))
       .join("");
     const used = new Set(
