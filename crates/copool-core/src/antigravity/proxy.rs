@@ -13,16 +13,18 @@ impl Stored {
     fn proxy_auth(&self) -> Option<Value> {
         Some(json!({
             "accessToken": pool_login::antigravity::access_token(&self.document)?,
-            "project": self.project,
+            "project": self.own.project,
         }))
     }
 
     /// The engine's account for the login in its proxy form, `auth`: named
     /// as [`pool_login::antigravity::proxy_account_id`] says, else by its card.
     fn proxy_account(&self, auth: Value, proxy: &str, current: bool) -> Result<StoredAccount> {
-        let account_id =
-            pool_login::antigravity::proxy_account_id(&self.document, self.google_id.as_deref())
-                .unwrap_or_else(|| self.id.clone());
+        let account_id = pool_login::antigravity::proxy_account_id(
+            &self.document,
+            self.own.google_id.as_deref(),
+        )
+        .unwrap_or_else(|| self.id.clone());
         let mut stored: StoredAccount = serde_json::from_value(json!({
             "id": self.id, "label": self.label, "accountId": account_id,
             "authJson": auth, "usage": self.usage, "planType": self.plan,
@@ -184,8 +186,8 @@ impl Application {
         &self,
         remote: Option<&Value>,
     ) -> Result<Vec<u8>> {
-        let _operations = self.antigravity.operations.lock().await;
-        let _lock = self.antigravity.lock.lock().await;
+        let _operations = self.antigravity.logins.operations.lock().await;
+        let _lock = self.antigravity.logins.store.lock().await;
         let mut store = self.antigravity_load()?;
         let mut changed = false;
         let mut accounts = Vec::new();

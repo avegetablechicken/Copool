@@ -275,7 +275,7 @@ impl Application {
         &self,
         edit: impl FnOnce(&mut Vec<Provider>) -> Result<T>,
     ) -> Result<T> {
-        let _lock = self.antigravity.lock.lock().await;
+        let _lock = self.antigravity.logins.store.lock().await;
         let mut store = self.antigravity_load()?;
         let result = edit(&mut store.providers)?;
         self.antigravity_save(&store)?;
@@ -356,7 +356,7 @@ impl Application {
     }
     /// `"modelProvider": "gemini"` in agy's settings, for the provider.
     async fn antigravity_apply_gemini(&self, path: &Path, provider: &Provider) -> Result<()> {
-        let _lock = self.antigravity.lock.lock().await;
+        let _lock = self.antigravity.logins.store.lock().await;
         let mut store = self.antigravity_load()?;
         // The `.env` was written outside the lock, for the provider as it was.
         let now = store

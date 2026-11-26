@@ -361,7 +361,6 @@ pub(super) struct Left {
     text: Option<String>,
     env: env_bridge::Changes,
     record: Option<ConfigRecord>,
-    provider: Option<String>,
 }
 /// Takes Grok Build off the gateway before an account's switch: what the
 /// provider replaced goes back, Copool's block in `~/.grok/.env` is removed,
@@ -374,8 +373,8 @@ pub(super) fn leave_gateway(path: &Path, store: &mut Store) -> Result<Left> {
         text: text.clone(),
         env: env_changed,
         record: store.config_record.take(),
-        provider: store.config_provider.take(),
     };
+    store.config_provider = None;
     let Some(record) = left.record.as_ref() else {
         return Ok(left);
     };
@@ -391,14 +390,13 @@ pub(super) fn leave_gateway(path: &Path, store: &mut Store) -> Result<Left> {
     }
     Ok(left)
 }
-/// Undoes `leave_gateway` after a failed switch.
-pub(super) fn restore_left(path: &Path, store: &mut Store, left: Left) {
+/// Undoes `leave_gateway` after a failed switch, whose store keeps what
+/// it had.
+pub(super) fn restore_left(path: &Path, left: Left) {
     if left.record.is_some() {
         let _ = put_text(path, left.text.as_deref());
     }
     left.env.undo();
-    store.config_record = left.record;
-    store.config_provider = left.provider;
 }
 
 /// The Grok pool's providers, for its Provider registry.
@@ -439,7 +437,7 @@ impl Application {
         &self,
         edit: impl FnOnce(&mut Vec<Provider>) -> Result<T>,
     ) -> Result<T> {
-        let _lock = self.grok.lock.lock().await;
+        let _lock = self.grok.logins.store.lock().await;
         let mut store = self.grok_load()?;
         let result = edit(&mut store.providers)?;
         self.grok_save(&store)?;
@@ -547,7 +545,7 @@ impl Application {
         variable: &str,
         listed: &[String],
     ) -> Result<()> {
-        let _lock = self.grok.lock.lock().await;
+        let _lock = self.grok.logins.store.lock().await;
         let mut store = self.grok_load()?;
         // The key, gateway and `.env` were prepared outside the lock.
         let now = store
@@ -758,7 +756,7 @@ mod tests {
         assert!(store.config_record.is_none() && store.config_provider.is_none());
         assert_eq!(current_route(&path, &store), CurrentRoute::Login);
         // A failed account switch takes Grok Build back to the gateway.
-        restore_left(&path, &mut store, left);
+        restore_left(&path, left);
         assert!(env_bridges_variable(
             read_text(&env).unwrap().as_deref(),
             "OTHER_KEY"

@@ -6,11 +6,13 @@
 //! gateway. Copool has no Grok API proxy or hi.
 use crate::{
     application::{Application, SwitchExecution},
-    models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
+    login_store::{Account, Asked, LoginPool, Logins, Nothing},
+    models::{AccountSummary, UsageSnapshot},
     persistence::write_json,
     pool::{Pool, PoolAccount},
     pool_login::{self, grok::CREDENTIALS_INVALID, Identity},
     utils::now_unix_seconds,
+    vault::KeychainAccess,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -34,8 +36,6 @@ pub(crate) const SIGN_IN_EXPIRED: &str = "error.grok.sign_in_expired";
 const NOT_AVAILABLE: &str = "This is not available for Grok accounts";
 /// A card of a login that names no account.
 const UNNAMED: &str = "Grok";
-/// An access token this close to its expiry is renewed first.
-const EXPIRY_MARGIN: i64 = 60;
 
 /// A browser sign-in's login, from its code.
 pub(crate) async fn sign_in(code: &str, verifier: &str, redirect: &str) -> Result<Value> {
@@ -57,10 +57,11 @@ pub(crate) struct State {
     /// The startup file of the user's shell that a provider's card has load
     /// `~/.grok/.env` when bridging a custom variable to `XAI_API_KEY`.
     shell_rc: std::sync::RwLock<Option<PathBuf>>,
-    /// Held across a load and save of the store.
-    lock: tokio::sync::Mutex<()>,
-    /// Serializes imports, switches and refreshes.
-    operations: tokio::sync::Mutex<()>,
+    pub(crate) logins: crate::login_store::Locks,
+    /// Reads of the Live login answer this late with what was there when
+    /// asked.
+    #[cfg(test)]
+    live_read_delay_ms: std::sync::atomic::AtomicU64,
 }
 impl Default for State {
     fn default() -> Self {
@@ -92,8 +93,9 @@ impl Default for State {
             shell_rc: std::sync::RwLock::new(sub2api::BRIDGE.shell_rc()),
             #[cfg(test)]
             shell_rc: Default::default(),
-            lock: Default::default(),
-            operations: Default::default(),
+            logins: Default::default(),
+            #[cfg(test)]
+            live_read_delay_ms: Default::default(),
         }
     }
 }
@@ -133,113 +135,96 @@ struct Store {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     known_models: Vec<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Stored {
-    id: String,
-    label: String,
-    #[serde(default)]
-    email: Option<String>,
-    /// The sign-in as Grok Build's `auth.json` holds it.
-    document: Value,
-    #[serde(default)]
-    proxy_url: String,
-    added_at: i64,
-    updated_at: i64,
-    #[serde(default)]
-    usage: Option<UsageSnapshot>,
-    #[serde(default)]
-    usage_error: Option<String>,
-    #[serde(default)]
-    plan: Option<String>,
-    /// Newly imported; nothing goes upstream for it until a manual refresh.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    first_request_pending: bool,
-    /// The user's choice of whether to renew the tokens; none for the default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    renewal: Option<Renewal>,
-}
-impl Stored {
-    fn summary(&self, current: bool) -> AccountSummary {
-        AccountSummary {
-            display_status: "list".into(),
-            workspace_status: "active".into(),
-            source_tag: None,
-            team_name: None,
-            available: true,
-            proxy_url: self.proxy_url.clone(),
-            id: self.id.clone(),
-            label: self.label.clone(),
-            email: self.email.clone(),
-            account_id: pool_login::grok::user_id(&self.document).unwrap_or_default(),
-            plan_type: self.plan.clone(),
-            added_at: self.added_at,
-            updated_at: self.updated_at,
-            usage: self.usage.clone(),
-            usage_error: self.usage_error.clone(),
-            is_current: current,
-            awaiting_first_request: self.first_request_pending,
-            token_expires_at: pool_login::grok::expiry(&self.document)
-                .and_then(crate::models::displayed_expiry),
-            renewal: Some(Renewal::of(self.renewal).as_str().into()),
-            next_refresh_at: None,
-            refresh: None,
-            outdated_sub2api_version: None,
-            tags: Default::default(),
-        }
+type Stored = Account<Nothing>;
+
+/// The Grok pool's facts for its store: Grok Build's `auth.json` is its
+/// Live login.
+struct GrokLogins<'a>(&'a Application);
+impl LoginPool for GrokLogins<'_> {
+    type Own = Nothing;
+    type Store = Store;
+    type Login = Value;
+    type Renewed = Renewed;
+    const FILE: &'static str = "grok-accounts.json";
+    const NAME: &'static str = "Grok";
+    const UNNAMED: &'static str = UNNAMED;
+    const SIGN_IN_EXPIRED: &'static str = SIGN_IN_EXPIRED;
+    const LIVE_UNREADABLE: &'static str =
+        "Cannot read Grok Build's login; fix auth.json before renewing the account it uses";
+
+    fn app(&self) -> &Application {
+        self.0
     }
-    /// Takes a newer generation of the same login (Grok Build renewed it).
-    fn adopt(&mut self, document: &Value) -> bool {
-        let newer = pool_login::grok::expiry(document).unwrap_or(0)
-            > pool_login::grok::expiry(&self.document).unwrap_or(0);
-        if !newer
-            || pool_login::grok::access_token(document)
-                == pool_login::grok::access_token(&self.document)
+    fn locks(&self) -> &crate::login_store::Locks {
+        &self.0.grok.logins
+    }
+    fn accounts(store: &Store) -> &Vec<Stored> {
+        &store.accounts
+    }
+    fn accounts_mut(store: &mut Store) -> &mut Vec<Stored> {
+        &mut store.accounts
+    }
+    fn current(store: &mut Store) -> &mut Option<String> {
+        &mut store.current_account_id
+    }
+    async fn read_live(&self, _: KeychainAccess) -> Result<Option<Value>> {
+        let live = self.0.grok_read_live();
+        #[cfg(test)]
         {
-            return false;
+            let delay = self
+                .0
+                .grok
+                .live_read_delay_ms
+                .load(std::sync::atomic::Ordering::Relaxed);
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
-        self.document = document.clone();
-        self.usage_error = None;
-        true
+        live
     }
-}
-impl PoolAccount for Stored {
-    fn id(&self) -> &str {
-        &self.id
+    async fn write_live(&self, login: &Value, _: KeychainAccess) -> Result<()> {
+        self.0.grok_write_live(login)
     }
-    fn set_renewal(&mut self, renewal: Renewal) {
-        self.renewal = Some(renewal);
+    fn document(login: &Value) -> &Value {
+        login
     }
-    fn set_proxy(&mut self, proxy: String) {
-        self.proxy_url = proxy;
+    fn document_mut(login: &mut Value) -> &mut Value {
+        login
     }
-    fn release(&mut self) -> bool {
-        std::mem::take(&mut self.first_request_pending)
+    fn login_of(account: &Stored) -> Value {
+        account.document.clone()
+    }
+    fn keep(account: &mut Stored, login: Value) {
+        account.document = login;
+    }
+    fn access_token(document: &Value) -> Option<String> {
+        pool_login::grok::access_token(document)
+    }
+    fn refresh_token(document: &Value) -> Option<String> {
+        pool_login::grok::refresh_token(document)
+    }
+    fn expiry(document: &Value) -> Option<i64> {
+        pool_login::grok::expiry(document)
+    }
+    fn email(document: &Value) -> Option<String> {
+        pool_login::grok::email(document)
+    }
+    /// The same user in the same team: one email may sign in to several.
+    fn same_login(a: &Value, b: &Value) -> bool {
+        pool_login::grok::same_login(a, b)
+    }
+    fn account_id(account: &Stored) -> String {
+        pool_login::grok::user_id(&account.document).unwrap_or_default()
+    }
+    async fn renew(&self, document: &mut Value, proxy: &str) -> Result<Renewed> {
+        renew(&*self.0.grok_network(), document, proxy).await
+    }
+    fn renewed(renewed: &Renewed) -> (&str, i64) {
+        (&renewed.access, renewed.expires_at)
+    }
+    fn apply(renewed: &Renewed, document: &mut Value) {
+        renewed.apply(document);
     }
 }
 
-/// Follows the login Grok Build uses: its account becomes current, and a
-/// newer generation of it is adopted. None read leaves the selection as last
-/// seen. Returns whether the store changed.
-fn follow_live(store: &mut Store, live: Option<&Value>) -> bool {
-    let Some(live) = live else {
-        return false;
-    };
-    let mut changed = false;
-    let current = store
-        .accounts
-        .iter_mut()
-        .find(|a| pool_login::grok::same_login(&a.document, live))
-        .map(|account| {
-            changed |= account.adopt(live);
-            account.id.clone()
-        });
-    if store.current_account_id != current {
-        store.current_account_id = current;
-        changed = true;
-    }
-    changed
-}
 /// The sign-ins of an import: Grok Build's `auth.json`, a sign-in, a list
 /// of either, or `{"accounts": [...]}`, each perhaps a card with its
 /// `document`. None when any is not a sign-in.
@@ -311,51 +296,35 @@ async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Resu
     renewed.apply(document);
     Ok(renewed)
 }
-/// A usage request's failure.
-enum Failure {
-    /// The access token was refused: renewing it may help.
-    Expired,
-    Other(String),
-}
 async fn fetch_usage(
     network: &dyn Network,
     token: &str,
     proxy: &str,
     now: i64,
-) -> std::result::Result<UsageSnapshot, Failure> {
-    let (status, body) = network
-        .api(api::USAGE_PATH, token, proxy)
-        .await
-        .map_err(Failure::Other)?;
+) -> Asked<UsageSnapshot> {
+    let (status, body) = match network.api(api::USAGE_PATH, token, proxy).await {
+        Ok(answer) => answer,
+        Err(error) => return Asked::Failed(error),
+    };
     match status {
-        200..=299 => {
-            api::usage(&body, now).ok_or(Failure::Other("Grok reported no usage limit".into()))
-        }
-        401 => Err(Failure::Expired),
-        _ => Err(Failure::Other(api::status_error(
-            "Grok usage request",
-            status,
-            &body,
-        ))),
+        200..=299 => match api::usage(&body, now) {
+            Some(usage) => Asked::Answered(usage),
+            None => Asked::Failed("Grok reported no usage limit".into()),
+        },
+        401 => Asked::Refused,
+        _ => Asked::Failed(api::status_error("Grok usage request", status, &body)),
     }
 }
 
 impl Application {
-    fn grok_store_path(&self) -> PathBuf {
-        self.paths.data_dir.join("grok-accounts.json")
+    fn grok_logins(&self) -> Logins<GrokLogins<'_>> {
+        Logins(GrokLogins(self))
     }
     fn grok_load(&self) -> Result<Store> {
-        match fs::read(self.grok_store_path()) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|e| format!("Invalid Grok account store: {e}")),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
-            Err(e) => Err(e.to_string()),
-        }
+        self.grok_logins().load()
     }
     fn grok_save(&self, store: &Store) -> Result<()> {
-        write_json(&self.grok_store_path(), store)?;
-        self.publish();
-        Ok(())
+        self.grok_logins().save(store)
     }
     fn grok_network(&self) -> Arc<dyn Network> {
         self.grok.network.read().unwrap().clone()
@@ -414,21 +383,15 @@ impl Application {
     }
     /// The pool, following the login Grok Build uses.
     pub(crate) async fn grok_accounts(&self) -> Result<Vec<AccountSummary>> {
-        let _lock = self.grok.lock.lock().await;
-        // Read under the lock a switch writes the sign-in under, which a
-        // sign-in read before it would undo.
-        let live = self.grok_read_live().ok().flatten();
-        let mut store = self.grok_load()?;
-        if follow_live(&mut store, live.as_ref()) {
-            self.grok_save(&store)?;
-        }
+        let store = self.grok_logins().followed().await?;
         let route = sub2api::current_route(&self.grok_config_path(), &store);
         let provider = self.grok_provider(&store);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
             .map(|a| {
-                a.summary(
+                Logins::<GrokLogins>::summary(
+                    a,
                     route == sub2api::CurrentRoute::Login
                         && store.current_account_id.as_deref() == Some(a.id.as_str()),
                 )
@@ -451,61 +414,13 @@ impl Application {
         let store = self.grok_load().ok()?;
         self.grok_provider(&store).map(str::to_owned)
     }
-    /// Adds or updates the account of a sign-in; returns its id and whether
-    /// it waits for a manual refresh.
-    async fn grok_upsert(&self, document: Value, current: bool) -> Result<(String, bool)> {
-        let defer = !self.preferences()?.request_new_accounts;
-        let now = now_unix_seconds();
-        let _lock = self.grok.lock.lock().await;
-        let mut store = self.grok_load()?;
-        let email = pool_login::grok::email(&document);
-        let found = store
-            .accounts
-            .iter_mut()
-            .find(|a| pool_login::grok::same_login(&a.document, &document));
-        let (id, waiting) = match found {
-            Some(existing) => {
-                existing.document = document;
-                existing.updated_at = now;
-                existing.usage_error = None;
-                if let Some(email) = email {
-                    existing.label = email.clone();
-                    existing.email = Some(email);
-                }
-                (existing.id.clone(), existing.first_request_pending)
-            }
-            None => {
-                let id = uuid::Uuid::new_v4().to_string();
-                store.accounts.push(Stored {
-                    id: id.clone(),
-                    label: email.clone().unwrap_or_else(|| UNNAMED.into()),
-                    email,
-                    document,
-                    proxy_url: String::new(),
-                    added_at: now,
-                    updated_at: now,
-                    usage: None,
-                    usage_error: None,
-                    plan: None,
-                    first_request_pending: defer,
-                    renewal: None,
-                });
-                (id, defer)
-            }
-        };
-        if current {
-            store.current_account_id = Some(id.clone());
-        }
-        self.grok_save(&store)?;
-        Ok((id, waiting))
-    }
     /// Imports the login Grok Build uses.
     pub(crate) async fn grok_import_current(&self) -> Result<usize> {
-        let op = self.grok.operations.lock().await;
-        let live = self.grok_read_live()?.ok_or(LOGIN_NOT_FOUND)?;
-        let (id, waiting) = self.grok_upsert(live, true).await?;
-        drop(op);
-        if !waiting {
+        let fresh = self
+            .grok_logins()
+            .import_live(KeychainAccess::Interactive, LOGIN_NOT_FOUND)
+            .await?;
+        if let Some(id) = fresh {
             let _ = self.grok_refresh(&id, None).await;
         }
         Ok(1)
@@ -513,160 +428,66 @@ impl Application {
     /// Stores a browser sign-in's login without switching to it.
     pub(crate) async fn grok_import_login(&self, document: Value) -> Result<usize> {
         let document = pool_login::grok::sign_in_of(&document).ok_or(CREDENTIALS_INVALID)?;
-        let op = self.grok.operations.lock().await;
-        let (id, waiting) = self.grok_upsert(document, false).await?;
-        drop(op);
-        if !waiting {
-            let _ = self.grok_refresh(&id, None).await;
-        }
-        Ok(1)
+        self.grok_import(vec![document]).await
     }
     /// Imports exported logins without switching to them; the whole
     /// document is checked before any is stored.
     pub(crate) async fn grok_import_json(&self, content: &str) -> Result<usize> {
-        let documents = parse_import(content).ok_or(CREDENTIALS_INVALID)?;
-        let op = self.grok.operations.lock().await;
+        self.grok_import(parse_import(content).ok_or(CREDENTIALS_INVALID)?)
+            .await
+    }
+    async fn grok_import(&self, documents: Vec<Value>) -> Result<usize> {
         let count = documents.len();
-        let mut fresh = Vec::new();
-        for document in documents {
-            let (id, waiting) = self.grok_upsert(document, false).await?;
-            if !waiting {
-                fresh.push(id);
-            }
-        }
-        drop(op);
-        for id in fresh {
+        for id in self.grok_logins().import(documents).await? {
             let _ = self.grok_refresh(&id, None).await;
         }
         Ok(count)
     }
     pub(crate) async fn grok_delete_account(&self, id: &str) -> Result<()> {
-        let _lock = self.grok.lock.lock().await;
-        let mut store = self.grok_load()?;
-        let before = store.accounts.len();
-        store.accounts.retain(|a| a.id != id);
-        if store.accounts.len() == before {
-            return Err("Account not found".into());
-        }
-        if store.current_account_id.as_deref() == Some(id) {
-            store.current_account_id = None;
-        }
-        self.grok_save(&store)
+        self.grok_logins().delete(id).await
     }
     pub(crate) async fn grok_edit_accounts(
         &self,
         edit: impl FnOnce(&mut [&mut dyn PoolAccount]) -> Result<bool>,
     ) -> Result<()> {
-        let _lock = self.grok.lock.lock().await;
-        let mut store = self.grok_load()?;
-        let changed = {
-            let mut accounts: Vec<&mut dyn PoolAccount> = store
-                .accounts
-                .iter_mut()
-                .map(|a| a as &mut dyn PoolAccount)
-                .collect();
-            edit(&mut accounts)?
-        };
-        if changed {
-            self.grok_save(&store)?;
-        }
-        Ok(())
+        self.grok_logins().edit(edit).await
     }
     /// Gives Grok Build this account's sign-in, off the gateway a provider
     /// put its models on, or a Sub2api card's provider. A sign-in there
     /// that the pool does not hold is kept in `grok-before-switch.json`
     /// first; a failed step is rolled back.
     pub(crate) async fn grok_switch_account(&self, id: &str) -> Result<SwitchExecution> {
-        let _op = self.grok.operations.lock().await;
+        let _op = self.grok.logins.operations.lock().await;
         if crate::sub2api::is_card(Pool::Grok, id) {
             return self.grok_switch_sub2api(id).await;
         }
+        // An auth.json holding no xAI sign-in is written over, its other
+        // issuers kept.
         let live = self.grok_read_live().ok().flatten();
-        let _lock = self.grok.lock.lock().await;
-        let mut store = self.grok_load()?;
-        follow_live(&mut store, live.as_ref());
-        let target = store
-            .accounts
-            .iter()
-            .find(|a| a.id == id)
-            .ok_or("Account not found")?
-            .clone();
-        if let Some(live) = live.as_ref().filter(|_| store.current_account_id.is_none()) {
-            let backup = self.paths.data_dir.join("grok-before-switch.json");
-            write_json(&backup, live)?;
-        }
         // Grok Build's models keep to a provider's gateway until put back.
         let config = self.grok_config_path();
-        let left = sub2api::leave_gateway(&config, &mut store)?;
-        if let Err(error) = self.grok_write_live(&target.document) {
-            sub2api::restore_left(&config, &mut store, left);
-            return Err(error);
-        }
-        store.current_account_id = Some(target.id);
-        self.grok_save(&store)?;
-        drop(_lock);
+        let target = self
+            .grok_logins()
+            .switch(
+                id,
+                live,
+                KeychainAccess::Interactive,
+                "grok-before-switch.json",
+                |store| sub2api::leave_gateway(&config, store),
+                |left| sub2api::restore_left(&config, left),
+                |store| {
+                    store.config_record = None;
+                    store.config_provider = None;
+                },
+            )
+            .await?;
         drop(_op);
         let credential = pool_login::grok::credential(&target.document, &Identity::default());
         self.after_switch(Pool::Grok, Some(credential)).await
     }
     /// Whether the account failed: its usage refused, or its token expired.
     pub(crate) async fn grok_login_failed(&self, id: &str) -> Result<bool> {
-        let store = self.grok_load()?;
-        let account = store
-            .accounts
-            .iter()
-            .find(|a| a.id == id)
-            .ok_or("Account not found")?;
-        Ok(account.usage_error.is_some()
-            || pool_login::grok::expiry(&account.document).is_some_and(|e| e <= now_unix_seconds()))
-    }
-    /// Grok Build's sign-in when it holds the document's account with
-    /// another access token, unexpired: Grok Build renewed it.
-    fn grok_live_renewal(&self, document: &Value, now: i64) -> Option<Value> {
-        let live = self.grok_read_live().ok().flatten()?;
-        let renewed = pool_login::grok::same_login(&live, document)
-            && pool_login::grok::access_token(&live).is_some()
-            && pool_login::grok::access_token(&live) != pool_login::grok::access_token(document)
-            && pool_login::grok::expiry(&live).is_none_or(|e| e > now + EXPIRY_MARGIN);
-        renewed.then_some(live)
-    }
-    /// Renews the document's access token, then gives the renewal to Grok
-    /// Build's sign-in when it holds this account: xAI rotates the refresh
-    /// token, and the one Grok Build holds stops working.
-    async fn grok_renew(
-        &self,
-        network: &dyn Network,
-        document: &mut Value,
-        proxy: &str,
-    ) -> Result<()> {
-        let before = document.clone();
-        let renewed = renew(network, document, proxy).await?;
-        self.grok_write_back(&renewed, &before);
-        Ok(())
-    }
-    /// Puts a renewal in Grok Build's sign-in when it still holds the
-    /// renewed login and no token lasting longer; never another account or
-    /// a newer token. A failure is only logged, for Copool's store keeps
-    /// the renewal.
-    fn grok_write_back(&self, renewed: &Renewed, before: &Value) {
-        let outcome: Result<()> = (|| {
-            let Some(mut live) = self.grok_read_live()? else {
-                return Ok(());
-            };
-            if !pool_login::grok::same_login(&live, before)
-                || pool_login::grok::expiry(&live).unwrap_or(0) > renewed.expires_at
-                || pool_login::grok::access_token(&live).as_deref() == Some(renewed.access.as_str())
-                // Grok Build renewed it from another refresh token meanwhile.
-                || pool_login::grok::refresh_token(&live) != pool_login::grok::refresh_token(before)
-            {
-                return Ok(());
-            }
-            renewed.apply(&mut live);
-            self.grok_write_live(&live)
-        })();
-        if let Err(error) = outcome {
-            log::warn!("Grok Build's login was not given the renewal; Copool keeps it: {error}");
-        }
+        self.grok_logins().login_failed(id)
     }
     /// Refreshes an account's usage, renewing its access token as its
     /// renewal allows; with `renew_now`, only renews it, whatever the choice,
@@ -674,92 +495,28 @@ impl Application {
     pub(crate) async fn grok_refresh(&self, id: &str, renew_now: Option<&mut bool>) -> Result<()> {
         let forced = renew_now.is_some();
         let _activity = (!forced).then(|| self.begin_refresh(id));
-        let _op = self.grok.operations.lock().await;
-        let live = self.grok_read_live().ok().flatten();
-        let account = {
-            let _lock = self.grok.lock.lock().await;
-            let mut store = self.grok_load()?;
-            if follow_live(&mut store, live.as_ref()) {
-                self.grok_save(&store)?;
-            }
-            store
-                .accounts
-                .into_iter()
-                .find(|a| a.id == id)
-                .ok_or("Account not found")?
-        };
-        if account.first_request_pending {
+        let logins = self.grok_logins();
+        let _op = self.grok.logins.operations.lock().await;
+        let begun = logins.begin(id).await?;
+        if begun.account.first_request_pending {
             return Ok(());
         }
         let network = self.grok_network();
         let network = &*network;
-        let proxy = self.account_proxy(&account.proxy_url)?;
+        let proxy = self.account_proxy(&begun.account.proxy_url)?;
         let now = now_unix_seconds();
-        let mut document = account.document.clone();
-        let may_renew = forced || Renewal::of(account.renewal) != Renewal::Never;
-        let mut renewed = false;
-        // A sign-in Grok Build renewed, taken in place of the card's.
-        let mut adopted = false;
-        let outcome: Result<Option<UsageSnapshot>> = async {
-            if forced {
-                self.grok_renew(network, &mut document, &proxy).await?;
-                renewed = true;
-                return Ok(None);
-            }
-            let expired = pool_login::grok::expiry(&document)
-                .is_some_and(|e| e <= now + EXPIRY_MARGIN)
-                || pool_login::grok::access_token(&document).is_none();
-            if expired {
-                if let Some(live) = self.grok_live_renewal(&document, now) {
-                    document = live;
-                    adopted = true;
-                } else {
-                    if !may_renew {
-                        return Err(RENEWAL_OFF.into());
-                    }
-                    self.grok_renew(network, &mut document, &proxy).await?;
-                    renewed = true;
-                }
-            }
-            let token = pool_login::grok::access_token(&document).unwrap_or_default();
-            match fetch_usage(network, &token, &proxy, now).await {
-                Ok(usage) => Ok(Some(usage)),
-                Err(Failure::Other(error)) => Err(error),
-                Err(Failure::Expired) if renewed => Err(SIGN_IN_EXPIRED.into()),
-                Err(Failure::Expired) => {
-                    // Grok Build may have renewed the login since it was
-                    // read: its token is tried once before renewing.
-                    if let Some(live) = self.grok_live_renewal(&document, now) {
-                        document = live;
-                        adopted = true;
-                        let token = pool_login::grok::access_token(&document).unwrap_or_default();
-                        match fetch_usage(network, &token, &proxy, now).await {
-                            Ok(usage) => return Ok(Some(usage)),
-                            Err(Failure::Other(error)) => return Err(error),
-                            Err(Failure::Expired) => {}
-                        }
-                    }
-                    if !may_renew {
-                        return Err(RENEWAL_OFF.into());
-                    }
-                    self.grok_renew(network, &mut document, &proxy).await?;
-                    renewed = true;
-                    let token = pool_login::grok::access_token(&document).unwrap_or_default();
-                    match fetch_usage(network, &token, &proxy, now).await {
-                        Ok(usage) => Ok(Some(usage)),
-                        Err(Failure::Expired) => Err(SIGN_IN_EXPIRED.into()),
-                        Err(Failure::Other(error)) => Err(error),
-                    }
-                }
-            }
-        }
-        .await;
+        let asked = proxy.as_str();
+        let used = logins
+            .use_token(&begun, forced, &proxy, now, |token| async move {
+                fetch_usage(network, &token, asked, now).await
+            })
+            .await;
         // The plan and official model catalog, with the token that worked; when
         // either fails, the card keeps what it had.
         let mut plan = None;
         let mut models = None;
-        if matches!(outcome, Ok(Some(_))) {
-            let token = pool_login::grok::access_token(&document).unwrap_or_default();
+        if matches!(used.outcome, Ok(Some(_))) {
+            let token = pool_login::grok::access_token(&used.document).unwrap_or_default();
             plan = network
                 .api(api::SETTINGS_PATH, &token, &proxy)
                 .await
@@ -774,46 +531,22 @@ impl Application {
                 .map(|(_, body)| api::models(&body))
                 .filter(|list| !list.is_empty());
         }
-        let _lock = self.grok.lock.lock().await;
-        let mut store = self.grok_load()?;
-        if let Some(models) = models {
-            store.known_models = models;
-        }
-        let Some(stored) = store.accounts.iter_mut().find(|a| a.id == id) else {
-            return outcome.map(|_| ());
-        };
-        // Grok Build may have renewed the login meanwhile; keep the newer.
-        // A sign-in taken from Grok Build is kept whatever its expiry, for
-        // its refresh token is the one that still works, unless the card
-        // changed meanwhile.
-        if renewed
-            || (adopted && stored.document == account.document)
-            || pool_login::grok::expiry(&document) > pool_login::grok::expiry(&stored.document)
-        {
-            stored.document = document;
-        }
-        if let Some(plan) = plan {
-            stored.plan = Some(plan);
-        }
-        match &outcome {
-            Ok(Some(usage)) => {
-                let mut usage = usage.clone();
-                usage.plan_type = stored.plan.clone();
-                stored.usage = Some(usage);
-                stored.usage_error = None;
-                stored.updated_at = now;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                stored.usage_error = Some(error.clone());
-                stored.updated_at = now;
-            }
-        }
-        self.grok_save(&store)?;
+        logins
+            .record(&begun, &used, |store, index| {
+                if let Some(models) = models {
+                    store.known_models = models;
+                }
+                let stored = &mut store.accounts[index];
+                if let Some(plan) = plan {
+                    stored.plan = Some(plan);
+                }
+                stored.record(&used.outcome, now);
+            })
+            .await?;
         if let Some(reported) = renew_now {
-            *reported = renewed;
+            *reported = used.renewed;
         }
-        outcome.map(|_| ())
+        used.outcome.map(|_| ())
     }
     pub(crate) fn grok_unavailable<T>(&self) -> Result<T> {
         Err(NOT_AVAILABLE.into())

@@ -28,6 +28,10 @@ _Avoid_: provider list, provider settings
 The document a **Pool**'s tool signs in with (Codex's `auth.json`, Claude's `claudeAiOauth`, Grok's and Antigravity's sign-ins), which Copool stores per account and hands to the tool on a switch.
 _Avoid_: auth JSON, token file
 
+**Live login**:
+The **Login** a **Pool**'s tool signs in with now (Codex's and Grok Build's `auth.json`, Claude Code's and agy's credential store item), which Copool follows to know the current account, renews in step with its own copy, and replaces on a switch.
+_Avoid_: current auth, active login file
+
 **Credential**:
 What a **Login** grants, read the same way everywhere: its access and refresh tokens, when the access token expires, and whose account it is.
 _Avoid_: OAuth data, auth info

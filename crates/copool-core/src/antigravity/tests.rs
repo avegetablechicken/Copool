@@ -1,6 +1,7 @@
 use super::*;
 use crate::{account_network::Response, Preferences};
 use serde_json::json;
+use std::fs;
 use std::sync::Mutex;
 
 /// Antigravity's login item in memory.
@@ -302,6 +303,105 @@ async fn harness(request_new_accounts: bool) -> Harness {
         _dir: dir,
     }
 }
+/// The Antigravity pool as the store's suite drives it.
+struct Fixture(Harness);
+impl crate::login_store::suite::Fixture for Fixture {
+    const POOL: Pool = Pool::Antigravity;
+    const LIVE_UNREADABLE: &'static str = <AntigravityLogins as LoginPool>::LIVE_UNREADABLE;
+    async fn open(request_new_accounts: bool) -> Self {
+        Self(harness(request_new_accounts).await)
+    }
+    fn app(&self) -> &Application {
+        &self.0.app
+    }
+    fn login(user: &str, access: &str, expires: i64) -> Value {
+        login_of(user, access, expires)
+    }
+    fn with_refresh(login: &Value, refresh: &str) -> Value {
+        let mut login = login.clone();
+        login["token"]["refresh_token"] = refresh.into();
+        login
+    }
+    fn without_expiry(login: &Value) -> Value {
+        let mut login = login.clone();
+        login["token"].as_object_mut().unwrap().remove("expiry");
+        login
+    }
+    fn no_login() -> Value {
+        json!({"token": {"access_token": "a"}})
+    }
+    fn access(document: &Value) -> Option<String> {
+        pool_login::antigravity::access_token(document)
+    }
+    fn renewed(user: &str) -> String {
+        format!("fresh-refresh-{user}")
+    }
+    fn sign_in(&self, login: &Value) {
+        self.0.live.sign_in(login);
+    }
+    fn live(&self) -> Value {
+        self.0.live.document().value
+    }
+    fn corrupt_live(&self) {
+        *self.0.live.bytes.lock().unwrap() = Some(b"not a login".to_vec());
+    }
+    fn delay_live_reads(&self, ms: u64) {
+        self.0
+            .live
+            .read_delay_ms
+            .store(ms, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn meanwhile(&self, login: Value) {
+        self.0.fake.meanwhile("renew", &self.0.live, login);
+    }
+    fn renewals(&self) -> usize {
+        self.0.fake.renewals()
+    }
+    /// The account whose refresh token, renewed or not, is `user`'s.
+    fn id_of(&self, user: &str) -> String {
+        let refresh = format!("refresh-{user}");
+        let store = self.0.app.antigravity_load().unwrap();
+        store
+            .accounts
+            .into_iter()
+            .find(|a| {
+                pool_login::antigravity::refresh_token(&a.document)
+                    .is_some_and(|r| r.ends_with(refresh.as_str()))
+            })
+            .unwrap()
+            .id
+    }
+    fn stored(&self, id: &str) -> Value {
+        stored_document(&self.0.app, id)
+    }
+    fn current(&self) -> Option<String> {
+        self.0.app.antigravity_load().unwrap().current_account_id
+    }
+}
+crate::login_store::login_store_suite!(super::Fixture);
+
+/// agy signed in again to the same Google account: another refresh token,
+/// the same email. Its card stays the one current and takes the login.
+#[tokio::test]
+async fn a_new_login_of_the_same_google_account_is_followed() {
+    let h = harness(true).await;
+    let named = |access: &str, refresh: &str, expires: i64| {
+        let mut login = login_of("alice", access, expires);
+        login["token"]["refresh_token"] = refresh.into();
+        login["id_token_email"] = "alice@gmail.com".into();
+        login
+    };
+    h.live
+        .sign_in(&named("access-alice", "refresh-alice", later()));
+    h.app.import_current(Pool::Antigravity).await.unwrap();
+    let again = named("access-alice-again", "refresh-alice-again", later() + 60);
+    h.live.sign_in(&again);
+    let accounts = cards(&h.app).await;
+    assert_eq!(accounts.len(), 1);
+    assert!(accounts[0].is_current);
+    assert_eq!(stored_document(&h.app, &accounts[0].id), again);
+}
+
 async fn cards(app: &Application) -> Vec<AccountSummary> {
     app.accounts(Pool::Antigravity).await.unwrap()
 }
@@ -441,7 +541,7 @@ async fn expired_or_refused_tokens_are_renewed_as_the_renewal_allows() {
         .await
         .unwrap();
     {
-        let _lock = h.app.antigravity.lock.lock().await;
+        let _lock = h.app.antigravity.logins.store.lock().await;
         let mut store = h.app.antigravity_load().unwrap();
         let account = store.accounts.iter_mut().find(|a| a.id == bob.id).unwrap();
         account.document = login_of("bob", "access-bob", now_unix_seconds() - 1);
@@ -468,7 +568,7 @@ async fn expired_or_refused_tokens_are_renewed_as_the_renewal_allows() {
     // A revoked login says the sign-in expired.
     h.fake.revoked.lock().unwrap().push("refresh-alice".into());
     {
-        let _lock = h.app.antigravity.lock.lock().await;
+        let _lock = h.app.antigravity.logins.store.lock().await;
         let mut store = h.app.antigravity_load().unwrap();
         let account = store
             .accounts
@@ -530,44 +630,6 @@ async fn quota_permission_errors_reach_the_card_without_consuming_a_renewal() {
         assert_eq!(updated.renewal.as_deref(), Some("always"));
         assert!(updated.usage.is_some());
     }
-}
-
-#[tokio::test]
-async fn cards_read_before_a_switch_keep_the_account_switched_to() {
-    let h = harness(true).await;
-    for user in ["alice", "bob"] {
-        h.app
-            .import_json(
-                Pool::Antigravity,
-                &json!({"document": login_of(user, &format!("access-{user}"), later()), "wrapped": true})
-                    .to_string(),
-            )
-            .await
-            .unwrap();
-    }
-    h.live.sign_in(&login_of("alice", "access-alice", later()));
-    let accounts = cards(&h.app).await;
-    let bob = accounts
-        .iter()
-        .find(|a| a.email.as_deref() == Some("bob@gmail.com"))
-        .unwrap()
-        .id
-        .clone();
-    // The cards read Alice's login, which a switch to Bob replaces before
-    // the read answers.
-    h.live
-        .read_delay_ms
-        .store(300, std::sync::atomic::Ordering::Relaxed);
-    let (_, switched) = tokio::join!(cards(&h.app), async {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        h.live
-            .read_delay_ms
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-        h.app.switch_account(Pool::Antigravity, &bob).await
-    });
-    switched.unwrap();
-    let store = h.app.antigravity_load().unwrap();
-    assert_eq!(store.current_account_id.as_deref(), Some(bob.as_str()));
 }
 
 #[tokio::test]
@@ -828,7 +890,8 @@ async fn a_hi_starts_each_idle_five_hour_window() {
         .unwrap();
     let id = cards(&h.app).await[0].id.clone();
     let set_usage = |gemini: Option<i64>, claude: Option<i64>| {
-        let _lock = futures_util::FutureExt::now_or_never(h.app.antigravity.lock.lock()).unwrap();
+        let _lock =
+            futures_util::FutureExt::now_or_never(h.app.antigravity.logins.store.lock()).unwrap();
         let mut store = h.app.antigravity_load().unwrap();
         let usage = store.accounts[0].usage.as_mut().unwrap();
         usage.five_hour.as_mut().unwrap().reset_at = gemini;
@@ -866,7 +929,7 @@ async fn a_hi_starts_each_idle_five_hour_window() {
     // A refused token is renewed by a refresh, then the hi goes again.
     h.fake.messages.lock().unwrap().clear();
     {
-        let _lock = h.app.antigravity.lock.lock().await;
+        let _lock = h.app.antigravity.logins.store.lock().await;
         let mut store = h.app.antigravity_load().unwrap();
         store.accounts[0].document = login_of("alice", "expired-alice", later());
         h.app.antigravity_save(&store).unwrap();
@@ -992,101 +1055,6 @@ async fn a_renewal_that_rotates_the_refresh_token_is_written_back_too() {
     );
     assert_eq!(written, stored_document(&h.app, &id));
     assert!(cards(&h.app).await[0].is_current);
-}
-
-#[tokio::test]
-async fn renewing_another_card_leaves_antigravitys_login_alone() {
-    let h = harness(true).await;
-    let alice = login_of("alice", "access-alice", later());
-    h.live.sign_in(&alice);
-    h.app.import_current(Pool::Antigravity).await.unwrap();
-    h.app
-        .import_json(
-            Pool::Antigravity,
-            &login_of("bob", "access-bob", now_unix_seconds() - 10).to_string(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(h.fake.renewals(), 1);
-    assert_eq!(h.live.writes(), 0);
-    assert_eq!(h.live.document().value, alice);
-    let bob = cards(&h.app)
-        .await
-        .into_iter()
-        .find(|c| c.email.as_deref() == Some("bob@gmail.com"))
-        .unwrap();
-    assert!(!bob.is_current && bob.usage_error.is_none());
-}
-
-#[tokio::test]
-async fn a_renewal_never_replaces_another_login_antigravity_took_meanwhile() {
-    let h = harness(true).await;
-    h.live
-        .sign_in(&login_of("alice", "access-alice", now_unix_seconds() - 10));
-    // The user switches Antigravity to Carol while Alice's token renews;
-    // Carol's token expires sooner than Alice's renewed one.
-    let carol = login_of("carol", "access-carol", now_unix_seconds() + 600);
-    h.fake
-        .meanwhile("renew refresh-alice", &h.live, carol.clone());
-    h.app.import_current(Pool::Antigravity).await.unwrap();
-    assert_eq!(h.fake.renewals(), 1);
-    assert_eq!(h.live.writes(), 0);
-    assert_eq!(h.live.document().value, carol);
-    let card = cards(&h.app).await.remove(0);
-    assert!(card.usage.is_some() && card.usage_error.is_none());
-    assert_eq!(
-        pool_login::antigravity::access_token(&stored_document(&h.app, &card.id)).as_deref(),
-        Some("fresh-refresh-alice")
-    );
-}
-
-#[tokio::test]
-async fn a_renewal_never_replaces_a_token_antigravity_renewed_for_longer() {
-    let h = harness(true).await;
-    h.live
-        .sign_in(&login_of("alice", "access-alice", now_unix_seconds() - 10));
-    // agy renews the same login, for longer, while Copool renews it.
-    let renewed = login_of("alice", "access-alice-agy", later() + 3600);
-    h.fake
-        .meanwhile("renew refresh-alice", &h.live, renewed.clone());
-    h.app.import_current(Pool::Antigravity).await.unwrap();
-    assert_eq!(h.fake.renewals(), 1);
-    assert_eq!(h.live.writes(), 0);
-    assert_eq!(h.live.document().value, renewed);
-    // The pool follows the newer token on its next read.
-    let card = cards(&h.app).await.remove(0);
-    assert_eq!(
-        pool_login::antigravity::access_token(&stored_document(&h.app, &card.id)).as_deref(),
-        Some("access-alice-agy")
-    );
-}
-
-#[tokio::test]
-async fn a_refused_token_gives_way_to_the_one_antigravity_renewed_meanwhile() {
-    let h = harness(true).await;
-    h.live.sign_in(&login_of("alice", "expired-alice", later()));
-    // agy renews the login while Copool's quota request is refused.
-    h.fake.meanwhile(
-        &format!("{} expired-alice", api::QUOTA_SUMMARY_PATH),
-        &h.live,
-        login_of("alice", "access-alice-agy", later() + 60),
-    );
-    h.app.import_current(Pool::Antigravity).await.unwrap();
-    // Asked again with agy's token; Google's token endpoint is not called.
-    assert_eq!(h.fake.renewals(), 0);
-    assert_eq!(h.live.writes(), 0);
-    assert!(h.fake.calls().contains(&format!(
-        "{} access-alice-agy {} ",
-        api::QUOTA_SUMMARY_PATH,
-        api::agent()
-    )));
-    let card = cards(&h.app).await.remove(0);
-    assert!(card.is_current && card.usage.is_some() && card.usage_error.is_none());
-    assert_eq!(card.email.as_deref(), Some("alice@gmail.com"));
-    assert_eq!(
-        pool_login::antigravity::access_token(&stored_document(&h.app, &card.id)).as_deref(),
-        Some("access-alice-agy")
-    );
 }
 
 #[tokio::test]
@@ -1990,10 +1958,10 @@ async fn the_proxy_names_a_login_by_its_own_google_id_else_the_stored_one() {
         match access.as_str() {
             "access-alice" => {
                 account.document["google_id"] = "google-login-alice".into();
-                account.google_id = Some("google-stored-alice".into());
+                account.own.google_id = Some("google-stored-alice".into());
             }
-            "access-bob" => account.google_id = Some("google-stored-bob".into()),
-            _ => account.google_id = None,
+            "access-bob" => account.own.google_id = Some("google-stored-bob".into()),
+            _ => account.own.google_id = None,
         }
         ids.insert(access, account.id.clone());
     }
@@ -2038,7 +2006,7 @@ fn a_card_folded_into_its_google_account_brings_its_project() {
     merge_identified(&mut store, "new");
     assert_eq!(store.accounts.len(), 1);
     assert_eq!(store.accounts[0].id, "old");
-    assert_eq!(store.accounts[0].project.as_deref(), Some("project-1"));
+    assert_eq!(store.accounts[0].own.project.as_deref(), Some("project-1"));
 }
 
 #[tokio::test]
@@ -2057,7 +2025,7 @@ async fn switching_hands_the_login_and_identity_to_the_switch_effects() {
         })
         .map(|a| {
             a.email = Some("alice@gmail.com".into());
-            a.google_id = Some("google-sub-alice".into());
+            a.own.google_id = Some("google-sub-alice".into());
             a.id.clone()
         })
         .unwrap();

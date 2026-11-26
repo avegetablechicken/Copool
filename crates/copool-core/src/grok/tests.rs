@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-    account_network::Response, platform::SyncAgent, AgentSync, AgentSyncOutcome, Preferences,
+    account_network::Response, models::RENEWAL_OFF, platform::SyncAgent, AgentSync,
+    AgentSyncOutcome, Preferences,
 };
 use serde_json::json;
 use std::sync::Mutex;
@@ -226,6 +227,80 @@ async fn harness(request_new_accounts: bool) -> Harness {
         _dir: dir,
     }
 }
+/// The Grok pool as the store's suite drives it.
+struct Fixture(Harness);
+impl crate::login_store::suite::Fixture for Fixture {
+    const POOL: Pool = Pool::Grok;
+    const LIVE_UNREADABLE: &'static str = <GrokLogins as LoginPool>::LIVE_UNREADABLE;
+    async fn open(request_new_accounts: bool) -> Self {
+        Self(harness(request_new_accounts).await)
+    }
+    fn app(&self) -> &Application {
+        &self.0.app
+    }
+    fn login(user: &str, access: &str, expires: i64) -> Value {
+        sign_in_of(user, access, expires)
+    }
+    fn with_refresh(login: &Value, refresh: &str) -> Value {
+        let mut login = login.clone();
+        login["refresh_token"] = refresh.into();
+        login
+    }
+    fn without_expiry(login: &Value) -> Value {
+        let mut login = login.clone();
+        login.as_object_mut().unwrap().remove("expires_at");
+        login
+    }
+    fn no_login() -> Value {
+        json!({"key": "a", "email": "x@example.com"})
+    }
+    fn access(document: &Value) -> Option<String> {
+        pool_login::grok::access_token(document)
+    }
+    fn renewed(user: &str) -> String {
+        format!("fresh-{user}")
+    }
+    fn sign_in(&self, login: &Value) {
+        self.0.sign_in(login);
+    }
+    fn live(&self) -> Value {
+        self.0.live()
+    }
+    fn corrupt_live(&self) {
+        fs::write(&self.0.auth, b"not a sign-in").unwrap();
+    }
+    fn delay_live_reads(&self, ms: u64) {
+        self.0
+            .app
+            .grok
+            .live_read_delay_ms
+            .store(ms, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn meanwhile(&self, login: Value) {
+        *self.0.fake.meanwhile.lock().unwrap() = Some((self.0.auth.clone(), auth_file(&login)));
+    }
+    fn renewals(&self) -> usize {
+        self.0.fake.renewals()
+    }
+    fn id_of(&self, user: &str) -> String {
+        let email = format!("{user}@example.com");
+        let store = self.0.app.grok_load().unwrap();
+        store
+            .accounts
+            .into_iter()
+            .find(|a| a.email.as_deref() == Some(email.as_str()))
+            .unwrap()
+            .id
+    }
+    fn stored(&self, id: &str) -> Value {
+        self.0.stored(id)
+    }
+    fn current(&self) -> Option<String> {
+        self.0.app.grok_load().unwrap().current_account_id
+    }
+}
+crate::login_store::login_store_suite!(super::Fixture);
+
 async fn cards(app: &Application) -> Vec<AccountSummary> {
     app.accounts(Pool::Grok).await.unwrap()
 }
@@ -295,35 +370,6 @@ async fn an_imported_login_waits_then_shows_its_weekly_usage_and_plan() {
     assert_eq!(
         cards(&h.app).await[0].plan_type.as_deref(),
         Some("SuperGrok")
-    );
-}
-
-#[tokio::test]
-async fn cards_read_while_a_switch_writes_keep_the_account_switched_to() {
-    let h = harness(true).await;
-    let alice = sign_in_of("alice", "access-alice", later());
-    let bob = sign_in_of("bob", "access-bob", later());
-    h.app
-        .import_json(Pool::Grok, &json!([alice, bob]).to_string())
-        .await
-        .unwrap();
-    h.sign_in(&alice);
-    let bob_id = card_of(&cards(&h.app).await, "bob").id;
-    // The cards are asked for while a switch to Bob holds the store to
-    // write his sign-in.
-    let lock = h.app.grok.lock.lock().await;
-    let switch = async {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        h.sign_in(&bob);
-        let mut store = h.app.grok_load().unwrap();
-        store.current_account_id = Some(bob_id.clone());
-        h.app.grok_save(&store).unwrap();
-        drop(lock);
-    };
-    tokio::join!(cards(&h.app), switch);
-    assert_eq!(
-        h.app.grok_load().unwrap().current_account_id.as_deref(),
-        Some(bob_id.as_str())
     );
 }
 
@@ -523,28 +569,6 @@ async fn expired_tokens_are_renewed_and_given_to_grok_build_when_it_holds_them()
         RENEWAL_OFF
     );
     assert_eq!(h.fake.renewals(), before);
-}
-
-#[tokio::test]
-async fn a_renewal_never_replaces_a_sign_in_grok_build_renewed_meanwhile() {
-    let h = harness(true).await;
-    h.sign_in(&sign_in_of("alice", "access-alice", later()));
-    h.app.import_current(Pool::Grok).await.unwrap();
-    let id = cards(&h.app).await[0].id.clone();
-    // Grok Build renews from the same refresh token first; Copool's own
-    // renewal, from the refresh token it held, leaves that sign-in alone.
-    let mut theirs = sign_in_of("alice", "grok-renewed", later() + 7200);
-    theirs["refresh_token"] = "grok-rotated".into();
-    *h.fake.meanwhile.lock().unwrap() = Some((h.auth.clone(), auth_file(&theirs)));
-    h.app.renew_now(Pool::Grok, &id).await.unwrap();
-    assert_eq!(h.live(), theirs);
-    assert_eq!(
-        pool_login::grok::access_token(&h.stored(&id)).as_deref(),
-        Some("fresh-alice")
-    );
-    // Its own chain stays Grok Build's from then on, as Copool's stays its.
-    h.app.renew_now(Pool::Grok, &id).await.unwrap();
-    assert_eq!(h.live(), theirs);
 }
 
 #[tokio::test]
