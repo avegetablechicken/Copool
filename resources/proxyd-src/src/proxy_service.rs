@@ -36,7 +36,6 @@ use crate::models::ApiProxyStatus;
 use crate::models::Pool;
 use crate::models::StoredAccount;
 use crate::models::UsageSnapshot;
-use crate::models::UsageWindow;
 use crate::pool_login::ProxyLogin;
 use crate::state::ApiProxyRuntimeHandle;
 use crate::state::ApiProxyRuntimeSnapshot;
@@ -2428,7 +2427,7 @@ fn compare_proxy_candidates(left: &ProxyCandidate, right: &ProxyCandidate) -> Or
     if preferred != Ordering::Equal {
         return preferred;
     }
-    match remaining_score(right).cmp(&remaining_score(left)) {
+    match remaining_score(right).total_cmp(&remaining_score(left)) {
         Ordering::Equal => {}
         ordering => return ordering,
     }
@@ -2441,27 +2440,12 @@ fn compare_proxy_candidates(left: &ProxyCandidate, right: &ProxyCandidate) -> Or
     left.id.cmp(&right.id)
 }
 
-fn remaining_percent(window: Option<&UsageWindow>) -> i32 {
-    match window {
-        Some(window) => (100.0 - window.used_percent).round().clamp(0.0, 100.0) as i32,
-        None => 0,
-    }
-}
-
-fn remaining_score(candidate: &ProxyCandidate) -> i32 {
-    // Codex Free reports a monthly window in place of the week's.
-    let week = remaining_percent(
-        candidate
-            .usage
-            .as_ref()
-            .and_then(|usage| usage.one_week.as_ref().or(usage.one_month.as_ref())),
-    );
-    let five = candidate
+/// The candidate's usage score, as the app ranks its cards; 0 without usage.
+fn remaining_score(candidate: &ProxyCandidate) -> f64 {
+    candidate
         .usage
         .as_ref()
-        .and_then(|usage| usage.five_hour_remaining())
-        .map_or(0, |remaining| remaining.round() as i32);
-    week * 7 + five * 3
+        .map_or(0.0, UsageSnapshot::remaining_score)
 }
 
 async fn order_proxy_candidates_for_runtime(
@@ -2513,7 +2497,7 @@ fn compare_runtime_proxy_candidates(
     left: &ProxyCandidate,
     right: &ProxyCandidate,
 ) -> Ordering {
-    match remaining_score(right).cmp(&remaining_score(left)) {
+    match remaining_score(right).total_cmp(&remaining_score(left)) {
         Ordering::Equal => {}
         ordering => return ordering,
     }
@@ -5495,6 +5479,22 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         assert_eq!(
             compare_proxy_candidates(&richer, &selected_low_remaining),
             std::cmp::Ordering::Less
+        );
+    }
+
+    /// The proxy ranks as the cards do: what is left, unrounded, before when
+    /// an account was added.
+    #[test]
+    fn accounts_a_fraction_apart_rank_as_the_cards_do() {
+        let earlier = make_proxy_candidate("earlier", "acc-a", Some(10.0), Some(50.4), 1);
+        let later = make_proxy_candidate("later", "acc-b", Some(10.0), Some(50.2), 2);
+        assert_eq!(
+            compare_proxy_candidates(&later, &earlier),
+            std::cmp::Ordering::Less
+        );
+        assert!(
+            earlier.usage.as_ref().unwrap().remaining_score()
+                < later.usage.as_ref().unwrap().remaining_score()
         );
     }
 

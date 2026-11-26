@@ -238,6 +238,17 @@ impl UsageSnapshot {
             (None, None, None) => None,
         }
     }
+    /// How much an account has left, as Copool and its proxies rank
+    /// accounts: 70% of what is left of its week (its month, for Codex Free)
+    /// and 30% of its five hours, each from 0 to 100.
+    pub fn remaining_score(&self) -> f64 {
+        let long = self
+            .one_week
+            .as_ref()
+            .or(self.one_month.as_ref())
+            .map_or(0.0, |w| (100.0 - w.used_percent).clamp(0.0, 100.0));
+        0.7 * long + 0.3 * self.five_hour_remaining().unwrap_or(0.0)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

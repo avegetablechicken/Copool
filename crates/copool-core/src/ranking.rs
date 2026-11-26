@@ -1,20 +1,9 @@
-//! Quota ranking shared by application commands and the migrated Swift tests.
-use crate::models::{AccountSummary, UsageWindow};
+//! Quota ranking of the cards, their switches and the widgets.
+use crate::models::{AccountSummary, UsageSnapshot};
+/// The card's usage score (`UsageSnapshot::remaining_score`, as the proxies
+/// rank by); 0 without usage.
 pub(crate) fn remaining_score(a: &AccountSummary) -> f64 {
-    let remaining = |w: Option<&UsageWindow>| {
-        w.map(|w| (100.0 - w.used_percent).clamp(0.0, 100.0))
-            .unwrap_or(0.0)
-    };
-    let long = a
-        .usage
-        .as_ref()
-        .and_then(|u| u.one_week.as_ref().or(u.one_month.as_ref()));
-    0.7 * remaining(long)
-        + 0.3
-            * a.usage
-                .as_ref()
-                .and_then(|u| u.five_hour_remaining())
-                .unwrap_or(0.0)
+    a.usage.as_ref().map_or(0.0, UsageSnapshot::remaining_score)
 }
 pub(crate) fn sort_for_display(accounts: &mut [AccountSummary]) {
     accounts.sort_by(|a, b| {
