@@ -343,6 +343,8 @@ pub struct Application {
     pub(crate) state: AppState,
     pub(crate) operations: Mutex<()>,
     proxy_operations: Mutex<()>,
+    /// Serializes renewals of logins the Codex proxy's upstream refused.
+    codex_renewals: Mutex<()>,
     pub(crate) greetings_inflight: std::sync::Mutex<std::collections::BTreeSet<String>>,
     switch_effects: Arc<std::sync::RwLock<Option<SwitchEffect>>>,
     refreshing: std::sync::Mutex<std::collections::BTreeMap<String, usize>>,
@@ -423,6 +425,7 @@ impl Application {
             state: AppState::default(),
             operations: Mutex::new(()),
             proxy_operations: Mutex::new(()),
+            codex_renewals: Mutex::new(()),
             greetings_inflight: Default::default(),
             switch_effects: Arc::new(std::sync::RwLock::new(None)),
             refreshing: Default::default(),
@@ -531,14 +534,27 @@ impl Application {
         storage.upstream_base_url = Some(crate::usage::chatgpt_base_origin(
             crate::codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
         ));
-        let paths = self.paths.clone();
-        storage.on_auth_refreshed = Some(Arc::new(move |id, from, auth| {
-            crate::proxy_integration::sync_refreshed_auth(&paths, id, from, auth)
-        }));
+        // The pool keeps its logins, renews them and refreshes their usage.
+        storage.read_store = false;
+        storage.refresh_usage = false;
         let paths = self.paths.clone();
         storage.provider_candidates = Some(Arc::new(move || {
-            crate::proxy_integration::candidates(&paths)
+            let mut candidates = crate::proxy_integration::login_candidates(&paths)?;
+            candidates.extend(crate::proxy_integration::candidates(&paths)?);
+            Ok(candidates)
         }));
+        if let Some(app) = self.shared() {
+            let pool = Arc::downgrade(&app);
+            storage.renew_candidate = Some(Arc::new(move |id, rejected| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    pool.upgrade()
+                        .ok_or("Copool is closing")?
+                        .codex_renew_login(&id, &rejected)
+                        .await
+                })
+            }));
+        }
         let paths = self.paths.clone();
         let changes = self.changes.clone();
         let effects = self.switch_effects.clone();
@@ -1056,6 +1072,35 @@ impl Application {
         drop(_op);
         let credential = codex::credential(&normalized, &Identity::default());
         self.after_switch(Pool::Codex, Some(credential)).await
+    }
+    /// Renews a login the proxy's upstream refused (`rejected`, its access
+    /// token), and returns the account's login in the proxy's form. A login
+    /// already renewed since is returned as it is.
+    async fn codex_renew_login(&self, id: &str, rejected: &str) -> Result<Value> {
+        let _op = self.codex_renewals.lock().await;
+        let account = |app: &Self| -> Result<StoredAccount> {
+            store::load_store_from_path(&app.paths.store())?
+                .accounts
+                .into_iter()
+                .find(|a| a.id == id)
+                .ok_or_else(|| "Account not found".into())
+        };
+        let before = account(self)?;
+        let access = codex::extract_auth(&before.auth_json).map(|a| a.access_token);
+        if access.as_deref() != Ok(rejected) {
+            return Ok(before.auth_json);
+        }
+        if !before.renews() {
+            return Err(crate::models::RENEWAL_OFF.into());
+        }
+        let mut renewed = false;
+        let result = self
+            .codex_refresh_account(id, true, Some(&mut renewed))
+            .await;
+        if !renewed {
+            result?;
+        }
+        Ok(account(self)?.auth_json)
     }
     /// Whether the stored account failed: its usage refused, or its token
     /// expired.
@@ -1702,6 +1747,53 @@ mod tests {
         write_json(&app.paths.codex_auth, &other).unwrap();
         app.refresh_usage(Pool::Codex, &id).await.unwrap();
         assert_eq!(stored_token(), "next-test-only");
+    }
+
+    /// The proxy takes the pool's logins, the one Codex uses marked current
+    /// while Codex is on its official provider, and has the pool renew a
+    /// login its upstream refused; the pool's store and Codex's login keep
+    /// the renewal.
+    #[tokio::test]
+    async fn the_codex_proxy_takes_its_logins_and_renewals_from_the_pool() {
+        let (_dir, app, network) = crate::legacy_tests::network_fixture::fixture();
+        let app = app.into_shared();
+        let mut login = document("alice");
+        login["tokens"]["refresh_token"] = "refresh-test-only".into();
+        app.import_json(Pool::Codex, &login.to_string())
+            .await
+            .unwrap();
+        let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
+        app.switch_account(Pool::Codex, &id).await.unwrap();
+        let storage = app.proxy_storage(Pool::Codex);
+        assert!(!storage.read_store && !storage.refresh_usage);
+        let candidates = storage.provider_candidates.as_ref().unwrap()().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].extra["copoolCurrent"], true);
+        let renew = storage.renew_candidate.as_ref().unwrap();
+        // A token renewed since is handed back as it is.
+        assert_eq!(
+            renew(id.clone(), "not-the-stored-token".into())
+                .await
+                .unwrap()["tokens"]["access_token"],
+            "test-only"
+        );
+        let renewed = renew(id.clone(), "test-only".into()).await.unwrap();
+        assert_eq!(renewed["tokens"]["access_token"], "refreshed-test-only");
+        let stored = store::load_store_from_path(&app.paths.store()).unwrap();
+        assert_eq!(stored.accounts[0].auth_json, renewed);
+        let live: Value =
+            serde_json::from_slice(&fs::read(&app.paths.codex_auth).unwrap()).unwrap();
+        assert_eq!(live["tokens"]["access_token"], "refreshed-test-only");
+        assert_eq!(
+            network
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(call, ..)| call == "refresh")
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]

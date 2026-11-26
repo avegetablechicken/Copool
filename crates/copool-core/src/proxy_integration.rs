@@ -283,6 +283,29 @@ pub(crate) fn candidates_with_keys(
     }
     Ok(result)
 }
+/// The pool's logins as the proxy's candidates: the one Codex uses marked
+/// current, unless Codex is on a provider or the proxy only hosts the API.
+pub(crate) fn login_candidates(paths: &Paths) -> Result<Vec<StoredAccount>, String> {
+    let store = repository::load_accounts(&paths.store())?;
+    let settings = repository::load_settings(&paths.data_dir.join("settings.json"))?;
+    let official =
+        codex_config::resolve_path(&paths.codex_auth.with_file_name("config.toml")).is_official();
+    let current = store
+        .extra
+        .get("currentAccountId")
+        .and_then(Value::as_str)
+        .filter(|_| official && !settings.local_proxy_host_api_only);
+    Ok(store
+        .accounts
+        .into_iter()
+        .map(|mut account| {
+            if current == Some(account.id.as_str()) {
+                account.extra.insert("copoolCurrent".into(), true.into());
+            }
+            account
+        })
+        .collect())
+}
 pub(crate) fn select(paths: &Paths, id: &str, auth_json: &Value) -> Result<bool, String> {
     let settings = repository::load_settings(&paths.data_dir.join("settings.json"))?;
     if settings.local_proxy_host_api_only {
@@ -344,45 +367,9 @@ pub(crate) fn select(paths: &Paths, id: &str, auth_json: &Value) -> Result<bool,
     .map(|_| true)
 }
 
-/// Writes a login the proxy renewed from `from` to auth.json, when Codex
-/// still uses that account at that generation or an older one.
-pub(crate) fn sync_refreshed_auth(
-    paths: &Paths,
-    id: &str,
-    from: &Value,
-    auth_json: &Value,
-) -> Result<(), String> {
-    let settings = repository::load_settings(&paths.data_dir.join("settings.json"))?;
-    if settings.local_proxy_host_api_only
-        || !codex_config::resolve_path(&paths.codex_auth.with_file_name("config.toml"))
-            .is_official()
-    {
-        return Ok(());
-    }
-    let store = repository::load_accounts(&paths.store())?;
-    if store.extra.get("currentAccountId").and_then(Value::as_str) != Some(id) {
-        return Ok(());
-    }
-    let current: Value = match fs::read(&paths.codex_auth) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.to_string()),
-    };
-    if codex::account_identity(&current).ok() != codex::account_identity(auth_json).ok()
-        || !codex::renewal_replaces(auth_json, from, &current)
-    {
-        return Ok(());
-    }
-    let mut next = codex::normalized_auth_for_write(auth_json.clone())?;
-    if let Some(key) = current.get("OPENAI_API_KEY").filter(|v| !v.is_null()) {
-        next["OPENAI_API_KEY"] = key.clone();
-    }
-    write_json(&paths.codex_auth, &next)
-}
 #[cfg(test)]
 mod refresh_tests {
     use super::*;
-    use crate::Pool;
 
     /// A shell asked what the user exports is told so, for the line that
     /// loads agy's `.env` to load nothing; one asked what a shell opened now
@@ -423,44 +410,5 @@ mod refresh_tests {
         assert_eq!(codex_dotenv(&paths, "SINGLE").as_deref(), Some("sk-single"));
         assert_eq!(codex_dotenv(&paths, "EMPTY"), None);
         assert_eq!(codex_dotenv(&paths, "MISSING"), None);
-    }
-    #[tokio::test]
-    async fn refreshed_proxy_auth_updates_only_current_account_and_respects_host_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = crate::Application::open(Paths {
-            data_dir: dir.path().join("data"),
-            codex_auth: dir.path().join("codex/auth.json"),
-        })
-        .unwrap();
-        let document = json!({"tokens":{"id_token":"","access_token":"old","refresh_token":"refresh","account_id":"workspace"}});
-        app.import_json(Pool::Codex, &document.to_string())
-            .await
-            .unwrap();
-        let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
-        app.switch_account(Pool::Codex, &id).await.unwrap();
-        let read =
-            || serde_json::from_slice::<Value>(&fs::read(&app.paths.codex_auth).unwrap()).unwrap();
-        let from = read();
-        let mut refreshed = from.clone();
-        refreshed["tokens"]["access_token"] = "new".into();
-        sync_refreshed_auth(&app.paths, "different-card", &from, &refreshed).unwrap();
-        assert_eq!(read()["tokens"]["access_token"], "old");
-        let mut settings = app.configuration().unwrap();
-        settings.local_proxy_host_api_only = true;
-        app.persist_configuration(&settings).unwrap();
-        sync_refreshed_auth(&app.paths, &id, &from, &refreshed).unwrap();
-        assert_eq!(read()["tokens"]["access_token"], "old");
-        settings.local_proxy_host_api_only = false;
-        app.persist_configuration(&settings).unwrap();
-        // A renewal answered after Codex renewed the login keeps Codex's.
-        let mut renewed = from.clone();
-        renewed["tokens"]["access_token"] = "renewed-by-codex".into();
-        renewed["last_refresh"] = "2099-01-01T00:00:00Z".into();
-        write_json(&app.paths.codex_auth, &renewed).unwrap();
-        sync_refreshed_auth(&app.paths, &id, &from, &refreshed).unwrap();
-        assert_eq!(read()["tokens"]["access_token"], "renewed-by-codex");
-        write_json(&app.paths.codex_auth, &from).unwrap();
-        sync_refreshed_auth(&app.paths, &id, &from, &refreshed).unwrap();
-        assert_eq!(read()["tokens"]["access_token"], "new");
     }
 }
