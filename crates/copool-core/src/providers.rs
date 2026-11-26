@@ -118,44 +118,29 @@ impl Application {
     }
     /// A pool's Sub2api providers for the settings, without their secrets.
     pub fn providers(&self, pool: Pool) -> Result<Value> {
-        match pool {
-            Pool::Codex => serde_json::to_value(self.configuration()?.sub2_api_provider.providers),
-            Pool::Claude => serde_json::to_value(self.claude_providers()?),
-            Pool::Antigravity => serde_json::to_value(self.antigravity_providers()?),
-            Pool::Grok => serde_json::to_value(self.grok_providers()?),
+        match self.registry(pool) {
+            Some(registry) => registry.providers(),
+            None => serde_json::to_value(self.configuration()?.sub2_api_provider.providers)
+                .map_err(|e| e.to_string()),
         }
-        .map_err(|e| e.to_string())
     }
     /// Saves a provider form; a blank password keeps the saved one.
     pub async fn save_provider(&self, pool: Pool, draft: Value) -> Result<Value> {
-        let invalid = |e: serde_json::Error| e.to_string();
-        match pool {
-            Pool::Codex => serde_json::to_value(
-                self.codex_save_provider(serde_json::from_value(draft).map_err(invalid)?)
-                    .await?,
-            ),
-            Pool::Claude => serde_json::to_value(
-                self.claude_save_provider(serde_json::from_value(draft).map_err(invalid)?)
-                    .await?,
-            ),
-            Pool::Antigravity => serde_json::to_value(
-                self.antigravity_save_provider(serde_json::from_value(draft).map_err(invalid)?)
-                    .await?,
-            ),
-            Pool::Grok => serde_json::to_value(
-                self.grok_save_provider(serde_json::from_value(draft).map_err(invalid)?)
-                    .await?,
-            ),
+        if let Some(registry) = self.registry(pool) {
+            return registry.save(draft).await;
         }
+        let invalid = |e: serde_json::Error| e.to_string();
+        serde_json::to_value(
+            self.codex_save_provider(serde_json::from_value(draft).map_err(invalid)?)
+                .await?,
+        )
         .map_err(invalid)
     }
     pub async fn remove_provider(&self, pool: Pool, id: &str) -> Result<()> {
-        match pool {
-            Pool::Codex => self.codex_remove_provider(id).await?,
-            Pool::Claude => self.claude_remove_provider(id).await?,
-            Pool::Antigravity => self.antigravity_remove_provider(id).await?,
-            Pool::Grok => self.grok_remove_provider(id).await?,
+        if let Some(registry) = self.registry(pool) {
+            return registry.remove(id).await;
         }
+        self.codex_remove_provider(id).await?;
         self.secrets.remove(&sub2api::password_secret(pool, id))
     }
     /// Keeps a form's password in the keyring, never in the settings; a
@@ -173,18 +158,16 @@ impl Application {
         Ok(())
     }
     fn members(&self, pool: Pool) -> Result<Vec<Member>> {
-        match pool {
-            Pool::Codex => Ok(self
-                .configuration()?
-                .sub2_api_provider
-                .providers
-                .iter()
-                .map(codex_member)
-                .collect()),
-            Pool::Claude => self.claude_members(),
-            Pool::Antigravity => self.antigravity_members(),
-            Pool::Grok => self.grok_members(),
+        if let Some(registry) = self.registry(pool) {
+            return registry.members();
         }
+        Ok(self
+            .configuration()?
+            .sub2_api_provider
+            .providers
+            .iter()
+            .map(codex_member)
+            .collect())
     }
     fn member(&self, pool: Pool, key: &str) -> Result<Member> {
         self.members(pool)?
@@ -193,23 +176,23 @@ impl Application {
             .ok_or_else(|| {
                 match pool {
                     Pool::Codex => sub2api::PROVIDER_NOT_FOUND,
-                    Pool::Claude | Pool::Antigravity | Pool::Grok => "Provider not found",
+                    Pool::Claude | Pool::Antigravity | Pool::Grok => {
+                        crate::provider_registry::PROVIDER_NOT_FOUND
+                    }
                 }
                 .into()
             })
     }
     fn member_connection(&self, pool: Pool, member: &Member) -> Result<sub2api::Connection> {
-        match pool {
-            Pool::Codex => sub2api::connection(
-                &self.codex_config_path(),
-                &self.configuration()?.sub2_api_provider,
-                Some(&member.key),
-                self.secrets.as_ref(),
-            ),
-            Pool::Claude => self.claude_member_connection(&member.key),
-            Pool::Antigravity => self.antigravity_member_connection(&member.key),
-            Pool::Grok => self.grok_member_connection(&member.key),
+        if let Some(registry) = self.registry(pool) {
+            return registry.connection(&member.key);
         }
+        sub2api::connection(
+            &self.codex_config_path(),
+            &self.configuration()?.sub2_api_provider,
+            Some(&member.key),
+            self.secrets.as_ref(),
+        )
     }
     /// Edits a provider's cards where its pool keeps them; none when it was
     /// removed.
@@ -219,12 +202,18 @@ impl Application {
         key: &str,
         edit: impl FnOnce(&mut Member) -> T + Send,
     ) -> Result<Option<T>> {
-        match pool {
-            Pool::Codex => self.codex_edit_member(key, edit).await,
-            Pool::Claude => self.claude_edit_member(key, edit).await,
-            Pool::Antigravity => self.antigravity_edit_member(key, edit).await,
-            Pool::Grok => self.grok_edit_member(key, edit).await,
-        }
+        let Some(registry) = self.registry(pool) else {
+            return self.codex_edit_member(key, edit).await;
+        };
+        let (mut edit, mut result) = (Some(edit), None);
+        registry
+            .edit_member(key, &mut |member| {
+                if let Some(edit) = edit.take() {
+                    result = Some(edit(member));
+                }
+            })
+            .await?;
+        Ok(result)
     }
     /// Every provider's cards; those of the provider the pool uses
     /// (`current`) are current.

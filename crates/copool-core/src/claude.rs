@@ -30,6 +30,7 @@ mod proxy;
 mod refresh_lock;
 mod settings_source;
 mod sub2api;
+pub(crate) use sub2api::ProviderAdapter;
 
 const PROFILE_PATH: &str = "/api/oauth/profile";
 const ORGANIZATIONS_PATH: &str = "/api/oauth/organizations";

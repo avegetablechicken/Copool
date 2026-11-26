@@ -12,10 +12,9 @@ mod config;
 use super::{api, Result, Store};
 use crate::{
     application::{Application, SwitchExecution},
-    codex_config::Definition,
     env_bridge::{self, Bridge, Expect},
     pool::Pool,
-    sub2api::{self, Account, Member},
+    provider_registry::{embeds_record, strip_suffix, upstream, Adapter, ProviderRecord, Route},
 };
 use config::{Layout, XAI_KEY};
 use serde::{Deserialize, Serialize};
@@ -37,44 +36,23 @@ const ROLES: [&str; 4] = [
     "image_description",
 ];
 
+/// A Grok provider. Its address (`baseURL`) is the Sub2api root, or its
+/// `/v1` gateway, which Grok Build sends to: a switch names `<root>/v1`.
+/// Through Coport it is Coport's, with Sub2api's in its path; the admin API
+/// is then derived from the Sub2api address in it, reached directly.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Provider {
-    pub id: String,
-    pub name: String,
-    /// The Sub2api address, its root or its `/v1` gateway, which Grok Build
-    /// sends to: a switch names `<root>/v1`. Through Coport it is Coport's,
-    /// with Sub2api's in its path; the admin API is then derived from the
-    /// Sub2api address in it, reached directly.
-    #[serde(rename = "baseURL")]
-    pub base_url: String,
-    /// Optional admin API override, independent of Grok Build's gateway.
-    #[serde(rename = "adminBaseURL")]
-    pub admin_base_url: String,
-    pub username: String,
-    /// Only in a draft from the form; the system keyring keeps it.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub password: String,
+    #[serde(flatten)]
+    pub record: ProviderRecord,
     /// The variable holding the Sub2api API key Grok Build sends, as a new
     /// shell exports it. The user supplies the variable name.
     pub api_key_variable: String,
-    /// The proxy of every request for the provider and its accounts: blank
-    /// for the system settings, "direct://" for none.
-    #[serde(rename = "proxyURL")]
-    pub proxy_url: String,
-    #[serde(rename = "allowInsecureTLS")]
-    pub allow_insecure_tls: bool,
-    #[serde(rename = "importedAccountIDs")]
-    pub imported_account_ids: Vec<i64>,
-    pub cached_accounts: Vec<Account>,
 }
+embeds_record!(Provider);
 /// The Sub2api root of an address: without its `/v1` gateway.
 fn root(url: &str) -> String {
-    let url = url.trim().trim_end_matches('/');
-    url.strip_suffix("/v1")
-        .unwrap_or(url)
-        .trim_end_matches('/')
-        .to_owned()
+    strip_suffix(url, &["/v1"])
 }
 /// Grok Build's gateway at a provider.
 pub(super) fn gateway(p: &Provider) -> Result<String> {
@@ -83,15 +61,6 @@ pub(super) fn gateway(p: &Provider) -> Result<String> {
     }
     Ok(format!("{}/v1", p.base_url))
 }
-/// The Sub2api address in an address: the upstream a proxy's path names
-/// (`<proxy>/https://relay`), else the address itself.
-fn upstream(url: &str) -> &str {
-    ["/https://", "/http://"]
-        .iter()
-        .filter_map(|scheme| url.find(scheme))
-        .min()
-        .map_or(url, |at| &url[at + 1..])
-}
 /// The variable holding a provider's key.
 fn key_variable(p: &Provider) -> Result<&str> {
     let name = p.api_key_variable.trim();
@@ -99,16 +68,6 @@ fn key_variable(p: &Provider) -> Result<&str> {
         Ok(name)
     } else {
         Err(API_KEY_VARIABLE_INVALID.into())
-    }
-}
-/// A Grok provider's cards, named by its id.
-fn member(p: &Provider) -> Member {
-    Member {
-        key: p.id.clone(),
-        name: p.name.clone(),
-        proxy_url: p.proxy_url.clone(),
-        imported: p.imported_account_ids.clone(),
-        cached: p.cached_accounts.clone(),
     }
 }
 
@@ -442,67 +401,39 @@ pub(super) fn restore_left(path: &Path, store: &mut Store, left: Left) {
     store.config_provider = left.provider;
 }
 
-impl Application {
-    /// The Grok providers for the settings, without their secrets.
-    pub(crate) fn grok_providers(&self) -> Result<Vec<Provider>> {
-        Ok(self.grok_load()?.providers)
+/// The Grok pool's providers, for its Provider registry.
+pub(crate) struct ProviderAdapter<'a>(pub(crate) &'a Application);
+impl Adapter for ProviderAdapter<'_> {
+    type Provider = Provider;
+    const POOL: Pool = Pool::Grok;
+    fn load_providers(&self) -> Result<Vec<Provider>> {
+        Ok(self.0.grok_load()?.providers)
     }
-    pub(crate) async fn grok_save_provider(&self, mut draft: Provider) -> Result<Provider> {
-        draft.name = draft.name.trim().into();
-        draft.username = draft.username.trim().into();
+    async fn edit_providers<T: Send>(
+        &self,
+        edit: impl FnOnce(&mut Vec<Provider>) -> Result<T> + Send,
+    ) -> Result<T> {
+        self.0.grok_edit_providers(edit).await
+    }
+    fn prepare(&self, draft: &mut Provider) -> Result<()> {
         draft.base_url = root(&draft.base_url);
-        draft.admin_base_url = draft.admin_base_url.trim().trim_end_matches('/').into();
-        draft.proxy_url = draft.proxy_url.trim().into();
         // Grok Build's gateway is the Sub2api URL; the admin API only
         // overrides where Copool asks for the accounts.
         if draft.base_url.is_empty() {
             return Err(CONFIGURATION_INCOMPLETE.into());
         }
-        draft.api_key_variable = key_variable(&draft)?.to_owned();
-        if draft.id.trim().is_empty() {
-            draft.id = uuid::Uuid::new_v4().to_string();
-        }
-        self.grok_edit_providers(|providers| {
-            let existing = providers.iter().position(|p| p.id == draft.id);
-            sub2api::validate_form(
-                &draft.name,
-                providers
-                    .iter()
-                    .any(|p| p.id != draft.id && p.name.eq_ignore_ascii_case(&draft.name)),
-                &draft.username,
-                &draft.password,
-                existing.is_some(),
-                &draft.proxy_url,
-                &[
-                    &draft.base_url,
-                    upstream(&draft.base_url),
-                    &draft.admin_base_url,
-                ],
-            )?;
-            if let Some(old) = existing.map(|i| &providers[i]) {
-                draft.imported_account_ids = old.imported_account_ids.clone();
-                draft.cached_accounts = old.cached_accounts.clone();
-                // The provider's card sets its proxy, not its settings.
-                draft.proxy_url = old.proxy_url.clone();
-            }
-            self.store_provider_password(Pool::Grok, &draft.id, &draft.password)?;
-            draft.password.clear();
-            match existing {
-                Some(i) => providers[i] = draft.clone(),
-                None => providers.push(draft.clone()),
-            }
-            Ok(())
-        })
-        .await?;
-        Ok(draft)
+        draft.api_key_variable = key_variable(draft)?.to_owned();
+        Ok(())
     }
-    pub(crate) async fn grok_remove_provider(&self, id: &str) -> Result<()> {
-        self.grok_edit_providers(|providers| {
-            providers.retain(|p| p.id != id);
-            Ok(())
+    fn route(&self, p: &Provider) -> Result<Route> {
+        Ok(Route {
+            gateway: gateway(p)?,
+            sub2api: upstream(&p.base_url).to_owned(),
         })
-        .await
     }
+}
+
+impl Application {
     /// Edits the providers alone; the logins stay as stored.
     async fn grok_edit_providers<T>(
         &self,
@@ -513,74 +444,6 @@ impl Application {
         let result = edit(&mut store.providers)?;
         self.grok_save(&store)?;
         Ok(result)
-    }
-    pub(crate) fn grok_members(&self) -> Result<Vec<Member>> {
-        Ok(self.grok_load()?.providers.iter().map(member).collect())
-    }
-    pub(crate) async fn grok_edit_member<T>(
-        &self,
-        key: &str,
-        edit: impl FnOnce(&mut Member) -> T,
-    ) -> Result<Option<T>> {
-        self.grok_edit_providers(|providers| {
-            let Some(p) = providers
-                .iter_mut()
-                .find(|p| p.id.eq_ignore_ascii_case(key))
-            else {
-                return Ok(None);
-            };
-            let mut member = member(p);
-            let result = edit(&mut member);
-            p.imported_account_ids = member.imported;
-            p.cached_accounts = member.cached;
-            p.proxy_url = member.proxy_url;
-            Ok(Some(result))
-        })
-        .await
-    }
-    pub(crate) fn grok_member_connection(&self, key: &str) -> Result<sub2api::Connection> {
-        let p = self
-            .grok_load()?
-            .providers
-            .into_iter()
-            .find(|p| p.id.eq_ignore_ascii_case(key))
-            .ok_or("Provider not found")?;
-        let password = self
-            .secrets
-            .get(&sub2api::password_secret(Pool::Grok, &p.id))?
-            .ok_or(CONFIGURATION_INCOMPLETE)?;
-        // Sub2api itself, not a proxy in front of Grok Build's requests.
-        let admin = if p.admin_base_url.is_empty() {
-            upstream(&p.base_url)
-        } else {
-            &p.admin_base_url
-        };
-        Ok(sub2api::Connection {
-            admin_base: sub2api::admin_base(admin)?,
-            definition: Definition {
-                id: p.name.clone(),
-                base_url: Some(gateway(&p)?),
-                wire_api: None,
-                env_key: key_variable(&p).ok().map(str::to_owned),
-                requires_openai_auth: None,
-            },
-            configuration: crate::settings::Provider {
-                id: p.id,
-                provider_id: p.name,
-                username: p.username,
-                password,
-                allow_insecure_tls: p.allow_insecure_tls,
-                proxy_url: p.proxy_url,
-                imported_account_ids: p.imported_account_ids,
-                cached_accounts: p
-                    .cached_accounts
-                    .iter()
-                    .map(serde_json::to_value)
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|e| e.to_string())?,
-                ..Default::default()
-            },
-        })
     }
     /// Variables in Grok Build's environment: with `now`, as a new shell
     /// exports them (including `~/.grok/.env`); otherwise the user's own
@@ -671,7 +534,7 @@ impl Application {
         }
         applied?;
         Ok(SwitchExecution {
-            provider: Some(provider.name),
+            provider: Some(provider.record.name),
             ..Default::default()
         })
     }
@@ -766,7 +629,10 @@ mod tests {
             assert_eq!(root(typed), saved);
         }
         let provider = Provider {
-            base_url: "http://127.0.0.1:8787/https://relay.example.com".into(),
+            record: ProviderRecord {
+                base_url: "http://127.0.0.1:8787/https://relay.example.com".into(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert_eq!(
@@ -843,8 +709,11 @@ mod tests {
         store.config_record = Some(record.clone());
         store.config_provider = Some("p".into());
         store.providers.push(Provider {
-            id: "p".into(),
-            base_url: "https://relay.example.com".into(),
+            record: ProviderRecord {
+                id: "p".into(),
+                base_url: "https://relay.example.com".into(),
+                ..Default::default()
+            },
             api_key_variable: "GROK_SUB2API_API_KEY".into(),
             ..Provider::default()
         });

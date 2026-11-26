@@ -9,15 +9,14 @@
 //! Gemini CLI reads and agy has from a shell that loads it, and switches
 //! only once a new shell exports them so. An account's switch removes the
 //! block. What the pools do alike with their providers is in
-//! `providers.rs`; here is where the Antigravity pool keeps them and how it
+//! `provider_registry.rs`; here is where the Antigravity pool keeps them and how it
 //! uses one.
 use super::{Result, Store};
 use crate::{
     application::{Application, SwitchExecution},
-    codex_config::Definition,
     env_bridge::{self, Bridge, Expect},
     pool::Pool,
-    sub2api::{self, Account, Member},
+    provider_registry::{embeds_record, strip_suffix, upstream, Adapter, ProviderRecord, Route},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -35,48 +34,28 @@ pub(crate) const ENV_NOT_LOADED: &str = "error.antigravity.gemini_env_not_loaded
 pub(crate) const SETTINGS_INVALID: &str = "error.antigravity.settings_invalid";
 const CONFIGURATION_INCOMPLETE: &str = "error.sub2api.configuration_incomplete";
 
+/// An Antigravity provider. Its address (`baseURL`) is the Sub2api address
+/// agy sends to, as its root or its `/antigravity` gateway: its switch sets
+/// `GOOGLE_GEMINI_BASE_URL` to the gateway. Through Coport it is Coport's,
+/// with Sub2api's in its path
+/// (`http://127.0.0.1:8787/antigravity/https://relay.example.com`), as
+/// `ANTHROPIC_BASE_URL` names a Claude gateway through Coport; the admin API
+/// is then derived from the Sub2api address in it, reached directly. Its
+/// admin API override is never taken from `GOOGLE_GEMINI_BASE_URL`: the
+/// administrator's password goes only where the form says.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Provider {
-    pub id: String,
-    pub name: String,
-    /// The Sub2api address agy sends to, as its root or its `/antigravity`
-    /// gateway: its switch sets `GOOGLE_GEMINI_BASE_URL` to the gateway.
-    /// Through Coport it is Coport's, with Sub2api's in its path
-    /// (`http://127.0.0.1:8787/antigravity/https://relay.example.com`), as
-    /// `ANTHROPIC_BASE_URL` names a Claude gateway through Coport; the admin
-    /// API is then derived from the Sub2api address in it, reached directly.
-    #[serde(rename = "baseURL")]
-    pub base_url: String,
-    /// Optional admin API override, independent of agy's gateway. Never
-    /// taken from `GOOGLE_GEMINI_BASE_URL`: the administrator's password
-    /// goes only where the form says.
-    #[serde(rename = "adminBaseURL")]
-    pub admin_base_url: String,
-    pub username: String,
-    /// Only in a draft from the form; the system keyring keeps it.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub password: String,
+    #[serde(flatten)]
+    pub record: ProviderRecord,
     /// The variable holding the Sub2api API key agy sends, as a new shell
     /// exports it: `GEMINI_API_KEY` itself unless named. Never the key.
     pub api_key_variable: String,
-    /// The proxy of every request for the provider and its accounts: blank
-    /// for the system settings, "direct://" for none.
-    #[serde(rename = "proxyURL")]
-    pub proxy_url: String,
-    #[serde(rename = "allowInsecureTLS")]
-    pub allow_insecure_tls: bool,
-    #[serde(rename = "importedAccountIDs")]
-    pub imported_account_ids: Vec<i64>,
-    pub cached_accounts: Vec<Account>,
 }
+embeds_record!(Provider);
 /// The Sub2api root of an address: without its `/antigravity` gateway.
 fn root(url: &str) -> String {
-    let url = url.trim().trim_end_matches('/');
-    url.strip_suffix("/antigravity")
-        .unwrap_or(url)
-        .trim_end_matches('/')
-        .to_owned()
+    strip_suffix(url, &["/antigravity"])
 }
 /// agy's gateway at a provider, its `GOOGLE_GEMINI_BASE_URL`.
 pub(super) fn gateway(p: &Provider) -> Result<String> {
@@ -84,15 +63,6 @@ pub(super) fn gateway(p: &Provider) -> Result<String> {
         return Err(CONFIGURATION_INCOMPLETE.into());
     }
     Ok(format!("{}/antigravity", p.base_url))
-}
-/// The Sub2api address in an address: the upstream a proxy's path names
-/// (`<proxy>/antigravity/https://relay`), else the address itself.
-fn upstream(url: &str) -> &str {
-    ["/https://", "/http://"]
-        .iter()
-        .filter_map(|scheme| url.find(scheme))
-        .min()
-        .map_or(url, |at| &url[at + 1..])
 }
 /// The variable holding a provider's key.
 pub(super) fn key_variable(p: &Provider) -> &str {
@@ -108,16 +78,6 @@ fn quotable(value: &str) -> bool {
         && !value
             .chars()
             .any(|c| c == '\'' || c == '"' || c.is_whitespace() || c.is_control())
-}
-/// An Antigravity provider's cards, named by its id.
-fn member(p: &Provider) -> Member {
-    Member {
-        key: p.id.clone(),
-        name: p.name.clone(),
-        proxy_url: p.proxy_url.clone(),
-        imported: p.imported_account_ids.clone(),
-        cached: p.cached_accounts.clone(),
-    }
 }
 
 /// `modelProvider` as agy's settings had it before a provider set it (none
@@ -273,17 +233,22 @@ fn bridge_lines(variable: &str, gateway: &str) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-impl Application {
-    /// The Antigravity providers for the settings, without their secrets.
-    pub(crate) fn antigravity_providers(&self) -> Result<Vec<Provider>> {
-        Ok(self.antigravity_load()?.providers)
+/// The Antigravity pool's providers, for its Provider registry.
+pub(crate) struct ProviderAdapter<'a>(pub(crate) &'a Application);
+impl Adapter for ProviderAdapter<'_> {
+    type Provider = Provider;
+    const POOL: Pool = Pool::Antigravity;
+    fn load_providers(&self) -> Result<Vec<Provider>> {
+        Ok(self.0.antigravity_load()?.providers)
     }
-    pub(crate) async fn antigravity_save_provider(&self, mut draft: Provider) -> Result<Provider> {
-        draft.name = draft.name.trim().into();
-        draft.username = draft.username.trim().into();
+    async fn edit_providers<T: Send>(
+        &self,
+        edit: impl FnOnce(&mut Vec<Provider>) -> Result<T> + Send,
+    ) -> Result<T> {
+        self.0.antigravity_edit_providers(edit).await
+    }
+    fn prepare(&self, draft: &mut Provider) -> Result<()> {
         draft.base_url = root(&draft.base_url);
-        draft.admin_base_url = draft.admin_base_url.trim().trim_end_matches('/').into();
-        draft.proxy_url = draft.proxy_url.trim().into();
         // agy's gateway is the Sub2api URL; the admin API only overrides.
         if draft.base_url.is_empty() {
             return Err(CONFIGURATION_INCOMPLETE.into());
@@ -294,50 +259,17 @@ impl Application {
             // A key typed here would be kept in plain text: never.
             _ => return Err(API_KEY_VARIABLE_INVALID.into()),
         };
-        if draft.id.trim().is_empty() {
-            draft.id = uuid::Uuid::new_v4().to_string();
-        }
-        self.antigravity_edit_providers(|providers| {
-            let existing = providers.iter().position(|p| p.id == draft.id);
-            sub2api::validate_form(
-                &draft.name,
-                providers
-                    .iter()
-                    .any(|p| p.id != draft.id && p.name.eq_ignore_ascii_case(&draft.name)),
-                &draft.username,
-                &draft.password,
-                existing.is_some(),
-                &draft.proxy_url,
-                &[
-                    &draft.base_url,
-                    upstream(&draft.base_url),
-                    &draft.admin_base_url,
-                ],
-            )?;
-            if let Some(old) = existing.map(|i| &providers[i]) {
-                draft.imported_account_ids = old.imported_account_ids.clone();
-                draft.cached_accounts = old.cached_accounts.clone();
-                // The provider's card sets its proxy, not its settings.
-                draft.proxy_url = old.proxy_url.clone();
-            }
-            self.store_provider_password(Pool::Antigravity, &draft.id, &draft.password)?;
-            draft.password.clear();
-            match existing {
-                Some(i) => providers[i] = draft.clone(),
-                None => providers.push(draft.clone()),
-            }
-            Ok(())
-        })
-        .await?;
-        Ok(draft)
+        Ok(())
     }
-    pub(crate) async fn antigravity_remove_provider(&self, id: &str) -> Result<()> {
-        self.antigravity_edit_providers(|providers| {
-            providers.retain(|p| p.id != id);
-            Ok(())
+    fn route(&self, p: &Provider) -> Result<Route> {
+        Ok(Route {
+            gateway: gateway(p)?,
+            sub2api: upstream(&p.base_url).to_owned(),
         })
-        .await
     }
+}
+
+impl Application {
     /// Edits the providers alone; the logins stay as stored.
     async fn antigravity_edit_providers<T>(
         &self,
@@ -348,79 +280,6 @@ impl Application {
         let result = edit(&mut store.providers)?;
         self.antigravity_save(&store)?;
         Ok(result)
-    }
-    pub(crate) fn antigravity_members(&self) -> Result<Vec<Member>> {
-        Ok(self
-            .antigravity_load()?
-            .providers
-            .iter()
-            .map(member)
-            .collect())
-    }
-    pub(crate) async fn antigravity_edit_member<T>(
-        &self,
-        key: &str,
-        edit: impl FnOnce(&mut Member) -> T,
-    ) -> Result<Option<T>> {
-        self.antigravity_edit_providers(|providers| {
-            let Some(p) = providers
-                .iter_mut()
-                .find(|p| p.id.eq_ignore_ascii_case(key))
-            else {
-                return Ok(None);
-            };
-            let mut member = member(p);
-            let result = edit(&mut member);
-            p.imported_account_ids = member.imported;
-            p.cached_accounts = member.cached;
-            p.proxy_url = member.proxy_url;
-            Ok(Some(result))
-        })
-        .await
-    }
-    pub(crate) fn antigravity_member_connection(&self, key: &str) -> Result<sub2api::Connection> {
-        let p = self
-            .antigravity_load()?
-            .providers
-            .into_iter()
-            .find(|p| p.id.eq_ignore_ascii_case(key))
-            .ok_or("Provider not found")?;
-        let password = self
-            .secrets
-            .get(&sub2api::password_secret(Pool::Antigravity, &p.id))?
-            .ok_or("error.sub2api.configuration_incomplete")?;
-        // Sub2api itself, not a proxy in front of agy's requests.
-        let admin = if p.admin_base_url.is_empty() {
-            upstream(&p.base_url)
-        } else {
-            &p.admin_base_url
-        };
-        Ok(sub2api::Connection {
-            admin_base: sub2api::admin_base(admin)?,
-            definition: Definition {
-                id: p.name.clone(),
-                base_url: Some(gateway(&p)?),
-                wire_api: None,
-                env_key: Some(API_KEY.into()),
-                requires_openai_auth: None,
-            },
-            configuration: crate::settings::Provider {
-                id: p.id,
-                provider_id: p.name,
-                username: p.username,
-                password,
-                allow_insecure_tls: p.allow_insecure_tls,
-                proxy_url: p.proxy_url,
-                imported_account_ids: p.imported_account_ids,
-                cached_accounts: p
-                    .cached_accounts
-                    .iter()
-                    .map(serde_json::to_value)
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|e| e.to_string())?,
-                ..Default::default()
-            },
-        })
     }
     /// Variables in agy's environment, as the user's shell exports them;
     /// with `now`, as one shell opened now does. Asked off the runtime, for
@@ -491,7 +350,7 @@ impl Application {
         }
         applied?;
         Ok(SwitchExecution {
-            provider: Some(provider.name),
+            provider: Some(provider.record.name),
             ..Default::default()
         })
     }
@@ -642,7 +501,10 @@ mod tests {
             (coport.clone(), coport.clone()),
         ] {
             let p = Provider {
-                base_url: root(&raw),
+                record: ProviderRecord {
+                    base_url: root(&raw),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             assert_eq!(p.base_url, base, "{raw}");

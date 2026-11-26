@@ -821,12 +821,12 @@ async fn grok_requires_the_providers_own_key_variable() {
             sub2api::API_KEY_VARIABLE_INVALID
         );
     }
-    assert!(h.app.grok_providers().unwrap().is_empty());
+    assert_eq!(h.app.providers(Pool::Grok).unwrap(), json!([]));
     value["apiKeyVariable"] = json!("  TEAM_RELAY_TOKEN  ");
     let saved = h.app.save_provider(Pool::Grok, value).await.unwrap();
     assert_eq!(saved["apiKeyVariable"], "TEAM_RELAY_TOKEN");
     assert_eq!(
-        h.app.grok_providers().unwrap()[0].api_key_variable,
+        h.app.providers(Pool::Grok).unwrap()[0]["apiKeyVariable"],
         "TEAM_RELAY_TOKEN"
     );
 
@@ -834,16 +834,16 @@ async fn grok_requires_the_providers_own_key_variable() {
     let mut store = h.app.grok_load().unwrap();
     store.providers[0].api_key_variable.clear();
     h.app.grok_save(&store).unwrap();
-    assert!(h.app.grok_providers().unwrap()[0]
-        .api_key_variable
-        .is_empty());
+    assert_eq!(
+        h.app.providers(Pool::Grok).unwrap()[0]["apiKeyVariable"],
+        ""
+    );
     assert!(h
         .app
-        .grok_member_connection(&store.providers[0].id)
+        .registry(Pool::Grok)
         .unwrap()
-        .definition
-        .env_key
-        .is_none());
+        .connection(&store.providers[0].id)
+        .is_ok());
 }
 
 async fn grok_provider(h: &Harness, base: &str) -> String {
@@ -1251,7 +1251,12 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
             .await
             .unwrap();
         assert_eq!(
-            h.app.grok_member_connection(&id).unwrap().admin_base,
+            h.app
+                .registry(Pool::Grok)
+                .unwrap()
+                .connection(&id)
+                .unwrap()
+                .admin_base,
             "https://relay.example:6060/api/v1"
         );
         h.app.switch_account(Pool::Grok, &card.id).await.unwrap();

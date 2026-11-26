@@ -18,6 +18,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 mod api;
 pub(crate) mod login;
 mod sub2api;
+pub(crate) use sub2api::ProviderAdapter;
 
 pub(crate) use api::{sign_in_url, sub2api_usage, Network};
 

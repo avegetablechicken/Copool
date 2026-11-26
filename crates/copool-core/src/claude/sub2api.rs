@@ -4,7 +4,7 @@
 //! given instead by its Sub2api URL and the variable holding its key is
 //! merged as such a file: its gateway, and an `apiKeyHelper` printing the
 //! variable, so that the key stays in the user's environment. What the
-//! pools do alike with their providers is in `providers.rs`; here is where
+//! pools do alike with their providers is in `provider_registry.rs`; here is where
 //! the Claude pool keeps them and how it uses one.
 use super::{
     login_overrides, official_base, parse_settings, provider_config, put_settings, read_settings,
@@ -12,9 +12,8 @@ use super::{
 };
 use crate::{
     application::{Application, SwitchExecution},
-    codex_config::Definition,
     pool::Pool,
-    sub2api::{self, Account, Member},
+    provider_registry::{embeds_record, upstream, Adapter, ProviderRecord, Route},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,22 +26,18 @@ pub(crate) const API_KEY_MISSING: &str = "error.claude.sub2api_api_key_variable_
 pub(crate) const API_KEY_VARIABLE_INVALID: &str = "error.claude.api_key_variable_invalid";
 const CONFIGURATION_INCOMPLETE: &str = "error.sub2api.configuration_incomplete";
 
+/// A Claude provider. Its address (`baseURL`) is the Sub2api address: the
+/// gateway root, or its admin API (`…/api/v1`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Provider {
-    pub id: String,
-    pub name: String,
+    #[serde(flatten)]
+    pub record: ProviderRecord,
     /// `"address"` for a provider given by its Sub2api URL and the variable
     /// holding its key; none for a settings file, as saved before there was
     /// a choice.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mode: String,
-    /// The Sub2api address: the gateway root, or its admin API (`…/api/v1`).
-    #[serde(rename = "baseURL")]
-    pub base_url: String,
-    /// Optional admin API override, independent of the Claude Code gateway.
-    #[serde(rename = "adminBaseURL")]
-    pub admin_base_url: String,
     /// The Claude Code settings file naming the gateway and its credential;
     /// empty when it is searched for by `name` on every use.
     pub settings_path: String,
@@ -50,10 +45,6 @@ pub struct Provider {
     /// draft and in the listing, not stored.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub settings: String,
-    pub username: String,
-    /// Only in a draft from the form; the system keyring keeps it.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub password: String,
     /// The Sub2api API key Claude Code sends; only in a draft.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub api_key: String,
@@ -63,16 +54,8 @@ pub struct Provider {
     /// named. Never the key.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub api_key_variable: String,
-    /// The proxy of every request for the provider and its accounts: blank
-    /// for the system settings, "direct://" for none.
-    #[serde(rename = "proxyURL")]
-    pub proxy_url: String,
-    #[serde(rename = "allowInsecureTLS")]
-    pub allow_insecure_tls: bool,
-    #[serde(rename = "importedAccountIDs")]
-    pub imported_account_ids: Vec<i64>,
-    pub cached_accounts: Vec<Account>,
 }
+embeds_record!(Provider);
 impl Provider {
     /// Whether the provider is its Sub2api URL and key variable.
     fn by_address(&self) -> bool {
@@ -102,15 +85,6 @@ pub(super) fn gateway(url: &str) -> String {
         .trim_end_matches('/')
         .to_owned()
 }
-/// The Sub2api address in an address: the upstream a proxy's path names
-/// (`<proxy>/https://relay`), else the address itself.
-fn upstream(url: &str) -> &str {
-    ["/https://", "/http://"]
-        .iter()
-        .filter_map(|scheme| url.find(scheme))
-        .min()
-        .map_or(url, |at| &url[at + 1..])
-}
 /// The variable holding an address's key.
 pub(super) fn key_variable(p: &Provider) -> &str {
     match p.api_key_variable.as_str() {
@@ -127,37 +101,24 @@ fn address_settings(p: &Provider) -> Value {
         "apiKeyHelper": format!("printf '%s' \"${}\"", key_variable(p)),
     })
 }
-/// A Claude provider's cards, named by its id.
-fn claude_member(p: &Provider) -> Member {
-    Member {
-        key: p.id.clone(),
-        name: p.name.clone(),
-        proxy_url: p.proxy_url.clone(),
-        imported: p.imported_account_ids.clone(),
-        cached: p.cached_accounts.clone(),
-    }
-}
 
-impl Application {
-    /// The Claude providers for the settings, without their secrets.
-    pub(crate) fn claude_providers(&self) -> Result<Vec<Provider>> {
-        let location = self.claude_location();
+/// The Claude pool's providers, for its Provider registry.
+pub(crate) struct ProviderAdapter<'a>(pub(crate) &'a Application);
+impl Adapter for ProviderAdapter<'_> {
+    type Provider = Provider;
+    const POOL: Pool = Pool::Claude;
+    fn load_providers(&self) -> Result<Vec<Provider>> {
         // Provider metadata does not need the official accounts' vault tokens.
-        let mut providers = self.claude_store_file()?.providers;
-        for p in &mut providers {
-            // An address's key is looked for when it is used.
-            p.has_api_key = p.by_address()
-                || settings_source::load(&location, &p.name, &p.settings_path).is_ok();
-            p.settings = p.settings_input();
-        }
-        Ok(providers)
+        Ok(self.0.claude_store_file()?.providers)
     }
-    pub(crate) async fn claude_save_provider(&self, mut draft: Provider) -> Result<Provider> {
-        draft.username = draft.username.trim().into();
-        draft.admin_base_url = draft.admin_base_url.trim().trim_end_matches('/').into();
-        draft.proxy_url = draft.proxy_url.trim().into();
+    async fn edit_providers<T: Send>(
+        &self,
+        edit: impl FnOnce(&mut Vec<Provider>) -> Result<T> + Send,
+    ) -> Result<T> {
+        self.0.claude_edit_providers(edit).await
+    }
+    fn prepare(&self, draft: &mut Provider) -> Result<()> {
         if draft.by_address() {
-            draft.name = draft.name.trim().into();
             // Claude Code's gateway is the Sub2api root; the admin API only
             // overrides.
             draft.base_url = gateway(&draft.base_url);
@@ -180,66 +141,44 @@ impl Application {
                 input => input.to_owned(),
             };
             (draft.name, draft.settings_path) = settings_source::parse(&input)?;
-            let source =
-                settings_source::load(&self.claude_location(), &draft.name, &draft.settings_path)?;
+            let source = settings_source::load(
+                &self.0.claude_location(),
+                &draft.name,
+                &draft.settings_path,
+            )?;
             draft.base_url = source.base_url;
         }
-        if draft.id.trim().is_empty() {
-            draft.id = uuid::Uuid::new_v4().to_string();
+        // Model credentials remain in the source JSON or the user's
+        // environment, never inferred from the current main settings or
+        // substituted with the admin token.
+        draft.api_key.clear();
+        draft.has_api_key = true;
+        draft.settings.clear();
+        Ok(())
+    }
+    fn route(&self, p: &Provider) -> Result<Route> {
+        // An address's admin API is the Sub2api one in it, reached directly.
+        if p.by_address() {
+            return Ok(Route {
+                gateway: gateway(&p.base_url),
+                sub2api: upstream(&p.base_url).to_owned(),
+            });
         }
-        self.claude_edit_providers(|providers| {
-            let existing = providers.iter().position(|p| p.id == draft.id);
-            sub2api::validate_form(
-                &draft.name,
-                providers
-                    .iter()
-                    .any(|p| p.id != draft.id && p.name.eq_ignore_ascii_case(&draft.name)),
-                &draft.username,
-                &draft.password,
-                existing.is_some(),
-                &draft.proxy_url,
-                &[
-                    &draft.base_url,
-                    // Through a proxy, the Sub2api address in its path.
-                    if draft.by_address() {
-                        upstream(&draft.base_url)
-                    } else {
-                        ""
-                    },
-                    &draft.admin_base_url,
-                ],
-            )?;
-            if let Some(old) = existing.map(|i| &providers[i]) {
-                draft.imported_account_ids = old.imported_account_ids.clone();
-                draft.cached_accounts = old.cached_accounts.clone();
-                // The provider's card sets its proxy, not its settings.
-                draft.proxy_url = old.proxy_url.clone();
-            }
-            self.store_provider_password(Pool::Claude, &draft.id, &draft.password)?;
-            // Model credentials remain in the source JSON or the user's
-            // environment, never inferred from the current main settings or
-            // substituted with the admin token.
-            draft.password.clear();
-            draft.api_key.clear();
-            draft.has_api_key = true;
-            draft.settings.clear();
-            match existing {
-                Some(i) => providers[i] = draft.clone(),
-                None => providers.push(draft.clone()),
-            }
-            Ok(())
+        let source = settings_source::load(&self.0.claude_location(), &p.name, &p.settings_path)?;
+        Ok(Route {
+            gateway: gateway(&source.base_url),
+            sub2api: source.base_url,
         })
-        .await?;
-        draft.settings = draft.settings_input();
-        Ok(draft)
     }
-    pub(crate) async fn claude_remove_provider(&self, id: &str) -> Result<()> {
-        self.claude_edit_providers(|providers| {
-            providers.retain(|p| p.id != id);
-            Ok(())
-        })
-        .await
+    fn present(&self, p: &mut Provider) {
+        // An address's key is looked for when it is used.
+        p.has_api_key = p.by_address()
+            || settings_source::load(&self.0.claude_location(), &p.name, &p.settings_path).is_ok();
+        p.settings = p.settings_input();
     }
+}
+
+impl Application {
     /// Edits the providers alone: the official accounts' tokens stay as
     /// stored, the vault neither read nor rewritten.
     async fn claude_edit_providers<T>(
@@ -252,87 +191,6 @@ impl Application {
         crate::persistence::write_json(&self.claude_store_path(), &store)?;
         self.publish();
         Ok(result)
-    }
-    pub(crate) fn claude_members(&self) -> Result<Vec<Member>> {
-        Ok(self
-            .claude_store_file()?
-            .providers
-            .iter()
-            .map(claude_member)
-            .collect())
-    }
-    pub(crate) async fn claude_edit_member<T>(
-        &self,
-        key: &str,
-        edit: impl FnOnce(&mut Member) -> T,
-    ) -> Result<Option<T>> {
-        self.claude_edit_providers(|providers| {
-            let Some(p) = providers
-                .iter_mut()
-                .find(|p| p.id.eq_ignore_ascii_case(key))
-            else {
-                return Ok(None);
-            };
-            let mut member = claude_member(p);
-            let result = edit(&mut member);
-            p.imported_account_ids = member.imported;
-            p.cached_accounts = member.cached;
-            p.proxy_url = member.proxy_url;
-            Ok(Some(result))
-        })
-        .await
-    }
-    pub(crate) fn claude_member_connection(&self, key: &str) -> Result<sub2api::Connection> {
-        let p = self
-            .claude_store_file()?
-            .providers
-            .into_iter()
-            .find(|p| p.id.eq_ignore_ascii_case(key))
-            .ok_or("Provider not found")?;
-        self.claude_sub2api_connection(&p)
-    }
-    fn claude_sub2api_connection(&self, p: &Provider) -> Result<sub2api::Connection> {
-        // An address's admin API is the Sub2api one in it, reached directly.
-        let (base_url, admin) = if p.by_address() {
-            (p.base_url.clone(), upstream(&p.base_url).to_owned())
-        } else {
-            let source = settings_source::load(&self.claude_location(), &p.name, &p.settings_path)?;
-            (source.base_url.clone(), source.base_url)
-        };
-        let password = self
-            .secrets
-            .get(&sub2api::password_secret(Pool::Claude, &p.id))?
-            .ok_or("error.sub2api.configuration_incomplete")?;
-        Ok(sub2api::Connection {
-            configuration: crate::settings::Provider {
-                id: p.id.clone(),
-                provider_id: p.name.clone(),
-                username: p.username.clone(),
-                password,
-                allow_insecure_tls: p.allow_insecure_tls,
-                proxy_url: p.proxy_url.clone(),
-                imported_account_ids: p.imported_account_ids.clone(),
-                cached_accounts: p
-                    .cached_accounts
-                    .iter()
-                    .map(serde_json::to_value)
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|e| e.to_string())?,
-                ..Default::default()
-            },
-            definition: Definition {
-                id: p.name.clone(),
-                base_url: Some(gateway(&base_url)),
-                wire_api: None,
-                env_key: None,
-                requires_openai_auth: None,
-            },
-            admin_base: sub2api::admin_base(if p.admin_base_url.is_empty() {
-                &admin
-            } else {
-                &p.admin_base_url
-            })?,
-        })
     }
     /// What a provider's switch merges over Claude Code's settings: its
     /// settings file, read again each time, or what its address gives once
@@ -457,7 +315,7 @@ mod tests {
     use crate::models::AccountSummary;
     /// Syncs every provider, as choosing each in the import menu would.
     async fn sync_all(app: &Application) {
-        for p in app.claude_providers().unwrap() {
+        for p in listed(&app) {
             app.refresh_provider(Pool::Claude, &p.id, true)
                 .await
                 .unwrap();
@@ -465,6 +323,21 @@ mod tests {
     }
     use super::super::{tests::sign_in, tests::Fake, Location};
     use super::*;
+
+    /// A form saved through the pool's Provider registry, as the settings save it.
+    async fn save(app: &Application, draft: Provider) -> Result<Provider> {
+        let draft = serde_json::to_value(draft).unwrap();
+        let saved = app.registry(Pool::Claude).unwrap().save(draft).await?;
+        Ok(serde_json::from_value(saved).unwrap())
+    }
+    /// The providers as the settings list them.
+    fn listed(app: &Application) -> Vec<Provider> {
+        let listed = app.registry(Pool::Claude).unwrap().providers().unwrap();
+        serde_json::from_value(listed).unwrap()
+    }
+    fn connection(app: &Application, key: &str) -> Result<crate::sub2api::Connection> {
+        app.registry(Pool::Claude).unwrap().connection(key)
+    }
     use serde_json::{json, Value};
     use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex};
 
@@ -636,7 +509,7 @@ mod tests {
         crate::persistence::write_json(&app.claude_store_path(), &store).unwrap();
         let before = serde_json::to_value(&store.accounts).unwrap();
         app.set_claude_vault(std::sync::Arc::new(UnavailableVault));
-        let providers = app.claude_providers().unwrap();
+        let providers = listed(&app);
         app.refresh_provider(Pool::Claude, &providers[0].id, true)
             .await
             .unwrap();
@@ -669,15 +542,20 @@ mod tests {
         let (app, location, secrets) = open_recording(dir);
         let base = server(requests.clone()).await;
         let path = source_file(dir, &base, AUTH_TOKEN, "sk-team");
-        let saved = app
-            .claude_save_provider(Provider {
+        let saved = save(
+            &app,
+            Provider {
+                record: ProviderRecord {
+                    username: "admin@example.com".into(),
+                    password: "secret".into(),
+                    ..Default::default()
+                },
                 settings: path.to_str().unwrap().into(),
-                username: "admin@example.com".into(),
-                password: "secret".into(),
                 ..Default::default()
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         sync_all(&app).await;
         app.set_claude_network(std::sync::Arc::new(Fake::default()));
         sign_in(&location, "alice", 4_000_000_000_000);
@@ -716,15 +594,20 @@ mod tests {
             json!({"env": {BASE_URL: base, AUTH_TOKEN: "sk-other"}}).to_string(),
         )
         .unwrap();
-        let saved = app
-            .claude_save_provider(Provider {
+        let saved = save(
+            &app,
+            Provider {
+                record: ProviderRecord {
+                    username: "other@example.com".into(),
+                    password: password.into(),
+                    ..Default::default()
+                },
                 settings: path.to_str().unwrap().into(),
-                username: "other@example.com".into(),
-                password: password.into(),
                 ..Default::default()
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         sync_all(&app).await;
         (saved, requests)
     }
@@ -775,15 +658,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (app, _) = open(dir.path());
         let path = source_file(dir.path(), &base, AUTH_TOKEN, "sk-team");
-        let saved = app
-            .claude_save_provider(Provider {
+        let saved = save(
+            &app,
+            Provider {
+                record: ProviderRecord {
+                    username: "admin@example.com".into(),
+                    password: "secret".into(),
+                    ..Default::default()
+                },
                 settings: path.to_str().unwrap().into(),
-                username: "admin@example.com".into(),
-                password: "secret".into(),
                 ..Default::default()
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         sync_all(&app).await;
         let card = crate::sub2api::card_id(Pool::Claude, &saved.id, 7);
         let shown = |app: &Application| {
@@ -998,22 +886,27 @@ mod tests {
             "sk-from-source",
         );
         let draft = Provider {
-            username: "admin".into(),
-            password: "admin-password".into(),
+            record: ProviderRecord {
+                username: "admin".into(),
+                password: "admin-password".into(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         // The settings file is required, never taken from the main settings.
         assert_eq!(
-            app.claude_save_provider(draft.clone()).await.unwrap_err(),
+            save(&app, draft.clone()).await.unwrap_err(),
             "error.sub2api.configuration_incomplete"
         );
-        let mut saved = app
-            .claude_save_provider(Provider {
+        let mut saved = save(
+            &app,
+            Provider {
                 settings: format!(" {} ", path.display()),
                 ..draft
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(saved.name, "team");
         assert_eq!(saved.settings_path, path.to_str().unwrap());
         assert_eq!(saved.settings, saved.settings_path);
@@ -1021,13 +914,13 @@ mod tests {
         assert!(saved.has_api_key);
         assert!(saved.password.is_empty() && saved.api_key.is_empty());
         assert_eq!(
-            app.claude_sub2api_connection(&saved).unwrap().admin_base,
+            connection(&app, &saved.id).unwrap().admin_base,
             "https://gateway.example/api/v1"
         );
 
         saved.admin_base_url = "https://admin.example/api/v1/".into();
-        saved = app.claude_save_provider(saved).await.unwrap();
-        let connection = app.claude_sub2api_connection(&saved).unwrap();
+        saved = save(&app, saved).await.unwrap();
+        let connection = connection(&app, &saved.id).unwrap();
         assert_eq!(connection.admin_base, "https://admin.example/api/v1");
         assert_eq!(
             connection.definition.base_url.as_deref(),
@@ -1036,19 +929,24 @@ mod tests {
         assert_eq!(connection.configuration.password, "admin-password");
         let stored = fs::read_to_string(app.claude_store_path()).unwrap();
         assert!(!stored.contains("sk-from") && !stored.contains("admin-password"));
-        assert!(app
-            .claude_save_provider(Provider {
+        assert!(save(
+            &app,
+            Provider {
+                record: ProviderRecord {
+                    username: "admin".into(),
+                    password: "password".into(),
+                    ..Default::default()
+                },
                 settings: dir.path().join("missing.json").to_str().unwrap().into(),
-                username: "admin".into(),
-                password: "password".into(),
                 ..Default::default()
-            })
-            .await
-            .unwrap_err()
-            .contains("Cannot read"));
+            }
+        )
+        .await
+        .unwrap_err()
+        .contains("Cannot read"));
         saved.admin_base_url = "https://user:password@admin.example".into();
         assert_eq!(
-            app.claude_save_provider(saved).await.unwrap_err(),
+            save(&app, saved).await.unwrap_err(),
             "error.sub2api.invalid_base_url"
         );
     }
@@ -1171,34 +1069,32 @@ mod tests {
         let (app, location) = open(dir.path());
         let base = server(requests).await;
         let draft = |url: &str, variable: &str| Provider {
+            record: ProviderRecord {
+                name: "relay".into(),
+                base_url: url.into(),
+                username: "admin@example.com".into(),
+                password: "secret".into(),
+                ..Default::default()
+            },
             mode: "address".into(),
-            name: "relay".into(),
-            base_url: url.into(),
             api_key_variable: variable.into(),
-            username: "admin@example.com".into(),
-            password: "secret".into(),
             ..Default::default()
         };
         // A key itself is refused, never kept; the address is required.
         assert_eq!(
-            app.claude_save_provider(draft(&base, "sk-relay"))
-                .await
-                .unwrap_err(),
+            save(&app, draft(&base, "sk-relay")).await.unwrap_err(),
             API_KEY_VARIABLE_INVALID
         );
         assert_eq!(
-            app.claude_save_provider(draft("", "")).await.unwrap_err(),
+            save(&app, draft("", "")).await.unwrap_err(),
             CONFIGURATION_INCOMPLETE
         );
         // The gateway's `/v1` is the provider's root; the variable a default.
-        let saved = app
-            .claude_save_provider(draft(&format!("{base}/v1/"), ""))
-            .await
-            .unwrap();
+        let saved = save(&app, draft(&format!("{base}/v1/"), "")).await.unwrap();
         assert_eq!(saved.base_url, base);
         assert_eq!(saved.api_key_variable, "CLAUDE_SUB2API_API_KEY");
         assert_eq!(saved.settings, "");
-        let listed = &app.claude_providers().unwrap()[0];
+        let listed = &listed(&app)[0];
         assert_eq!(
             (listed.mode.as_str(), listed.settings.as_str()),
             ("address", "")
@@ -1262,15 +1158,11 @@ mod tests {
 
         // Through a proxy, the admin API is the Sub2api in its path.
         let proxied = "http://127.0.0.1:8787/anthropic/https://relay.invalid";
-        let saved = app
-            .claude_save_provider(Provider {
-                id: saved.id,
-                password: String::new(),
-                ..draft(proxied, "RELAY_KEY")
-            })
-            .await
-            .unwrap();
-        let connection = app.claude_member_connection(&saved.id).unwrap();
+        let mut edited = draft(proxied, "RELAY_KEY");
+        edited.id = saved.id.clone();
+        edited.password = String::new();
+        let saved = save(&app, edited).await.unwrap();
+        let connection = connection(&app, &saved.id).unwrap();
         assert_eq!(connection.admin_base, "https://relay.invalid/api/v1");
         assert_eq!(connection.definition.base_url.as_deref(), Some(proxied));
     }
@@ -1317,15 +1209,20 @@ mod tests {
             .unwrap()
         };
         write(&found, "sk-found");
-        let saved = app
-            .claude_save_provider(Provider {
+        let saved = save(
+            &app,
+            Provider {
+                record: ProviderRecord {
+                    username: "admin@example.com".into(),
+                    password: "secret".into(),
+                    ..Default::default()
+                },
                 settings: "team".into(),
-                username: "admin@example.com".into(),
-                password: "secret".into(),
                 ..Default::default()
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(
             (saved.name.as_str(), saved.settings_path.as_str()),
             ("team", "")
@@ -1333,7 +1230,7 @@ mod tests {
         assert_eq!(saved.settings, "team");
         let stored = fs::read_to_string(app.claude_store_path()).unwrap();
         assert!(!stored.contains("team-settings.json") && !stored.contains("\"settings\""));
-        assert_eq!(app.claude_providers().unwrap()[0].settings, "team");
+        assert_eq!(listed(&app)[0].settings, "team");
         sync_all(&app).await;
         // The file moved: the next switch searches again.
         let moved = location.config_dir.join("other/settings-team.json");
@@ -1351,13 +1248,15 @@ mod tests {
         let picked = dir.path().join("elsewhere/team.json");
         fs::create_dir_all(picked.parent().unwrap()).unwrap();
         write(&picked, "sk-picked");
-        let saved = app
-            .claude_save_provider(Provider {
+        let saved = save(
+            &app,
+            Provider {
                 settings: picked.to_str().unwrap().into(),
                 ..saved
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(saved.settings_path, picked.to_str().unwrap());
         app.switch_account(
             Pool::Claude,
