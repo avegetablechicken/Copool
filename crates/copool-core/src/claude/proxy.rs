@@ -289,8 +289,7 @@ impl Application {
         serde_json::to_vec_pretty(&store).map_err(|e| e.to_string())
     }
     /// Takes the logins a server's daemon renewed since they were uploaded:
-    /// a later generation of a login replaces the pool's, which stays to
-    /// fall back on.
+    /// a later generation of a login replaces the pool's.
     pub(crate) async fn claude_adopt_remote_logins(&self, remote: &Value) -> Result<()> {
         let _lock = self.claude.lock.lock().await;
         let mut store = self.claude_load()?;
@@ -301,7 +300,7 @@ impl Application {
                 found["id"].as_str() == Some(a.id.as_str())
                     && crate::pool_login::claude::newer_login(oauth, &a.oauth)
             }) {
-                changed |= account.adopt(oauth, false);
+                changed |= account.adopt(oauth);
             }
         }
         if changed {

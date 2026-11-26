@@ -17,11 +17,9 @@
 //! An account its issuer deactivated stays listed so ([`Standing`]); deleted,
 //! it stays hidden, for the pool to remember the workspace gone.
 //!
-//! Every pool is meant to keep its accounts here; Claude has yet to: an
-//! account keeps several generations of its login, told apart by Claude's
-//! refusals rather than by expiry. Once Claude Code's refresh lock is known
-//! to make them unneeded, the login (its tokens and its `oauthAccount`), the
-//! vault and that lock fit as its pool's facts.
+//! Every pool is meant to keep its accounts here; Claude has yet to: its
+//! login (its tokens and its `oauthAccount`), its vault and Claude Code's
+//! refresh lock are to be its pool's facts.
 use crate::{
     application::Application,
     models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
