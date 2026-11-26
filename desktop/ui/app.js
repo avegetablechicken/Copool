@@ -382,7 +382,6 @@ function cardContext(now = Date.now() / 1000) {
     locale,
     tr,
     now,
-    refresh: preferences?.refresh?.[pool],
     accountProxy: (preferences?.accountProxyUrl || "").trim(),
     switchingId,
     adding: controller.adding,
@@ -492,14 +491,13 @@ async function droppingNewCards(origin, task) {
     if (dropOrigin === origin) dropOrigin = null;
   }
 }
-/// The provider of a Sub2api card, from its id (`sub2api-<provider>-<n>`,
-/// `claude-sub2api-<provider>-<n>`, `antigravity-sub2api-<provider>-<n>`,
-/// `grok-sub2api-<provider>-<n>`):
+/// The provider of a Sub2api card, which its cards refresh with: the core
+/// names the card's refresh key `sub2api:<provider>` (refresh_plan.rs), so
 /// cards synced since the provider list was last read still group with
 /// their provider.
 function providerKey(account) {
-  if (account.sourceTag !== "SUB2API") return null;
-  return /^(?:claude-|antigravity-|grok-)?sub2api-(.+)-\d+$/.exec(account.id)?.[1] ?? null;
+  const key = account.refresh?.key;
+  return key?.startsWith("sub2api:") ? key.slice("sub2api:".length) : null;
 }
 /// The saved Sub2api provider a card belongs to, if any.
 function accountProvider(account) {
@@ -1086,13 +1084,11 @@ async function saveGreeting(id, state, auto, times) {
   }
   if (editing === state) renderEditing();
 }
-/// The key a card's own refresh switches are saved under: an account's id,
-/// or `sub2api:<provider>` for a Sub2api provider's cards, which refresh
-/// together.
+/// The key a card's own refresh switches are saved under, as the core names
+/// it: an account's id, or `sub2api:<provider>` for a Sub2api provider's
+/// cards, which refresh together.
 function refreshKey(target) {
-  if (target.group) return `sub2api:${target.group.key}`;
-  const provider = providerKey(target.account);
-  return provider === null ? target.account.id : `sub2api:${provider}`;
+  return (target.group ? target.group.accounts[0] : target.account).refresh.key;
 }
 /// A card's background refresh: the pool's intervals, which all its cards
 /// share (the card in use's only on its own card), and the card's own
@@ -2990,8 +2986,9 @@ document.addEventListener("keydown", (event) => {
 /// takes no panel-wide lock: each card updates and becomes operable again as
 /// its own refresh lands ("copool-changed"), while the others stay usable.
 function refreshUsage(id = null) {
-  const provider = id === null ? null : providerKey({ id, sourceTag: "SUB2API" });
-  if (provider !== null) return refreshProvider({ key: provider, accounts: [{ id }] });
+  const account = id === null ? null : accountsCache.find((a) => a.id === id);
+  const provider = account ? providerKey(account) : null;
+  if (provider !== null) return refreshProvider({ key: provider, accounts: [account] });
   accountsController
     .refresh(id)
     .then((done) => {

@@ -475,16 +475,15 @@ test("a Sub2api provider's cards share their speed-up and have no slow-down", as
   assert.deepEqual(JSON.parse(JSON.stringify(scope.preferences.refresh.cards)), {
     claude: { "sub2api:p": { adaptive: false } },
   });
+  // The key is the core's, the card's or its provider's cards' (refresh_plan.rs).
   const refreshKey = vm.runInNewContext(
     `${between("/// The key a card's own refresh switches are saved under", "/// A card's background refresh: the pool's intervals")}; refreshKey`,
-    {
-      providerKey: (a) =>
-        a.sourceTag === "SUB2API" ? /^(?:claude-)?sub2api-(.+)-\d+$/.exec(a.id)?.[1] ?? null : null,
-    },
+    {},
   );
-  assert.equal(refreshKey({ group: { key: "p" } }), "sub2api:p");
-  assert.equal(refreshKey({ account: { id: "claude-sub2api-p-3", sourceTag: "SUB2API" } }), "sub2api:p");
-  assert.equal(refreshKey({ account: { id: "acct" } }), "acct");
+  const member = { id: "claude-sub2api-p-3", sourceTag: "SUB2API", refresh: { key: "sub2api:p" } };
+  assert.equal(refreshKey({ group: { key: "p", accounts: [member] } }), "sub2api:p");
+  assert.equal(refreshKey({ account: member }), "sub2api:p");
+  assert.equal(refreshKey({ account: { id: "acct", refresh: { key: "acct" } } }), "acct");
 });
 
 test("only Claude's own accounts offer the slow-down after HTTP 429, on by default", async () => {

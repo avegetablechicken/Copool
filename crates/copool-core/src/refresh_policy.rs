@@ -344,29 +344,6 @@ pub(crate) fn target_ids(accounts: &[AccountSummary], now: i64, lead: i64) -> Ve
     }
     ids
 }
-/// None means the complete pool; intermediate ticks only refresh the active card.
-pub(crate) fn recurring_ids(
-    tick: u64,
-    full_every: u64,
-    accounts: &[AccountSummary],
-) -> Option<Vec<String>> {
-    if is_full_round(tick, full_every) {
-        None
-    } else {
-        Some(
-            round_card(accounts)
-                .map(|id| vec![id.into()])
-                .unwrap_or_default(),
-        )
-    }
-}
-/// The card every round asks for, the others waiting for a full round.
-pub(crate) fn round_card(accounts: &[AccountSummary]) -> Option<&str> {
-    accounts
-        .iter()
-        .find(|a| a.is_current)
-        .map(|a| a.id.as_str())
-}
 
 #[cfg(test)]
 mod tests {

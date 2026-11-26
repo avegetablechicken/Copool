@@ -299,6 +299,14 @@ fn without_login_replacement(mut settings: Value) -> Value {
     }
     settings
 }
+/// The provider Claude Code uses: under settings other than the official
+/// ones, the provider last applied; else none, its login.
+fn claude_provider<'a>(store: &'a Store, location: &Location) -> Option<&'a str> {
+    store
+        .settings_provider
+        .as_deref()
+        .filter(|_| !settings_are_official(location))
+}
 /// Whether Claude Code uses its subscription login with the main settings.
 fn settings_are_official(location: &Location) -> bool {
     read_settings(location)
@@ -721,6 +729,7 @@ impl Stored {
             token_expires_at: crate::models::displayed_expiry(expires_at(&self.oauth) / 1000),
             renewal: Some(Renewal::of(self.renewal).as_str().into()),
             next_refresh_at: None,
+            refresh: None,
             outdated_sub2api_version: None,
             tags: Default::default(),
         }
@@ -1434,6 +1443,23 @@ impl Application {
             .usage_retry_at
             .filter(|_| self.card_refresh(Pool::Claude, &account.id).backoff)
     }
+    /// The provider Claude Code uses now, if any.
+    pub(crate) fn claude_provider_in_use(&self) -> Option<String> {
+        let store = self.claude_load().ok()?;
+        claude_provider(&store, &self.claude_location()).map(str::to_owned)
+    }
+    /// Each account's rate limit pause, by id, for the refresh plan.
+    pub(crate) fn claude_pauses(&self) -> std::collections::BTreeMap<String, i64> {
+        self.claude_load()
+            .map(|store| {
+                store
+                    .accounts
+                    .iter()
+                    .filter_map(|a| Some((a.id.clone(), self.claude_pause(a)?)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
     /// Lets a user action ask for the vault's Keychain item when background
     /// work could not read it, as after a build changed Copool's signature.
     pub(crate) async fn claude_authorize(&self) -> Result<()> {
@@ -1620,9 +1646,8 @@ impl Application {
         {
             self.claude_save(&store)?;
         }
-        // Official settings use the login; others, the provider last applied.
         let official = settings_are_official(location);
-        let provider = store.settings_provider.as_deref().filter(|_| !official);
+        let provider = claude_provider(&store, location);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
@@ -1639,28 +1664,6 @@ impl Application {
             .chain(self.provider_cards(Pool::Claude, provider)?)
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
-        if let Some(schedule) = self.schedule(Pool::Claude) {
-            for card in &mut summaries {
-                // Every round asks for the card in use, full rounds for all,
-                // subject to freshness and rate limit pauses for official
-                // accounts; a card speeding up sooner.
-                let every = card.is_current;
-                let fast = self.fast_refresh_at(Pool::Claude, &card.id);
-                card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
-                    None => Some(crate::pool::sooner(
-                        schedule.next_refresh_at(every, 0),
-                        fast,
-                    )),
-                    Some(account) if account.first_request_pending => None,
-                    Some(account) => {
-                        let due = account.updated_at + schedule.interval;
-                        let paused = self.claude_pause(account).unwrap_or_default();
-                        let next = schedule.next_refresh_at(every, due.max(paused));
-                        Some(crate::pool::sooner(next, fast.map(|fast| fast.max(paused))))
-                    }
-                };
-            }
-        }
         Ok(summaries)
     }
     /// Adds or updates an account; a new one waits for a manual refresh when
@@ -3389,7 +3392,7 @@ mod tests {
         app.fast_round(Pool::Claude).await;
         assert_eq!(usages(&fake).len(), 5);
         assert_eq!(app.fast_wait(Pool::Claude), None);
-        assert_eq!(app.fast_refresh_at(Pool::Claude, &id), None);
+        assert!(app.speedup(Pool::Claude, &id).is_none());
         // A rate limit is no change in usage.
         queue_usage_rate_limit(&fake, Value::Null);
         age(&app, 300);
@@ -3443,8 +3446,8 @@ mod tests {
         assert_eq!(usages(&fake).len(), 4);
         // As the speed-up loop, woken, schedules its next ask.
         assert!(app.fast_wait(Pool::Claude).is_some());
-        assert!(app.fast_refresh_at(Pool::Claude, &alice).is_some());
-        assert_eq!(app.fast_refresh_at(Pool::Claude, &bob), None);
+        assert!(app.speedup(Pool::Claude, &alice).is_some());
+        assert!(app.speedup(Pool::Claude, &bob).is_none());
         age(&app, 60);
         app.fast_round(Pool::Claude).await;
         assert_eq!(usages(&fake)[4..], ["alice-access"]);
@@ -3723,8 +3726,9 @@ mod tests {
             app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
             error
         );
+        // The background round passes the paused account by.
         age(&app, REFRESH_SECONDS);
-        assert!(app.refresh_recurring(Pool::Claude, 0).await.is_err());
+        app.refresh_recurring(Pool::Claude, 0).await.unwrap();
         assert_eq!(fake.usage.lock().unwrap().len(), 1);
         let mut store = app.claude_load().unwrap();
         store.accounts[0].usage_retry_at = Some(now_unix_seconds() - 1);
@@ -3851,8 +3855,9 @@ mod tests {
                 paused
             );
             assert!(app.refresh_all(Pool::Claude).await.is_err());
+            // The background round passes the paused account by.
             age(&app, REFRESH_SECONDS);
-            assert!(app.refresh_recurring(Pool::Claude, 0).await.is_err());
+            app.refresh_recurring(Pool::Claude, 0).await.unwrap();
             assert_eq!(fake.refreshed.lock().unwrap().len(), 1);
             assert_eq!(fake.usage_tokens.lock().unwrap().len(), usage_calls);
             let mut store = app.claude_load().unwrap();

@@ -183,6 +183,7 @@ impl Stored {
                 .and_then(crate::models::displayed_expiry),
             renewal: Some(Renewal::of(self.renewal).as_str().into()),
             next_refresh_at: None,
+            refresh: None,
             outdated_sub2api_version: None,
             tags: Default::default(),
         }
@@ -421,12 +422,8 @@ impl Application {
         if follow_live(&mut store, live.as_ref()) {
             self.grok_save(&store)?;
         }
-        // On a provider's gateway Grok Build uses the provider; else its login.
         let route = sub2api::current_route(&self.grok_config_path(), &store);
-        let provider = match route {
-            sub2api::CurrentRoute::Provider(id) => Some(id),
-            _ => None,
-        };
+        let provider = self.grok_provider(&store);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
@@ -439,23 +436,20 @@ impl Application {
             .chain(self.provider_cards(Pool::Grok, provider)?)
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
-        if let Some(schedule) = self.schedule(Pool::Grok) {
-            for card in &mut summaries {
-                // Every round asks for the card in use, full rounds for all;
-                // a card speeding up sooner.
-                let every = card.is_current;
-                let fast = self.fast_refresh_at(Pool::Grok, &card.id);
-                card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
-                    None => Some(schedule.next_refresh_at(every, 0)),
-                    Some(a) if a.first_request_pending => None,
-                    Some(a) => {
-                        Some(schedule.next_refresh_at(every, a.updated_at + schedule.interval))
-                    }
-                }
-                .map(|next| crate::pool::sooner(next, fast));
-            }
-        }
         Ok(summaries)
+    }
+    /// The provider Grok Build uses: on a provider's gateway, the provider;
+    /// else none, its login.
+    fn grok_provider<'a>(&self, store: &'a Store) -> Option<&'a str> {
+        match sub2api::current_route(&self.grok_config_path(), store) {
+            sub2api::CurrentRoute::Provider(id) => Some(id),
+            _ => None,
+        }
+    }
+    /// The provider Grok Build uses now, if any.
+    pub(crate) fn grok_provider_in_use(&self) -> Option<String> {
+        let store = self.grok_load().ok()?;
+        self.grok_provider(&store).map(str::to_owned)
     }
     /// Adds or updates the account of a sign-in; returns its id and whether
     /// it waits for a manual refresh.

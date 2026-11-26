@@ -16,7 +16,6 @@ const context = (extra = {}) => ({
   locale: "en",
   tr,
   now: NOW,
-  refresh: { seconds: 30, fullEvery: 6 },
   accountProxy: "",
   switchingId: null,
   adding: false,
@@ -524,7 +523,8 @@ test("A collapsed provider's first row carries the provider's dot and controls",
 });
 
 test("Details contain the proxy, relative token expiry and this card's refresh interval", () => {
-  const account = { id: "a", isCurrent: true, renewal: "always", tokenExpiresAt: NOW + 3600 };
+  // The card's usual interval is the core's (refresh_plan.rs).
+  const account = { id: "a", isCurrent: true, renewal: "always", tokenExpiresAt: NOW + 3600, refresh: { key: "a", seconds: 30 } };
   const c = context({ pool: "claude", accountProxy: "socks5://127.0.0.1:7890" });
   const details = (extra = {}) => V.details({ account }, { ...c, ...extra });
   assert.equal(details(), "accounts.proxy.title: socks5://127.0.0.1:7890\naccounts.renewal.expires_format 1h\naccounts.refresh.interval_format 30 seconds");
@@ -543,20 +543,23 @@ test("Details contain the proxy, relative token expiry and this card's refresh i
   account.proxyUrl = "";
   assert.equal(details({ accountProxy: "direct://" }), "direct\naccounts.refresh.interval_format 30 seconds");
   assert.equal(details({ accountProxy: "" }), "direct\naccounts.refresh.interval_format 30 seconds");
-  account.isCurrent = false;
+  account.refresh = { key: "a", seconds: 180 };
   assert.equal(details({ accountProxy: "" }), "direct\naccounts.refresh.interval_format 3 minutes");
+  // Before the core has listed it, no interval.
+  delete account.refresh;
+  assert.equal(details({ accountProxy: "" }), "direct");
   assert.equal(V.details(null, c), "accounts.card.edit");
 });
 
 test("Providers and their members show the interval for whether the provider is in use", () => {
   const c = context({ pool: "claude", accountProxy: "socks5://127.0.0.1:7890" });
-  const account = { id: "member", sourceTag: "SUB2API" };
+  const account = { id: "member", sourceTag: "SUB2API", refresh: { key: "sub2api:provider", seconds: 180 } };
   const group = { key: "provider", accounts: [account] };
   // A provider's proxy never falls back to the shared account proxy.
   assert.equal(V.details({ group }, c), "direct\naccounts.refresh.interval_format 3 minutes");
   assert.equal(V.details({ account, grouped: true }, c), "accounts.refresh.interval_format 3 minutes");
   assert.equal(V.details({ account }, c), "direct\naccounts.refresh.interval_format 3 minutes");
-  group.accounts.push({ id: "current", isCurrent: true });
+  group.accounts.push({ id: "current", isCurrent: true, refresh: { key: "sub2api:provider", seconds: 30 } });
   assert.equal(V.details({ group }, c), "direct\naccounts.refresh.interval_format 30 seconds");
 });
 

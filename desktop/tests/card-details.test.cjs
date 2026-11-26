@@ -19,7 +19,6 @@ function load(extra = {}) {
       locale: "en",
       tr: (key, ...args) => [key, ...args].join(" "),
       accountProxy: "",
-      refresh: { seconds: 30, fullEvery: 6 },
     }),
     tr: (key, ...args) => [key, ...args].join(" "),
     ...extra,
@@ -32,7 +31,9 @@ function load(extra = {}) {
 }
 
 test("hover and focus update details locally and ignore another pool", () => {
-  let target = { account: { id: "a", renewal: "always", tokenExpiresAt: Date.now() / 1000 + 3600 } };
+  // Its usual interval, as the core gives the card.
+  const refresh = { key: "a", seconds: 180 };
+  let target = { account: { id: "a", renewal: "always", tokenExpiresAt: Date.now() / 1000 + 3600, refresh } };
   const c = load({
     flipTarget: () => target,
     button: () => ({ setAttribute() {} }),
@@ -43,7 +44,7 @@ test("hover and focus update details locally and ignore another pool", () => {
   target.account.tokenExpiresAt = 1;
   control.onpointerenter();
   assert.match(control.title, /accounts.renewal.expired/);
-  target = { account: { id: "a", proxyUrl: "direct://" } };
+  target = { account: { id: "a", proxyUrl: "direct://", refresh } };
   control.onfocus();
   assert.equal(control.title, "direct\naccounts.refresh.interval_format 3 minutes");
   c.pool = "codex";

@@ -103,6 +103,7 @@ impl Account {
             token_expires_at: None,
             renewal: None,
             next_refresh_at: None,
+            refresh: None,
             available: self.status.eq_ignore_ascii_case("active"),
             proxy_url: String::new(),
             outdated_sub2api_version: self.outdated_version.clone(),

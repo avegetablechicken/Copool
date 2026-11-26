@@ -780,23 +780,6 @@ impl Application {
         let current = self.codex_provider_in_use()?;
         summaries.extend(self.provider_cards(Pool::Codex, current.as_deref())?);
         crate::ranking::sort_for_display(&mut summaries);
-        if let Some(schedule) = self.schedule(Pool::Codex) {
-            let every_round = crate::refresh_policy::round_card(&summaries).map(str::to_owned);
-            for card in &mut summaries {
-                // Sub2api cards refresh with their provider: every round while
-                // it is in use, else on full rounds.
-                card.next_refresh_at = if card.source_tag.as_deref() == Some("SUB2API") {
-                    Some(schedule.next_refresh_at(card.is_current, 0))
-                } else if card.awaiting_first_request {
-                    None
-                } else {
-                    let every = every_round.as_deref() == Some(card.id.as_str());
-                    Some(schedule.next_refresh_at(every, 0))
-                }
-                // A card speeding up sooner.
-                .map(|next| crate::pool::sooner(next, self.fast_refresh_at(Pool::Codex, &card.id)));
-            }
-        }
         Ok(summaries)
     }
     /// Imports the login Codex uses.
@@ -1804,17 +1787,19 @@ mod tests {
                 .unwrap();
         }
         app.switch_account(Pool::Codex, &id("alice")).await.unwrap();
-        app.set_schedule(
-            Pool::Codex,
-            crate::refresh_policy::Schedule {
-                at: 1_000,
-                tick: 2,
-                interval: 300,
-                full_every: 6,
-            },
-        );
+        // Rounds every 300 seconds, starting once the accounts were last
+        // refreshed an interval ago.
+        let refreshed = accounts.iter().map(|a| a.updated_at).max().unwrap();
+        let at = refreshed + 1_000;
+        let schedule = |at| crate::refresh_policy::Schedule {
+            at,
+            tick: 2,
+            interval: 300,
+            full_every: 6,
+        };
+        app.set_schedule(Pool::Codex, schedule(at));
         let accounts = app.accounts(Pool::Codex).await.unwrap();
-        let next = |name: &str| {
+        let next = |accounts: &[AccountSummary], name: &str| {
             accounts
                 .iter()
                 .find(|a| a.id == id(name))
@@ -1823,11 +1808,21 @@ mod tests {
         };
         // The current card every round, the others on the next full round
         // (tick 6), and a new account only on a manual refresh.
-        assert_eq!(next("alice"), Some(1_000));
-        assert_eq!(next("bob"), Some(2_200));
-        assert_eq!(next("carol"), None);
+        assert_eq!(next(&accounts, "alice"), Some(at));
+        assert_eq!(next(&accounts, "bob"), Some(at + 1_200));
+        assert_eq!(next(&accounts, "carol"), None);
         // The refresh of the whole pool keeps its own schedule.
-        assert_eq!(app.next_full_refresh_at(Pool::Codex), Some(2_200));
+        assert_eq!(app.next_full_refresh_at(Pool::Codex), Some(at + 1_200));
+        // A round within the interval since a card was refreshed passes it
+        // by, as in every pool.
+        let alice = accounts
+            .iter()
+            .find(|a| a.id == id("alice"))
+            .unwrap()
+            .updated_at;
+        app.set_schedule(Pool::Codex, schedule(alice + 100));
+        let accounts = app.accounts(Pool::Codex).await.unwrap();
+        assert_eq!(next(&accounts, "alice"), Some(alice + 400));
     }
     #[tokio::test]
     async fn shared_workspace_keeps_principals_distinct_and_switch_is_exact() {

@@ -205,6 +205,7 @@ impl Stored {
                 .and_then(crate::models::displayed_expiry),
             renewal: Some(Renewal::of(self.renewal).as_str().into()),
             next_refresh_at: None,
+            refresh: None,
             outdated_sub2api_version: None,
             tags: Default::default(),
         }
@@ -436,9 +437,8 @@ impl Application {
         {
             self.antigravity_save(&store)?;
         }
-        // On the Gemini API agy uses the provider last applied; else its login.
         let api = sub2api::api_key_mode(&self.antigravity_settings_path());
-        let provider = store.settings_provider.as_deref().filter(|_| api);
+        let provider = self.antigravity_provider(&store);
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
@@ -446,23 +446,18 @@ impl Application {
             .chain(self.provider_cards(Pool::Antigravity, provider)?)
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
-        if let Some(schedule) = self.schedule(Pool::Antigravity) {
-            for card in &mut summaries {
-                // Every round asks for the card in use, full rounds for all;
-                // a card speeding up sooner.
-                let every = card.is_current;
-                let fast = self.fast_refresh_at(Pool::Antigravity, &card.id);
-                card.next_refresh_at = match store.accounts.iter().find(|a| a.id == card.id) {
-                    None => Some(schedule.next_refresh_at(every, 0)),
-                    Some(a) if a.first_request_pending => None,
-                    Some(a) => {
-                        Some(schedule.next_refresh_at(every, a.updated_at + schedule.interval))
-                    }
-                }
-                .map(|next| crate::pool::sooner(next, fast));
-            }
-        }
         Ok(summaries)
+    }
+    /// The provider agy uses: on the Gemini API, the provider last applied;
+    /// else none, its login.
+    fn antigravity_provider<'a>(&self, store: &'a Store) -> Option<&'a str> {
+        let api = sub2api::api_key_mode(&self.antigravity_settings_path());
+        store.settings_provider.as_deref().filter(|_| api)
+    }
+    /// The provider agy uses now, if any.
+    pub(crate) fn antigravity_provider_in_use(&self) -> Option<String> {
+        let store = self.antigravity_load().ok()?;
+        self.antigravity_provider(&store).map(str::to_owned)
     }
     /// Adds or updates the account of a login; returns its id and whether
     /// it waits for a manual refresh.

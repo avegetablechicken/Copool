@@ -119,6 +119,21 @@ pub struct AccountSummary {
     /// it (`plan_tags`); none before.
     #[serde(flatten)]
     pub tags: PlanTags,
+    /// How the background refresh treats the card, as `Application::accounts`
+    /// lists it (`refresh_plan`); none before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh: Option<CardRefreshSummary>,
+}
+
+/// How the background refresh treats a card: the key its own refresh
+/// switches are saved under (its id, or `sub2api:<provider>` for a Sub2api
+/// provider's cards, which refresh together), and its usual interval in
+/// seconds.
+#[allow(dead_code)] // listed by the desktop core only
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct CardRefreshSummary {
+    pub key: String,
+    pub seconds: u64,
 }
 
 /// How a card names its plan: the plan tag, none until the plan is known,
@@ -646,6 +661,7 @@ impl StoredAccount {
             next_refresh_at: None,
             outdated_sub2api_version: None,
             tags: PlanTags::default(),
+            refresh: None,
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),

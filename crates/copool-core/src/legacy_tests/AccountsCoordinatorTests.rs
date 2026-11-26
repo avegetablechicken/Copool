@@ -48,17 +48,6 @@ fn testAccountsUsageRefreshPlanningTargetsNonCurrentAccountsJustAfterReset() {
         ["acct-current", "acct-post-reset"]
     );
 }
-#[test]
-fn testAccountsUsageRefreshPlanningUsesActiveThenFullRecurringTicks() {
-    let a = [
-        account("acct-current", 0., 0., true),
-        account("acct-idle", 0., 0., false),
-    ];
-    assert_eq!(recurring_ids(1, 6, &a), Some(vec!["acct-current".into()]));
-    assert_eq!(recurring_ids(6, 6, &a), None);
-    // Every round refreshes the whole pool when set so.
-    assert_eq!(recurring_ids(1, 1, &a), None);
-}
 #[tokio::test]
 async fn testSwitchAccountWritesCurrentAccountIDToStore() {
     let (_dir, app) = fixture();
@@ -909,7 +898,12 @@ async fn testTrayMenuModelRecurringRefreshDoesNotTriggerWorkspaceMetadataLookup(
         &app,
         json!({"accounts":[team("a","a",None)],"currentAccountId":"a"}),
     );
+    // Each round finds the account last refreshed an interval ago or more.
+    let path = app.paths.data_dir.join("accounts.json");
     for tick in [0, 1, 6] {
+        let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        saved["accounts"][0]["updatedAt"] = json!(0);
+        std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
         app.refresh_recurring(Pool::Codex, tick).await.unwrap();
     }
     assert_eq!(network.calls.lock().unwrap().len(), 3);

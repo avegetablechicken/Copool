@@ -34,6 +34,7 @@ mod legacy_tests;
 mod ranking;
 mod system_proxy;
 
+mod refresh_plan;
 mod refresh_policy;
 pub use refresh_policy::{PoolRefresh, RefreshPreferences};
 

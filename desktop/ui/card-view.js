@@ -10,7 +10,6 @@
      collapsed     the list is collapsed into rows
      locale, tr    the language and its translation, tr(key, ...args)
      now           Unix seconds
-     refresh       the pool's refresh preferences, { seconds, fullEvery }
      accountProxy  the shared account proxy, trimmed; blank for none
      switchingId   the account being switched to, or null
      adding, authorizing   a sign-in under way
@@ -162,10 +161,12 @@
       const token = tokenLabel(account, ctx);
       if (token) lines.push(token);
     }
+    // Its usual interval, as the core gives each card (refresh_plan.rs): a
+    // provider's cards share theirs.
     const cards = target.group ? target.group.accounts : [account];
-    const refresh = ctx.refresh;
-    const seconds = refresh.seconds * (cards.some((card) => card.isCurrent) ? 1 : refresh.fullEvery);
-    lines.push(tr("accounts.refresh.interval_format", P.formatInterval(seconds, ctx.locale)));
+    const seconds = cards.map((card) => card.refresh?.seconds).filter(Number.isFinite);
+    if (seconds.length)
+      lines.push(tr("accounts.refresh.interval_format", P.formatInterval(Math.min(...seconds), ctx.locale)));
     return lines.join("\n");
   }
 

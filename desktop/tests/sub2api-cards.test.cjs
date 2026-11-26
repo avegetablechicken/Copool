@@ -8,7 +8,7 @@ const vm = require("node:vm");
 const source = fs
   .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
   .replace(/\r\n/g, "\n");
-test("Sub2api cards group by the provider in their id, even before the provider list knows them", () => {
+test("Sub2api cards group by the provider the core names, even before the provider list knows them", () => {
   const { Providers } = require("../ui/controllers.js");
   const providerControllers = {
     claude: new Providers(null, "claude"),
@@ -29,21 +29,24 @@ test("Sub2api cards group by the provider in their id, even before the provider 
   const end = source.indexOf("/// Removes an account, or all of a Sub2api provider's cards", start);
   assert(start >= 0 && end > start, "providerKey found");
   vm.runInContext(source.slice(start, end), scope);
-  const card = (id) => ({ id, sourceTag: "SUB2API" });
-  assert.equal(scope.providerKey(card("claude-sub2api-srv-2")), "srv");
-  assert.equal(scope.providerTitle(card("claude-sub2api-srv-2")), "myServer");
+  // A card's refresh key names its provider (refresh_plan.rs); the app
+  // never reads the card's id for it.
+  const card = (provider) => ({ id: "any", sourceTag: "SUB2API", refresh: { key: `sub2api:${provider}`, seconds: 300 } });
+  assert.equal(scope.providerKey(card("srv")), "srv");
+  assert.equal(scope.providerTitle(card("srv")), "myServer");
+  assert.equal(scope.providerKey({ id: "claude-sub2api-srv-2", refresh: { key: "claude-sub2api-srv-2" } }), null);
   assert.equal(scope.providerKey({ id: "claude-sub2api-srv-2" }), null);
   // Codex's cards name their provider by its id too, in any case.
   scope.pool = "codex";
-  assert.equal(scope.providerKey(card("sub2api-team-a-17")), "team-a");
-  assert.equal(scope.providerTitle(card("sub2api-team-a-17")), "Team-A");
-  assert.equal(scope.providerTitle(card("sub2api-TEAM-A-18")), "Team-A");
+  assert.equal(scope.providerKey(card("team-a")), "team-a");
+  assert.equal(scope.providerTitle(card("team-a")), "Team-A");
+  assert.equal(scope.providerTitle(card("TEAM-A")), "Team-A");
   // An unknown provider still groups, under its id.
-  assert.equal(scope.providerTitle(card("sub2api-gone-3")), "gone");
-  // Antigravity's cards name their provider's id, dashes and all.
+  assert.equal(scope.providerTitle(card("gone")), "gone");
+  // Dashes and all.
   scope.pool = "antigravity";
-  assert.equal(scope.providerKey(card("antigravity-sub2api-0b9e-4f1a-7")), "0b9e-4f1a");
-  assert.equal(scope.providerTitle(card("antigravity-sub2api-0b9e-4f1a-7")), "Relay");
+  assert.equal(scope.providerKey(card("0b9e-4f1a")), "0b9e-4f1a");
+  assert.equal(scope.providerTitle(card("0b9e-4f1a")), "Relay");
 });
 test("Antigravity's Sub2api form keeps agy's key out and its password secret", () => {
   const { Providers } = require("../ui/controllers.js");

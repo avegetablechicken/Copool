@@ -8,7 +8,7 @@
 use crate::{
     application::{eligible, Application, SmartSwitchOutcome, SwitchExecution},
     models::{AccountSummary, Renewal, StoredAccount},
-    plan_tags,
+    plan_tags, refresh_plan,
     refresh_policy::{self, Schedule},
     sub2api,
     utils::now_unix_seconds,
@@ -55,11 +55,6 @@ impl PoolAccount for StoredAccount {
     }
 }
 
-/// The sooner of a card's next round and its next ask while speeding up.
-pub(crate) fn sooner(next: i64, fast: Option<i64>) -> i64 {
-    fast.map_or(next, |fast| next.min(fast))
-}
-
 /// One pool's background refresh rounds.
 #[derive(Default)]
 pub(crate) struct Rounds {
@@ -81,7 +76,8 @@ impl Application {
         &self.rounds[pool as usize]
     }
     /// The pool's cards, following the login its tool uses, each with its
-    /// plan and workspace tags.
+    /// plan and workspace tags and how the background refresh treats it:
+    /// when it next asks for the card (`refresh_plan`).
     pub async fn accounts(&self, pool: Pool) -> Result<Vec<AccountSummary>> {
         let mut accounts = match pool {
             Pool::Codex => self.codex_accounts().await,
@@ -90,10 +86,40 @@ impl Application {
             Pool::Grok => self.grok_accounts().await,
         }?;
         let now = now_unix_seconds();
-        for account in &mut accounts {
+        let refresh = self.preferences().map(|p| p.refresh).unwrap_or_default();
+        let schedule = self.schedule(pool);
+        let pauses = self.refresh_pauses(pool);
+        let next: Vec<Option<i64>> = accounts
+            .iter()
+            .map(|account| {
+                let card = refresh_plan::Card::of(pool, account, &pauses);
+                let schedule = schedule.as_ref()?;
+                refresh_plan::next_refresh_at(&card, schedule, self.speedup(pool, &account.id))
+            })
+            .collect();
+        for (account, next) in accounts.iter_mut().zip(next) {
             account.tags = plan_tags::of(pool, account, now);
+            account.next_refresh_at = next;
+            account.refresh = Some(refresh_plan::summary(pool, account, &refresh));
         }
         Ok(accounts)
+    }
+    /// The Sub2api provider the pool's tool uses, if any.
+    fn provider_in_use(&self, pool: Pool) -> Option<String> {
+        match pool {
+            Pool::Codex => self.codex_provider_in_use().ok().flatten(),
+            Pool::Claude => self.claude_provider_in_use(),
+            Pool::Antigravity => self.antigravity_provider_in_use(),
+            Pool::Grok => self.grok_provider_in_use(),
+        }
+    }
+    /// Until when a rate limit pauses each account's requests, by id: only
+    /// Claude's accounts pause for now.
+    fn refresh_pauses(&self, pool: Pool) -> std::collections::BTreeMap<String, i64> {
+        match pool {
+            Pool::Claude => self.claude_pauses(),
+            _ => Default::default(),
+        }
     }
     /// Lets a user action ask for the Keychain access background work does
     /// not, as after a build changed Copool's signature.
@@ -468,49 +494,27 @@ impl Application {
         }
     }
     /// A background round's refresh: the card in use and the provider in
-    /// use, the whole pool and every provider on its full rounds. Claude and
-    /// Antigravity ask for no account asked within the interval (by a manual
-    /// refresh, say).
+    /// use, the whole pool and every provider on its full rounds
+    /// (`refresh_plan::round`).
     pub async fn refresh_recurring(&self, pool: Pool, tick: u64) -> Result<()> {
         let accounts = self.accounts(pool).await?;
-        let full_every = self.pool_refresh(pool).full_every;
-        match pool {
-            Pool::Codex => {
-                let ids = refresh_policy::recurring_ids(tick, full_every, &accounts);
-                // The provider Codex uses, by its id.
-                let current = self.codex_provider_in_use()?;
-                let providers = ids
-                    .is_some()
-                    .then(|| current.into_iter().collect::<Vec<_>>());
-                self.refresh_pool(pool, ids.as_deref(), providers.as_deref())
-                    .await
-            }
-            Pool::Claude | Pool::Antigravity | Pool::Grok => {
-                let now = now_unix_seconds();
-                let interval = self.round_interval(pool).as_secs() as i64;
-                let full = refresh_policy::is_full_round(tick, full_every);
-                let ids: Vec<String> = accounts
-                    .iter()
-                    .filter(|a| {
-                        (full || a.is_current)
-                            && !sub2api::is_card(pool, &a.id)
-                            && now - a.updated_at >= interval
-                    })
-                    .map(|a| a.id.clone())
-                    .collect();
-                // Between full rounds, only a provider in use.
-                let providers: Option<Vec<String>> = (!full).then(|| {
-                    accounts
-                        .iter()
-                        .filter(|a| a.is_current)
-                        .filter_map(|a| sub2api::card_provider(pool, &a.id))
-                        .map(str::to_owned)
-                        .collect()
-                });
-                self.refresh_pool(pool, Some(&ids), providers.as_deref())
-                    .await
-            }
-        }
+        let pauses = self.refresh_pauses(pool);
+        let cards: Vec<_> = accounts
+            .iter()
+            .map(|account| refresh_plan::Card::of(pool, account, &pauses))
+            .collect();
+        let full = refresh_policy::is_full_round(tick, self.pool_refresh(pool).full_every);
+        let interval = self.round_interval(pool).as_secs() as i64;
+        let in_use = self.provider_in_use(pool);
+        let ask = refresh_plan::round(
+            &cards,
+            in_use.as_deref(),
+            full,
+            now_unix_seconds(),
+            interval,
+        );
+        self.refresh_pool(pool, Some(&ask.ids), ask.providers.as_deref())
+            .await
     }
     pub async fn background(self: std::sync::Arc<Self>) {
         if let Ok(preferences) = self.preferences() {
@@ -591,22 +595,14 @@ impl Application {
             return;
         }
         let soon = refresh_policy::fast_interval(refresh.pool(pool).interval()).as_secs() as i64;
-        let now = now_unix_seconds();
-        let ids: Vec<String> = self
-            .accounts(pool)
-            .await
-            .unwrap_or_default()
+        let accounts = self.accounts(pool).await.unwrap_or_default();
+        let pauses = self.refresh_pauses(pool);
+        let cards: Vec<_> = accounts
             .iter()
-            .filter(|a| {
-                !sub2api::is_card(pool, &a.id) && keys.contains(&a.id) && now - a.updated_at >= soon
-            })
-            .map(|a| a.id.clone())
+            .map(|account| refresh_plan::Card::of(pool, account, &pauses))
             .collect();
-        let providers: Vec<String> = keys
-            .iter()
-            .filter_map(|key| key.strip_prefix("sub2api:"))
-            .map(str::to_owned)
-            .collect();
+        let ask = refresh_plan::fast(pool, &cards, &keys, now_unix_seconds(), soon);
+        let (ids, providers) = (ask.ids, ask.providers.unwrap_or_default());
         let before = self.card_usage(pool).await;
         if !ids.is_empty() || !providers.is_empty() {
             let _ = self.refresh_pool(pool, Some(&ids), Some(&providers)).await;
@@ -644,17 +640,21 @@ impl Application {
             rounds.sped_up.notify_one();
         }
     }
-    /// When a card speeding up is next asked for on its own; none for one
-    /// that is not.
-    pub(crate) fn fast_refresh_at(&self, pool: Pool, id: &str) -> Option<i64> {
+    /// The asks between rounds while the card speeds up; none for a card
+    /// that does not.
+    pub(crate) fn speedup(&self, pool: Pool, id: &str) -> Option<refresh_plan::Speedup> {
         let rounds = self.rounds(pool);
-        rounds
+        if !rounds
             .fast
             .lock()
             .unwrap()
             .contains_key(&refresh_policy::card_key(pool, id))
-            .then(|| *rounds.fast_at.lock().unwrap())
-            .flatten()
+        {
+            return None;
+        }
+        let at = (*rounds.fast_at.lock().unwrap())?;
+        let soon = refresh_policy::fast_interval(self.round_interval(pool)).as_secs() as i64;
+        Some(refresh_plan::Speedup { at, soon })
     }
     /// The pool's background refresh, as set for all its cards.
     pub(crate) fn pool_refresh(&self, pool: Pool) -> refresh_policy::PoolRefresh {
