@@ -1973,7 +1973,7 @@ html.linux.composited:where([data-theme="dark"]) .tooltip {
   visibility: hidden;
 }
 
-/* A plan's tier color (presentation.js planAccent). */
+/* A plan's tier color (the account's planTag, plan_tags.rs). */
 [data-accent="orange"] .tag.plan {
   --tag: var(--orange);
 }

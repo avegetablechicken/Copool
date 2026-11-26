@@ -54,63 +54,6 @@
     }
     return "en";
   }
-  /// When Claude renamed Max 5x to Max and Max 20x to Ultra.
-  const CLAUDE_PLAN_RENAME = Date.UTC(2026, 9, 30);
-  /// When OpenAI added its $100 Pro (prolite) beside the $200 one.
-  const CODEX_PRO_LITE = Date.UTC(2026, 3, 9);
-  /// When Google added its $100 Ultra beside the top one.
-  const GOOGLE_ULTRA_LITE = Date.UTC(2026, 4, 19);
-  /// A Claude Max plan by its name at `now`: "MAX 5X" and "MAX 20X" before
-  /// the rename, "MAX" and "ULTRA" after; a Max without multiplier is "MAX".
-  function claudeMaxName(times, now) {
-    if (now >= CLAUDE_PLAN_RENAME) return times >= 20 ? "ULTRA" : "MAX";
-    return times ? `MAX ${times}X` : "MAX";
-  }
-  function normalizedPlan(account, pool = "codex", now = Date.now()) {
-    const raw =
-      typeof account === "object" && account !== null
-        ? clean(account.usage?.planType) || clean(account.planType)
-        : clean(account);
-    let p = (raw || "team").toUpperCase().replace(/\s+/g, " ");
-    if (pool === "antigravity") {
-      // Both Ultra plans are "Google AI Ultra": known by their tier id as
-      // "ultra 5x" and "ultra 20x", else as "ultra" alone.
-      if (p === "ULTRA 5X" || p === "ULTRA LITE") return "ULTRA 5X";
-      if (p === "ULTRA 20X") return now >= GOOGLE_ULTRA_LITE ? "ULTRA 20X" : "ULTRA";
-    }
-    // Grok's plans are shown as named ("SUPERGROK HEAVY"), as its widget.
-    if (pool === "grok" || (pool === "antigravity" && account?.sourceTag === "SUB2API")) return p;
-    if (pool === "claude") {
-      // Claude Code reports Max 5x and Max 20x as "max" with the multiplier,
-      // also since their renaming; "ultra" is taken should it report one.
-      p = p.replace(/^CLAUDE[ _]/, "");
-      const max = /^MAX(?: (\d+)X)?$/.exec(p);
-      if (max) return claudeMaxName(max[1] ? Number(max[1]) : 0, now);
-      if (p === "ULTRA") return claudeMaxName(20, now);
-    }
-    if (pool === "codex") {
-      // OpenAI's Pro plans: $100 (prolite), $200 (pro) and $500 (promax),
-      // named as OpenAI does once the $100 one came.
-      // ChatGPT Go, the $8 plan below Plus.
-      if (p === "GO") return p;
-      if (p === "PROLITE") return "PRO 5X";
-      if (p === "PROMAX") return "PRO 50X";
-      if (p === "PRO") return now >= CODEX_PRO_LITE ? "PRO 20X" : "PRO";
-    }
-    // Claude's Max plans keep their usage multiplier ("MAX 20X").
-    if (/^MAX( \d+X)?$/.test(p)) return p;
-    return ["PRO", "PLUS", "FREE", "BUSINESS", "ENTERPRISE", "ULTRA"].includes(p)
-      ? p
-      : "TEAM";
-  }
-  function workspaceTag(account) {
-    return (
-      clean(account.sourceTag) ||
-      (["TEAM", "BUSINESS", "ENTERPRISE"].includes(normalizedPlan(account))
-        ? clean(account.teamAlias) || clean(account.teamName)
-        : null)
-    );
-  }
   function displayPercent(window, mode = "used", missing = null) {
     if (!window || !Number.isFinite(window.usedPercent)) return missing;
     const used = Math.max(0, Math.min(100, window.usedPercent));
@@ -333,51 +276,13 @@
       clockOffsetSeconds: window?.clockOffsetSeconds ?? null,
     };
   }
-  /// A plan's color, by tier so that providers' comparable plans match: the
-  /// entry subscription (Codex Go and Plus, Claude Pro, Google AI Pro,
-  /// SuperGrok Lite and SuperGrok) is pink; those of $100 to $300, which
-  /// their labels tell apart by multiplier (Codex Pro 5x and 20x, Claude Max
-  /// and Ultra, Google AI Ultra 5x and 20x, SuperGrok Plus and Heavy),
-  /// orange; and Codex's $500 Pro 50x purple.
-  function planAccent(plan, pool = "codex") {
-    if (pool === "grok") {
-      // Sub2api may space the name ("SUPER GROK HEAVY"). Also The X
-      // Subscription's names, which may replace SuperGrok's.
-      const name = plan.replace(/ /g, "");
-      if (["SUPERGROKLITE", "SUPERGROK", "PLUS", "PREMIUM"].includes(name)) return "pink";
-      if (["SUPERGROKPLUS", "SUPERGROKHEAVY", "SUPER", "ULTRA"].includes(name)) return "orange";
-      if (!["FREE", "BUSINESS", "ENTERPRISE"].includes(plan)) return "teal";
-    }
-    const pro = /^PRO(?: (\d+)X)?$/.exec(plan);
-    if (pool === "codex" && pro) return Number(pro[1] || 0) >= 50 ? "purple" : "orange";
-    if (/^(?:MAX|ULTRA)(?: \d+X)?$/.test(plan)) return "orange";
-    return (
-      {
-        GO: "pink",
-        PRO: "pink",
-        PLUS: "pink",
-        FREE: "gray",
-        BUSINESS: "indigo",
-        ENTERPRISE: "indigo",
-      }[plan] || "teal"
-    );
-  }
-  function card(
-    account,
-    collapsed = false,
-    mode = "used",
-    formatDate,
-    pool = "codex",
-    now = Date.now(),
-  ) {
-    const plan = normalizedPlan(account, pool, now),
-      name =
-        clean(account.email) || clean(account.accountId) || clean(account.label) || "",
-      credits = account.usage?.credits;
+  /// A card's view. Its plan and workspace tags come with the account
+  /// (`planTag`, `workspaceTag`), as the core names them.
+  function card(account, collapsed = false, mode = "used", formatDate) {
+    const name =
+      clean(account.email) || clean(account.accountId) || clean(account.label) || "";
+    const credits = account.usage?.credits;
     return {
-      plan,
-      accent: planAccent(plan, pool),
-      workspaceTag: workspaceTag(account),
       name:
         collapsed && name.includes("@")
           ? name.slice(0, name.indexOf("@"))
@@ -413,7 +318,6 @@
         displayPercent(account.usage?.fiveHour, mode),
         displayPercent(account.usage?.oneWeek ?? account.usage?.oneMonth, mode),
       ],
-      selectionAccent: account.isCurrent ? plan : null,
     };
   }
   function collapsedInteraction({ collapsed, current, switching, hovered }) {
@@ -889,9 +793,6 @@
     resolveLocale,
     resolveTheme,
     preferredLocale,
-    normalizedPlan,
-    planAccent,
-    workspaceTag,
     displayPercent,
     roundDisplayPercent,
     windowPresentation,

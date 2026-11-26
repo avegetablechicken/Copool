@@ -722,6 +722,7 @@ impl Stored {
             renewal: Some(Renewal::of(self.renewal).as_str().into()),
             next_refresh_at: None,
             outdated_sub2api_version: None,
+            tags: Default::default(),
         }
     }
 }

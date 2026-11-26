@@ -651,7 +651,7 @@ function accountControls(account, full, view, grouped = false) {
       collapsed ? "" : tr("accounts.card.sign_in_again"),
       "reauthenticate",
       collapsed ? "icon-btn card-reauth" : "btn quiet card-reauth",
-      () => signIn(view.workspaceTag ? account.accountId : null, "reauthenticate"),
+      () => signIn(account.workspaceTag ? account.accountId : null, "reauthenticate"),
     );
     signInAgain.title = tr("accounts.card.sign_in_again");
     signInAgain.setAttribute("aria-label", `${signInAgain.title} ${full}`);
@@ -1413,18 +1413,21 @@ function cardMenu(target) {
   );
   return items;
 }
-/// The plan tag. Codex treats an unknown plan as Team; Claude shows none
-/// until its plan is known.
-function planTag(account, view) {
-  const known = P.clean(account.usage?.planType) || P.clean(account.planType);
-  return pool !== "codex" && !known ? "" : el("span", "tag plan", view.plan);
+/// The plan tag. The core names it (plan_tags.rs): Codex treats an unknown
+/// plan as Team; the other pools show none until the plan is known.
+function planTag(account) {
+  return account.planTag ? el("span", "tag plan", account.planTag.label) : "";
+}
+/// The plan tag's tier color on the card or row holding it.
+function setPlanAccent(node, account) {
+  if (account.planTag) node.dataset.accent = account.planTag.accent;
 }
 function accountTags(account, view, grouped = false) {
   const tags = el("span", "account-tags");
-  tags.append(planTag(account, view));
+  tags.append(planTag(account));
   // A provider's group carries its SUB2API and CURRENT tags once.
-  if (view.workspaceTag && !grouped)
-    tags.append(el("span", "tag muted", view.workspaceTag));
+  if (account.workspaceTag && !grouped)
+    tags.append(el("span", "tag muted", account.workspaceTag));
   if (account.isCurrent && !grouped)
     tags.append(el("span", "tag good", tr("accounts.card.current")));
   // Imported but not yet requested upstream: refreshing the card sends the
@@ -1588,12 +1591,8 @@ function accountCard(account, grouped = false) {
     if (target) return cardBack(target);
   }
   const full = account.email || account.accountId || account.label;
-  const view = P.card(
-    account,
-    collapsed,
-    usageMode(),
-    (epoch) => P.formatReset(epoch, locale),
-    pool,
+  const view = P.card(account, collapsed, usageMode(), (epoch) =>
+    P.formatReset(epoch, locale),
   );
   if (collapsed) {
     const interaction = P.collapsedInteraction({
@@ -1608,7 +1607,7 @@ function accountCard(account, grouped = false) {
     );
     row.classList.toggle("can-reveal", !grouped && interaction.canReveal);
     row.classList.toggle("revealed", !grouped && interaction.visible);
-    row.dataset.accent = view.accent;
+    setPlanAccent(row, account);
     const name = el("span", "account-row-name", view.name);
     name.title = full;
     const secondCompactLabel =
@@ -1616,7 +1615,7 @@ function accountCard(account, grouped = false) {
     row.append(
       el("span", grouped ? "" : "dot"),
       name,
-      planTag(account, view) || el("span", "tag plan placeholder"),
+      planTag(account) || el("span", "tag plan placeholder"),
       compactUsage(view.compact[0], "5h"),
       compactUsage(view.compact[1], secondCompactLabel),
       accountControls(account, full, view, grouped),
@@ -1632,7 +1631,7 @@ function accountCard(account, grouped = false) {
       ? "account-member"
       : `block account${account.isCurrent ? " current" : ""}`,
   );
-  card.dataset.accent = view.accent;
+  setPlanAccent(card, account);
   card.dataset.cardId = account.id;
   card.dataset.flipKey = account.id;
   const head = el("div", "block-head");

@@ -115,6 +115,29 @@ pub struct AccountSummary {
     /// have none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outdated_sub2api_version: Option<String>,
+    /// The card's plan and workspace tags, as `Application::accounts` lists
+    /// it (`plan_tags`); none before.
+    #[serde(flatten)]
+    pub tags: PlanTags,
+}
+
+/// How a card names its plan: the plan tag, none until the plan is known,
+/// and the workspace tag beside it.
+#[allow(dead_code)] // listed by the desktop core only
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PlanTags {
+    #[serde(rename = "planTag", skip_serializing_if = "Option::is_none")]
+    pub tag: Option<PlanTag>,
+    #[serde(rename = "workspaceTag", skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+}
+
+/// A plan tag: its label ("PRO 20X") and its tier color ("orange").
+#[allow(dead_code)] // listed by the desktop core only
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlanTag {
+    pub label: String,
+    pub accent: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -622,6 +645,7 @@ impl StoredAccount {
             renewal: None,
             next_refresh_at: None,
             outdated_sub2api_version: None,
+            tags: PlanTags::default(),
             is_current: current_account_id
                 .map(|id| id == self.account_id)
                 .unwrap_or(false),

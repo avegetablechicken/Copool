@@ -106,6 +106,7 @@ impl Account {
             available: self.status.eq_ignore_ascii_case("active"),
             proxy_url: String::new(),
             outdated_sub2api_version: self.outdated_version.clone(),
+            tags: Default::default(),
         }
     }
 }

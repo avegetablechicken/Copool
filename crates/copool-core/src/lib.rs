@@ -25,6 +25,7 @@ mod usage;
 mod utils;
 pub use application::{Application, Paths, Preferences, SmartSwitchOutcome, SwitchExecution};
 pub use models::{AccountSummary, ApiProxyStatus, CreditSnapshot, UsageSnapshot, UsageWindow};
+mod plan_tags;
 mod pool;
 pub use pool::Pool;
 

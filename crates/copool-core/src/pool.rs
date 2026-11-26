@@ -8,6 +8,7 @@
 use crate::{
     application::{eligible, Application, SmartSwitchOutcome, SwitchExecution},
     models::{AccountSummary, Renewal, StoredAccount},
+    plan_tags,
     refresh_policy::{self, Schedule},
     sub2api,
     utils::now_unix_seconds,
@@ -79,14 +80,20 @@ impl Application {
     fn rounds(&self, pool: Pool) -> &Rounds {
         &self.rounds[pool as usize]
     }
-    /// The pool's cards, following the login its tool uses.
+    /// The pool's cards, following the login its tool uses, each with its
+    /// plan and workspace tags.
     pub async fn accounts(&self, pool: Pool) -> Result<Vec<AccountSummary>> {
-        match pool {
+        let mut accounts = match pool {
             Pool::Codex => self.codex_accounts().await,
             Pool::Claude => self.claude_accounts().await,
             Pool::Antigravity => self.antigravity_accounts().await,
             Pool::Grok => self.grok_accounts().await,
+        }?;
+        let now = now_unix_seconds();
+        for account in &mut accounts {
+            account.tags = plan_tags::of(pool, account, now);
         }
+        Ok(accounts)
     }
     /// Lets a user action ask for the Keychain access background work does
     /// not, as after a build changed Copool's signature.

@@ -86,7 +86,7 @@ fn snapshotCarriesUsageProgressDisplayMode() {
     assert_eq!(s.current_card.unwrap().five_hour.remaining_text, "88%");
 }
 #[test]
-fn claudeCardsFollowTheAppsPlanAndWorkspaceTags() {
+fn cardsCarryTheAppsPlanAndWorkspaceTags() {
     let mut max = account("max", true, "max@example.com", 10., 20.);
     max.plan_type = Some("max 20x".into());
     max.team_name = Some("max@example.com's Organization".into());
@@ -99,110 +99,40 @@ fn claudeCardsFollowTheAppsPlanAndWorkspaceTags() {
     let mut provider = account("provider", false, "relay", 70., 80.);
     provider.plan_type = None;
     provider.source_tag = Some("SUB2API".into());
-    let s = build(
-        Pool::Claude,
-        &[max, team, unknown, provider],
-        "used",
-        Some(0),
-        100,
-    );
-    let current = s.current_card.unwrap();
-    // Max 20x by its name at the time, before Claude renamed it Ultra.
-    assert_eq!(current.plan_label, "MAX 20X");
-    assert_eq!(current.plan_accent, "orange");
-    assert_eq!(current.workspace_label, None);
-    let rows: std::collections::HashMap<_, _> = s.rows.iter().map(|r| (r.id.as_str(), r)).collect();
-    assert_eq!(rows["team"].plan_label, "TEAM");
-    assert_eq!(rows["team"].workspace_label.as_deref(), Some("Acme"));
-    assert_eq!(rows["unknown"].plan_label, "");
-    assert_eq!(rows["unknown"].account_label, "label");
-    assert_eq!(rows["provider"].workspace_label.as_deref(), Some("SUB2API"));
-}
-#[test]
-fn claudesMaxPlansAreNamedAsTheyWereAtTheTime() {
-    let before = 1_790_812_800; // 2026-10-01
-    let after = 1_795_392_000; // 2026-11-23
-    let label = |plan: &str, now| {
-        let mut a = account("current", true, "current@example.com", 10., 20.);
-        a.plan_type = Some(plan.into());
-        let card = build(Pool::Claude, &[a], "used", Some(0), now)
-            .current_card
-            .unwrap();
-        (card.plan_label, card.plan_accent)
-    };
-    let named = |name: &str, accent: &str| (name.to_owned(), accent.to_owned());
-    // Claude Code reports both by their old names, also since the rename.
-    assert_eq!(label("max 20x", before), named("MAX 20X", "orange"));
-    assert_eq!(label("max 5x", before), named("MAX 5X", "orange"));
-    assert_eq!(label("max 20x", after), named("ULTRA", "orange"));
-    assert_eq!(label("max 5x", after), named("MAX", "orange"));
-    assert_eq!(label("max", before), named("MAX", "orange"));
-    assert_eq!(label("max", after), named("MAX", "orange"));
-    assert_eq!(label("ultra", before), named("MAX 20X", "orange"));
-    assert_eq!(label("claude ultra", after), named("ULTRA", "orange"));
-    assert_eq!(label("pro", after), named("PRO", "pink"));
-}
-#[test]
-fn codexAndGooglePlansAreNamedAsTheyWereAtTheTime() {
-    let label = |pool, plan: &str, now| {
-        let mut a = account("current", true, "current@example.com", 10., 20.);
-        a.plan_type = Some(plan.into());
-        let card = build(pool, &[a], "used", Some(0), now)
-            .current_card
-            .unwrap();
-        (card.plan_label, card.plan_accent)
-    };
-    let named = |name: &str, accent: &str| (name.to_owned(), accent.to_owned());
+    let accounts = [max, team, unknown, provider];
     let now = 1_795_392_000; // 2026-11-23
-                             // OpenAI's $100 Pro came on 2026-04-09.
-    let before_pro = 1_772_323_200; // 2026-03-01
+    let s = build(Pool::Claude, &accounts, "used", Some(0), now);
+    let cards: std::collections::HashMap<_, _> = s
+        .current_card
+        .iter()
+        .chain(&s.rows)
+        .map(|card| (card.id.as_str(), card))
+        .collect();
+    assert_eq!(cards.len(), accounts.len());
+    for account in &accounts {
+        let tags = crate::plan_tags::of(Pool::Claude, account, now);
+        let card = cards[account.id.as_str()];
+        // A card without a plan tag has an empty label, which the widget
+        // draws no tag for.
+        assert_eq!(
+            card.plan_label,
+            tags.tag.as_ref().map_or("", |t| t.label.as_str()),
+            "{}",
+            account.id
+        );
+        assert_eq!(
+            card.plan_accent,
+            tags.tag.as_ref().map_or("teal", |t| t.accent)
+        );
+        assert_eq!(card.workspace_label, tags.workspace);
+    }
+    assert_eq!(cards["max"].plan_label, "ULTRA");
+    assert_eq!(cards["unknown"].plan_label, "");
+    assert_eq!(cards["unknown"].account_label, "label");
     assert_eq!(
-        label(Pool::Codex, "pro", before_pro),
-        named("PRO", "orange")
+        cards["provider"].workspace_label.as_deref(),
+        Some("SUB2API")
     );
-    assert_eq!(label(Pool::Codex, "pro", now), named("PRO 20X", "orange"));
-    assert_eq!(
-        label(Pool::Codex, "prolite", now),
-        named("PRO 5X", "orange")
-    );
-    assert_eq!(
-        label(Pool::Codex, "promax", now),
-        named("PRO 50X", "purple")
-    );
-    assert_eq!(label(Pool::Codex, "go", now), named("GO", "pink"));
-    // Google's $100 Ultra came on 2026-05-19.
-    let before_ultra = 1_777_593_600; // 2026-05-01
-    assert_eq!(
-        label(Pool::Antigravity, "ultra 20x", before_ultra),
-        named("ULTRA", "orange")
-    );
-    assert_eq!(
-        label(Pool::Antigravity, "ultra", before_ultra),
-        named("ULTRA", "orange")
-    );
-    assert_eq!(
-        label(Pool::Antigravity, "ultra 20x", now),
-        named("ULTRA 20X", "orange")
-    );
-    assert_eq!(
-        label(Pool::Antigravity, "ultra 5x", now),
-        named("ULTRA 5X", "orange")
-    );
-    assert_eq!(
-        label(Pool::Antigravity, "ultra lite", now),
-        named("ULTRA 5X", "orange")
-    );
-    assert_eq!(
-        label(Pool::Antigravity, "ultra", now),
-        named("ULTRA", "orange")
-    );
-}
-#[test]
-fn codexCardsKeepTreatingUnknownPlansAsTeam() {
-    let mut a = account("current", true, "current@example.com", 10., 20.);
-    a.plan_type = Some("max 20x".into());
-    let s = build(Pool::Codex, &[a], "used", Some(0), 100);
-    assert_eq!(s.current_card.unwrap().plan_label, "TEAM");
 }
 #[test]
 fn bothPoolsWidgetLeadsWithEachPoolsCurrentAccountThenRanksTheRest() {
@@ -210,12 +140,10 @@ fn bothPoolsWidgetLeadsWithEachPoolsCurrentAccountThenRanksTheRest() {
         account("codex-current", true, "codex@example.com", 90., 90.),
         account("codex-low", false, "low@example.com", 80., 80.),
     ];
-    let mut claude = [
+    let claude = [
         account("claude-current", true, "claude@example.com", 95., 95.),
         account("claude-high", false, "high@example.com", 10., 10.),
     ];
-    claude[0].plan_type = Some("max 5x".into());
-    claude[1].plan_type = None;
     let s = Widget::All.build(
         &[(Pool::Codex, &codex), (Pool::Claude, &claude)],
         "used",
@@ -228,13 +156,8 @@ fn bothPoolsWidgetLeadsWithEachPoolsCurrentAccountThenRanksTheRest() {
     let secondary = s.secondary_card.unwrap();
     assert_eq!(secondary.id, "claude-current");
     assert_eq!(secondary.pool_label.as_deref(), Some("CLAUDE"));
-    assert_eq!(secondary.plan_label, "MAX 5X");
-    assert_eq!(secondary.plan_accent, "orange");
     let ids: Vec<_> = s.rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(ids, ["claude-current", "claude-high", "codex-low"]);
-    // Each card keeps its own pool's tags.
-    assert_eq!(s.rows[1].plan_label, "");
-    assert_eq!(s.rows[2].plan_label, "TEAM");
 }
 #[test]
 fn everyPoolsWidgetLeadsWithAntigravitysCurrentAccountAfterTheOthers() {
@@ -252,12 +175,10 @@ fn everyPoolsWidgetLeadsWithAntigravitysCurrentAccountAfterTheOthers() {
         95.,
         95.,
     )];
-    let mut antigravity = [
+    let antigravity = [
         account("agy-current", true, "agy@gmail.com", 20., 0.),
         account("agy-spare", false, "spare@gmail.com", 0., 0.),
     ];
-    antigravity[0].plan_type = Some("pro".into());
-    antigravity[1].plan_type = None;
     let s = Widget::All.build(
         &[
             (Pool::Codex, &codex),
@@ -272,12 +193,9 @@ fn everyPoolsWidgetLeadsWithAntigravitysCurrentAccountAfterTheOthers() {
     assert_eq!(ids, ["claude-current", "agy-current", "agy-spare"]);
     let agy = &s.rows[1];
     assert_eq!(agy.pool_label.as_deref(), Some("ANTIGRAVITY"));
-    assert_eq!(agy.plan_label, "PRO");
     assert_eq!(agy.account_label, "agy");
     // Gemini's windows, as the app's collapsed rows.
     assert_eq!(agy.five_hour.used_text, "20%");
-    // A plan not yet known shows no tag.
-    assert_eq!(s.rows[2].plan_label, "");
     // Its own widget names the pool too.
     let own = Widget::Antigravity.build(&[(Pool::Antigravity, &antigravity)], "used", Some(0), 100);
     assert_eq!(
@@ -299,12 +217,9 @@ fn grokHasItsOwnWidgetAndJoinsEveryPoolsWidget() {
     for account in &mut grok {
         account.usage.as_mut().unwrap().five_hour = None;
     }
-    grok[0].plan_type = Some("SuperGrok".into());
     let own = Widget::Grok.build(&[(Pool::Grok, &grok)], "used", Some(0), 100);
     let current = own.current_card.unwrap();
     assert_eq!(current.pool_label.as_deref(), Some("GROK"));
-    assert_eq!(current.plan_label, "SUPERGROK");
-    assert_eq!(current.plan_accent, "pink");
     assert_eq!(current.account_label, "grok");
     assert!(!current.five_hour.available);
     assert_eq!(current.one_week.used_text, "7%");

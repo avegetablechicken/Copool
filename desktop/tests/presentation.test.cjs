@@ -7,7 +7,6 @@ const a = {
   email: "dev@example.com",
   planType: "business",
   teamName: "workspace-a",
-  teamAlias: "Alias A",
   isCurrent: true,
   usage: {
     planType: "business",
@@ -18,111 +17,6 @@ const a = {
 };
 legacy(
   "AccountSummaryPresentationTests",
-  "testNormalizedPlanLabelFromRawPlanTypeFallsBackToTeam",
-  () => {
-    assert.equal(P.normalizedPlan(" business "), "BUSINESS");
-    assert.equal(P.normalizedPlan(null), "TEAM");
-  },
-);
-test("Grok's plans are shown as named", () => {
-  const plan = (planType) => P.card({ planType, usage: null }, false, "used", String, "grok").plan;
-  assert.equal(plan("SuperGrok"), "SUPERGROK");
-  assert.equal(plan(" SuperGrok  Heavy "), "SUPERGROK HEAVY");
-  // Elsewhere an unknown plan is still Team.
-  assert.equal(P.card({ planType: "SuperGrok", usage: null }).plan, "TEAM");
-});
-test("Antigravity Sub2api cards keep explicit tiers outside the Codex plan list", () => {
-  const card = { sourceTag: "SUB2API", planType: "standard" };
-  assert.equal(P.card(card, false, "used", String, "antigravity").plan, "STANDARD");
-});
-test("Claude's Max plans are named as they were at the time", () => {
-  const before = Date.UTC(2026, 9, 1);
-  const after = Date.UTC(2026, 10, 23);
-  const plan = (planType, now) =>
-    P.card({ planType, usage: null }, false, "used", String, "claude", now).plan;
-  // Claude Code reports both by their old names, also since the rename.
-  assert.equal(plan("max 20x", before), "MAX 20X");
-  assert.equal(plan("max 5x", before), "MAX 5X");
-  assert.equal(plan("max 20x", after), "ULTRA");
-  assert.equal(plan("max 5x", after), "MAX");
-  assert.equal(plan("max", before), "MAX");
-  assert.equal(plan("max", after), "MAX");
-  assert.equal(plan("ultra", before), "MAX 20X");
-  assert.equal(plan("Claude Ultra", after), "ULTRA");
-  assert.equal(plan("Claude Max", after), "MAX");
-  assert.equal(plan("pro", after), "PRO");
-  // The rename leaves the colors as they were.
-  const accent = (planType, now) =>
-    P.card({ planType, usage: null }, false, "used", String, "claude", now).accent;
-  assert.equal(accent("max 20x", before), "orange");
-  assert.equal(accent("max 20x", after), "orange");
-  assert.equal(accent("max 5x", before), "orange");
-  assert.equal(accent("max 5x", after), "orange");
-});
-test("Codex's and Google's plans are named as they were at the time", () => {
-  const view = (planType, pool, now) =>
-    P.card({ planType, usage: null }, false, "used", String, pool, now);
-  const named = (planType, pool, now) => {
-    const v = view(planType, pool, now);
-    return [v.plan, v.accent];
-  };
-  // OpenAI's $100 Pro came on 2026-04-09.
-  const beforePro = Date.UTC(2026, 2, 1);
-  const now = Date.UTC(2026, 10, 23);
-  assert.deepEqual(named("pro", "codex", beforePro), ["PRO", "orange"]);
-  assert.deepEqual(named("pro", "codex", now), ["PRO 20X", "orange"]);
-  assert.deepEqual(named("prolite", "codex", now), ["PRO 5X", "orange"]);
-  assert.deepEqual(named("promax", "codex", now), ["PRO 50X", "purple"]);
-  assert.deepEqual(named("go", "codex", now), ["GO", "pink"]);
-  // Google's $100 Ultra came on 2026-05-19.
-  const beforeUltra = Date.UTC(2026, 4, 1);
-  assert.deepEqual(named("ultra 20x", "antigravity", beforeUltra), ["ULTRA", "orange"]);
-  assert.deepEqual(named("ultra", "antigravity", beforeUltra), ["ULTRA", "orange"]);
-  assert.deepEqual(named("ultra 20x", "antigravity", now), ["ULTRA 20X", "orange"]);
-  assert.deepEqual(named("ultra 5x", "antigravity", now), ["ULTRA 5X", "orange"]);
-  assert.deepEqual(named("ultra lite", "antigravity", now), ["ULTRA 5X", "orange"]);
-  assert.deepEqual(named("ultra", "antigravity", now), ["ULTRA", "orange"]);
-  assert.deepEqual(named("pro", "antigravity", now), ["PRO", "pink"]);
-  const sub2api = { planType: "ultra 20x", sourceTag: "SUB2API", usage: null };
-  assert.equal(P.card(sub2api, false, "used", String, "antigravity", now).plan, "ULTRA 20X");
-});
-test("Comparable plans share a color across providers", () => {
-  const accent = (planType, pool) =>
-    P.card({ planType, usage: null }, false, "used", String, pool).accent;
-  // The entry subscription.
-  assert.equal(accent("go", "codex"), "pink");
-  assert.equal(accent("plus", "codex"), "pink");
-  assert.equal(accent("pro", "claude"), "pink");
-  assert.equal(accent("pro", "antigravity"), "pink");
-  assert.equal(accent("SuperGrok Lite", "grok"), "pink");
-  assert.equal(accent("SuperGrok", "grok"), "pink");
-  // Those of $100 to $300, told apart by their multiplier.
-  assert.equal(accent("prolite", "codex"), "orange");
-  assert.equal(accent("pro", "codex"), "orange");
-  assert.equal(accent("max 5x", "claude"), "orange");
-  assert.equal(accent("max", "claude"), "orange");
-  assert.equal(accent("max 20x", "claude"), "orange");
-  assert.equal(accent("ultra 5x", "antigravity"), "orange");
-  assert.equal(accent("ultra 20x", "antigravity"), "orange");
-  assert.equal(accent("ultra", "antigravity"), "orange");
-  assert.equal(accent("SuperGrok Plus", "grok"), "orange");
-  assert.equal(accent("SuperGrok Heavy", "grok"), "orange");
-  assert.equal(accent("SUPER GROK HEAVY", "grok"), "orange");
-  // Codex's $500 Pro alone.
-  assert.equal(accent("promax", "codex"), "purple");
-  assert.equal(accent("free", "claude"), "gray");
-  assert.equal(accent("Free", "grok"), "gray");
-  assert.equal(accent("Something New", "grok"), "teal");
-  // Without a pool, Codex's colors.
-  assert.equal(P.card({ planType: "pro", usage: null }).accent, "orange");
-});
-test("Claude Max plans keep their multiplier", () => {
-  assert.equal(P.normalizedPlan("max 20x"), "MAX 20X");
-  assert.equal(P.normalizedPlan({ planType: "max" }), "MAX");
-  assert.equal(P.normalizedPlan("maximum"), "TEAM");
-});
-legacy(
-  "AccountSummaryPresentationTests",
   "testWorkspaceDisplayNameNormalizationTrimsWhitespaceAndDropsEmptyValues",
   () => {
     assert.equal(P.clean(" workspace-a "), "workspace-a");
@@ -130,51 +24,10 @@ legacy(
   },
 );
 legacy(
-  "AccountSummaryPresentationTests",
-  "testNormalizedPlanLabelPrefersLatestUsagePlanType",
-  () =>
-    assert.equal(
-      P.normalizedPlan({ planType: "free", usage: { planType: "plus" } }),
-      "PLUS",
-    ),
-);
-legacy(
-  "AccountSummaryPresentationTests",
-  "testWorkspaceTagIsShownForBusinessPlan",
-  () =>
-    assert.equal(
-      P.workspaceTag({ planType: "business", teamName: "workspace-a" }),
-      "workspace-a",
-    ),
-);
-legacy(
-  "AccountSummaryPresentationTests",
-  "testWorkspaceTagStaysHiddenForProPlan",
-  () =>
-    assert.equal(
-      P.workspaceTag({ planType: "pro", teamName: "workspace-a" }),
-      null,
-    ),
-);
-legacy(
   "AccountCardPresentationTests",
-  "testCurrentAccountPaletteUsesOwnAccentForSelectionHighlight",
-  () => {
-    // Plain PRO, as before the $100 Pro came.
-    const before = Date.UTC(2026, 2, 1);
-    const c = P.card({ ...a, planType: "pro", usage: null }, false, "used", String, "codex", before);
-    assert.equal(c.accent, "orange");
-    assert.equal(c.selectionAccent, "PRO");
-  },
-);
-legacy(
-  "AccountCardPresentationTests",
-  "testCollapsedPresentationUsesAliasAccentAndShortEmail",
+  "testCollapsedPresentationUsesShortEmail",
   () => {
     const c = P.card(a, true);
-    assert.equal(c.plan, "BUSINESS");
-    assert.equal(c.accent, "indigo");
-    assert.equal(c.workspaceTag, "Alias A");
     assert.equal(c.name, "dev");
     assert.equal(c.credits, "128");
     assert.deepEqual(c.compact, [27.2, 52.6]);
@@ -182,16 +35,13 @@ legacy(
 );
 legacy(
   "AccountCardPresentationTests",
-  "testExpandedPresentationFallsBackToTeamAccentAndMissingWindowDefaults",
+  "testExpandedPresentationFallsBackToMissingWindowDefaults",
   () => {
     const c = P.card({
       accountId: "account-2",
       usage: { credits: { unlimited: true } },
     });
-    assert.equal(c.plan, "TEAM");
-    assert.equal(c.accent, "teal");
     assert.equal(c.name, "account-2");
-    assert.equal(c.workspaceTag, null);
     assert.equal(c.credits, "unlimited");
     assert.equal(c.fiveHour.progressPercent, 100);
     assert.equal(c.fiveHour.reset, "--");

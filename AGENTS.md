@@ -25,7 +25,7 @@ python3 scripts/build_rust_desktop.py > /tmp/copool-app-bundle-build.log 2>&1
 - Keep limitations and platform validation status current in `docs/rust-cross-platform.md`.
 
 - The GUI must preserve the original SwiftUI app's layout, controls and interactions. Its sources were removed from the tree; consult them in history at commit `cae2fce` (for example `git show cae2fce:Sources/Copool/Features/Accounts/AccountsPageModel.swift`). References such as Coport inform native material and rendering implementation; they do not authorize redesigning Copool.
-- Plan tags are colored by tier so that comparable plans of every pool match: pink for the entry subscription, orange for those of $100 to $300, which their labels tell apart by multiplier, purple for Codex's $500 Pro 50x (`planAccent` in `desktop/ui/presentation.js`, mirrored by `plan_accent` in `crates/copool-core/src/widgets.rs`; keep them in sync).
+- Plan tags are colored by tier so that comparable plans of every pool match: pink for the entry subscription, orange for those of $100 to $300, which their labels tell apart by multiplier, purple for Codex's $500 Pro 50x. `crates/copool-core/src/plan_tags.rs` alone names and colors plan tags and chooses workspace tags: `Application::accounts` gives each account its `planTag` and `workspaceTag`, which the UI only displays, and the widget snapshots are built from the same function. Do not derive plans in `desktop/ui` or `widgets.rs`.
 
 ## Windows Line Endings (Recurring CI Failure)
 
