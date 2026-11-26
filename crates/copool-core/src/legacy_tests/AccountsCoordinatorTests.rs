@@ -488,7 +488,9 @@ async fn testRefreshUsageDoesNotOverwriteConcurrentProxySwitchProjection() {
     let current: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(
-        crate::auth::extract_auth(&current).unwrap().account_id,
+        crate::pool_login::codex::extract_auth(&current)
+            .unwrap()
+            .account_id,
         "account-2"
     );
     assert_eq!(
@@ -1026,7 +1028,7 @@ async fn testTrayMenuModelAutoSmartSwitchWritesAuthAndLaunchesCodex() {
             assert_eq!(pool, Pool::Codex);
             observed.lock().unwrap().push((
                 settings.launch_codex_after_switch,
-                crate::auth::extract_auth(&auth.unwrap())
+                crate::pool_login::codex::extract_auth(&auth.unwrap())
                     .unwrap()
                     .account_id,
             ));
@@ -1043,7 +1045,12 @@ async fn testTrayMenuModelAutoSmartSwitchWritesAuthAndLaunchesCodex() {
     assert_eq!(*events.lock().unwrap(), [(true, "b".into())]);
     let auth: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
-    assert_eq!(crate::auth::extract_auth(&auth).unwrap().account_id, "b");
+    assert_eq!(
+        crate::pool_login::codex::extract_auth(&auth)
+            .unwrap()
+            .account_id,
+        "b"
+    );
 }
 #[tokio::test]
 async fn testRefreshUsageKeepsAuthSwitchedOutsideCopool() {

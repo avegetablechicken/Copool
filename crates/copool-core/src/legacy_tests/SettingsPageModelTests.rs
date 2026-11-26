@@ -403,7 +403,12 @@ async fn testAccountsPageSwitchesProviderToOpenAIForLocalAccount() {
     );
     let auth: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
-    assert_eq!(crate::auth::extract_auth(&auth).unwrap().account_id, "a");
+    assert_eq!(
+        crate::pool_login::codex::extract_auth(&auth)
+            .unwrap()
+            .account_id,
+        "a"
+    );
     assert!(app.accounts(Pool::Codex).await.unwrap()[0].is_current);
 }
 #[tokio::test]

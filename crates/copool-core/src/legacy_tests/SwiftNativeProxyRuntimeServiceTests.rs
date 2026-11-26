@@ -205,7 +205,12 @@ async fn testRecordSuccessfulCandidateUsesSuccessfulCandidateAsCurrentSelection(
     assert_eq!(store.current_selection.unwrap().account_id, "b");
     let auth: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
-    assert_eq!(crate::auth::extract_auth(&auth).unwrap().account_id, "b");
+    assert_eq!(
+        crate::pool_login::codex::extract_auth(&auth)
+            .unwrap()
+            .account_id,
+        "b"
+    );
 }
 #[tokio::test]
 async fn testHostAPIOnlyDisablesCurrentAuthSyncAfterSuccessfulProxyResponse() {

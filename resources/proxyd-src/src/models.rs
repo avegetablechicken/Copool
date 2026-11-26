@@ -617,7 +617,7 @@ impl StoredAccount {
             usage: self.usage.clone().map(UsageSnapshot::with_matching_windows),
             usage_error: self.usage_error.clone(),
             awaiting_first_request: self.awaiting_first_request(),
-            token_expires_at: crate::auth::access_token_expiry(&self.auth_json)
+            token_expires_at: crate::pool_login::codex::access_token_expiry(&self.auth_json)
                 .and_then(displayed_expiry),
             renewal: None,
             next_refresh_at: None,

@@ -1,5 +1,5 @@
 use super::{auth, jwt};
-use crate::auth::*;
+use crate::pool_login::codex::*;
 use serde_json::json;
 #[test]
 fn testExtractAuthReadsAccountAndClaims() {

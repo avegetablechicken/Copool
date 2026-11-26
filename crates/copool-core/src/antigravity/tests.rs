@@ -47,7 +47,7 @@ impl Live {
         self.sign_in_as(document, true);
     }
     fn sign_in_as(&self, document: &Value, wrapped: bool) {
-        *self.bytes.lock().unwrap() = Some(login::encode(&Document {
+        *self.bytes.lock().unwrap() = Some(pool_login::antigravity::encode(&Document {
             value: document.clone(),
             wrapped,
         }));
@@ -56,7 +56,7 @@ impl Live {
         *self.writes.lock().unwrap()
     }
     fn document(&self) -> Document {
-        login::decode(self.bytes.lock().unwrap().as_deref().unwrap()).unwrap()
+        pool_login::antigravity::decode(self.bytes.lock().unwrap().as_deref().unwrap()).unwrap()
     }
 }
 
@@ -414,10 +414,10 @@ async fn expired_or_refused_tokens_are_renewed_as_the_renewal_allows() {
     let store = h.app.antigravity_load().unwrap();
     let document = &store.accounts[0].document;
     assert_eq!(
-        login::access_token(document).as_deref(),
+        pool_login::antigravity::access_token(document).as_deref(),
         Some("fresh-refresh-alice")
     );
-    assert!(login::expiry(document).unwrap() > now_unix_seconds() + 3000);
+    assert!(pool_login::antigravity::expiry(document).unwrap() > now_unix_seconds() + 3000);
 
     // Refused though unexpired: renewed once, then asked again.
     h.app
@@ -612,7 +612,7 @@ async fn switching_writes_the_login_in_its_form_and_keeps_an_unknown_one() {
     let written = h.live.document();
     assert!(written.wrapped);
     assert_eq!(
-        login::refresh_token(&written.value).as_deref(),
+        pool_login::antigravity::refresh_token(&written.value).as_deref(),
         Some("refresh-alice")
     );
     let backup: Value = serde_json::from_slice(
@@ -630,7 +630,7 @@ async fn switching_writes_the_login_in_its_form_and_keeps_an_unknown_one() {
     let store = h.app.antigravity_load().unwrap();
     let stored = store.accounts.iter().find(|a| a.id == alice.id).unwrap();
     assert_eq!(
-        login::access_token(&stored.document).as_deref(),
+        pool_login::antigravity::access_token(&stored.document).as_deref(),
         Some("renewed-by-antigravity")
     );
 
@@ -646,7 +646,7 @@ async fn switching_writes_the_login_in_its_form_and_keeps_an_unknown_one() {
         crate::SmartSwitchOutcome::Switched { .. }
     ));
     assert_eq!(
-        login::refresh_token(&h.live.document().value).as_deref(),
+        pool_login::antigravity::refresh_token(&h.live.document().value).as_deref(),
         Some("refresh-bob")
     );
     // A pool login is not backed up again.
@@ -666,7 +666,7 @@ async fn imports_are_checked_whole_and_folded_into_known_accounts() {
         CREDENTIALS_INVALID
     );
     assert!(cards(&h.app).await.is_empty());
-    let wrapped = String::from_utf8(login::encode(&Document {
+    let wrapped = String::from_utf8(pool_login::antigravity::encode(&Document {
         value: login_of("bob", "access-bob", later()),
         wrapped: true,
     }))
@@ -946,7 +946,7 @@ async fn renewing_the_login_antigravity_uses_writes_it_back_in_its_form() {
         assert_eq!(h.live.writes(), 1);
         let stored = stored_document(&h.app, &id);
         assert_eq!(
-            login::access_token(&stored).as_deref(),
+            pool_login::antigravity::access_token(&stored).as_deref(),
             Some("fresh-refresh-alice")
         );
         let written = h.live.document();
@@ -957,8 +957,11 @@ async fn renewing_the_login_antigravity_uses_writes_it_back_in_its_form() {
         expected["token"]["expiry"] = written.value["token"]["expiry"].clone();
         assert_eq!(written.value.to_string(), expected.to_string());
         assert!(written.value["token"]["expiry"].is_string());
-        assert_eq!(login::expiry(&written.value), login::expiry(&stored));
-        assert!(login::expiry(&stored).unwrap() > now_unix_seconds() + 3000);
+        assert_eq!(
+            pool_login::antigravity::expiry(&written.value),
+            pool_login::antigravity::expiry(&stored)
+        );
+        assert!(pool_login::antigravity::expiry(&stored).unwrap() > now_unix_seconds() + 3000);
         let card = cards(&h.app).await.remove(0);
         assert!(card.is_current && card.usage.is_some() && card.usage_error.is_none());
     }
@@ -984,7 +987,7 @@ async fn a_renewal_that_rotates_the_refresh_token_is_written_back_too() {
     assert_eq!(h.live.writes(), 1);
     let written = h.live.document().value;
     assert_eq!(
-        login::refresh_token(&written).as_deref(),
+        pool_login::antigravity::refresh_token(&written).as_deref(),
         Some("rotated-refresh-alice")
     );
     assert_eq!(written, stored_document(&h.app, &id));
@@ -1032,7 +1035,7 @@ async fn a_renewal_never_replaces_another_login_antigravity_took_meanwhile() {
     let card = cards(&h.app).await.remove(0);
     assert!(card.usage.is_some() && card.usage_error.is_none());
     assert_eq!(
-        login::access_token(&stored_document(&h.app, &card.id)).as_deref(),
+        pool_login::antigravity::access_token(&stored_document(&h.app, &card.id)).as_deref(),
         Some("fresh-refresh-alice")
     );
 }
@@ -1053,7 +1056,7 @@ async fn a_renewal_never_replaces_a_token_antigravity_renewed_for_longer() {
     // The pool follows the newer token on its next read.
     let card = cards(&h.app).await.remove(0);
     assert_eq!(
-        login::access_token(&stored_document(&h.app, &card.id)).as_deref(),
+        pool_login::antigravity::access_token(&stored_document(&h.app, &card.id)).as_deref(),
         Some("access-alice-agy")
     );
 }
@@ -1081,7 +1084,7 @@ async fn a_refused_token_gives_way_to_the_one_antigravity_renewed_meanwhile() {
     assert!(card.is_current && card.usage.is_some() && card.usage_error.is_none());
     assert_eq!(card.email.as_deref(), Some("alice@gmail.com"));
     assert_eq!(
-        login::access_token(&stored_document(&h.app, &card.id)).as_deref(),
+        pool_login::antigravity::access_token(&stored_document(&h.app, &card.id)).as_deref(),
         Some("access-alice-agy")
     );
 }
@@ -1098,7 +1101,7 @@ async fn a_refused_write_back_does_not_fail_the_refresh() {
     let card = cards(&h.app).await.remove(0);
     assert!(card.usage.is_some() && card.usage_error.is_none());
     assert_eq!(
-        login::access_token(&stored_document(&h.app, &card.id)).as_deref(),
+        pool_login::antigravity::access_token(&stored_document(&h.app, &card.id)).as_deref(),
         Some("fresh-refresh-alice")
     );
     // Renew now succeeds too; Antigravity's login stays as it was.
@@ -1523,7 +1526,7 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     assert_eq!(fs::read_to_string(&env).unwrap(), env_original);
     assert_eq!(fs::read_to_string(&rc).unwrap(), rc_loaded);
     assert_eq!(
-        login::refresh_token(&h.live.document().value).as_deref(),
+        pool_login::antigravity::refresh_token(&h.live.document().value).as_deref(),
         Some("refresh-alice")
     );
     for account in cards(&h.app).await {
@@ -1886,7 +1889,7 @@ async fn a_remote_node_receives_only_released_logins_and_syncs_its_renewal() {
     );
     let mut stored = h.app.antigravity_load().unwrap();
     assert_eq!(
-        login::refresh_token(&stored.accounts[0].document).as_deref(),
+        pool_login::antigravity::refresh_token(&stored.accounts[0].document).as_deref(),
         Some("rotated-on-node")
     );
     // A delayed node snapshot cannot replace a new local sign-in.
@@ -1926,7 +1929,9 @@ async fn switching_hands_the_login_and_identity_to_the_switch_effects() {
     let alice_id = store
         .accounts
         .iter_mut()
-        .find(|a| login::access_token(&a.document).as_deref() == Some("access-alice"))
+        .find(|a| {
+            pool_login::antigravity::access_token(&a.document).as_deref() == Some("access-alice")
+        })
         .map(|a| {
             a.email = Some("alice@gmail.com".into());
             a.google_id = Some("google-sub-alice".into());
@@ -1952,7 +1957,10 @@ async fn switching_hands_the_login_and_identity_to_the_switch_effects() {
     let (pool, auth) = seen.lock().unwrap().take().unwrap();
     assert_eq!(pool, Pool::Antigravity);
     let auth = auth.unwrap();
-    assert_eq!(login::access_token(&auth).as_deref(), Some("access-alice"));
+    assert_eq!(
+        pool_login::antigravity::access_token(&auth).as_deref(),
+        Some("access-alice")
+    );
     assert_eq!(auth["email"], "alice@gmail.com");
     assert_eq!(auth["account_id"], "google-sub-alice");
 }

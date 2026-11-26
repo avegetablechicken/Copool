@@ -21,7 +21,7 @@ pub struct Network {
 impl AccountNetwork for Network {
     fn usage<'a>(&'a self, auth: &'a Value, proxy: &'a str) -> Response<'a, UsageSnapshot> {
         Box::pin(async move {
-            let id = crate::auth::extract_auth(auth)?.account_id;
+            let id = crate::pool_login::codex::extract_auth(auth)?.account_id;
             self.calls
                 .lock()
                 .unwrap()
@@ -49,7 +49,7 @@ impl AccountNetwork for Network {
         Box::pin(async move {
             self.calls.lock().unwrap().push((
                 "refresh".into(),
-                crate::auth::extract_auth(auth)?.account_id,
+                crate::pool_login::codex::extract_auth(auth)?.account_id,
                 proxy.into(),
             ));
             if let Some(error) = self.refresh_error.lock().unwrap().clone() {

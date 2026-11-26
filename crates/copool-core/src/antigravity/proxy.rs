@@ -1,7 +1,8 @@
 //! Adapts this pool's stored logins and Sub2api gateways to the local proxy.
-use super::{login, sub2api, Application, Renewal, Result, Stored};
+use super::{sub2api, Application, Renewal, Result, Stored};
 use crate::{
     models::{Pool, StoredAccount},
+    pool_login,
     proxy_service::{new_proxy_storage_context, ProxyStorageContext},
 };
 use serde_json::{json, Value};
@@ -10,7 +11,7 @@ use std::sync::Arc;
 impl Stored {
     fn proxy_auth(&self) -> Option<Value> {
         Some(json!({
-            "accessToken": login::access_token(&self.document)?,
+            "accessToken": pool_login::antigravity::access_token(&self.document)?,
             "project": self.project,
         }))
     }
@@ -42,12 +43,12 @@ impl Stored {
         if auth["sourceGeneration"].as_str() != Some(generation)
             || access.is_empty()
             || lifetime <= 0
-            || login::access_token(&self.document).as_deref() == Some(access)
-            || expiry < login::expiry(&self.document).unwrap_or(0)
+            || pool_login::antigravity::access_token(&self.document).as_deref() == Some(access)
+            || expiry < pool_login::antigravity::expiry(&self.document).unwrap_or(0)
         {
             return false;
         }
-        login::apply_renewal(
+        pool_login::antigravity::apply_renewal(
             &mut self.document,
             access,
             expiry,
@@ -184,12 +185,12 @@ impl Application {
             .iter_mut()
             .filter(|a| !a.first_request_pending)
         {
-            let Some(refresh) = login::refresh_token(&account.document) else {
+            let Some(refresh) = pool_login::antigravity::refresh_token(&account.document) else {
                 continue;
             };
             let generation = refresh_generation(
                 &refresh,
-                login::access_token(&account.document)
+                pool_login::antigravity::access_token(&account.document)
                     .as_deref()
                     .unwrap_or_default(),
             );
@@ -207,13 +208,14 @@ impl Application {
             };
             let choice = Renewal::of(account.renewal);
             if choice != Renewal::Never {
-                let refresh = login::refresh_token(&account.document).expect("checked login");
+                let refresh = pool_login::antigravity::refresh_token(&account.document)
+                    .expect("checked login");
                 auth["sourceGeneration"] =
                     refresh_generation(&refresh, auth["accessToken"].as_str().unwrap_or_default())
                         .into();
                 auth["refreshToken"] = refresh.into();
             }
-            auth["expiresAt"] = login::expiry(&account.document).into();
+            auth["expiresAt"] = pool_login::antigravity::expiry(&account.document).into();
             accounts.push(account.proxy_account(auth, &account.proxy_url, false)?);
         }
         if changed {

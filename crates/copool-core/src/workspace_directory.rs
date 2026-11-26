@@ -1,4 +1,6 @@
-use crate::{application::Application, auth, repository, utils::now_unix_seconds, workspaces};
+use crate::{
+    application::Application, pool_login::codex, repository, utils::now_unix_seconds, workspaces,
+};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 fn normalized(id: &str) -> String {
@@ -48,7 +50,7 @@ impl Application {
             {
                 continue;
             }
-            let Ok(extracted) = auth::extract_auth(&account.auth_json) else {
+            let Ok(extracted) = codex::extract_auth(&account.auth_json) else {
                 continue;
             };
             if !["team", "business", "enterprise"].contains(
@@ -132,7 +134,7 @@ impl Application {
             if !account.is_available() || account.awaiting_first_request() {
                 continue;
             }
-            let Ok(extracted) = auth::extract_auth(&account.auth_json) else {
+            let Ok(extracted) = codex::extract_auth(&account.auth_json) else {
                 continue;
             };
             if !["team", "business", "enterprise"].contains(

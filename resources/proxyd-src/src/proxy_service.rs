@@ -35,7 +35,6 @@ use tauri::AppHandle;
 #[cfg(feature = "desktop")]
 use tauri::Manager;
 
-use crate::auth::extract_auth;
 use crate::auth::refresh_chatgpt_auth_tokens;
 use crate::auth::write_active_codex_auth;
 use crate::models::ApiProxyStatus;
@@ -43,6 +42,7 @@ use crate::models::Pool;
 use crate::models::StoredAccount;
 use crate::models::UsageSnapshot;
 use crate::models::UsageWindow;
+use crate::pool_login::codex::extract_auth;
 use crate::state::ApiProxyRuntimeHandle;
 use crate::state::ApiProxyRuntimeSnapshot;
 #[cfg(feature = "desktop")]
@@ -1911,7 +1911,7 @@ enum HelloFailure {
 /// that model, or without one, with the oldest mini or luna model the
 /// upstream lists, the next one if the upstream no longer serves it.
 pub(crate) async fn say_hi(base: &str, auth: &Value, proxy: &str) -> Result<(), String> {
-    let auth = crate::auth::extract_auth(auth)?;
+    let auth = crate::pool_login::codex::extract_auth(auth)?;
     let client = crate::proxy_session::client(
         proxy,
         crate::proxy_session::Options {
@@ -2372,13 +2372,15 @@ async fn load_proxy_candidates(
                     .as_ref()
                     .and_then(|path| fs::read(path).ok())
                     .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                    .and_then(|auth| crate::auth::account_identity(&auth).ok())
+                    .and_then(|auth| crate::pool_login::codex::account_identity(&auth).ok())
                     .and_then(|identity| {
                         store
                             .accounts
                             .iter()
                             .find(|a| {
-                                crate::auth::account_identity(&a.auth_json).ok().as_ref()
+                                crate::pool_login::codex::account_identity(&a.auth_json)
+                                    .ok()
+                                    .as_ref()
                                     == Some(&identity)
                             })
                             .map(|a| a.id.clone())
@@ -2939,12 +2941,14 @@ async fn persist_refreshed_candidate_auth(
     {
         let replaces = match storage.pool {
             Pool::Antigravity => account.auth_json == *from && account.renews(),
-            Pool::Codex => {
-                crate::auth::renewal_replaces(refreshed_auth_json, from, &account.auth_json)
-            }
+            Pool::Codex => crate::pool_login::codex::renewal_replaces(
+                refreshed_auth_json,
+                from,
+                &account.auth_json,
+            ),
             Pool::Claude => {
                 account.auth_json == *from
-                    || crate::claude_api::newer_login(
+                    || crate::pool_login::claude::newer_login(
                         &refreshed_auth_json["claudeAiOauth"],
                         &account.auth_json["claudeAiOauth"],
                     )
@@ -2971,9 +2975,13 @@ async fn persist_refreshed_candidate_auth(
             .ok()
             .as_ref()
             .is_some_and(|current| {
-                crate::auth::account_identity(current).ok()
-                    == crate::auth::account_identity(refreshed_auth_json).ok()
-                    && crate::auth::renewal_replaces(refreshed_auth_json, from, current)
+                crate::pool_login::codex::account_identity(current).ok()
+                    == crate::pool_login::codex::account_identity(refreshed_auth_json).ok()
+                    && crate::pool_login::codex::renewal_replaces(
+                        refreshed_auth_json,
+                        from,
+                        current,
+                    )
             })
     {
         write_active_codex_auth(refreshed_auth_json)?;

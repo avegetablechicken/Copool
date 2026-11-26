@@ -5,8 +5,10 @@
 //! the file without a restart. A switch puts another account's sign-in
 //! under its key, leaving the sign-ins of other issuers alone; a renewal of
 //! the sign-in it holds updates its tokens in place.
+#![allow(dead_code)]
 use serde_json::{Map, Value};
 
+pub(crate) const CREDENTIALS_INVALID: &str = "error.grok.credentials_invalid";
 pub(crate) const ISSUER: &str = "https://auth.x.ai";
 pub(crate) const CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 
@@ -146,7 +148,7 @@ pub(crate) fn signed_in(tokens: &Value, now: i64) -> Result<Value, String> {
     let refresh = tokens["refresh_token"]
         .as_str()
         .filter(|t| !t.trim().is_empty())
-        .ok_or(super::CREDENTIALS_INVALID)?;
+        .ok_or(CREDENTIALS_INVALID)?;
     let lifetime = tokens["expires_in"]
         .as_i64()
         .filter(|s| *s > 0)

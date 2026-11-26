@@ -22,6 +22,20 @@ _Avoid_: base URL (when the gateway is meant)
 The **Sub2api providers** Copool keeps for a **Pool**, with each one's saved form, password and accounts.
 _Avoid_: provider list, provider settings
 
+### Logins
+
+**Login**:
+The document a **Pool**'s tool signs in with (Codex's `auth.json`, Claude's `claudeAiOauth`, Grok's and Antigravity's sign-ins), which Copool stores per account and hands to the tool on a switch.
+_Avoid_: auth JSON, token file
+
+**Credential**:
+What a **Login** grants, read the same way everywhere: its access and refresh tokens, when the access token expires, and whose account it is.
+_Avoid_: OAuth data, auth info
+
+**Third-party agent**:
+A coding tool other than the **Pool**'s own (OpenCode, pi, omp) that Copool gives the **Credential** of the account switched to.
+_Avoid_: external tool, client
+
 ### Switching
 
 **Env bridge**:

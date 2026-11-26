@@ -220,8 +220,9 @@ impl super::login::LiveStore for Keychain {
 
 #[cfg(test)]
 mod tests {
-    use super::super::login::{self, Document, LiveStore};
+    use super::super::login::LiveStore;
     use super::*;
+    use crate::pool_login::{self, antigravity::Document};
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -358,7 +359,7 @@ mod tests {
                 value: value.clone(),
                 wrapped,
             };
-            let bytes = login::encode(&document);
+            let bytes = pool_login::antigravity::encode(&document);
             store
                 .write(bytes.clone(), KeychainAccess::Background)
                 .await
@@ -393,7 +394,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(login::decode(&read), Some(document));
+            assert_eq!(pool_login::antigravity::decode(&read), Some(document));
         }
     }
 

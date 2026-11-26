@@ -1,5 +1,6 @@
 use crate::{
-    account_network, auth, models::StoredAccount, repository, utils::now_unix_seconds, Application,
+    account_network, models::StoredAccount, pool_login::codex, repository, utils::now_unix_seconds,
+    Application,
 };
 use serde_json::{json, Value};
 impl Application {
@@ -10,17 +11,17 @@ impl Application {
         workspace: Option<&str>,
         consent: &[Value],
     ) -> Result<usize, String> {
-        let mut document = auth::normalized_auth_for_write(document)?;
-        let mut extracted = auth::extract_auth(&document)?;
+        let mut document = codex::normalized_auth_for_write(document)?;
+        let mut extracted = codex::extract_auth(&document)?;
         if workspace.is_some_and(|id| id != extracted.account_id) {
             return Err("error.oauth.workspace_mismatch".into());
         }
-        let identity = auth::account_identity(&document)?;
+        let identity = codex::account_identity(&document)?;
         let store = repository::load_accounts(&self.paths.store())?;
         let existing = store
             .accounts
             .iter()
-            .find(|a| auth::account_identity(&a.auth_json).ok().as_ref() == Some(&identity));
+            .find(|a| codex::account_identity(&a.auth_json).ok().as_ref() == Some(&identity));
         let proxy = existing.map(|a| a.proxy_url.clone()).unwrap_or_default();
         // Requests go through the account's own proxy, else the shared one.
         let request_proxy = self.account_proxy(&proxy)?;
@@ -46,7 +47,7 @@ impl Application {
             Some(result) => match result {
                 Ok((refreshed, usage)) => {
                     document = refreshed;
-                    extracted = auth::extract_auth(&document)?;
+                    extracted = codex::extract_auth(&document)?;
                     (Some(usage), None)
                 }
                 Err(account_network::FetchFailure { message, .. })
@@ -58,7 +59,7 @@ impl Application {
                 Err(account_network::FetchFailure { auth, message }) => {
                     // Keep the rotated login: the refresh already spent the old one.
                     document = auth;
-                    extracted = auth::extract_auth(&document)?;
+                    extracted = codex::extract_auth(&document)?;
                     (None, Some(message))
                 }
             },

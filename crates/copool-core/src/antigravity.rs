@@ -20,7 +20,7 @@ use std::{
 };
 
 mod api;
-pub(crate) mod login;
+mod login;
 mod proxy;
 #[cfg(any(target_os = "macos", test))]
 mod security;
@@ -36,12 +36,13 @@ use crate::env_bridge::Environment;
 
 /// A Google sign-in's login document, from its code.
 pub(crate) async fn sign_in(code: &str, verifier: &str, redirect: &str) -> Result<Value> {
-    login::signed_in(
+    pool_login::antigravity::signed_in(
         &api::exchange(code, verifier, redirect).await?,
         now_unix_seconds(),
     )
 }
-use login::{Document, LiveStore};
+use crate::pool_login::{self, antigravity::Document};
+use login::LiveStore;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -200,7 +201,7 @@ impl Stored {
             usage_error: self.usage_error.clone(),
             is_current: current,
             awaiting_first_request: self.first_request_pending,
-            token_expires_at: login::expiry(&self.document)
+            token_expires_at: pool_login::antigravity::expiry(&self.document)
                 .and_then(crate::models::displayed_expiry),
             renewal: Some(Renewal::of(self.renewal).as_str().into()),
             next_refresh_at: None,
@@ -209,9 +210,12 @@ impl Stored {
     }
     /// Takes a newer generation of the same login (Antigravity renewed it).
     fn adopt(&mut self, document: &Value) -> bool {
-        let newer =
-            login::expiry(document).unwrap_or(0) > login::expiry(&self.document).unwrap_or(0);
-        if !newer || login::access_token(document) == login::access_token(&self.document) {
+        let newer = pool_login::antigravity::expiry(document).unwrap_or(0)
+            > pool_login::antigravity::expiry(&self.document).unwrap_or(0);
+        if !newer
+            || pool_login::antigravity::access_token(document)
+                == pool_login::antigravity::access_token(&self.document)
+        {
             return false;
         }
         self.document = document.clone();
@@ -245,7 +249,7 @@ fn follow_live(store: &mut Store, live: Option<&Document>) -> bool {
     let current = store
         .accounts
         .iter_mut()
-        .find(|a| login::same_login(&a.document, &live.value))
+        .find(|a| pool_login::antigravity::same_login(&a.document, &live.value))
         .map(|account| {
             changed |= account.adopt(&live.value);
             account.id.clone()
@@ -308,10 +312,10 @@ fn parse_import(content: &str) -> Option<Vec<Document>> {
     entries
         .into_iter()
         .map(|entry| match entry {
-            Value::String(text) => login::decode(text.as_bytes()),
+            Value::String(text) => pool_login::antigravity::decode(text.as_bytes()),
             Value::Object(ref object) if object.get("document").is_some_and(Value::is_object) => {
                 let value = object["document"].clone();
-                login::refresh_token(&value)?;
+                pool_login::antigravity::refresh_token(&value)?;
                 Some(Document {
                     value,
                     wrapped: object
@@ -321,7 +325,7 @@ fn parse_import(content: &str) -> Option<Vec<Document>> {
                 })
             }
             value => {
-                login::refresh_token(&value)?;
+                pool_login::antigravity::refresh_token(&value)?;
                 Some(Document {
                     value,
                     wrapped: cfg!(target_os = "macos"),
@@ -334,7 +338,7 @@ fn parse_import(content: &str) -> Option<Vec<Document>> {
 use crate::antigravity_cloud::{fetch_usage, status_error, Failure, Renewed};
 impl Renewed {
     fn apply(&self, document: &mut Value) {
-        login::apply_renewal(
+        pool_login::antigravity::apply_renewal(
             document,
             &self.access,
             self.expires_at,
@@ -345,7 +349,7 @@ impl Renewed {
 }
 /// Renews the document's access token; an error when Google refuses.
 async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Result<Renewed> {
-    let refresh = login::refresh_token(document).ok_or(SIGN_IN_EXPIRED)?;
+    let refresh = pool_login::antigravity::refresh_token(document).ok_or(SIGN_IN_EXPIRED)?;
     let renewed = crate::antigravity_cloud::renew_token(network, &refresh, proxy).await?;
     renewed.apply(document);
     Ok(renewed)
@@ -405,7 +409,7 @@ impl Application {
     async fn antigravity_read_live(&self, access: KeychainAccess) -> Result<Option<Document>> {
         match self.antigravity_live().read(access).await? {
             None => Ok(None),
-            Some(bytes) => login::decode(&bytes)
+            Some(bytes) => pool_login::antigravity::decode(&bytes)
                 .map(Some)
                 .ok_or(CREDENTIALS_INVALID.into()),
         }
@@ -470,9 +474,10 @@ impl Application {
         let now = now_unix_seconds();
         let _lock = self.antigravity.lock.lock().await;
         let mut store = self.antigravity_load()?;
-        let email = login::email(&document.value);
+        let email = pool_login::antigravity::email(&document.value);
         let found = store.accounts.iter_mut().find(|a| {
-            login::same_login(&a.document, &document.value) || email.is_some() && a.email == email
+            pool_login::antigravity::same_login(&a.document, &document.value)
+                || email.is_some() && a.email == email
         });
         let (id, waiting) = match found {
             Some(existing) => {
@@ -526,7 +531,7 @@ impl Application {
     }
     /// Stores a browser sign-in's login without switching to it.
     pub(crate) async fn antigravity_import_login(&self, document: Value) -> Result<usize> {
-        login::refresh_token(&document).ok_or(CREDENTIALS_INVALID)?;
+        pool_login::antigravity::refresh_token(&document).ok_or(CREDENTIALS_INVALID)?;
         let op = self.antigravity.operations.lock().await;
         let (id, waiting) = self
             .antigravity_upsert(
@@ -634,7 +639,7 @@ impl Application {
         if let Err(error) = self
             .antigravity_live()
             .write(
-                login::encode(&Document {
+                pool_login::antigravity::encode(&Document {
                     value: target.document.clone(),
                     wrapped: target.wrapped,
                 }),
@@ -685,7 +690,8 @@ impl Application {
             .find(|a| a.id == id)
             .ok_or("Account not found")?;
         Ok(account.usage_error.is_some()
-            || login::expiry(&account.document).is_some_and(|e| e <= now_unix_seconds()))
+            || pool_login::antigravity::expiry(&account.document)
+                .is_some_and(|e| e <= now_unix_seconds()))
     }
     /// Antigravity's login when it holds the document's login with another
     /// access token, unexpired: Antigravity, or another app sharing its
@@ -696,10 +702,11 @@ impl Application {
             .await
             .ok()
             .flatten()?;
-        let renewed = login::same_login(&live.value, document)
-            && login::access_token(&live.value).is_some()
-            && login::access_token(&live.value) != login::access_token(document)
-            && login::expiry(&live.value).is_none_or(|e| e > now + EXPIRY_MARGIN);
+        let renewed = pool_login::antigravity::same_login(&live.value, document)
+            && pool_login::antigravity::access_token(&live.value).is_some()
+            && pool_login::antigravity::access_token(&live.value)
+                != pool_login::antigravity::access_token(document)
+            && pool_login::antigravity::expiry(&live.value).is_none_or(|e| e > now + EXPIRY_MARGIN);
         renewed.then_some(live.value)
     }
     /// Renews the document's access token, then gives the renewal to
@@ -730,15 +737,19 @@ impl Application {
             else {
                 return Ok(());
             };
-            if !login::same_login(&live.value, document)
-                || login::expiry(&live.value).unwrap_or(0) > renewed.expires_at
-                || login::access_token(&live.value).as_deref() == Some(renewed.access.as_str())
+            if !pool_login::antigravity::same_login(&live.value, document)
+                || pool_login::antigravity::expiry(&live.value).unwrap_or(0) > renewed.expires_at
+                || pool_login::antigravity::access_token(&live.value).as_deref()
+                    == Some(renewed.access.as_str())
             {
                 return Ok(());
             }
             renewed.apply(&mut live.value);
             self.antigravity_live()
-                .write(login::encode(&live), KeychainAccess::Background)
+                .write(
+                    pool_login::antigravity::encode(&live),
+                    KeychainAccess::Background,
+                )
                 .await
         }
         .await;
@@ -791,7 +802,8 @@ impl Application {
             return Ok(());
         }
         if let Some(rejected) = rejected {
-            if login::access_token(&account.document).as_deref() != Some(rejected) {
+            if pool_login::antigravity::access_token(&account.document).as_deref() != Some(rejected)
+            {
                 return Ok(());
             }
             if Renewal::of(account.renewal) == Renewal::Never {
@@ -814,8 +826,9 @@ impl Application {
                 renewed = true;
                 return Ok(None);
             }
-            let expired = login::expiry(&document).is_some_and(|e| e <= now + EXPIRY_MARGIN)
-                || login::access_token(&document).is_none();
+            let expired = pool_login::antigravity::expiry(&document)
+                .is_some_and(|e| e <= now + EXPIRY_MARGIN)
+                || pool_login::antigravity::access_token(&document).is_none();
             if expired {
                 if !may_renew {
                     return Err(RENEWAL_OFF.into());
@@ -824,7 +837,7 @@ impl Application {
                     .await?;
                 renewed = true;
             }
-            let token = login::access_token(&document).unwrap_or_default();
+            let token = pool_login::antigravity::access_token(&document).unwrap_or_default();
             match fetch_usage(network, &token, &proxy, now).await {
                 Ok(usage) => Ok(Some(usage)),
                 Err(Failure::Denied(error) | Failure::Other(error)) => Err(error),
@@ -835,7 +848,8 @@ impl Application {
                     if let Some(live) = self.antigravity_live_renewal(&document, now).await {
                         document = live;
                         adopted = true;
-                        let token = login::access_token(&document).unwrap_or_default();
+                        let token =
+                            pool_login::antigravity::access_token(&document).unwrap_or_default();
                         match fetch_usage(network, &token, &proxy, now).await {
                             Ok(usage) => return Ok(Some(usage)),
                             Err(Failure::Denied(error) | Failure::Other(error)) => {
@@ -850,7 +864,8 @@ impl Application {
                     self.antigravity_renew(network, &mut document, &proxy)
                         .await?;
                     renewed = true;
-                    let token = login::access_token(&document).unwrap_or_default();
+                    let token =
+                        pool_login::antigravity::access_token(&document).unwrap_or_default();
                     match fetch_usage(network, &token, &proxy, now).await {
                         Ok(usage) => Ok(Some(usage)),
                         Err(Failure::Expired) => Err(SIGN_IN_EXPIRED.into()),
@@ -861,7 +876,7 @@ impl Application {
         }
         .await;
         // The account's name and plan, with the token that worked.
-        let token = login::access_token(&document).unwrap_or_default();
+        let token = pool_login::antigravity::access_token(&document).unwrap_or_default();
         let (mut identity, mut plan, mut project) = (None, None, None);
         // The credits of a successful `loadCodeAssist`; when it fails, the
         // card keeps those it had.
@@ -899,7 +914,8 @@ impl Application {
         // Antigravity may have renewed the login meanwhile; keep the newer.
         // Its token taken after a refusal replaces the refused one.
         if renewed
-            || login::expiry(&document) > login::expiry(&stored.document)
+            || pool_login::antigravity::expiry(&document)
+                > pool_login::antigravity::expiry(&stored.document)
             || adopted && stored.document == account.document
         {
             stored.document = document;
@@ -959,8 +975,9 @@ impl Application {
             .into_iter()
             .find(|a| a.id == id)
             .ok_or("Account not found")?;
-        let Some(token) = login::access_token(&account.document).filter(|_| {
-            login::expiry(&account.document).is_none_or(|e| e > now_unix_seconds() + EXPIRY_MARGIN)
+        let Some(token) = pool_login::antigravity::access_token(&account.document).filter(|_| {
+            pool_login::antigravity::expiry(&account.document)
+                .is_none_or(|e| e > now_unix_seconds() + EXPIRY_MARGIN)
         }) else {
             return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
         };

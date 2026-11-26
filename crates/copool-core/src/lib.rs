@@ -11,6 +11,8 @@ mod claude_api;
 #[path = "../../../resources/proxyd-src/src/models.rs"]
 mod models;
 mod persistence;
+#[path = "../../../resources/proxyd-src/src/pool_login/mod.rs"]
+mod pool_login;
 #[path = "../../../resources/proxyd-src/src/proxy_service.rs"]
 mod proxy_service;
 #[path = "../../../resources/proxyd-src/src/state.rs"]

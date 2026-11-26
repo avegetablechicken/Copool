@@ -22,7 +22,7 @@ impl Network {
 impl AccountNetwork for Network {
     fn usage<'a>(&'a self, auth: &'a Value, proxy: &'a str) -> Response<'a, UsageSnapshot> {
         Box::pin(async move {
-            let extracted = crate::auth::extract_auth(auth)?;
+            let extracted = crate::pool_login::codex::extract_auth(auth)?;
             crate::usage::fetch_usage_snapshot_from(
                 &self.origin(),
                 &extracted.access_token,
@@ -103,7 +103,8 @@ pub(crate) async fn fetch(
         auth,
         message: crate::models::RENEWAL_OFF.into(),
     };
-    let expired = crate::auth::access_token_expiry(&auth).is_some_and(|exp| exp <= now);
+    let expired =
+        crate::pool_login::codex::access_token_expiry(&auth).is_some_and(|exp| exp <= now);
     if expired && !renews {
         return Err(held_back(auth));
     }

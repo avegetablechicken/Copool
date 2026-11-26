@@ -316,9 +316,10 @@ impl Login {
                 ));
             }
             let tokens: Value = response.json().await.map_err(|e| e.to_string())?;
-            let auth = crate::auth::normalized_auth_for_write(json!({"tokens":tokens}))?;
+            let auth =
+                crate::pool_login::codex::normalized_auth_for_write(json!({"tokens":tokens}))?;
             if let Some(expected) = &self.workspace {
-                if crate::auth::extract_auth(&auth)?.account_id != *expected {
+                if crate::pool_login::codex::extract_auth(&auth)?.account_id != *expected {
                     return Err("error.oauth.workspace_mismatch".into());
                 }
             }

@@ -149,21 +149,21 @@ fn sign_in_of(user: &str, access: &str, expires: i64) -> Value {
     json!({
         "key": access,
         "auth_mode": "oidc",
-        "create_time": login::timestamp(expires - 21600),
+        "create_time": pool_login::grok::timestamp(expires - 21600),
         "user_id": format!("uid-{user}"),
         "email": format!("{user}@example.com"),
         "first_name": user,
         "principal_type": "User",
         "team_id": format!("team-{user}"),
         "refresh_token": format!("refresh-{user}"),
-        "expires_at": login::timestamp(expires),
-        "oidc_issuer": login::ISSUER,
-        "oidc_client_id": login::CLIENT_ID
+        "expires_at": pool_login::grok::timestamp(expires),
+        "oidc_issuer": pool_login::grok::ISSUER,
+        "oidc_client_id": pool_login::grok::CLIENT_ID
     })
 }
 /// Grok Build's `auth.json` holding the sign-in.
 fn auth_file(document: &Value) -> Value {
-    json!({ login::entry_key(document): document })
+    json!({ pool_login::grok::entry_key(document): document })
 }
 fn later() -> i64 {
     now_unix_seconds() + 3600
@@ -183,7 +183,7 @@ impl Harness {
         serde_json::from_slice(&fs::read(&self.auth).unwrap()).unwrap()
     }
     fn live(&self) -> Value {
-        login::sign_in_of(&self.file()).unwrap()
+        pool_login::grok::sign_in_of(&self.file()).unwrap()
     }
     fn stored(&self, id: &str) -> Value {
         self.app
@@ -332,9 +332,9 @@ fn a_file_with_a_byte_order_mark_keeps_its_other_issuers() {
     file["https://acme.okta.com::client"] = json!({"key": "okta", "refresh_token": "okta-r"});
     let mut bytes = b"\xEF\xBB\xBF".to_vec();
     bytes.extend(serde_json::to_vec(&file).unwrap());
-    assert!(login::decode(&bytes).is_some());
-    let written = login::encode(Some(&bytes), &alice);
-    assert_eq!(written[login::entry_key(&alice)], alice);
+    assert!(pool_login::grok::decode(&bytes).is_some());
+    let written = pool_login::grok::encode(Some(&bytes), &alice);
+    assert_eq!(written[pool_login::grok::entry_key(&alice)], alice);
     assert_eq!(written["https://acme.okta.com::client"]["key"], "okta");
     assert_eq!(written.as_object().unwrap().len(), 2);
 }
@@ -363,7 +363,7 @@ async fn switching_writes_the_sign_in_keeps_other_issuers_and_backs_up_a_strange
         .await
         .unwrap();
     let file = h.file();
-    assert_eq!(file[login::entry_key(&alice)], alice);
+    assert_eq!(file[pool_login::grok::entry_key(&alice)], alice);
     assert_eq!(file["https://acme.okta.com::client"]["key"], "okta");
     assert_eq!(file.as_object().unwrap().len(), 2);
     let backup: Value = serde_json::from_slice(
@@ -395,7 +395,10 @@ async fn switching_writes_the_sign_in_keeps_other_issuers_and_backs_up_a_strange
         outcome,
         crate::SmartSwitchOutcome::Switched { .. }
     ));
-    assert_eq!(login::email(&h.live()).as_deref(), Some("bob@example.com"));
+    assert_eq!(
+        pool_login::grok::email(&h.live()).as_deref(),
+        Some("bob@example.com")
+    );
     // A pool sign-in is not backed up again.
     let backup: Value = serde_json::from_slice(
         &fs::read(h.app.paths.data_dir.join("grok-before-switch.json")).unwrap(),
@@ -451,15 +454,21 @@ async fn expired_tokens_are_renewed_and_given_to_grok_build_when_it_holds_them()
     // The renewal, its rotated refresh token included, is the pool's and
     // Grok Build's: the refresh token Grok Build held no longer works.
     let stored = h.stored(&alice.id);
-    assert_eq!(login::access_token(&stored).as_deref(), Some("fresh-alice"));
     assert_eq!(
-        login::refresh_token(&stored).as_deref(),
+        pool_login::grok::access_token(&stored).as_deref(),
+        Some("fresh-alice")
+    );
+    assert_eq!(
+        pool_login::grok::refresh_token(&stored).as_deref(),
         Some("rotated-alice")
     );
     let live = h.live();
-    assert_eq!(login::access_token(&live).as_deref(), Some("fresh-alice"));
     assert_eq!(
-        login::refresh_token(&live).as_deref(),
+        pool_login::grok::access_token(&live).as_deref(),
+        Some("fresh-alice")
+    );
+    assert_eq!(
+        pool_login::grok::refresh_token(&live).as_deref(),
         Some("rotated-alice")
     );
     assert_eq!(live["first_name"], "alice");
@@ -469,7 +478,7 @@ async fn expired_tokens_are_renewed_and_given_to_grok_build_when_it_holds_them()
     // Grok Build's sign-in stays as it was.
     h.app.refresh_usage(Pool::Grok, &bob.id).await.unwrap();
     assert_eq!(
-        login::access_token(&h.stored(&bob.id)).as_deref(),
+        pool_login::grok::access_token(&h.stored(&bob.id)).as_deref(),
         Some("fresh-bob")
     );
     assert_eq!(h.live(), live);
@@ -528,7 +537,7 @@ async fn a_renewal_never_replaces_a_sign_in_grok_build_renewed_meanwhile() {
     h.app.renew_now(Pool::Grok, &id).await.unwrap();
     assert_eq!(h.live(), theirs);
     assert_eq!(
-        login::access_token(&h.stored(&id)).as_deref(),
+        pool_login::grok::access_token(&h.stored(&id)).as_deref(),
         Some("fresh-alice")
     );
     // Its own chain stays Grok Build's from then on, as Copool's stays its.
@@ -696,7 +705,7 @@ fn a_browser_sign_in_is_kept_as_grok_build_keeps_its_sign_in() {
         "id_token": jwt(json!({"sub": "uid-dana", "email": "dana@example.com",
             "given_name": "Dana", "family_name": "Lee"}))
     });
-    let document = login::signed_in(&tokens, 1_795_000_000).unwrap();
+    let document = pool_login::grok::signed_in(&tokens, 1_795_000_000).unwrap();
     assert_eq!(document["key"], access);
     assert_eq!(document["user_id"], "uid-dana");
     assert_eq!(document["team_id"], "team-dana");
@@ -704,20 +713,30 @@ fn a_browser_sign_in_is_kept_as_grok_build_keeps_its_sign_in() {
     assert_eq!(document["first_name"], "Dana");
     assert_eq!(document["last_name"], "Lee");
     assert_eq!(document["auth_mode"], "oidc");
-    assert_eq!(login::expiry(&document), Some(1_795_000_000 + 21600));
     assert_eq!(
-        login::entry_key(&document),
-        format!("{}::{}", login::ISSUER, login::CLIENT_ID)
+        pool_login::grok::expiry(&document),
+        Some(1_795_000_000 + 21600)
+    );
+    assert_eq!(
+        pool_login::grok::entry_key(&document),
+        format!(
+            "{}::{}",
+            pool_login::grok::ISSUER,
+            pool_login::grok::CLIENT_ID
+        )
     );
     // Without a refresh token the sign-in would not last.
     let mut short = tokens;
     short.as_object_mut().unwrap().remove("refresh_token");
     assert_eq!(
-        login::signed_in(&short, 0).unwrap_err(),
+        pool_login::grok::signed_in(&short, 0).unwrap_err(),
         CREDENTIALS_INVALID
     );
     // The time format is Grok Build's own.
-    assert_eq!(login::timestamp(0), "1970-01-01T00:00:00.000000Z");
+    assert_eq!(
+        pool_login::grok::timestamp(0),
+        "1970-01-01T00:00:00.000000Z"
+    );
     let url = sign_in_url("http://127.0.0.1:5/callback", "c", "s");
     assert!(url.starts_with("https://auth.x.ai/oauth2/authorize?"));
     assert!(url.contains("client_id=b1a00492-073a-47ea-816f-4c329264a828"));
@@ -1059,7 +1078,7 @@ async fn a_sub2api_card_gives_grok_builds_models_the_gateway_and_an_account_take
     // The login stays for an account's switch; the provider's card is the
     // one in use.
     assert_eq!(
-        login::email(&h.live()).as_deref(),
+        pool_login::grok::email(&h.live()).as_deref(),
         Some("alice@example.com")
     );
     let accounts = cards(&h.app).await;

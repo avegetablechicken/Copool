@@ -2,8 +2,8 @@
 //! (`/billing?format=credits`, a share of the current period's allowance),
 //! the plan (`/settings`), and token renewal with Grok Build's OAuth client
 //! at `auth.x.ai`.
-use super::login::{CLIENT_ID, ISSUER};
 use crate::models::{CreditSnapshot, UsageSnapshot, UsageWindow};
+use crate::pool_login::grok::{CLIENT_ID, ISSUER};
 use serde_json::Value;
 
 pub(crate) const API_BASE: &str = "https://cli-chat-proxy.grok.com/v1";

@@ -6,8 +6,9 @@ use super::{
 };
 use crate::{
     application::Application,
-    claude_api::{plan, text},
+    claude_api::text,
     models::{Pool, StoredAccount},
+    pool_login::claude::plan,
     proxy_service::{new_proxy_storage_context, ProxyStorageContext},
 };
 use serde_json::{json, Value};
@@ -298,7 +299,7 @@ impl Application {
             let oauth = &found["authJson"]["claudeAiOauth"];
             if let Some(account) = store.accounts.iter_mut().find(|a| {
                 found["id"].as_str() == Some(a.id.as_str())
-                    && crate::claude_api::newer_login(oauth, &a.oauth)
+                    && crate::pool_login::claude::newer_login(oauth, &a.oauth)
             }) {
                 changed |= account.adopt(oauth, false);
             }

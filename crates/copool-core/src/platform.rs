@@ -1,7 +1,7 @@
 //! Explicit desktop integrations. Never run by core tests or during account reads.
 use crate::{
-    auth, persistence::write_json, process, utils::now_unix_seconds, Pool, Preferences,
-    SwitchExecution,
+    persistence::write_json, pool_login::codex, process, utils::now_unix_seconds, Pool,
+    Preferences, SwitchExecution,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
@@ -191,7 +191,7 @@ fn is_sqlite_path(path: &Path) -> bool {
 fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCredential, String> {
     match pool {
         Pool::Codex => {
-            let oauth = auth::extract_codex_oauth_tokens(auth_json)?;
+            let oauth = codex::extract_codex_oauth_tokens(auth_json)?;
             let expires_ms = oauth
                 .expires_at_ms
                 .map(|ms| ms.max(0))
@@ -208,19 +208,21 @@ fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCreden
             })
         }
         Pool::Grok => {
-            let sign_in = crate::grok::login::sign_in_of(auth_json);
+            let sign_in = crate::pool_login::grok::sign_in_of(auth_json);
             let doc = sign_in.as_ref().unwrap_or(auth_json);
-            let access = crate::grok::login::access_token(doc).ok_or("Missing access token")?;
-            let refresh = crate::grok::login::refresh_token(doc).ok_or("Missing refresh token")?;
-            let access_claims = crate::grok::login::claims(&access);
-            let expires_ms = crate::grok::login::expiry(doc)
+            let access =
+                crate::pool_login::grok::access_token(doc).ok_or("Missing access token")?;
+            let refresh =
+                crate::pool_login::grok::refresh_token(doc).ok_or("Missing refresh token")?;
+            let access_claims = crate::pool_login::grok::claims(&access);
+            let expires_ms = crate::pool_login::grok::expiry(doc)
                 .or_else(|| access_claims.get("exp").and_then(Value::as_i64))
                 .map(|seconds| seconds.saturating_mul(1000).max(0))
                 .unwrap_or_else(default_expires_ms);
             // The xAI subject, as omp's `xai-oauth` keeps it in `accountId`.
-            let account_id = crate::grok::login::user_id(doc)
+            let account_id = crate::pool_login::grok::user_id(doc)
                 .or_else(|| non_empty_trimmed(access_claims.get("sub").and_then(Value::as_str)));
-            let email = crate::grok::login::email(doc)
+            let email = crate::pool_login::grok::email(doc)
                 .or_else(|| {
                     non_empty_trimmed(access_claims.get("email").and_then(Value::as_str))
                         .filter(|email| email.contains('@'))
@@ -247,10 +249,11 @@ fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCreden
             let text = |v: &Value, key: &str| non_empty_trimmed(v.get(key).and_then(Value::as_str));
             let access = text(oauth, "accessToken").ok_or("Missing access token")?;
             let refresh = text(oauth, "refreshToken").ok_or("Missing refresh token")?;
-            let expires_ms = crate::claude_api::expires_at_ms(oauth)
+            let expires_ms = crate::pool_login::claude::expires_at_ms(oauth)
                 .filter(|ms| *ms > 0)
                 .unwrap_or_else(default_expires_ms);
-            let scope = crate::claude_api::granted_scope(oauth).or_else(|| text(oauth, "scope"));
+            let scope =
+                crate::pool_login::claude::granted_scope(oauth).or_else(|| text(oauth, "scope"));
             Ok(OAuthCredential {
                 access,
                 refresh,
@@ -263,14 +266,15 @@ fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCreden
             })
         }
         Pool::Antigravity => {
-            let access =
-                crate::antigravity::login::access_token(auth_json).ok_or("Missing access token")?;
-            let refresh = crate::antigravity::login::refresh_token(auth_json)
+            let access = crate::pool_login::antigravity::access_token(auth_json)
+                .ok_or("Missing access token")?;
+            let refresh = crate::pool_login::antigravity::refresh_token(auth_json)
                 .ok_or("Missing refresh token")?;
-            let expires_ms = crate::antigravity::login::expiry(auth_json)
+            let expires_ms = crate::pool_login::antigravity::expiry(auth_json)
                 .map(|seconds| seconds.saturating_mul(1000).max(0))
                 .unwrap_or_else(default_expires_ms);
-            let email = crate::antigravity::login::email(auth_json).map(|e| e.to_ascii_lowercase());
+            let email =
+                crate::pool_login::antigravity::email(auth_json).map(|e| e.to_ascii_lowercase());
             let account_id = non_empty_trimmed(
                 auth_json
                     .get("account_id")
@@ -280,7 +284,7 @@ fn extract_oauth_credential(pool: Pool, auth_json: &Value) -> Result<OAuthCreden
             )
             .or_else(|| {
                 let id_token = auth_json.get("id_token").and_then(Value::as_str)?;
-                let claims = auth::decode_jwt_payload(id_token).ok()?;
+                let claims = codex::decode_jwt_payload(id_token).ok()?;
                 non_empty_trimmed(claims.get("sub").and_then(Value::as_str))
             });
             // omp's `antigravity-cli` requires email or subject to isolate its per-account dir.
@@ -467,11 +471,11 @@ fn opencode_row_email(pool: Pool, label: &str, value: &Value) -> Option<String> 
         .and_then(Value::as_str)
         .and_then(|access| match pool {
             Pool::Codex => {
-                let claims = auth::decode_jwt_payload(access).ok()?;
-                auth::jwt_openai_email(&claims)
+                let claims = codex::decode_jwt_payload(access).ok()?;
+                codex::jwt_openai_email(&claims)
             }
             Pool::Grok => non_empty_trimmed(
-                crate::grok::login::claims(access)
+                crate::pool_login::grok::claims(access)
                     .get("email")
                     .and_then(Value::as_str),
             )
@@ -494,11 +498,11 @@ fn opencode_row_account_id(pool: Pool, value: &Value) -> Option<String> {
         let access = value.get("access").and_then(Value::as_str)?;
         match pool {
             Pool::Codex => {
-                let claims = auth::decode_jwt_payload(access).ok()?;
-                auth::jwt_chatgpt_account_id(&claims)
+                let claims = codex::decode_jwt_payload(access).ok()?;
+                codex::jwt_chatgpt_account_id(&claims)
             }
             Pool::Grok => non_empty_trimmed(
-                crate::grok::login::claims(access)
+                crate::pool_login::grok::claims(access)
                     .get("sub")
                     .and_then(Value::as_str),
             ),
@@ -960,8 +964,8 @@ fn omp_extract_row_email(data: &Value) -> Option<String> {
     non_empty_trimmed(data.get("email").and_then(Value::as_str))
         .or_else(|| {
             let access = data.get("access").and_then(Value::as_str)?;
-            let claims = auth::decode_jwt_payload(access).ok()?;
-            auth::jwt_openai_email(&claims)
+            let claims = codex::decode_jwt_payload(access).ok()?;
+            codex::jwt_openai_email(&claims)
         })
         .map(|email| email.to_ascii_lowercase())
 }
@@ -972,11 +976,11 @@ fn omp_extract_row_email(data: &Value) -> Option<String> {
 fn omp_extract_row_account_id(data: &Value) -> Option<String> {
     non_empty_trimmed(data.get("accountId").and_then(Value::as_str)).or_else(|| {
         let access = data.get("access").and_then(Value::as_str)?;
-        let claims = auth::decode_jwt_payload(access).ok()?;
+        let claims = codex::decode_jwt_payload(access).ok()?;
         ["account_id", "accountId", "user_id", "sub"]
             .into_iter()
             .find_map(|key| non_empty_trimmed(claims.get(key).and_then(Value::as_str)))
-            .or_else(|| auth::jwt_chatgpt_account_id(&claims))
+            .or_else(|| codex::jwt_chatgpt_account_id(&claims))
     })
 }
 
@@ -2814,7 +2818,7 @@ mod tests {
             }
         });
 
-        let extracted = auth::extract_codex_oauth_tokens(&auth).unwrap();
+        let extracted = codex::extract_codex_oauth_tokens(&auth).unwrap();
         assert_eq!(extracted.email.as_deref(), Some("id-profile@example.com"));
 
         sync_omp(&auth, std::slice::from_ref(&db_path)).unwrap();

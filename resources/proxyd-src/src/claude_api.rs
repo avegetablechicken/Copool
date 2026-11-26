@@ -2,6 +2,7 @@
 //! remote daemon: token renewal and the usage of a login.
 #![allow(dead_code)]
 use crate::models::{ResetGrant, ResetKind, UsageSnapshot, UsageWindow};
+use crate::pool_login::claude::{apply_tokens, plan, refresh_scope};
 use crate::utils::now_unix_seconds;
 use serde_json::{json, Value};
 
@@ -99,55 +100,12 @@ pub(crate) async fn refresh_at(
     .to_owned())
 }
 
-/// The space-separated scopes recorded on `oauth["scopes"]`, if any.
-pub(crate) fn granted_scope(oauth: &Value) -> Option<String> {
-    let scopes: Vec<&str> = oauth["scopes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|scope| !scope.is_empty())
-        .collect();
-    (!scopes.is_empty()).then(|| scopes.join(" "))
-}
-
-/// The scopes a login was granted, as Claude Code asks for them on renewal;
-/// the default ones for a login that records none.
-pub(crate) fn refresh_scope(oauth: &Value) -> String {
-    granted_scope(oauth).unwrap_or_else(|| SCOPES.into())
-}
-
 pub(crate) fn text(value: &Value) -> Option<String> {
     value
         .as_str()
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
-}
-
-pub(crate) fn expires_at_ms(oauth: &Value) -> Option<i64> {
-    oauth
-        .get("expiresAt")
-        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|ms| ms as i64)))
-}
-
-pub(crate) fn expires_at(oauth: &Value) -> i64 {
-    expires_at_ms(oauth).unwrap_or(0)
-}
-
-/// "max 20x" from the subscription and its rate limit tier.
-pub(crate) fn plan(oauth: &Value) -> Option<String> {
-    let subscription = text(&oauth["subscriptionType"])?.to_lowercase();
-    let multiplier = text(&oauth["rateLimitTier"]).and_then(|tier| {
-        tier.split(|c: char| !c.is_ascii_alphanumeric())
-            .find(|p| p.ends_with('x') && p[..p.len() - 1].parse::<u32>().is_ok())
-            .map(str::to_owned)
-    });
-    Some(match multiplier {
-        Some(m) => format!("{subscription} {m}"),
-        None => subscription,
-    })
 }
 
 /// A number, or a string of one; never NaN or infinite, which a string
@@ -367,28 +325,6 @@ pub(crate) fn banked_resets(block: &Value, now: i64) -> Option<(i64, Vec<i64>, V
     Some((count, expiries, inventory))
 }
 
-/// Applies a token response to a `claudeAiOauth` entry.
-pub(crate) fn apply_tokens(oauth: &mut Value, tokens: &Value, now_ms: i64) -> Result<()> {
-    let access = text(&tokens["access_token"]).ok_or("Claude returned no access token")?;
-    oauth["accessToken"] = access.into();
-    if let Some(refresh) = text(&tokens["refresh_token"]) {
-        oauth["refreshToken"] = refresh.into();
-    }
-    // Saturating: a lifetime too long for the clock is as good as forever.
-    let at = |seconds: f64| now_ms.saturating_add((seconds * 1000.0) as i64);
-    if let Some(seconds) = number(&tokens["expires_in"]) {
-        oauth["expiresAt"] = at(seconds).into();
-    }
-    if let Some(scope) = text(&tokens["scope"]) {
-        oauth["scopes"] = scope.split_whitespace().collect::<Vec<_>>().into();
-    }
-    // Claude Code records when the refresh token itself expires.
-    if let Some(seconds) = number(&tokens["refresh_token_expires_in"]) {
-        oauth["refreshTokenExpiresAt"] = at(seconds).into();
-    }
-    Ok(())
-}
-
 /// The HTTP status and body of the OAuth usage endpoint, with the seconds of
 /// a `Retry-After` header and the server clock's offset.
 pub(crate) type UsageResponse = (u16, Value, Option<u64>, Option<i64>);
@@ -433,12 +369,6 @@ pub(crate) async fn renew(oauth: &mut Value, proxy: &str) -> Result<()> {
     let token = text(&oauth["refreshToken"]).ok_or(SIGN_IN_EXPIRED)?;
     let tokens = refresh_at(TOKEN_URL, &token, &refresh_scope(oauth), proxy).await?;
     apply_tokens(oauth, &tokens, now_unix_seconds() * 1000)
-}
-/// Whether `a` is a later generation of the same login than `b`.
-pub(crate) fn newer_login(a: &Value, b: &Value) -> bool {
-    text(&a["accessToken"]).is_some()
-        && text(&a["refreshToken"]) != text(&b["refreshToken"])
-        && expires_at(a) > expires_at(b)
 }
 /// A login's usage, asked as Claude Code asks: as `claude-cli/…`, else as
 /// `claude-code/…` when the endpoint refuses that agent.

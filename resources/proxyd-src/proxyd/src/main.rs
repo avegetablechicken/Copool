@@ -14,6 +14,8 @@ mod auth;
 mod claude_api;
 #[path = "../../src/models.rs"]
 mod models;
+#[path = "../../src/pool_login/mod.rs"]
+mod pool_login;
 #[path = "../../src/proxy_daemon.rs"]
 mod proxy_daemon;
 #[path = "../../src/proxy_service.rs"]

@@ -1,8 +1,8 @@
 use crate::{
-    auth::{self, newer_login},
     models::*,
     persistence::write_json,
     pool::Pool,
+    pool_login::codex::{self, newer_login},
     proxy_service,
     state::AppState,
     store,
@@ -686,7 +686,7 @@ impl Application {
         let mut store = store::load_store_from_path(&self.paths.store())?;
         let before = serde_json::to_value(&store).map_err(|e| e.to_string())?;
         for account in &mut store.accounts {
-            if let Ok(extracted) = auth::extract_auth(&account.auth_json) {
+            if let Ok(extracted) = codex::extract_auth(&account.auth_json) {
                 account.account_id = extracted.account_id;
                 if extracted.email.is_some() {
                     account.email = extracted.email;
@@ -759,7 +759,7 @@ impl Application {
                 // adopts it, that token's expiry is the one in effect.
                 if let Some(live) = live.as_ref().filter(|l| newer_login(l, &a.auth_json)) {
                     summary.token_expires_at =
-                        auth::access_token_expiry(live).and_then(crate::models::displayed_expiry);
+                        codex::access_token_expiry(live).and_then(crate::models::displayed_expiry);
                 }
                 summary
             })
@@ -821,9 +821,10 @@ impl Application {
         let now = now_unix_seconds();
         let mut incoming = Vec::new();
         for entry in entries {
-            let document =
-                auth::normalize_imported_auth_json(entry.get("authJson").unwrap_or(&entry).clone());
-            let extracted = auth::extract_auth(&document)?;
+            let document = codex::normalize_imported_auth_json(
+                entry.get("authJson").unwrap_or(&entry).clone(),
+            );
+            let extracted = codex::extract_auth(&document)?;
             if extracted.access_token.trim().is_empty() || extracted.account_id.trim().is_empty() {
                 return Err("Empty access token or account ID".into());
             }
@@ -1008,7 +1009,7 @@ impl Application {
         if !account.is_available() {
             return Err("Account is deactivated or hidden".into());
         }
-        let normalized = auth::normalized_auth_for_write(account.auth_json.clone())?;
+        let normalized = codex::normalized_auth_for_write(account.auth_json.clone())?;
         let previous = self.current_auth()?;
         if let Some(previous) = &previous {
             write_json(
@@ -1052,7 +1053,7 @@ impl Application {
             .find(|a| a.id == id)
             .ok_or("Account not found")?;
         Ok(account.usage_error.is_some()
-            || auth::access_token_expiry(&account.auth_json)
+            || codex::access_token_expiry(&account.auth_json)
                 .is_some_and(|at| at <= now_unix_seconds()))
     }
     /// One hi with this account's login, without switching to it.
@@ -1081,7 +1082,7 @@ impl Application {
             .flatten()
             .filter(|live| newer_login(live, &account.auth_json));
         let auth = live.as_ref().unwrap_or(&account.auth_json);
-        let expired = auth::access_token_expiry(auth).is_some_and(|at| at <= now_unix_seconds());
+        let expired = codex::access_token_expiry(auth).is_some_and(|at| at <= now_unix_seconds());
         let result = if expired {
             Err("Provided authentication token is expired".into())
         } else {
@@ -1233,7 +1234,7 @@ impl Application {
                     {
                         target.auth_json = auth.clone();
                     }
-                    let extracted = crate::auth::extract_auth(auth)?;
+                    let extracted = crate::pool_login::codex::extract_auth(auth)?;
                     if let Some(name) = extracted.team_name {
                         target.extra.insert("teamName".into(), name.into());
                     }
@@ -1315,12 +1316,12 @@ impl Application {
         if let Some(auth) = live_write.filter(|auth| kept(auth)) {
             let renewable = self.current_auth().ok().flatten().is_some_and(|disk| {
                 identity(&disk).ok() == identity(auth).ok()
-                    && auth::renewal_replaces(auth, auth_json, &disk)
+                    && codex::renewal_replaces(auth, auth_json, &disk)
             });
             if renewable {
                 write_json(
                     &self.paths.codex_auth,
-                    &crate::auth::normalized_auth_for_write(auth.clone())?,
+                    &crate::pool_login::codex::normalized_auth_for_write(auth.clone())?,
                 )?;
             }
         }
@@ -1451,7 +1452,7 @@ fn validate_proxy(value: &str) -> Result<()> {
 }
 
 fn identity(document: &Value) -> Result<(String, String)> {
-    auth::account_identity(document)
+    codex::account_identity(document)
 }
 
 /// Whether automatic switching may choose this card: available, fresh and

@@ -5,13 +5,17 @@ use crate::{
     account_network::Response,
     application::{Application, SwitchExecution},
     claude_api::{
-        apply_tokens, expires_at, number, plan, refresh_at, refresh_scope, request_error, reset_at,
-        text, usage_snapshot, UsageResponse, API_ROOT, SIGN_IN_EXPIRED, TOKEN_REFRESH_RATE_LIMITED,
-        USAGE_USER_AGENT, USER_AGENT,
+        number, refresh_at, request_error, reset_at, text, usage_snapshot, UsageResponse, API_ROOT,
+        SIGN_IN_EXPIRED, TOKEN_REFRESH_RATE_LIMITED, USAGE_USER_AGENT, USER_AGENT,
     },
     models::{AccountSummary, CreditSnapshot, Renewal, UsageSnapshot},
     persistence::write_json,
     pool::{Hello, Pool, PoolAccount},
+    pool_login::claude::{
+        apply_tokens, expires_at, exported_oauth, identity, label_of, merged_oauth,
+        parse_credentials, plan, profile_account, refresh_scope, same_login, same_oauth_generation,
+        same_tokens,
+    },
     utils::now_unix_seconds,
 };
 use serde::{Deserialize, Serialize};
@@ -759,13 +763,6 @@ impl Live {
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
-fn identity(account: &Value) -> Option<String> {
-    let account_id = text(&account["accountUuid"])?;
-    Some(format!(
-        "{account_id}|{}",
-        text(&account["organizationUuid"]).unwrap_or_default()
-    ))
-}
 fn is_zero(count: &u32) -> bool {
     *count == 0
 }
@@ -777,12 +774,6 @@ fn fingerprint(oauth: &Value) -> Option<String> {
     let token = text(&oauth["refreshToken"]).or_else(|| text(&oauth["accessToken"]))?;
     Some(hex(&Sha256::digest(token.as_bytes()))[..16].to_owned())
 }
-/// Both tokens are the same.
-fn same_login(a: &Value, b: &Value) -> bool {
-    ["accessToken", "refreshToken"]
-        .iter()
-        .all(|key| text(&a[key]) == text(&b[key]))
-}
 fn push_alternate(alternates: &mut Vec<Value>, oauth: Value) {
     // A generation without tokens (unread from the vault) is no alternate.
     let Some(print) = fingerprint(&oauth).map(Some) else {
@@ -791,18 +782,6 @@ fn push_alternate(alternates: &mut Vec<Value>, oauth: Value) {
     alternates.retain(|a| fingerprint(a) != print);
     alternates.insert(0, oauth);
     alternates.truncate(MAX_ALTERNATES);
-}
-fn same_tokens(a: &Value, b: &Value) -> bool {
-    ["accessToken", "refreshToken"]
-        .iter()
-        .any(|key| text(&a[key]).is_some_and(|token| text(&b[key]) == Some(token)))
-}
-/// A card's name: the email, else the display name, else Claude Code for a
-/// login not yet identified.
-fn label_of(account: &Value) -> String {
-    text(&account["emailAddress"])
-        .or_else(|| text(&account["displayName"]))
-        .unwrap_or_else(|| "Claude Code".into())
 }
 /// Folds an account just identified into the pool's card for the same
 /// account: the newer tokens and this usage stay, as does the selection.
@@ -840,23 +819,6 @@ fn merge_identified(store: &mut Store, id: &str) {
     if store.current_account_id.as_deref() == Some(id) {
         store.current_account_id = Some(existing.id.clone());
     }
-}
-/// The credentials document, as JSON or the hexadecimal Keychain encoding.
-fn parse_credentials(bytes: &[u8]) -> Option<Value> {
-    let text = std::str::from_utf8(bytes).ok()?.trim();
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .or_else(|| {
-            if text.len() % 2 != 0 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return None;
-            }
-            let decoded = (0..text.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok())
-                .collect::<Option<Vec<_>>>()?;
-            serde_json::from_slice(&decoded).ok()
-        })
-        .filter(Value::is_object)
 }
 
 /// What extra usage has left, as Claude Code counts it: the smaller of the
@@ -946,55 +908,6 @@ pub(crate) fn sub2api_usage(body: &Value, now: i64) -> Result<UsageSnapshot> {
     }
     let plan = text(&body["subscription_tier"]).map(|t| t.to_lowercase());
     usage_snapshot(&body, plan, now)
-}
-/// `oauthAccount` and the subscription from the OAuth profile, else from the
-/// account and organization of a token response.
-fn profile_account(
-    profile: Option<&Value>,
-    tokens: &Value,
-) -> (Value, Option<String>, Option<String>) {
-    let mut account = serde_json::Map::new();
-    let mut put = |key: &str, value: Option<Value>| {
-        if let Some(value) = value.filter(|v| !v.is_null()) {
-            account.insert(key.into(), value);
-        }
-    };
-    let (subscription, tier);
-    if let Some(p) = profile {
-        put("accountUuid", p["account"].get("uuid").cloned());
-        put("emailAddress", p["account"].get("email").cloned());
-        put("organizationUuid", p["organization"].get("uuid").cloned());
-        put("organizationName", p["organization"].get("name").cloned());
-        put("displayName", p["account"].get("display_name").cloned());
-        put(
-            "billingType",
-            p["organization"].get("billing_type").cloned(),
-        );
-        put(
-            "hasExtraUsageEnabled",
-            p["organization"].get("has_extra_usage_enabled").cloned(),
-        );
-        subscription = text(&p["organization"]["organization_type"])
-            .map(|t| t.strip_prefix("claude_").unwrap_or(&t).to_owned());
-        tier = text(&p["organization"]["rate_limit_tier"]);
-    } else {
-        put("accountUuid", tokens["account"].get("uuid").cloned());
-        put(
-            "emailAddress",
-            tokens["account"].get("email_address").cloned(),
-        );
-        put(
-            "organizationUuid",
-            tokens["organization"].get("uuid").cloned(),
-        );
-        put(
-            "organizationName",
-            tokens["organization"].get("name").cloned(),
-        );
-        subscription = None;
-        tier = None;
-    }
-    (Value::Object(account), subscription, tier)
 }
 
 /// Replaces or adds a top-level member of a JSON object and keeps the rest of
@@ -1215,20 +1128,6 @@ async fn sync_live(location: &Location, seen: &Live, oauth: &Value) -> Result<()
     .await
 }
 
-/// `oauth` over the members a live login keeps beside it.
-fn merged_oauth(live: Option<&Value>, oauth: &Value) -> Value {
-    let mut merged = live
-        .filter(|live| live.is_object())
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    if let (Some(target), Some(source)) = (merged.as_object_mut(), oauth.as_object()) {
-        for (key, value) in source {
-            target.insert(key.clone(), value.clone());
-        }
-    }
-    merged
-}
-
 fn written_keychain(location: &Location, held: Option<Held>) -> Option<&String> {
     location
         .keychain
@@ -1324,13 +1223,6 @@ fn follow_live(store: &mut Store, live: Option<&Live>) -> bool {
         changed |= store.accounts[i].adopt(oauth, true);
     }
     changed
-}
-
-// Compare only the credential generation, not unrelated profile/MCP metadata.
-fn same_oauth_generation(a: &Value, b: &Value) -> bool {
-    ["accessToken", "refreshToken", "expiresAt"]
-        .iter()
-        .all(|key| a[*key] == b[*key])
 }
 
 fn live_generation_changed(before: Option<&Live>, after: Option<&Live>) -> bool {
@@ -1876,18 +1768,7 @@ impl Application {
         let invalid = "error.claude.credentials_json_invalid";
         let document: Value =
             serde_json::from_str(content.trim_start_matches('\u{feff}')).map_err(|_| invalid)?;
-        let oauth = document.get("claudeAiOauth").unwrap_or(&document);
-        if !oauth.is_object()
-            || text(&oauth["accessToken"]).is_none()
-            || oauth.get("refreshToken").is_some_and(|v| text(v).is_none())
-            || oauth.get("expiresAt").is_some_and(|v| v.as_i64().is_none())
-            || oauth.get("scopes").is_some_and(|v| {
-                v.as_array()
-                    .is_none_or(|items| items.iter().any(|v| !v.is_string()))
-            })
-        {
-            return Err(invalid.into());
-        }
+        let oauth = exported_oauth(&document).ok_or(invalid)?;
         let live = Live {
             account: document
                 .get("oauthAccount")
@@ -4143,27 +4024,6 @@ mod tests {
                     "scope": scope,
                 })
             );
-        }
-    }
-
-    #[test]
-    fn renewal_asks_again_for_the_scopes_the_login_holds() {
-        let default = crate::claude_api::SCOPES;
-        assert_eq!(
-            refresh_scope(&json!({"scopes": ["user:inference", "user:profile"]})),
-            "user:inference user:profile"
-        );
-        assert_eq!(
-            refresh_scope(&json!({"scopes": [" user:inference ", "", 7]})),
-            "user:inference"
-        );
-        for oauth in [
-            json!({}),
-            json!({"scopes": []}),
-            json!({"scopes": "user:inference"}),
-            json!({"scopes": [""]}),
-        ] {
-            assert_eq!(refresh_scope(&oauth), default, "{oauth}");
         }
     }
 
@@ -7622,13 +7482,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(location.account_file(), location.global_config);
-    }
-
-    #[test]
-    fn credentials_accept_the_hexadecimal_keychain_form() {
-        let document = json!({"claudeAiOauth": {"accessToken": "t"}});
-        let encoded = hex(&serde_json::to_vec(&document).unwrap());
-        assert_eq!(parse_credentials(encoded.as_bytes()), Some(document));
     }
 
     /// An Anthropic API stand-in: it records each request (path and query,

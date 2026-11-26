@@ -55,7 +55,9 @@ fn pool() -> Value {
 fn current(app: &crate::Application) -> String {
     let document: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
-    crate::auth::extract_auth(&document).unwrap().account_id
+    crate::pool_login::codex::extract_auth(&document)
+        .unwrap()
+        .account_id
 }
 #[tokio::test]
 async fn testAccountsPageSmartSwitchUpdatesCurrentStateAndAuth() {

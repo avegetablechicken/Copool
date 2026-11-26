@@ -1,8 +1,9 @@
 use crate::{
     application::Paths,
-    auth, codex_config,
+    codex_config,
     models::{CurrentAccountSelection, StoredAccount},
     persistence::write_json,
+    pool_login::codex,
     repository,
     utils::now_unix_seconds,
 };
@@ -305,8 +306,8 @@ pub(crate) fn select(paths: &Paths, id: &str, auth_json: &Value) -> Result<bool,
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     let same_identity = current_auth
         .as_ref()
-        .and_then(|v| auth::account_identity(v).ok())
-        == auth::account_identity(auth_json).ok();
+        .and_then(|v| codex::account_identity(v).ok())
+        == codex::account_identity(auth_json).ok();
     if before.extra.get("currentAccountId").and_then(Value::as_str) == Some(id)
         && codex_config::resolve_path(&config).is_official()
         && same_identity
@@ -320,7 +321,7 @@ pub(crate) fn select(paths: &Paths, id: &str, auth_json: &Value) -> Result<bool,
         if !codex_config::resolve_path(&config).is_official() {
             codex_config::switch(&config, "openai")?;
         }
-        let mut normalized = auth::normalized_auth_for_write(auth_json.clone())?;
+        let mut normalized = codex::normalized_auth_for_write(auth_json.clone())?;
         if normalized.get("OPENAI_API_KEY").is_none_or(Value::is_null) {
             if let Some(key) = current_auth
                 .as_ref()
@@ -367,12 +368,12 @@ pub(crate) fn sync_refreshed_auth(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.to_string()),
     };
-    if auth::account_identity(&current).ok() != auth::account_identity(auth_json).ok()
-        || !auth::renewal_replaces(auth_json, from, &current)
+    if codex::account_identity(&current).ok() != codex::account_identity(auth_json).ok()
+        || !codex::renewal_replaces(auth_json, from, &current)
     {
         return Ok(());
     }
-    let mut next = auth::normalized_auth_for_write(auth_json.clone())?;
+    let mut next = codex::normalized_auth_for_write(auth_json.clone())?;
     if let Some(key) = current.get("OPENAI_API_KEY").filter(|v| !v.is_null()) {
         next["OPENAI_API_KEY"] = key.clone();
     }

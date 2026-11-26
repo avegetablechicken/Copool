@@ -283,7 +283,7 @@ pub(crate) fn adopt_newer_logins(
     for account in accounts {
         if let Some(newer) = remote
             .iter()
-            .find(|auth| crate::auth::newer_login(auth, &account.auth_json))
+            .find(|auth| crate::pool_login::codex::newer_login(auth, &account.auth_json))
         {
             account.auth_json = (*newer).clone();
             adopted = true;
@@ -301,11 +301,10 @@ pub(crate) fn accounts_payload(
     let loaded = crate::store::load_store_from_path(path)?;
     let mut merged: Vec<crate::models::StoredAccount> = Vec::new();
     for incoming in loaded.accounts {
-        let key = crate::auth::account_identity(&incoming.auth_json).ok();
-        if let Some(old) = merged
-            .iter_mut()
-            .find(|a| key.is_some() && crate::auth::account_identity(&a.auth_json).ok() == key)
-        {
+        let key = crate::pool_login::codex::account_identity(&incoming.auth_json).ok();
+        if let Some(old) = merged.iter_mut().find(|a| {
+            key.is_some() && crate::pool_login::codex::account_identity(&a.auth_json).ok() == key
+        }) {
             if incoming.updated_at > old.updated_at {
                 *old = incoming;
             }
@@ -318,7 +317,7 @@ pub(crate) fn accounts_payload(
     }
     if !merged
         .iter()
-        .any(|a| crate::auth::extract_auth(&a.auth_json).is_ok())
+        .any(|a| crate::pool_login::codex::extract_auth(&a.auth_json).is_ok())
     {
         return Err("No usable accounts for remote deployment".into());
     }
