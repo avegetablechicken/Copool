@@ -34,3 +34,17 @@ python3 scripts/build_rust_desktop.py > /tmp/copool-app-bundle-build.log 2>&1
 - Never search raw source with LF-only boundaries such as `indexOf("\n}\n")`. Check that start and end markers were found before slicing or evaluating extracted code; otherwise CRLF can silently produce an empty snippet and misleading errors such as `... is not a function`.
 - When adding or changing source-reading tests, verify them with both LF and CRLF input. For UI tests, run the suite against a temporary copy with the UI source files converted to CRLF; do not rewrite the working tree or change global Git settings. A passing macOS run alone does not establish Windows compatibility.
 - For Windows-only CI test failures, check line-ending assumptions early. This has repeatedly affected `desktop/tests`, including the reset-inventory function-extraction tests; do not fix it by skipping Windows tests or weakening assertions.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues on the fork `avegetablechicken/Copool` (not upstream `AlickH/Copool`), using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels are used as-is (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` and `docs/adr/`, both created lazily. See `docs/agents/domain.md`.
