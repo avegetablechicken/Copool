@@ -172,31 +172,39 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
   );
   const en = localeScope.window.COPOOL_LOCALES.en;
   const scope = {
+    P,
     pool: "codex",
     tr: (key, ...args) => P.formatLocalized(en[key] ?? key, args),
   };
   vm.runInNewContext(snippet, scope);
   assert.equal(typeof scope.switchNotice, "function");
 
+  // The agents the core synced, in its order; an unknown one says nothing.
   const ok = scope.switchNotice({
-    opencodeSynced: true,
-    piSynced: true,
-    ompSynced: true,
+    agentSync: [
+      { agent: "opencode", error: null },
+      { agent: "pi", error: null },
+      { agent: "omp", error: null },
+      { agent: "later", error: null },
+    ],
     restartedEditors: [],
   });
   assert.equal(ok.error, false);
-  assert.match(ok.text, /OpenCode auth synced/);
-  assert.match(ok.text, /Pi auth synced/);
-  assert.match(ok.text, /omp auth synced/);
+  assert.match(ok.text, /OpenCode auth synced.*Pi auth synced.*omp auth synced/s);
 
   const err = scope.switchNotice({
-    piSyncError: "disk full",
-    ompSyncError: "database locked",
+    agentSync: [
+      { agent: "pi", error: "disk full" },
+      { agent: "omp", error: "database locked" },
+    ],
     restartedEditors: [],
   });
   assert.equal(err.error, true);
   assert.match(err.text, /Pi sync failed: disk full/);
   assert.match(err.text, /omp sync failed: database locked/);
+  assert.doesNotMatch(err.text, /OpenCode/);
+  // No agent synced: none is mentioned.
+  assert.doesNotMatch(scope.switchNotice({ restartedEditors: [] }).text, /sync/);
 });
 
 test("SettingsControlPresentationTests.testAgentSyncRowsChooseEveryPoolUnlessSavedOff", () => {
@@ -206,13 +214,12 @@ test("SettingsControlPresentationTests.testAgentSyncRowsChooseEveryPoolUnlessSav
     { id: "unknown", pools: ["codex"] },
   ];
   const rows = P.agentSyncRows(
-    { syncOpencodeOpenaiAuth: true, syncPools: { opencode: { grok: false } } },
+    { agentSync: { opencode: { enabled: true, pools: { grok: false } } } },
     agents,
   );
   assert.deepEqual(rows, [
     {
       id: "opencode",
-      preference: "syncOpencodeOpenaiAuth",
       enabled: true,
       target: "~/.config/opencode/auth.json",
       found: true,
@@ -223,7 +230,6 @@ test("SettingsControlPresentationTests.testAgentSyncRowsChooseEveryPoolUnlessSav
     },
     {
       id: "omp",
-      preference: "syncOmpAuth",
       enabled: false,
       target: null,
       found: false,
@@ -232,19 +238,28 @@ test("SettingsControlPresentationTests.testAgentSyncRowsChooseEveryPoolUnlessSav
   ]);
 });
 test("SettingsControlPresentationTests.testToggleAgentSyncPoolKeepsOtherAgentsAndPools", () => {
+  const all = { codex: true, claude: true, antigravity: true, grok: true };
   const settings = {
-    syncPools: {
-      opencode: { codex: true, claude: true, antigravity: true, grok: true },
-      pi: { codex: false, claude: true, antigravity: true, grok: true },
+    agentSync: {
+      opencode: { enabled: true, pools: all },
+      pi: { enabled: false, pools: { ...all, codex: false } },
     },
   };
-  assert.deepEqual(P.toggleAgentSyncPool(settings, "opencode", "grok").syncPools, {
-    opencode: { codex: true, claude: true, antigravity: true, grok: false },
-    pi: { codex: false, claude: true, antigravity: true, grok: true },
+  assert.deepEqual(P.toggleAgentSyncPool(settings, "opencode", "grok").agentSync, {
+    opencode: { enabled: true, pools: { ...all, grok: false } },
+    pi: { enabled: false, pools: { ...all, codex: false } },
   });
-  assert.equal(P.toggleAgentSyncPool(settings, "pi", "codex").syncPools.pi.codex, true);
+  assert.equal(P.toggleAgentSyncPool(settings, "pi", "codex").agentSync.pi.pools.codex, true);
   // A selection not saved yet starts from every pool chosen.
   assert.deepEqual(P.toggleAgentSyncPool({}, "omp", "claude"), {
-    syncPools: { omp: { claude: false } },
+    agentSync: { omp: { pools: { claude: false } } },
   });
+  // A switch keeps the agent's pools and the other agents.
+  assert.deepEqual(P.setAgentSync(settings, "pi", true).agentSync, {
+    opencode: { enabled: true, pools: all },
+    pi: { enabled: true, pools: { ...all, codex: false } },
+  });
+  assert.deepEqual(P.agentSync({}, "omp"), { enabled: false, pools: {} });
+  assert.equal(P.agentSync(settings, "opencode").enabled, true);
 });
+

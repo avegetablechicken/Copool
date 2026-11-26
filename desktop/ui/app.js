@@ -3040,30 +3040,11 @@ function switchNotice(execution) {
       ),
     );
   }
-  for (const [synced, syncError, doneKey, failedKey] of [
-    [
-      "opencodeSynced",
-      "opencodeSyncError",
-      "accounts.notice.sync_done",
-      "accounts.notice.sync_failed_format",
-    ],
-    [
-      "piSynced",
-      "piSyncError",
-      "accounts.notice.pi_sync_done",
-      "accounts.notice.pi_sync_failed_format",
-    ],
-    [
-      "ompSynced",
-      "ompSyncError",
-      "accounts.notice.omp_sync_done",
-      "accounts.notice.omp_sync_failed_format",
-    ],
-  ]) {
-    if (execution[syncError]) {
-      error = true;
-      segments.push(tr(failedKey, execution[syncError]));
-    } else if (execution[synced]) segments.push(tr(doneKey));
+  for (const outcome of execution.agentSync || []) {
+    const message = P.agentSyncNotice(outcome);
+    if (!message) continue;
+    if (message.error) error = true;
+    segments.push(tr(message.key, ...message.args));
   }
   if (execution.editorRestartError) {
     error = true;

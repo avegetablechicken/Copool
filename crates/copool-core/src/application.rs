@@ -1,6 +1,7 @@
 use crate::{
     models::*,
     persistence::write_json,
+    platform::SyncAgent,
     pool::Pool,
     pool_login::{
         codex::{self, newer_login},
@@ -13,7 +14,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 type Result<T> = std::result::Result<T, String>;
@@ -69,12 +70,8 @@ pub struct Preferences {
     pub theme: String,
     pub launch_at_startup: bool,
     pub launch_codex_after_switch: bool,
-    pub sync_opencode_openai_auth: bool,
-    pub sync_pi_auth: bool,
-    pub sync_omp_auth: bool,
-    /// The pools each third-party agent receives the switched-to login of,
-    /// while its sync is on.
-    pub sync_pools: SyncPools,
+    /// Each third-party agent's sync, every one of them listed.
+    pub agent_sync: BTreeMap<SyncAgent, AgentSync>,
     pub host_api_only: bool,
     pub restart_editors_on_switch: bool,
     pub restart_editor_targets: Vec<String>,
@@ -101,13 +98,13 @@ pub struct AccountOrder {
     pub antigravity: Vec<String>,
     pub grok: Vec<String>,
 }
-/// Each third-party agent's pool selection.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// A third-party agent's sync: whether a switch hands it the login
+/// switched to, and in which pools.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct SyncPools {
-    pub opencode: PoolSelection,
-    pub pi: PoolSelection,
-    pub omp: PoolSelection,
+pub struct AgentSync {
+    pub enabled: bool,
+    pub pools: PoolSelection,
 }
 /// Pools chosen for one agent; a pool missing from the saved value is chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -153,10 +150,10 @@ impl Default for Preferences {
             theme: "system".into(),
             launch_at_startup: false,
             launch_codex_after_switch: true,
-            sync_opencode_openai_auth: false,
-            sync_pi_auth: false,
-            sync_omp_auth: false,
-            sync_pools: SyncPools::default(),
+            agent_sync: SyncAgent::ALL
+                .into_iter()
+                .map(|agent| (agent, AgentSync::default()))
+                .collect(),
             host_api_only: false,
             restart_editors_on_switch: false,
             restart_editor_targets: vec![],
@@ -168,23 +165,50 @@ impl Default for Preferences {
     }
 }
 
+/// Early Rust preferences kept each agent's switch under its own key and
+/// the agents' pools in `syncPools`; they are read as `agentSync`.
+fn key_agent_sync(object: &mut serde_json::Map<String, Value>) {
+    let pools = object.remove("syncPools");
+    let mut agent_sync = serde_json::Map::new();
+    for agent in SyncAgent::ALL {
+        let mut sync = serde_json::Map::new();
+        if let Some(on) = object.remove(agent.switch_key()) {
+            sync.insert("enabled".into(), on);
+        }
+        if let Some(chosen) = pools.as_ref().and_then(|pools| pools.get(agent.id())) {
+            sync.insert("pools".into(), chosen.clone());
+        }
+        if !sync.is_empty() {
+            agent_sync.insert(agent.id().into(), sync.into());
+        }
+    }
+    if !agent_sync.is_empty() {
+        object
+            .entry("agentSync")
+            .or_insert_with(|| agent_sync.into());
+    }
+}
+
 /// What followed a switch, as Swift's SwitchAccountExecutionResult.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SwitchExecution {
     /// The Codex provider switched to, for an unofficial provider's card.
     pub provider: Option<String>,
-    pub opencode_synced: bool,
-    pub opencode_sync_error: Option<String>,
-    pub pi_synced: bool,
-    pub pi_sync_error: Option<String>,
-    pub omp_synced: bool,
-    pub omp_sync_error: Option<String>,
+    /// Each agent the login was handed to, in [`SyncAgent::ALL`]'s order.
+    pub agent_sync: Vec<AgentSyncOutcome>,
     pub restarted_editors: Vec<String>,
     pub editor_restart_error: Option<String>,
     pub launch_error: Option<String>,
     /// Claude Code settings that bypass the switched-to account login.
     pub login_overrides: Vec<String>,
+}
+/// An agent's sync after a switch: written, or why not.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSyncOutcome {
+    pub agent: SyncAgent,
+    pub error: Option<String>,
 }
 /// Smart Switch: no target, already on the best account, or switched.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -209,6 +233,23 @@ type SwitchEffect = Arc<
 >;
 impl Preferences {
     fn from_settings(settings: crate::settings::Settings) -> Result<Self> {
+        let agent_sync = SyncAgent::ALL
+            .into_iter()
+            .map(|agent| {
+                let sync = AgentSync {
+                    enabled: agent.stored_switch(&settings),
+                    // A selection this build cannot read keeps every
+                    // pool chosen.
+                    pools: settings
+                        .extra
+                        .get("syncPools")
+                        .and_then(|pools| pools.get(agent.id()))
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default(),
+                };
+                (agent, sync)
+            })
+            .collect();
         let port = |name: &str, default| match settings.extra.get(name) {
             None => Ok(default),
             Some(port) => port
@@ -248,25 +289,7 @@ impl Preferences {
                 .into(),
             launch_at_startup: settings.launch_at_startup,
             launch_codex_after_switch: settings.launch_codex_after_switch,
-            sync_opencode_openai_auth: settings.sync_opencode_openai_auth,
-            sync_pi_auth: settings
-                .extra
-                .get("syncPiAuth")
-                .or_else(|| settings.extra.get("syncPiOpenaiAuth"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            sync_omp_auth: settings
-                .extra
-                .get("syncOmpAuth")
-                .or_else(|| settings.extra.get("syncOmpOpenaiAuth"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            // A selection this build cannot read keeps every pool chosen.
-            sync_pools: settings
-                .extra
-                .get("syncPools")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .unwrap_or_default(),
+            agent_sync,
             host_api_only: settings.local_proxy_host_api_only,
             restart_editors_on_switch: settings.restart_editors_on_switch,
             restart_editor_targets: settings.restart_editor_targets,
@@ -573,6 +596,7 @@ impl Application {
                         // The fixed refresh interval is no longer a preference.
                         if let Some(object) = value.as_object_mut() {
                             object.remove("refreshSeconds");
+                            key_agent_sync(object);
                         }
                         serde_json::from_value(value).map_err(|e| e.to_string())
                     })
@@ -615,15 +639,16 @@ impl Application {
             .insert("claudeProxyPort".into(), p.claude_proxy_port.into());
         s.launch_at_startup = p.launch_at_startup;
         s.launch_codex_after_switch = p.launch_codex_after_switch;
-        s.sync_opencode_openai_auth = p.sync_opencode_openai_auth;
-        s.extra.remove("syncPiOpenaiAuth");
-        s.extra.remove("syncOmpOpenaiAuth");
-        s.extra.insert("syncPiAuth".into(), p.sync_pi_auth.into());
-        s.extra.insert("syncOmpAuth".into(), p.sync_omp_auth.into());
-        s.extra.insert(
-            "syncPools".into(),
-            serde_json::to_value(&p.sync_pools).unwrap_or_default(),
-        );
+        let mut pools = serde_json::Map::new();
+        for agent in SyncAgent::ALL {
+            let sync = p.agent_sync.get(&agent).copied().unwrap_or_default();
+            agent.store_switch(s, sync.enabled);
+            pools.insert(
+                agent.id().into(),
+                serde_json::to_value(sync.pools).unwrap_or_default(),
+            );
+        }
+        s.extra.insert("syncPools".into(), pools.into());
         s.extra.insert(
             "antigravityAutoStartProxy".into(),
             p.antigravity_auto_start_proxy.into(),
@@ -1997,7 +2022,8 @@ mod tests {
         // Early Rust preferences still migrate with their interval present.
         fs::write(
             data.join("preferences.json"),
-            r#"{"refreshSeconds": 10, "autoSwitch": true, "proxyPort": 9999}"#,
+            r#"{"refreshSeconds": 10, "autoSwitch": true, "proxyPort": 9999,
+                "syncOpencodeOpenaiAuth": true, "syncPools": {"opencode": {"grok": false}}}"#,
         )
         .unwrap();
         let app = Application::open(Paths {
@@ -2008,6 +2034,10 @@ mod tests {
         let preferences = app.preferences().unwrap();
         assert!(preferences.auto_switch);
         assert_eq!(preferences.proxy_port, 9999);
+        // As do its agents' syncs, kept before they were keyed by agent.
+        let opencode = preferences.agent_sync[&SyncAgent::Opencode];
+        assert!(opencode.enabled && !opencode.pools.grok && opencode.pools.codex);
+        assert!(!preferences.agent_sync[&SyncAgent::Pi].enabled);
         assert!(!fs::read_dir(&data).unwrap().any(|entry| entry
             .unwrap()
             .file_name()
@@ -2152,8 +2182,11 @@ mod tests {
         assert!(!app.stop_proxy(Pool::Codex).await.unwrap().running);
     }
 
+    /// Each agent's switch and pools round-trip through settings.json, its
+    /// switch under the key it always had; a new install has all off and
+    /// every pool chosen.
     #[tokio::test]
-    async fn pi_and_omp_sync_preferences_round_trip() {
+    async fn agent_sync_preferences_round_trip_under_their_keys() {
         let dir = tempfile::tempdir().unwrap();
         let app = Application::open(Paths {
             data_dir: dir.path().join("data"),
@@ -2161,56 +2194,74 @@ mod tests {
         })
         .unwrap();
         let initial = app.preferences().unwrap();
-        assert!(!initial.sync_pi_auth);
-        assert!(!initial.sync_omp_auth);
-
-        let mut updated = initial.clone();
-        updated.sync_pi_auth = true;
-        updated.sync_omp_auth = true;
-        app.save_preferences(updated).await.unwrap();
-
-        let reloaded = app.preferences().unwrap();
-        assert!(reloaded.sync_pi_auth);
-        assert!(reloaded.sync_omp_auth);
-    }
-
-    #[tokio::test]
-    async fn sync_pools_default_to_every_pool_and_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = Application::open(Paths {
-            data_dir: dir.path().join("data"),
-            codex_auth: dir.path().join("codex/auth.json"),
-        })
-        .unwrap();
-        let initial = app.preferences().unwrap();
-        for pool in Pool::ALL {
-            assert!(initial.sync_pools.opencode.includes(pool));
-            assert!(initial.sync_pools.pi.includes(pool));
-            assert!(initial.sync_pools.omp.includes(pool));
+        assert_eq!(
+            initial.agent_sync.keys().copied().collect::<Vec<_>>(),
+            SyncAgent::ALL
+        );
+        for (agent, sync) in &initial.agent_sync {
+            assert!(!sync.enabled, "{agent:?}");
+            for pool in Pool::ALL {
+                assert!(sync.pools.includes(pool), "{agent:?} {pool:?}");
+            }
         }
 
         let mut updated = initial.clone();
-        updated.sync_pools.omp.claude = false;
-        updated.sync_pools.opencode.grok = false;
-        app.save_preferences(updated).await.unwrap();
+        for sync in updated.agent_sync.values_mut() {
+            sync.enabled = true;
+        }
+        let omp = updated.agent_sync.get_mut(&SyncAgent::Omp).unwrap();
+        omp.pools.claude = false;
+        updated
+            .agent_sync
+            .get_mut(&SyncAgent::Opencode)
+            .unwrap()
+            .pools
+            .grok = false;
+        app.save_preferences(updated.clone()).await.unwrap();
+        assert_eq!(app.preferences().unwrap().agent_sync, updated.agent_sync);
 
-        let reloaded = app.preferences().unwrap();
-        assert!(!reloaded.sync_pools.omp.includes(Pool::Claude));
-        assert!(reloaded.sync_pools.omp.includes(Pool::Codex));
-        assert!(!reloaded.sync_pools.opencode.includes(Pool::Grok));
-        assert!(reloaded.sync_pools.pi.includes(Pool::Grok));
+        let saved: Value =
+            serde_json::from_slice(&fs::read(dir.path().join("data/settings.json")).unwrap())
+                .unwrap();
+        for key in ["syncOpencodeOpenaiAuth", "syncPiAuth", "syncOmpAuth"] {
+            assert_eq!(saved[key], true, "{key}");
+        }
+        assert_eq!(saved["syncPools"]["omp"]["claude"], false);
+        assert_eq!(saved["syncPools"]["opencode"]["grok"], false);
+        assert_eq!(saved["syncPools"]["pi"]["grok"], true);
     }
 
+    /// Switches saved under the names Pi's and omp's had are still read,
+    /// and a pool selection this build cannot read keeps every pool chosen.
     #[test]
-    fn sync_pools_tolerate_partial_and_unreadable_values() {
-        let partial: SyncPools = serde_json::from_value(json!({"pi": {"codex": false}})).unwrap();
-        assert!(!partial.pi.codex);
-        assert!(partial.pi.grok && partial.omp.claude);
+    fn agent_sync_reads_earlier_names_and_tolerates_unreadable_pools() {
+        let mut settings: crate::settings::Settings = Default::default();
+        settings
+            .extra
+            .insert("syncPiOpenaiAuth".into(), true.into());
+        settings
+            .extra
+            .insert("syncOmpOpenaiAuth".into(), true.into());
+        settings.extra.insert(
+            "syncPools".into(),
+            json!({"pi": {"codex": false}, "omp": "not a selection"}),
+        );
+        let p = Preferences::from_settings(settings).unwrap();
+        let pi = p.agent_sync[&SyncAgent::Pi];
+        assert!(pi.enabled && !pi.pools.codex && pi.pools.grok);
+        let omp = p.agent_sync[&SyncAgent::Omp];
+        assert!(omp.enabled);
+        assert_eq!(omp.pools, PoolSelection::default());
+        assert!(!p.agent_sync[&SyncAgent::Opencode].enabled);
+
         let mut settings: crate::settings::Settings = Default::default();
         settings
             .extra
             .insert("syncPools".into(), json!("not a selection"));
-        let preferences = Preferences::from_settings(settings).unwrap();
-        assert_eq!(preferences.sync_pools, SyncPools::default());
+        let p = Preferences::from_settings(settings).unwrap();
+        assert!(p
+            .agent_sync
+            .values()
+            .all(|sync| sync.pools == PoolSelection::default()));
     }
 }

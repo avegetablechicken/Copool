@@ -1,5 +1,7 @@
 use super::*;
-use crate::{account_network::Response, Preferences};
+use crate::{
+    account_network::Response, platform::SyncAgent, AgentSync, AgentSyncOutcome, Preferences,
+};
 use serde_json::json;
 use std::sync::Mutex;
 
@@ -1419,7 +1421,14 @@ async fn switching_a_grok_account_triggers_opencode_sync_effect() {
         .clone();
     h.app
         .save_preferences(Preferences {
-            sync_opencode_openai_auth: true,
+            agent_sync: [(
+                SyncAgent::Opencode,
+                AgentSync {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )]
+            .into(),
             ..Default::default()
         })
         .await
@@ -1436,20 +1445,23 @@ async fn switching_a_grok_account_triggers_opencode_sync_effect() {
             Box::pin(async move {
                 *observed.lock().unwrap() += 1;
                 assert_eq!(pool, Pool::Grok);
-                assert!(prefs.sync_opencode_openai_auth);
+                assert!(prefs.agent_sync[&SyncAgent::Opencode].enabled);
                 crate::platform::sync_opencode_grok(
                     &credential.unwrap()?,
                     std::slice::from_ref(&target_path),
                 )?;
                 Ok(SwitchExecution {
-                    opencode_synced: true,
+                    agent_sync: vec![AgentSyncOutcome {
+                        agent: SyncAgent::Opencode,
+                        error: None,
+                    }],
                     ..Default::default()
                 })
             })
         }));
 
     let execution = h.app.switch_account(Pool::Grok, &bob.id).await.unwrap();
-    assert!(execution.opencode_synced);
+    assert_eq!(execution.agent_sync[0].agent, SyncAgent::Opencode);
     assert_eq!(*calls.lock().unwrap(), 1);
     let synced: Value = serde_json::from_slice(&fs::read(&opencode_path).unwrap()).unwrap();
     assert_eq!(synced["xai"]["type"], "oauth");
@@ -1458,7 +1470,7 @@ async fn switching_a_grok_account_triggers_opencode_sync_effect() {
     assert_eq!(synced["xai"]["expires"], second_exp * 1000);
 
     let execution = h.app.switch_account(Pool::Grok, &alice.id).await.unwrap();
-    assert!(execution.opencode_synced);
+    assert_eq!(execution.agent_sync[0].agent, SyncAgent::Opencode);
     assert_eq!(*calls.lock().unwrap(), 2);
     let synced: Value = serde_json::from_slice(&fs::read(&opencode_path).unwrap()).unwrap();
     assert_eq!(synced["xai"]["access"], "access-alice");

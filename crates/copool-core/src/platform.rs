@@ -3,11 +3,12 @@ use crate::{
     persistence::write_json,
     pool_login::{codex, OAuthCredential},
     process,
+    settings::Settings,
     utils::now_unix_seconds,
-    Pool, Preferences, SwitchExecution,
+    AgentSyncOutcome, Pool, Preferences, SwitchExecution,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -74,14 +75,46 @@ enum OpencodeTarget {
     Sqlite(PathBuf),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SyncAgent {
+/// A file an agent's logins are written to: a JSON document or a SQLite
+/// database, which only OpenCode's storage may be either of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Target {
+    Json(PathBuf),
+    Sqlite(PathBuf),
+}
+
+impl Target {
+    /// A file the user named, its storage told by its extension.
+    #[cfg(test)]
+    fn named(path: &Path) -> Self {
+        if is_sqlite_path(path) {
+            Self::Sqlite(path.into())
+        } else {
+            Self::Json(path.into())
+        }
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Self::Json(path) | Self::Sqlite(path) => path,
+        }
+    }
+}
+
+/// A third-party agent a switch hands its login to. Each one's row says
+/// which pools it takes, where its switch is saved, where its logins are
+/// written and how; nothing else names an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncAgent {
     Opencode,
     Pi,
     Omp,
 }
 
 impl SyncAgent {
+    pub const ALL: [Self; 3] = [Self::Opencode, Self::Pi, Self::Omp];
+
     fn provider_key(self, pool: Pool) -> Option<&'static str> {
         match (self, pool) {
             (Self::Opencode, Pool::Codex) => Some("openai"),
@@ -98,9 +131,7 @@ impl SyncAgent {
         }
     }
 
-    const ALL: [Self; 3] = [Self::Opencode, Self::Pi, Self::Omp];
-
-    fn id(self) -> &'static str {
+    pub fn id(self) -> &'static str {
         match self {
             Self::Opencode => "opencode",
             Self::Pi => "pi",
@@ -108,40 +139,125 @@ impl SyncAgent {
         }
     }
 
+    /// The key its switch is saved under, in settings.json as in early Rust
+    /// preferences.json: OpenCode's the Swift app's.
+    pub(crate) fn switch_key(self) -> &'static str {
+        match self {
+            Self::Opencode => "syncOpencodeOpenaiAuth",
+            Self::Pi => "syncPiAuth",
+            Self::Omp => "syncOmpAuth",
+        }
+    }
+
+    /// The key its switch had before, still read.
+    fn earlier_switch_key(self) -> Option<&'static str> {
+        match self {
+            Self::Opencode => None,
+            Self::Pi => Some("syncPiOpenaiAuth"),
+            Self::Omp => Some("syncOmpOpenaiAuth"),
+        }
+    }
+
+    /// Its switch as settings.json keeps it, where OpenCode's is a field of
+    /// the Swift app's settings.
+    pub(crate) fn stored_switch(self, settings: &Settings) -> bool {
+        if self == Self::Opencode {
+            return settings.sync_opencode_openai_auth;
+        }
+        settings
+            .extra
+            .get(self.switch_key())
+            .or_else(|| {
+                self.earlier_switch_key()
+                    .and_then(|key| settings.extra.get(key))
+            })
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn store_switch(self, settings: &mut Settings, on: bool) {
+        if self == Self::Opencode {
+            settings.sync_opencode_openai_auth = on;
+            return;
+        }
+        if let Some(key) = self.earlier_switch_key() {
+            settings.extra.remove(key);
+        }
+        settings.extra.insert(self.switch_key().into(), on.into());
+    }
+
     /// Whether a switch in the pool syncs to this agent: its sync is on, it
     /// has a provider for the pool, and the pool is among those chosen.
     fn enabled(self, p: &Preferences, pool: Pool) -> bool {
-        let (on, pools) = match self {
-            Self::Opencode => (p.sync_opencode_openai_auth, &p.sync_pools.opencode),
-            Self::Pi => (p.sync_pi_auth, &p.sync_pools.pi),
-            Self::Omp => (p.sync_omp_auth, &p.sync_pools.omp),
-        };
-        on && self.provider_key(pool).is_some() && pools.includes(pool)
+        let sync = p.agent_sync.get(&self).copied().unwrap_or_default();
+        sync.enabled && self.provider_key(pool).is_some() && sync.pools.includes(pool)
     }
 
-    fn sync_credential(
+    /// The files its logins are written to: OpenCode's storage follows its
+    /// installed version, which its executable is asked for.
+    async fn locate(self) -> Vec<Target> {
+        match self {
+            Self::Opencode => match opencode_target().await {
+                OpencodeTarget::Sqlite(path) => vec![Target::Sqlite(path)],
+                OpencodeTarget::Json(paths) => paths.into_iter().map(Target::Json).collect(),
+            },
+            Self::Pi => pi_paths().into_iter().map(Target::Json).collect(),
+            Self::Omp => omp_paths().into_iter().map(Target::Sqlite).collect(),
+        }
+    }
+
+    /// Writes the pool's credential to each of `targets`, succeeding when
+    /// any write does. It may block on a database, so it runs off the async
+    /// threads ([`sync_to_agents`]).
+    fn write(
         self,
         pool: Pool,
         credential: &OAuthCredential,
-        targets: &[PathBuf],
+        targets: &[Target],
     ) -> Result<(), String> {
         let provider_key = self
             .provider_key(pool)
             .ok_or_else(|| format!("Unsupported sync target: {self:?} for {pool:?}"))?;
         let include_account_id = pool == Pool::Codex;
-        match self {
-            Self::Opencode => sync_opencode_paths(pool, credential, provider_key, targets),
-            Self::Pi => sync_oauth_json(
+        let missing = match self {
+            Self::Opencode => "Unable to locate OpenCode auth file path",
+            Self::Pi => "Unable to locate pi auth file path",
+            Self::Omp => "Unable to locate omp agent database path",
+        };
+        sync_targets(targets, missing, |target| match (self, target) {
+            (Self::Opencode, Target::Sqlite(path)) => {
+                sync_opencode_db_one(pool, credential, provider_key, path)
+            }
+            (Self::Opencode, Target::Json(path)) => sync_oauth_json_one(
                 credential,
-                targets,
+                path,
                 provider_key,
-                "Unable to locate pi auth file path",
+                "Invalid OpenCode auth document",
+                false,
+                include_account_id,
+            ),
+            (Self::Pi, target) => sync_oauth_json_one(
+                credential,
+                target.path(),
+                provider_key,
                 "Invalid pi auth document",
                 true,
                 include_account_id,
             ),
-            Self::Omp => sync_omp_credential(credential, provider_key, targets),
-        }
+            (Self::Omp, target) => sync_omp_one(credential, provider_key, target.path()),
+        })
+    }
+
+    /// Writes to files the test names, their storage told by extension.
+    #[cfg(test)]
+    fn sync_credential(
+        self,
+        pool: Pool,
+        credential: &OAuthCredential,
+        paths: &[PathBuf],
+    ) -> Result<(), String> {
+        let targets: Vec<_> = paths.iter().map(|path| Target::named(path)).collect();
+        self.write(pool, credential, &targets)
     }
 }
 
@@ -195,9 +311,9 @@ fn non_empty_env(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn sync_targets<F>(targets: &[PathBuf], empty_error: &str, mut apply: F) -> Result<(), String>
+fn sync_targets<T, F>(targets: &[T], empty_error: &str, mut apply: F) -> Result<(), String>
 where
-    F: FnMut(&Path) -> Result<(), String>,
+    F: FnMut(&T) -> Result<(), String>,
 {
     if targets.is_empty() {
         return Err(empty_error.into());
@@ -253,27 +369,6 @@ fn sync_oauth_json_one(
     }
     root_obj.insert(provider_key.into(), Value::Object(entry));
     write_json(path, &root)
-}
-
-fn sync_oauth_json(
-    credential: &OAuthCredential,
-    targets: &[PathBuf],
-    provider_key: &str,
-    empty_error: &str,
-    invalid_doc_error: &str,
-    replace_entry: bool,
-    include_account_id: bool,
-) -> Result<(), String> {
-    sync_targets(targets, empty_error, |path| {
-        sync_oauth_json_one(
-            credential,
-            path,
-            provider_key,
-            invalid_doc_error,
-            replace_entry,
-            include_account_id,
-        )
-    })
 }
 
 fn opencode_credential_id(now_ms: i64) -> String {
@@ -586,50 +681,6 @@ fn sync_opencode_db_one(
     }
 
     tx.commit().map_err(|e| e.to_string())
-}
-
-fn sync_opencode_target(
-    pool: Pool,
-    credential: &OAuthCredential,
-    target: &OpencodeTarget,
-) -> Result<(), String> {
-    let provider_key = SyncAgent::Opencode
-        .provider_key(pool)
-        .ok_or_else(|| format!("Unsupported sync target: Opencode for {pool:?}"))?;
-    match target {
-        OpencodeTarget::Json(paths) => sync_oauth_json(
-            credential,
-            paths,
-            provider_key,
-            "",
-            "Invalid OpenCode auth document",
-            false,
-            pool == Pool::Codex,
-        ),
-        OpencodeTarget::Sqlite(path) => sync_opencode_db_one(pool, credential, provider_key, path),
-    }
-}
-
-fn sync_opencode_paths(
-    pool: Pool,
-    credential: &OAuthCredential,
-    provider_key: &str,
-    targets: &[PathBuf],
-) -> Result<(), String> {
-    sync_targets(targets, "", |path| {
-        if is_sqlite_path(path) {
-            sync_opencode_db_one(pool, credential, provider_key, path)
-        } else {
-            sync_oauth_json_one(
-                credential,
-                path,
-                provider_key,
-                "Invalid OpenCode auth document",
-                false,
-                pool == Pool::Codex,
-            )
-        }
-    })
 }
 
 #[cfg(test)]
@@ -1236,18 +1287,6 @@ fn sync_omp_one(credential: &OAuthCredential, provider: &str, path: &Path) -> Re
     tx.commit().map_err(|e| e.to_string())
 }
 
-fn sync_omp_credential(
-    credential: &OAuthCredential,
-    provider: &str,
-    targets: &[PathBuf],
-) -> Result<(), String> {
-    sync_targets(
-        targets,
-        "Unable to locate omp agent database path",
-        |path| sync_omp_one(credential, provider, path),
-    )
-}
-
 #[cfg(test)]
 pub(crate) fn sync_omp(credential: &OAuthCredential, targets: &[PathBuf]) -> Result<(), String> {
     SyncAgent::Omp.sync_credential(Pool::Codex, credential, targets)
@@ -1483,7 +1522,7 @@ pub fn editors() -> Vec<Editor> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncAgentInfo {
-    pub id: &'static str,
+    pub id: SyncAgent,
     pub pools: Vec<Pool>,
     /// The file written, `~`-abbreviated: OpenCode's storage follows its
     /// installed version. None when it cannot be located.
@@ -1503,36 +1542,61 @@ pub async fn sync_agents() -> Vec<SyncAgentInfo> {
     let home = dirs::home_dir();
     let mut agents = Vec::new();
     for agent in SyncAgent::ALL {
-        let targets = match agent {
-            SyncAgent::Opencode => match opencode_target().await {
-                OpencodeTarget::Sqlite(path) => vec![path],
-                OpencodeTarget::Json(paths) => paths,
-            },
-            SyncAgent::Pi => pi_paths(),
-            SyncAgent::Omp => omp_paths(),
-        };
+        let targets = agent.locate().await;
         let target = targets
             .iter()
+            .map(Target::path)
             .find(|path| path.exists())
-            .or_else(|| targets.first());
+            .or_else(|| targets.first().map(Target::path));
         agents.push(SyncAgentInfo {
-            id: agent.id(),
+            id: agent,
             pools: Pool::ALL
                 .into_iter()
                 .filter(|&pool| agent.provider_key(pool).is_some())
                 .collect(),
             target: target.map(|path| abbreviated(path, home.as_deref())),
-            found: target.is_some_and(|path| path.exists()),
+            found: target.is_some_and(Path::exists),
         });
     }
     agents
 }
 
-fn record_sync(outcome: Result<(), String>, synced: &mut bool, sync_error: &mut Option<String>) {
-    match outcome {
-        Ok(()) => *synced = true,
-        Err(error) => *sync_error = Some(error),
+/// Hands the login switched to in `pool` to each agent whose sync takes it,
+/// in [`SyncAgent::ALL`]'s order, at the files `locate` finds for it: what
+/// each reports, an error for a login that grants no credential. Each write
+/// runs off the async threads, as a database's may block.
+async fn sync_to_agents<F, Located>(
+    pool: Pool,
+    p: &Preferences,
+    credential: Result<OAuthCredential, String>,
+    locate: F,
+) -> Vec<AgentSyncOutcome>
+where
+    F: Fn(SyncAgent) -> Located,
+    Located: std::future::Future<Output = Vec<Target>>,
+{
+    let mut outcomes = vec![];
+    for agent in SyncAgent::ALL
+        .into_iter()
+        .filter(|agent| agent.enabled(p, pool))
+    {
+        let outcome = match &credential {
+            Err(error) => Err(error.clone()),
+            Ok(credential) => {
+                let targets = locate(agent).await;
+                let credential = credential.clone();
+                tokio::task::spawn_blocking(move || agent.write(pool, &credential, &targets))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|written| written)
+            }
+        };
+        outcomes.push(AgentSyncOutcome {
+            agent,
+            error: outcome.err(),
+        });
     }
+    outcomes
 }
 
 /// Side effects of a switch, reported as Swift's SwitchAccountExecutionResult:
@@ -1546,58 +1610,8 @@ pub(crate) async fn after_switch(
     credential: Option<Result<OAuthCredential, String>>,
 ) -> Result<SwitchExecution, String> {
     let mut result = SwitchExecution::default();
-    if let Some(extracted) = credential {
-        let sync_opencode_enabled = SyncAgent::Opencode.enabled(p, pool);
-        let sync_pi_enabled = SyncAgent::Pi.enabled(p, pool);
-        let sync_omp_enabled = SyncAgent::Omp.enabled(p, pool);
-        if sync_opencode_enabled || sync_pi_enabled || sync_omp_enabled {
-            if sync_opencode_enabled {
-                let outcome = match extracted.as_ref() {
-                    Ok(cred) => match opencode_target().await {
-                        OpencodeTarget::Sqlite(db_path) => {
-                            let cred = cred.clone();
-                            tokio::task::spawn_blocking(move || {
-                                sync_opencode_target(pool, &cred, &OpencodeTarget::Sqlite(db_path))
-                            })
-                            .await
-                            .map_err(|e| e.to_string())
-                            .and_then(|res| res)
-                        }
-                        target @ OpencodeTarget::Json(_) => {
-                            sync_opencode_target(pool, cred, &target)
-                        }
-                    },
-                    Err(error) => Err(error.clone()),
-                };
-                record_sync(
-                    outcome,
-                    &mut result.opencode_synced,
-                    &mut result.opencode_sync_error,
-                );
-            }
-            if sync_pi_enabled {
-                let outcome = extracted
-                    .as_ref()
-                    .map_err(Clone::clone)
-                    .and_then(|cred| SyncAgent::Pi.sync_credential(pool, cred, &pi_paths()));
-                record_sync(outcome, &mut result.pi_synced, &mut result.pi_sync_error);
-            }
-            if sync_omp_enabled {
-                let outcome = match extracted {
-                    Ok(cred) => {
-                        let targets = omp_paths();
-                        tokio::task::spawn_blocking(move || {
-                            SyncAgent::Omp.sync_credential(pool, &cred, &targets)
-                        })
-                        .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|res| res)
-                    }
-                    Err(error) => Err(error),
-                };
-                record_sync(outcome, &mut result.omp_synced, &mut result.omp_sync_error);
-            }
-        }
+    if let Some(credential) = credential {
+        result.agent_sync = sync_to_agents(pool, p, credential, SyncAgent::locate).await;
     }
     if pool == Pool::Codex && p.restart_editors_on_switch {
         let installed = editors();
@@ -1839,21 +1853,163 @@ mod tests {
         assert!(saved["xai"].get("accountId").is_none());
     }
 
-    #[test]
-    fn sync_agent_enabled_needs_switch_support_and_chosen_pool() {
-        let mut p = Preferences {
-            sync_opencode_openai_auth: true,
-            sync_pi_auth: true,
-            sync_omp_auth: false,
+    /// Each of `agents` with its sync on, every pool chosen; the others off.
+    fn syncing(agents: &[SyncAgent]) -> std::collections::BTreeMap<SyncAgent, crate::AgentSync> {
+        SyncAgent::ALL
+            .into_iter()
+            .map(|agent| {
+                let sync = crate::AgentSync {
+                    enabled: agents.contains(&agent),
+                    ..Default::default()
+                };
+                (agent, sync)
+            })
+            .collect()
+    }
+
+    /// Each agent's own file in `dir`, as `locate` would find it at home.
+    fn located(dir: &Path, agent: SyncAgent) -> Vec<Target> {
+        match agent {
+            SyncAgent::Opencode => vec![Target::Json(dir.join("opencode/auth.json"))],
+            SyncAgent::Pi => vec![Target::Json(dir.join("pi/auth.json"))],
+            SyncAgent::Omp => vec![Target::Sqlite(dir.join("omp/agent.db"))],
+        }
+    }
+
+    /// A switch writes an agent exactly when its sync is on, it takes the
+    /// pool, and the pool is chosen for it; the writes land in the files
+    /// `locate` names, never at home.
+    #[tokio::test]
+    async fn a_switch_syncs_each_agent_that_takes_its_pool_where_it_is_on_and_chosen() {
+        let takes = |agent, pool| {
+            matches!(
+                (agent, pool),
+                (SyncAgent::Opencode, Pool::Codex | Pool::Grok)
+                    | (SyncAgent::Pi, Pool::Codex | Pool::Grok | Pool::Claude)
+                    | (SyncAgent::Omp, _)
+            )
+        };
+        let credential = |pool| match pool {
+            Pool::Codex => codex_credential(
+                "alice@example.com",
+                "acct-1",
+                "plus",
+                1_780_000_000,
+                "refresh-1",
+            ),
+            Pool::Claude => claude_credential("alice", "org-1", "rt-1"),
+            Pool::Grok => grok_credential("alice", "grok-refresh"),
+            Pool::Antigravity => OAuthCredential {
+                access: "a".into(),
+                refresh: "r".into(),
+                expires_ms: 1_780_000_000_000,
+                email: Some("alice@gmail.com".into()),
+                ..OAuthCredential::default()
+            },
+        };
+        for pool in Pool::ALL {
+            for agent in SyncAgent::ALL {
+                for (on, chosen) in [(true, true), (true, false), (false, true)] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let on_agents: &[SyncAgent] = if on { &[agent] } else { &[] };
+                    let mut p = Preferences {
+                        agent_sync: syncing(on_agents),
+                        ..Default::default()
+                    };
+                    let pools = &mut p.agent_sync.get_mut(&agent).unwrap().pools;
+                    match pool {
+                        Pool::Codex => pools.codex = chosen,
+                        Pool::Claude => pools.claude = chosen,
+                        Pool::Antigravity => pools.antigravity = chosen,
+                        Pool::Grok => pools.grok = chosen,
+                    }
+                    let root = dir.path().to_path_buf();
+                    let outcomes = sync_to_agents(pool, &p, Ok(credential(pool)), |agent| {
+                        let targets = located(&root, agent);
+                        async move { targets }
+                    })
+                    .await;
+                    let expected = on && chosen && takes(agent, pool);
+                    let case = format!("{agent:?} in {pool:?}, on {on}, chosen {chosen}");
+                    let written = if expected {
+                        vec![AgentSyncOutcome { agent, error: None }]
+                    } else {
+                        vec![]
+                    };
+                    assert_eq!(outcomes, written, "{case}");
+                    for other in SyncAgent::ALL {
+                        let path = located(dir.path(), other)[0].path().to_path_buf();
+                        assert_eq!(
+                            path.exists(),
+                            expected && other == agent,
+                            "{case}: {other:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every agent on reports in the table's order, each written or why
+    /// not, and a login granting no credential is each one's error.
+    #[tokio::test]
+    async fn a_switch_reports_each_agent_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Preferences {
+            agent_sync: syncing(&SyncAgent::ALL),
             ..Default::default()
         };
-        assert!(SyncAgent::Opencode.enabled(&p, Pool::Grok));
-        assert!(!SyncAgent::Opencode.enabled(&p, Pool::Antigravity));
-        assert!(!SyncAgent::Omp.enabled(&p, Pool::Codex));
-        p.sync_pools.opencode.grok = false;
-        assert!(!SyncAgent::Opencode.enabled(&p, Pool::Grok));
-        assert!(SyncAgent::Opencode.enabled(&p, Pool::Codex));
-        assert!(SyncAgent::Pi.enabled(&p, Pool::Grok));
+        // OpenCode's file is a directory: its write fails, the others' not.
+        std::fs::create_dir_all(dir.path().join("opencode/auth.json")).unwrap();
+        let root = dir.path().to_path_buf();
+        let locate = |agent| {
+            let targets = located(&root, agent);
+            async move { targets }
+        };
+        let codex = codex_credential(
+            "alice@example.com",
+            "acct-1",
+            "plus",
+            1_780_000_000,
+            "refresh-1",
+        );
+        let outcomes = sync_to_agents(Pool::Codex, &p, Ok(codex), locate).await;
+        assert_eq!(
+            outcomes.iter().map(|o| o.agent).collect::<Vec<_>>(),
+            SyncAgent::ALL
+        );
+        assert!(outcomes[0].error.is_some());
+        assert_eq!(outcomes[1].error, None);
+        assert_eq!(outcomes[2].error, None);
+        let none = "Missing refresh token".to_string();
+        let outcomes = sync_to_agents(Pool::Codex, &p, Err(none.clone()), locate).await;
+        assert_eq!(
+            outcomes,
+            SyncAgent::ALL
+                .map(|agent| AgentSyncOutcome {
+                    agent,
+                    error: Some(none.clone()),
+                })
+                .to_vec()
+        );
+        // No agent's file is found: each says where it looked for none.
+        let outcomes = sync_to_agents(
+            Pool::Codex,
+            &p,
+            Ok(codex_credential(
+                "alice@example.com",
+                "acct-1",
+                "plus",
+                1_780_000_000,
+                "refresh-1",
+            )),
+            |_| async { vec![] },
+        )
+        .await;
+        assert_eq!(
+            outcomes[0].error.as_deref(),
+            Some("Unable to locate OpenCode auth file path")
+        );
     }
 
     #[test]
@@ -1870,9 +2026,7 @@ mod tests {
     async fn after_switch_outside_codex_skips_editors_codex_launch_and_unsupported_agents() {
         // Agents stay off for Grok: enabled, they would write the real home.
         let grok_preferences = Preferences {
-            sync_opencode_openai_auth: false,
-            sync_pi_auth: false,
-            sync_omp_auth: false,
+            agent_sync: syncing(&[]),
             restart_editors_on_switch: true,
             restart_editor_targets: vec!["not-installed-editor".into()],
             launch_codex_after_switch: true,
@@ -1889,9 +2043,7 @@ mod tests {
         // OpenCode and pi do not take an Antigravity login, and OpenCode does
         // not take Claude; keep supported agents off so tests never touch home.
         let antigravity_preferences = Preferences {
-            sync_opencode_openai_auth: true,
-            sync_pi_auth: true,
-            sync_omp_auth: false,
+            agent_sync: syncing(&[SyncAgent::Opencode, SyncAgent::Pi]),
             ..grok_preferences.clone()
         };
         let credential = OAuthCredential {
@@ -1911,9 +2063,7 @@ mod tests {
         assert_eq!(execution, SwitchExecution::default());
 
         let claude_preferences = Preferences {
-            sync_opencode_openai_auth: true,
-            sync_pi_auth: false,
-            sync_omp_auth: false,
+            agent_sync: syncing(&[SyncAgent::Opencode]),
             ..grok_preferences
         };
         let execution = after_switch(
@@ -1931,9 +2081,7 @@ mod tests {
         // A login granting no Credential writes nothing, so no home is
         // touched; Grok's switch neither restarts editors nor launches Codex.
         let preferences = Preferences {
-            sync_opencode_openai_auth: true,
-            sync_pi_auth: true,
-            sync_omp_auth: true,
+            agent_sync: syncing(&SyncAgent::ALL),
             restart_editors_on_switch: false,
             launch_codex_after_switch: false,
             ..Default::default()
@@ -1945,9 +2093,12 @@ mod tests {
         assert_eq!(
             execution,
             SwitchExecution {
-                opencode_sync_error: Some(error.clone()),
-                pi_sync_error: Some(error.clone()),
-                omp_sync_error: Some(error),
+                agent_sync: SyncAgent::ALL
+                    .map(|agent| AgentSyncOutcome {
+                        agent,
+                        error: Some(error.clone()),
+                    })
+                    .to_vec(),
                 ..SwitchExecution::default()
             }
         );

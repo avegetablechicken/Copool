@@ -296,9 +296,16 @@ function brandIcon(target) {
 }
 /// The third-party agents shown expanded; all start collapsed.
 const expandedAgents = new Set();
-/// Each third-party agent's row, which expands to the file it writes and a
-/// chip per pool; its switch is bound with the other preferences.
+/// Each third-party agent's row: its switch, shown at once, and once the
+/// core has located the agents, the file it writes and a chip per pool.
 function renderAgentSync() {
+  for (const root of document.querySelectorAll(".agent-sync[data-agent]")) {
+    const id = root.dataset.agent;
+    const input = root.querySelector(".agent-sync-head .switch");
+    input.checked = P.agentSync(preferences, id).enabled;
+    input.onchange = () =>
+      savePreference((current) => P.setAgentSync(current, id, input.checked));
+  }
   for (const row of P.agentSyncRows(preferences, syncAgents)) {
     const root = document.querySelector(`.agent-sync[data-agent="${row.id}"]`);
     if (!root) continue;

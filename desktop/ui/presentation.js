@@ -306,43 +306,69 @@
       { intent: "refreshUsage", enabled: canRefresh, spinning },
     ];
   }
-  /// Each third-party agent's switch, mirroring `SyncAgent` in the core.
-  const agentSyncPreferences = {
-    opencode: "syncOpencodeOpenaiAuth",
-    pi: "syncPiAuth",
-    omp: "syncOmpAuth",
+  /// Each third-party agent's notices after a switch, by its id in the
+  /// core, whose `SyncAgent` table alone decides what a switch syncs.
+  const agentSyncNotices = {
+    opencode: {
+      done: "accounts.notice.sync_done",
+      failed: "accounts.notice.sync_failed_format",
+    },
+    pi: {
+      done: "accounts.notice.pi_sync_done",
+      failed: "accounts.notice.pi_sync_failed_format",
+    },
+    omp: {
+      done: "accounts.notice.omp_sync_done",
+      failed: "accounts.notice.omp_sync_failed_format",
+    },
   };
+  /// An agent's saved sync: off with every pool chosen, unless saved not.
+  function agentSync(settings = {}, id) {
+    const saved = settings.agentSync?.[id] || {};
+    return { enabled: Boolean(saved.enabled), pools: saved.pools || {} };
+  }
   /// The third-party agents' rows: each one's switch, target and the pools
   /// it can receive, every pool chosen unless saved as not.
   function agentSyncRows(settings = {}, agents = []) {
     return agents
-      .filter((agent) => agent.id in agentSyncPreferences)
+      .filter((agent) => agent.id in agentSyncNotices)
       .map((agent) => {
-        const preference = agentSyncPreferences[agent.id];
-        const chosen = settings.syncPools?.[agent.id] || {};
+        const sync = agentSync(settings, agent.id);
         return {
           id: agent.id,
-          preference,
-          enabled: Boolean(settings[preference]),
+          enabled: sync.enabled,
           target: agent.target || null,
           found: Boolean(agent.found),
           pools: (agent.pools || []).map((pool) => ({
             pool,
-            chosen: chosen[pool] !== false,
+            chosen: sync.pools[pool] !== false,
           })),
         };
       });
   }
+  /// The preferences after one agent's saved sync is changed.
+  function changeAgentSync(settings = {}, agent, change) {
+    const all = settings.agentSync || {};
+    return { agentSync: { ...all, [agent]: change(all[agent] || {}) } };
+  }
+  /// The preferences after one agent's sync is turned on or off.
+  function setAgentSync(settings, agent, enabled) {
+    return changeAgentSync(settings, agent, (saved) => ({ ...saved, enabled }));
+  }
   /// The preferences after one agent's pool is chosen or not.
-  function toggleAgentSyncPool(settings = {}, agent, pool) {
-    const pools = settings.syncPools || {};
-    const current = pools[agent] || {};
-    return {
-      syncPools: {
-        ...pools,
-        [agent]: { ...current, [pool]: current[pool] === false },
-      },
-    };
+  function toggleAgentSyncPool(settings, agent, pool) {
+    return changeAgentSync(settings, agent, (saved) => {
+      const pools = saved.pools || {};
+      return { ...saved, pools: { ...pools, [pool]: pools[pool] === false } };
+    });
+  }
+  /// What a switch's notice says of one agent it synced: done, or why not.
+  function agentSyncNotice({ agent, error } = {}) {
+    const keys = agentSyncNotices[agent];
+    if (!keys) return null;
+    return error
+      ? { key: keys.failed, args: [error], error: true }
+      : { key: keys.done, args: [], error: false };
   }
   function settingsControls(settings = {}, editors = []) {
     return {
@@ -716,8 +742,11 @@
     resetInventory,
     balanceTooltips,
     settingsControls,
+    agentSync,
     agentSyncRows,
+    setAgentSync,
     toggleAgentSyncPool,
+    agentSyncNotice,
     publicCallout,
     remoteHeader,
     remoteMetrics,
