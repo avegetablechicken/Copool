@@ -64,11 +64,18 @@ pub(crate) fn proxy_login(pool: Pool, auth: &Value) -> Result<ProxyLogin, String
             .ok_or_else(|| "Missing access token".to_owned())
     };
     match pool {
-        Pool::Codex => codex::extract_auth(auth).map(|auth| ProxyLogin {
-            access_token: auth.access_token,
-            account_id: Some(auth.account_id),
-            plan_type: auth.plan_type,
-        }),
+        // An empty access token is none, as for the other pools.
+        Pool::Codex => match codex::extract_auth(auth)? {
+            auth if auth.access_token.trim().is_empty() => Err(crate::utils::localized(
+                "error.auth.missing_access_token",
+                &[],
+            )),
+            auth => Ok(ProxyLogin {
+                access_token: auth.access_token,
+                account_id: Some(auth.account_id),
+                plan_type: auth.plan_type,
+            }),
+        },
         Pool::Claude => token_only(claude::access_token(auth)),
         Pool::Antigravity => token_only(antigravity::proxy_form::access_token(auth)),
         Pool::Grok => Err("Grok accounts have no API proxy".into()),
@@ -212,6 +219,16 @@ mod tests {
             assert_eq!(proxy_login(pool, &auth), expected, "{name}");
         }
         assert!(proxy_login(Pool::Codex, &json!({"tokens": {"access_token": "at"}})).is_err());
+        // Codex's identity holds without a token; its proxy login does not.
+        let blank = json!({"tokens": {"access_token": " ", "id_token": id_token}});
+        assert!(codex::extract_auth(&blank).is_ok());
+        assert_eq!(
+            proxy_login(Pool::Codex, &blank),
+            Err(crate::utils::localized(
+                "error.auth.missing_access_token",
+                &[]
+            ))
+        );
         // The Claude entry the proxy reads is the one its Credential is of,
         // whose scope a `scope` string gives without a `scopes` list.
         let root =
