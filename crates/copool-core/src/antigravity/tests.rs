@@ -817,6 +817,9 @@ async fn agys_login_file_takes_each_switch_and_its_later_logins_are_followed() {
         .map(|a| a.id)
         .collect();
     assert_eq!(current, [id("bob")]);
+    // Taken from the file, the login keeps the item's form.
+    let bob = h.app.antigravity_load().unwrap().accounts;
+    assert!(bob.iter().find(|a| a.id == id("bob")).unwrap().own.wrapped);
 
     // A login the item refuses leaves the file as it was.
     let before = fs::read(h.app.antigravity_token_file()).unwrap();

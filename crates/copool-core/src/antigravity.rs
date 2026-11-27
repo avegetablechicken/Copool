@@ -405,7 +405,15 @@ impl Application {
                 .ok_or(CREDENTIALS_INVALID.to_owned()),
             Err(error) => Err(error),
         };
-        let file = self.antigravity_token_file_login();
+        // The file holds the document alone: taken, it keeps the form the
+        // item has, or would have.
+        let file = self.antigravity_token_file_login().map(|mut file| {
+            file.wrapped = match &item {
+                Ok(Some(item)) => item.wrapped,
+                _ => cfg!(target_os = "macos"),
+            };
+            file
+        });
         match (item, file) {
             (Ok(Some(item)), Some(file)) => Ok(Some(
                 if <AntigravityLogins as LoginPool>::newer(&file.value, &item.value) {
