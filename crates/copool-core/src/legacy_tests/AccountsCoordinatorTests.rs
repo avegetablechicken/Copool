@@ -458,6 +458,49 @@ async fn testProxyAnsweringWithTheAccountInUseWaitsForNoRefresh() {
     task.await.unwrap().unwrap();
 }
 #[tokio::test]
+async fn testProxySwitchToAnAccountBeingRenewedGivesCodexTheRenewal() {
+    let (_dir, app, network) = super::network_fixture::fixture();
+    save_fixture(
+        &app,
+        json!({"accounts":[stored("a","a","account-1"),stored("b","b","account-2")],"currentAccountId":"a"}),
+    );
+    let app = std::sync::Arc::new(app);
+    app.switch_account(Pool::Codex, "a").await.unwrap();
+    let b = app.codex_load().unwrap().accounts[1].clone();
+    *network.rejected_access_token.lock().unwrap() = b.document["tokens"]["access_token"]
+        .as_str()
+        .map(str::to_owned);
+    let block = || {
+        network
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst)
+    };
+    block();
+    let task = {
+        let app = app.clone();
+        tokio::spawn(async move { app.refresh_usage(Pool::Codex, "b").await })
+    };
+    // B's token is refused, then renewed; its renewal is asked about
+    // before it is saved.
+    network.started.notified().await;
+    block();
+    network.resume.notify_one();
+    network.started.notified().await;
+    // The proxy reached b with the login it read before: the switch waits
+    // for the renewal, and gives Codex that, not the spent login.
+    let follow = {
+        let app = app.clone();
+        tokio::spawn(async move { app.codex_follow_proxy(&b.id, &b.document).await })
+    };
+    tokio::task::yield_now().await;
+    network.resume.notify_one();
+    task.await.unwrap().unwrap();
+    assert!(follow.await.unwrap().unwrap());
+    let current: Value =
+        serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
+    assert_eq!(current["tokens"]["access_token"], "refreshed-test-only");
+}
+#[tokio::test]
 async fn testRefreshUsageDoesNotOverwriteConcurrentProxySwitchProjection() {
     let (_dir, app, network) = super::network_fixture::fixture();
     let first = stored("a", "a", "account-1");
