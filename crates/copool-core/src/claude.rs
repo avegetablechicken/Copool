@@ -5346,6 +5346,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_token_its_profile_named_is_not_asked_about_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let earlier = app.claude_load().unwrap();
+        // Claude Code renews alice's login: its profile confirms it.
+        external_update(location.clone(), "alice", "alice-renewed")();
+        app.accounts(Pool::Claude).await.unwrap();
+        let access = |app: &Application| {
+            app.claude_load().unwrap().accounts[0].document["accessToken"].clone()
+        };
+        assert_eq!(access(&app), "alice-renewed");
+        let asked = fake.profile_proxies.lock().unwrap().len();
+        // Read again before the store holds it, as a renewal under Claude
+        // Code's lock rereads it, the token is not asked about again: its
+        // profile, refused or out of reach by now, would hold it unconfirmed.
+        app.claude_save(&earlier).unwrap();
+        *fake.claude_code.lock().unwrap() = None;
+        fake.profile_fails
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        app.accounts(Pool::Claude).await.unwrap();
+        assert_eq!(fake.profile_proxies.lock().unwrap().len(), asked);
+        assert_eq!(access(&app), "alice-renewed");
+    }
+
+    #[tokio::test]
     async fn a_login_not_yet_confirmed_is_as_one_not_read() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = app(&dir).await;
