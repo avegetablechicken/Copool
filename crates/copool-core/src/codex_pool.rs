@@ -594,8 +594,9 @@ impl Application {
             return Ok(false);
         }
         let _op = self.codex.operations.lock().await;
-        // A switch may have been made while the lock was awaited.
-        if !self.codex_proxy_switches(id, auth)? {
+        // A switch, or the choice to only host the API, may have been made
+        // while the lock was awaited.
+        if self.preferences()?.host_api_only || !self.codex_proxy_switches(id, auth)? {
             return Ok(false);
         }
         if let Some(provider) = auth.get("copoolProvider") {
