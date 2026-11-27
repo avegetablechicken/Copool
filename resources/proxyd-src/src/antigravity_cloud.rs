@@ -461,7 +461,11 @@ pub(crate) async fn renew_token(
                 access: access.to_owned(),
                 expires_at: now_unix_seconds() + lifetime,
                 lifetime,
-                refresh: body["refresh_token"].as_str().map(str::to_owned),
+                // An empty refresh token is none: the login keeps its own.
+                refresh: body["refresh_token"]
+                    .as_str()
+                    .filter(|t| !t.trim().is_empty())
+                    .map(str::to_owned),
             };
             Ok(renewed)
         }

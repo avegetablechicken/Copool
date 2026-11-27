@@ -393,6 +393,51 @@ pub(super) async fn remote_usage(
 mod tests {
     use super::*;
 
+    /// Google renewing every login with the same answer.
+    struct Renews(Value);
+    type Answer<'a> = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(u16, Value), String>> + Send + 'a>,
+    >;
+    impl crate::antigravity_cloud::Network for Renews {
+        fn cloud<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: Value,
+            _: &'a str,
+            _: &'a str,
+        ) -> Answer<'a> {
+            unreachable!("no Cloud Code request")
+        }
+        fn renew<'a>(&'a self, _: &'a str, _: &'a str) -> Answer<'a> {
+            let body = self.0.clone();
+            Box::pin(async move { Ok((200, body)) })
+        }
+        fn identity<'a>(&'a self, _: &'a str, _: &'a str) -> Answer<'a> {
+            unreachable!("no identity request")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_remote_renewal_keeps_the_refresh_token_unless_given_another() {
+        let auth = json!({"accessToken": "a", "refreshToken": "r", "expiresAt": 1});
+        let renew = |refresh: Value| {
+            let auth = auth.clone();
+            async move {
+                let body =
+                    json!({"access_token": "b", "expires_in": 3599, "refresh_token": refresh});
+                renew_remote(&auth, "", &Renews(body)).await.unwrap()
+            }
+        };
+        for refresh in [json!(""), json!(" "), Value::Null] {
+            let renewed = renew(refresh.clone()).await;
+            assert_eq!(renewed["accessToken"], "b", "{refresh}");
+            assert_eq!(renewed["refreshToken"], "r", "{refresh}");
+            assert_eq!(renewed["expiresIn"], 3599);
+        }
+        assert_eq!(renew(json!("s")).await["refreshToken"], "s");
+    }
+
     fn req(model: &str, body: Value) -> Generate {
         Generate {
             model: model.into(),
