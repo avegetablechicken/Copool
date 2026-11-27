@@ -928,8 +928,9 @@ impl<P: LoginPool> Logins<P> {
             return Ok(false);
         };
         let stored = &mut P::accounts_mut(&mut store)[index];
-        if used.renewed
-            || (used.adopted && stored.document == begun.account.document)
+        // A renewal or a login taken from the tool replaces only the card's
+        // as the refresh began, or an earlier generation saved meanwhile.
+        if ((used.renewed || used.adopted) && stored.document == begun.account.document)
             || P::newer(&used.document, &stored.document)
         {
             stored.document = used.document.clone();
