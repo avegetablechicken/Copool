@@ -913,11 +913,13 @@ impl LoginPool for ClaudeLogins<'_> {
         self.0.claude_sealed(store)
     }
     /// Where Claude Code keeps its login in the Keychain, the login may be
-    /// kept without its directory, which Claude Code creates to lock it;
-    /// elsewhere the login is kept in that directory.
+    /// kept without its directory, which Claude Code creates to lock it:
+    /// it is created only while Claude Code keeps a login there, or may.
+    /// Elsewhere the login is kept in that directory.
     async fn renewal_lock(&self) -> Result<Option<Box<dyn RenewalLock>>> {
         let location = self.0.claude_location();
-        let login_kept = location.keychain.is_some();
+        let login_kept = location.keychain.is_some()
+            && (location.storage_dir.is_dir() || !matches!(read_live(&location).await, Ok(None)));
         Ok(claude_code_lock(&location, login_kept)
             .await?
             .map(|lock| Box::new(ClaudeCodeLock(lock)) as Box<dyn RenewalLock>))
@@ -1884,7 +1886,12 @@ impl Application {
             CLAUDE_CODE_RENEWING => CLAUDE_CODE_RENEWING_SWITCH.to_owned(),
             _ => error,
         };
-        let claude_code = logins.0.renewal_lock().await.map_err(for_switch)?;
+        // The switch gives Claude Code a login, so locks it where it keeps
+        // one in the Keychain even before its directory is there.
+        let claude_code = claude_code_lock(&location, location.keychain.is_some())
+            .await
+            .map_err(for_switch)?
+            .map(ClaudeCodeLock);
         // A login not yet confirmed is switched from as no account's: kept
         // in the backup, its tokens given to none.
         let live = self
@@ -5762,6 +5769,32 @@ mod tests {
         assert!(!location.storage_dir.exists());
         let stored = app.claude_load().unwrap();
         assert_eq!(stored.accounts[0].document["refreshToken"], "fresh-refresh");
+    }
+
+    /// Where Claude Code would keep its login in the Keychain but keeps
+    /// none, the pool's renewals create no directory for its lock either.
+    /// Not on macOS, where the Keychain read would reach the user's.
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn pool_logins_renew_without_creating_a_directory_for_a_keychain_never_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, mut location, fake) = waiting_app(&dir);
+        location.keychain = Some("Copool test credentials".into());
+        app.set_claude_location(location.clone());
+        *fake.claude_code.lock().unwrap() = Some(location.clone());
+        let (oauth, account) = login("bob", 1);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": oauth, "oauthAccount": account}).to_string(),
+        )
+        .await
+        .unwrap();
+        let id = app.claude_load().unwrap().accounts[0].id.clone();
+        app.release_new_accounts(Pool::Claude, Some(&id))
+            .await
+            .unwrap();
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
+        assert_eq!(refreshes(&fake), ["bob-refresh"]);
+        assert!(!location.storage_dir.exists());
     }
 
     #[tokio::test]
