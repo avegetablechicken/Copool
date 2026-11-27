@@ -464,7 +464,7 @@ async fn testProxySwitchToAnAccountBeingRenewedGivesCodexTheRenewal() {
         &app,
         json!({"accounts":[stored("a","a","account-1"),stored("b","b","account-2")],"currentAccountId":"a"}),
     );
-    let app = std::sync::Arc::new(app);
+    let app = app.into_shared();
     app.switch_account(Pool::Codex, "a").await.unwrap();
     // The agents a switch syncs are given the login Codex is given.
     let synced = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -498,16 +498,17 @@ async fn testProxySwitchToAnAccountBeingRenewedGivesCodexTheRenewal() {
     block();
     network.resume.notify_one();
     network.started.notified().await;
-    // The proxy reached b with the login it read before: the switch waits
-    // for the renewal, and gives Codex that, not the spent login.
+    // The proxy reached b with the login it read before. Call its real
+    // selection hook, including agent sync: the old hook handed agents the
+    // stale candidate even though the switch gave Codex the renewal.
     let follow = {
-        let app = app.clone();
-        tokio::spawn(async move { app.codex_follow_proxy(&b.id, &b.document).await })
+        let selected = app.proxy_storage(Pool::Codex).on_selected.unwrap();
+        tokio::spawn(async move { selected(b.id, b.document).await })
     };
     tokio::task::yield_now().await;
     network.resume.notify_one();
     task.await.unwrap().unwrap();
-    assert!(follow.await.unwrap().unwrap());
+    follow.await.unwrap().unwrap();
     let current: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(current["tokens"]["access_token"], "refreshed-test-only");

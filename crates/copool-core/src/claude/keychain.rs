@@ -64,6 +64,10 @@ fn read_with(
 }
 
 pub(super) async fn read(service: &str, access: KeychainAccess) -> Result<Option<Value>> {
+    #[cfg(test)]
+    if let Some(document) = testing::read(service) {
+        return Ok(Some(document));
+    }
     let service = service.to_owned();
     tokio::task::spawn_blocking(move || {
         let user = std::env::var("USER").unwrap_or_default();
@@ -257,6 +261,10 @@ pub(super) async fn delete(service: &str, access: KeychainAccess) -> Result<()> 
 }
 
 pub(super) async fn write(service: &str, document: &Value, access: KeychainAccess) -> Result<()> {
+    #[cfg(test)]
+    if testing::write(service, document) {
+        return Ok(());
+    }
     let user = std::env::var("USER").unwrap_or_default();
     if user.is_empty() {
         return Err("The Keychain account name is unavailable".into());
@@ -275,6 +283,49 @@ pub(super) async fn write(service: &str, document: &Value, access: KeychainAcces
     let command = creation_command(service, &user, &bytes, access)?;
     // A new shared item is created by the same system tool Claude Code uses.
     create_with_tool(&command, "Could not create the Claude Code Keychain entry").await
+}
+
+/// In-memory items for testing the Keychain/file write sequence without
+/// accessing Security.framework. Each test owns a unique service; dropping
+/// it removes the item, including after an assertion fails.
+#[cfg(test)]
+pub(super) mod testing {
+    use super::*;
+    use std::{collections::HashMap, sync::LazyLock, sync::Mutex};
+
+    static ITEMS: LazyLock<Mutex<HashMap<String, Vec<Value>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    pub(crate) struct Item(pub(crate) String);
+    impl Item {
+        pub(crate) fn new(document: Value) -> Self {
+            let service = format!("copool-test-{}", uuid::Uuid::new_v4());
+            ITEMS
+                .lock()
+                .unwrap()
+                .insert(service.clone(), vec![document]);
+            Self(service)
+        }
+        pub(crate) fn writes(&self) -> Vec<Value> {
+            ITEMS.lock().unwrap()[&self.0][1..].to_vec()
+        }
+    }
+    impl Drop for Item {
+        fn drop(&mut self) {
+            ITEMS.lock().unwrap().remove(&self.0);
+        }
+    }
+    pub(super) fn read(service: &str) -> Option<Value> {
+        ITEMS.lock().unwrap().get(service)?.last().cloned()
+    }
+    pub(super) fn write(service: &str, document: &Value) -> bool {
+        let mut items = ITEMS.lock().unwrap();
+        let Some(history) = items.get_mut(service) else {
+            return false;
+        };
+        history.push(document.clone());
+        true
+    }
 }
 
 /// Creates an item through `security -i`, so that the system tool, which

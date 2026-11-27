@@ -5521,6 +5521,49 @@ mod tests {
         assert_eq!(usages(&fake), ["bob-access"]);
     }
 
+    /// The Keychain write can succeed before the fallback file refuses it.
+    /// Exercise the real switch and file writer with an in-memory item only.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_failed_mirror_write_restores_the_keychain_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, mut location, _) = waiting_app(&dir);
+        let (bob_oauth, bob_account) = login("bob", LATER);
+        app.claude_import_json(
+            &json!({"claudeAiOauth": bob_oauth, "oauthAccount": bob_account}).to_string(),
+        )
+        .await
+        .unwrap();
+        let bob = app.claude_load().unwrap().accounts[0].id.clone();
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let before = app.claude_load().unwrap().current_account_id;
+        let account_file = fs::read(location.account_file()).unwrap();
+        let previous: Value =
+            serde_json::from_slice(&fs::read(location.credentials_file()).unwrap()).unwrap();
+        let item = keychain::testing::Item::new(previous.clone());
+        location.keychain = Some(item.0.clone());
+        app.set_claude_location(location.clone());
+        // A directory cannot be replaced by the atomic JSON file writer,
+        // even when the tests run with elevated permissions.
+        fs::remove_file(location.credentials_file()).unwrap();
+        fs::create_dir(location.credentials_file()).unwrap();
+
+        assert!(app.switch_account(Pool::Claude, &bob).await.is_err());
+        let mut target = previous.clone();
+        target["claudeAiOauth"] = bob_oauth;
+        // Both writes really happened: the target, then the restored login.
+        assert_eq!(item.writes(), [target, previous.clone()]);
+        assert_eq!(
+            keychain::read(&item.0, KeychainAccess::Background)
+                .await
+                .unwrap(),
+            Some(previous)
+        );
+        assert_eq!(fs::read(location.account_file()).unwrap(), account_file);
+        assert_eq!(app.claude_load().unwrap().current_account_id, before);
+    }
+
     #[tokio::test]
     async fn a_failed_switch_leaves_no_login_where_there_was_none() {
         let dir = tempfile::tempdir().unwrap();
