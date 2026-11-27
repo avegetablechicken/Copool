@@ -585,41 +585,48 @@ impl Application {
     /// The account the proxy chose, which it reached with `auth`: unless the
     /// proxy only hosts the API, Codex is switched to it, as any switch is,
     /// under the operations lock: a refresh renewing the account meanwhile
-    /// has kept its renewal before the switch reads it. Returns whether it
-    /// was.
+    /// has kept its renewal before the switch reads it. The proxy asks on
+    /// every answered request, so what Codex already uses is told without
+    /// the lock, which a refresh holds across its requests. Returns whether
+    /// it was switched.
     pub(crate) async fn codex_follow_proxy(&self, id: &str, auth: &Value) -> Result<bool> {
-        if self.preferences()?.host_api_only {
+        if self.preferences()?.host_api_only || !self.codex_proxy_switches(id, auth)? {
             return Ok(false);
         }
         let _op = self.codex.operations.lock().await;
-        let config = self.codex_config_path();
+        // A switch may have been made while the lock was awaited.
+        if !self.codex_proxy_switches(id, auth)? {
+            return Ok(false);
+        }
         if let Some(provider) = auth.get("copoolProvider") {
             let provider = provider["id"].as_str().ok_or("Invalid provider")?;
-            if codex_config::resolve_path(&config)
-                .id
-                .eq_ignore_ascii_case(provider)
-            {
-                return Ok(false);
-            }
-            codex_config::switch(&config, provider)?;
+            codex_config::switch(&self.codex_config_path(), provider)?;
             self.publish();
             return Ok(true);
+        }
+        self.codex_switch_login(id).await?;
+        Ok(true)
+    }
+    /// Whether following the proxy to the account would switch Codex: to
+    /// another provider, or to a known account it does not use.
+    fn codex_proxy_switches(&self, id: &str, auth: &Value) -> Result<bool> {
+        let config = codex_config::resolve_path(&self.codex_config_path());
+        if let Some(provider) = auth.get("copoolProvider") {
+            let provider = provider["id"].as_str().ok_or("Invalid provider")?;
+            return Ok(!config.id.eq_ignore_ascii_case(provider));
         }
         let store = self.codex_load()?;
         let Some(account) = store.accounts.iter().find(|a| a.id == id) else {
             return Ok(false);
         };
-        let live = self.codex_read_live().ok().flatten();
-        let uses = codex_config::resolve_path(&config).is_official()
+        let uses = config.is_official()
             && store.current_account_id.as_deref() == Some(id)
-            && live
-                .as_ref()
-                .is_some_and(|live| CodexLogins::same_login(live, &account.document));
-        if uses {
-            return Ok(false);
-        }
-        self.codex_switch_login(id).await?;
-        Ok(true)
+            && self
+                .codex_read_live()
+                .ok()
+                .flatten()
+                .is_some_and(|live| CodexLogins::same_login(&live, &account.document));
+        Ok(!uses)
     }
     /// Whether the account failed: its usage refused, or its token expired.
     pub(crate) async fn codex_login_failed(&self, id: &str) -> Result<bool> {

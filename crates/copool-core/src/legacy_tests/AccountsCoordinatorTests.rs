@@ -430,6 +430,34 @@ async fn testLateRefreshDoesNotOverwriteALoginRenewedSince() {
     assert_eq!(current["tokens"]["access_token"], "renewed-by-codex");
 }
 #[tokio::test]
+async fn testProxyAnsweringWithTheAccountInUseWaitsForNoRefresh() {
+    let (_dir, app, network) = super::network_fixture::fixture();
+    save_fixture(
+        &app,
+        json!({"accounts":[stored("a","a","account-1"),stored("b","b","account-2")],"currentAccountId":"a"}),
+    );
+    let app = std::sync::Arc::new(app);
+    app.switch_account(Pool::Codex, "a").await.unwrap();
+    network
+        .block
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let task = {
+        let app = app.clone();
+        tokio::spawn(async move { app.refresh_usage(Pool::Codex, "b").await })
+    };
+    network.started.notified().await;
+    let a = app.codex_load().unwrap().accounts[0].clone();
+    let followed = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        app.codex_follow_proxy(&a.id, &a.document),
+    )
+    .await
+    .expect("the proxy's answer waited for the refresh");
+    assert!(!followed.unwrap());
+    network.resume.notify_one();
+    task.await.unwrap().unwrap();
+}
+#[tokio::test]
 async fn testRefreshUsageDoesNotOverwriteConcurrentProxySwitchProjection() {
     let (_dir, app, network) = super::network_fixture::fixture();
     let first = stored("a", "a", "account-1");
