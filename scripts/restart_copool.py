@@ -54,10 +54,12 @@ def target(app):
             raise SystemExit(f'Not an application bundle: {app}')
         return app / 'Contents/MacOS', ['open', str(app)]
     if WINDOWS:
+        # An installation directory is the copy; an executable named on its
+        # own is the copy by itself, as its directory may hold other programs.
         executable = app / 'Copool.exe' if app.is_dir() else app
         if not executable.is_file():
             raise SystemExit(f'No executable at {executable}')
-        return executable.parent, [str(executable)]
+        return app, [str(executable)]
     if not app.is_file() or not os.access(app, os.X_OK):
         raise SystemExit(f'Not an executable: {app}')
     import linux_build
