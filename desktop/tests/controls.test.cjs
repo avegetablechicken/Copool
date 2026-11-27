@@ -157,7 +157,7 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
   const source = fs
     .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
     .replace(/\r\n/g, "\n");
-  const start = source.indexOf("function switchNotice(execution) {");
+  const start = source.indexOf("function switchNotice(execution, from) {");
   assert.notEqual(start, -1, "switchNotice start marker not found");
   const end = source.indexOf("\n}\n", start);
   assert.notEqual(end, -1, "switchNotice end marker not found");
@@ -173,7 +173,8 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
   const en = localeScope.window.COPOOL_LOCALES.en;
   const scope = {
     P,
-    pool: "codex",
+    // The pool on screen now; the notice names the one switched in.
+    pool: "grok",
     tr: (key, ...args) => P.formatLocalized(en[key] ?? key, args),
   };
   vm.runInNewContext(snippet, scope);
@@ -188,7 +189,7 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
       { agent: "later", error: null },
     ],
     restartedEditors: [],
-  });
+  }, "codex");
   assert.equal(ok.error, false);
   assert.match(ok.text, /OpenCode auth synced.*Pi auth synced.*omp auth synced/s);
 
@@ -198,13 +199,22 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
       { agent: "omp", error: "database locked" },
     ],
     restartedEditors: [],
-  });
+  }, "codex");
   assert.equal(err.error, true);
   assert.match(err.text, /Pi sync failed: disk full/);
   assert.match(err.text, /omp sync failed: database locked/);
   assert.doesNotMatch(err.text, /OpenCode/);
   // No agent synced: none is mentioned.
-  assert.doesNotMatch(scope.switchNotice({ restartedEditors: [] }).text, /sync/);
+  assert.doesNotMatch(scope.switchNotice({ restartedEditors: [] }, "codex").text, /sync/);
+  // Each pool's switch says so in its own words, whichever pool shows now.
+  assert.equal(
+    scope.switchNotice({ restartedEditors: [] }, "codex").text,
+    scope.tr("accounts.notice.switch_done"),
+  );
+  assert.equal(
+    scope.switchNotice({ restartedEditors: [] }, "claude").text,
+    scope.tr("accounts.notice.claude_switch_done"),
+  );
 });
 
 test("SettingsControlPresentationTests.testAgentSyncRowsChooseEveryPoolUnlessSavedOff", () => {

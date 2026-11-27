@@ -2853,8 +2853,9 @@ function refreshProvider(group) {
     .finally(() => refreshView().catch((error) => notice(error, true)));
 }
 $("refresh-all").onclick = () => refreshUsage();
-/// Swift's buildSwitchNotice: the switch, then what followed it.
-function switchNotice(execution) {
+/// Swift's buildSwitchNotice: the switch in pool `from`, then what followed
+/// it. `from` is the pool asked, which another may have replaced on screen.
+function switchNotice(execution, from) {
   let error = false;
   const segments = [
     execution.provider
@@ -2863,7 +2864,7 @@ function switchNotice(execution) {
             claude: "accounts.notice.claude_provider_switched_format",
             antigravity: "accounts.notice.antigravity_provider_switched_format",
             grok: "accounts.notice.grok_provider_switched_format",
-          }[pool] || "accounts.notice.provider_switched_format",
+          }[from] || "accounts.notice.provider_switched_format",
           execution.provider,
         )
       : tr(
@@ -2871,7 +2872,7 @@ function switchNotice(execution) {
             claude: "accounts.notice.claude_switch_done",
             antigravity: "accounts.notice.antigravity_switch_done",
             grok: "accounts.notice.grok_switch_done",
-          }[pool] || "accounts.notice.switch_done",
+          }[from] || "accounts.notice.switch_done",
         ),
   ];
   // settings.json keys that keep Claude Code off the account login.
@@ -2917,9 +2918,11 @@ async function switchAccount(account) {
   switchingId = account.id;
   renderAccounts(accountsCache);
   syncButtons();
+  const from = pool;
   try {
     const result = switchNotice(
-      await invoke("switch_account", { pool, id: account.id }),
+      await invoke("switch_account", { pool: from, id: account.id }),
+      from,
     );
     notice(result.text, result.error);
   } catch (error) {
@@ -2933,14 +2936,15 @@ $("smart-switch").onclick = async () => {
   if (switchingId !== null) return;
   switchingId = "";
   syncButtons();
+  const from = pool;
   try {
-    const outcome = await invoke("smart_switch", { pool });
+    const outcome = await invoke("smart_switch", { pool: from });
     if (outcome.kind === "noTarget")
       notice(tr("accounts.notice.no_switch_target"));
     else if (outcome.kind === "alreadyBest")
       notice(tr("accounts.notice.already_best"));
     else {
-      const result = switchNotice(outcome.execution);
+      const result = switchNotice(outcome.execution, from);
       notice(
         result.error
           ? result.text
