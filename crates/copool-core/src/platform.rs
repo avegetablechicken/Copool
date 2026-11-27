@@ -1416,14 +1416,22 @@ async fn opencode_target() -> OpencodeTarget {
         } else {
             detect_opencode_major_version().await
         };
-    resolve_opencode_target(
-        installed_major,
-        home.as_deref(),
-        auth_path.as_deref(),
-        db_env.as_deref(),
-        xdg_data_home.as_deref(),
-        opencode_paths(),
-    )
+    // Off the async threads: without a version, the database is opened to
+    // look for OpenCode's credential table, which may wait for its lock.
+    let json_paths = opencode_paths();
+    let fallback = json_paths.clone();
+    tokio::task::spawn_blocking(move || {
+        resolve_opencode_target(
+            installed_major,
+            home.as_deref(),
+            auth_path.as_deref(),
+            db_env.as_deref(),
+            xdg_data_home.as_deref(),
+            json_paths,
+        )
+    })
+    .await
+    .unwrap_or(OpencodeTarget::Json(fallback))
 }
 
 pub fn opencode_paths() -> Vec<PathBuf> {
