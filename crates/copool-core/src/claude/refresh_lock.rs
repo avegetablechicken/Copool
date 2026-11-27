@@ -118,7 +118,19 @@ impl RefreshLock {
         let mut watched: Option<(SystemTime, Instant)> = None;
         let mut attempt = 0u32;
         loop {
-            if let Some(first) = try_lock(&current)? {
+            // Windows can deny access while a removed lock directory still
+            // has open metadata handles. Retry within the same wait budget,
+            // but keep a persistent access error instead of reporting a holder.
+            let mut retry_error = None;
+            let first = match try_lock(&current) {
+                Ok(first) => first,
+                Err(error) if retryable_lock_error(&error) => {
+                    retry_error = Some(error);
+                    None
+                }
+                Err(error) => return Err(error),
+            };
+            if let Some(first) = first {
                 match try_lock(&legacy) {
                     Ok(Some(second)) => {
                         let owner = write_owner(&dir, &current, &legacy);
@@ -128,7 +140,11 @@ impl RefreshLock {
                     Ok(None) => release(&current, first),
                     Err(error) => {
                         release(&current, first);
-                        return Err(error);
+                        if retryable_lock_error(&error) {
+                            retry_error = Some(error);
+                        } else {
+                            return Err(error);
+                        }
                     }
                 }
             }
@@ -148,7 +164,10 @@ impl RefreshLock {
             }
             let left = wait.total.saturating_sub(started.elapsed());
             if left.is_zero() {
-                return Ok(None);
+                return match retry_error {
+                    Some(error) => Err(error),
+                    None => Ok(None),
+                };
             }
             attempt = attempt.wrapping_add(1);
             thread::sleep(jitter(wait.backoff, attempt).min(left));
@@ -226,6 +245,11 @@ impl Drop for RefreshLock {
             release(&path, ours);
         }
     }
+}
+
+fn retryable_lock_error(error: &io::Error) -> bool {
+    // ERROR_ACCESS_DENIED (delete pending) or ERROR_SHARING_VIOLATION.
+    cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32))
 }
 
 /// One attempt; `Ok(None)` while a live holder has it.
@@ -759,6 +783,55 @@ mod tests {
             thread.join().unwrap();
         }
         assert!(!overlap.load(Ordering::SeqCst));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn waits_for_delete_pending_current_and_legacy_locks() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        for index in 0..2 {
+            let home = tempfile::tempdir().unwrap();
+            let dir = config_dir(&home);
+            let paths = lock_paths(&dir);
+            let path = &paths[index];
+            fs::create_dir(path).unwrap();
+            // Keep the removed directory alive just as another taker's
+            // metadata handle can. Windows cannot recreate it until close.
+            let handle = fs::OpenOptions::new()
+                .access_mode(0)
+                .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+                .open(path)
+                .unwrap();
+            fs::remove_dir(path).unwrap();
+            let error = try_lock(path).unwrap_err();
+            assert!(retryable_lock_error(&error), "{error}");
+
+            // An access failure that outlasts the budget stays an error.
+            let error = RefreshLock::acquire(&dir, quick(30)).err().unwrap();
+            assert!(retryable_lock_error(&error), "{error}");
+            if index == 1 {
+                assert!(!paths[0].exists(), "release current while legacy waits");
+            }
+
+            let (started, ready) = mpsc::channel();
+            let waiter_dir = dir.clone();
+            let waiter = thread::spawn(move || {
+                started.send(()).unwrap();
+                RefreshLock::acquire(&waiter_dir, quick(5_000))
+            });
+            ready.recv().unwrap();
+            thread::sleep(Duration::from_millis(100));
+            assert!(!waiter.is_finished(), "access denial must be retried");
+            drop(handle);
+
+            let lock = waiter.join().unwrap().unwrap().unwrap();
+            assert!(paths.iter().all(|path| path.is_dir()));
+            assert!(!lock.compromised());
+            assert!(RefreshLock::acquire(&dir, quick(0)).unwrap().is_none());
+            drop(lock);
+            assert!(paths.iter().all(|path| !path.exists()));
+        }
     }
 
     #[test]
