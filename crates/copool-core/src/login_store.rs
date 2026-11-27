@@ -866,11 +866,17 @@ impl<P: LoginPool> Logins<P> {
                 Asked::Refused => {}
             }
             // The tool may have renewed the login since it was read: its
-            // token is tried once before renewing.
+            // token is tried once before renewing. Refused too, it replaces
+            // the account's only when it is the later generation: an
+            // earlier one's refresh token may be spent.
             if let Some(live) = self.live_renewal(account, &document, now).await {
-                document = live;
-                adopted = true;
-                match ask(document.clone()).await {
+                let later = P::newer(&live, &document);
+                let asked = ask(live.clone()).await;
+                if later || matches!(asked, Asked::Answered(_)) {
+                    document = live;
+                    adopted = true;
+                }
+                match asked {
                     Asked::Answered(answer) => return Ok(Some(answer)),
                     Asked::Failed(error) => return Err(error),
                     Asked::Refused => {}
@@ -1136,6 +1142,32 @@ pub(crate) mod suite {
         assert_eq!(f.renewals(), 0);
     }
 
+    pub(crate) async fn a_refused_token_keeps_its_login_over_an_earlier_one_the_tool_holds<
+        F: Fixture,
+    >() {
+        let f = F::open(false).await;
+        let refused = F::login("alice", "expired-alice", later() + 7200);
+        f.app()
+            .import_sign_in(F::POOL, F::browser_sign_in(&refused), None)
+            .await
+            .unwrap();
+        let id = f.id_of("alice");
+        // The tool still holds an earlier generation, refused too: its
+        // refresh token may be spent, so the account's stays.
+        f.sign_in(&F::with_refresh(
+            &F::login("alice", "expired-earlier", later()),
+            "refresh-spent",
+        ));
+        f.app().set_renewal(F::POOL, &id, "never").await.unwrap();
+        f.app()
+            .release_new_accounts(F::POOL, Some(&id))
+            .await
+            .unwrap();
+        assert!(f.app().refresh_usage(F::POOL, &id).await.is_err());
+        assert_eq!(F::access(&f.stored(&id)).as_deref(), Some("expired-alice"));
+        assert_eq!(f.renewals(), 0);
+    }
+
     pub(crate) async fn a_renewal_never_replaces_a_login_the_tool_renewed_meanwhile<F: Fixture>() {
         let f = F::open(true).await;
         f.sign_in(&F::login("alice", "access-alice", later()));
@@ -1219,6 +1251,7 @@ macro_rules! login_store_suite {
             the_live_login_shares_its_renewal_and_another_cards_leaves_it_alone,
             an_expired_token_takes_the_one_the_tool_renewed,
             a_refused_token_gives_way_to_the_one_the_tool_renewed,
+            a_refused_token_keeps_its_login_over_an_earlier_one_the_tool_holds,
             a_renewal_never_replaces_a_login_the_tool_renewed_meanwhile,
             a_renewal_never_replaces_a_token_the_tool_renewed_for_longer,
             the_account_in_use_is_not_renewed_while_its_live_login_cannot_be_read,
