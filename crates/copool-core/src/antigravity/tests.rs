@@ -751,12 +751,36 @@ async fn agys_login_file_takes_each_switch_and_its_later_logins_are_followed() {
         .unwrap();
     assert!(token_file(&h.app).is_none());
 
-    // Once it has, each switch gives the file the login, unwrapped.
+    // Once agy has run, Linux and Windows create its login file. macOS
+    // keeps using the Keychain unless agy already left a login file.
     fs::create_dir_all(h.app.antigravity_token_file().parent().unwrap()).unwrap();
     h.app
         .switch_account(Pool::Antigravity, &id("alice"))
         .await
         .unwrap();
+    assert_eq!(
+        h.app.antigravity_token_file().exists(),
+        !cfg!(target_os = "macos")
+    );
+    if cfg!(target_os = "macos") {
+        fs::write(
+            h.app.antigravity_token_file(),
+            stored_document(&h.app, &id("alice")).to_string(),
+        )
+        .unwrap();
+    }
+
+    // An existing file takes each switch on every platform.
+    for user in ["bob", "alice"] {
+        h.app
+            .switch_account(Pool::Antigravity, &id(user))
+            .await
+            .unwrap();
+        assert_eq!(
+            pool_login::antigravity::refresh_token(&token_file(&h.app).unwrap().value).as_deref(),
+            Some(format!("refresh-{user}").as_str())
+        );
+    }
     let file = token_file(&h.app).unwrap();
     assert!(!file.wrapped);
     assert_eq!(
