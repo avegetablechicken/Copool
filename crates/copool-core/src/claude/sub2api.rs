@@ -167,7 +167,7 @@ impl Adapter for ProviderAdapter<'_> {
         let source = settings_source::load(&self.0.claude_location(), &p.name, &p.settings_path)?;
         Ok(Route {
             gateway: gateway(&source.base_url),
-            sub2api: source.base_url,
+            sub2api: upstream(&source.base_url).to_owned(),
         })
     }
     fn present(&self, p: &mut Provider) {
