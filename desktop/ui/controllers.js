@@ -289,7 +289,9 @@
       // locks its refresh, then "received" until its 5h window shows.
       this.hi = new Map();
       this.renewingIds = new Set();
-      this.renewedIds = new Set();
+      // Cards showing their renewal done, each with the renewal that marked it,
+      // so an earlier renewal's moment ending cannot clear a later one's.
+      this.renewedIds = new Map();
       // Cards whose usage rows show their third-party pool (the model switch).
       this.thirdPartyIds = new Set();
       // The card turned over to edit it, as a widget's, one at a time: its
@@ -575,22 +577,28 @@
       }
     }
     /// Renews an account's tokens at once; its usage refreshes with them,
-    /// and its card shows the renewal done for a moment.
+    /// and once reloaded its card shows the renewal done for a moment.
     async renewNow(id) {
       if (this.busy(id)) return false;
       this.renewingIds.add(id);
       this.onUpdate();
+      let renewed = false;
       try {
         await this.invoke("renew_now", { id });
-        this.renewedIds.add(id);
-        this.clock.sleep(RENEWED_SHOWN_MS).then(() => {
-          this.renewedIds.delete(id);
-          this.onUpdate();
-        });
+        renewed = true;
         return true;
       } finally {
         await this.load().catch(() => {});
         this.renewingIds.delete(id);
+        if (renewed) {
+          const mark = {};
+          this.renewedIds.set(id, mark);
+          this.clock.sleep(RENEWED_SHOWN_MS).then(() => {
+            if (this.renewedIds.get(id) !== mark) return;
+            this.renewedIds.delete(id);
+            this.onUpdate();
+          });
+        }
         this.onUpdate();
       }
     }

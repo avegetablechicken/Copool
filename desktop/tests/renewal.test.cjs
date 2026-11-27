@@ -126,6 +126,62 @@ for (const target of ["claude", "codex"]) {
   });
 }
 
+test("a renewal's done moment starts once its card reloads, and an earlier one's end leaves a later one's", async () => {
+  // Each moment shown ends when the test says; reloads finish when it says.
+  const ends = [];
+  const clock = fakeClock();
+  clock.sleep = () => new Promise((resolve) => ends.push(resolve));
+  let reload = null;
+  const invoke = async (command) => {
+    if (command === "accounts") {
+      await new Promise((resolve) => (reload = resolve));
+      return [{ id: "a", usage: RUNNING }];
+    }
+    return [];
+  };
+  const model = new Accounts(invoke, [{ id: "a", usage: RUNNING }], () => {}, () => {}, { clock });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const renew = async () => {
+    const started = ends.length;
+    const renewal = model.renewNow("a");
+    await settle();
+    // Still reloading: under way, and its moment has not started.
+    assert.equal(model.cardState("a").renewing, true);
+    assert.equal(ends.length, started);
+    reload();
+    assert.equal(await renewal, true);
+    assert.equal(ends.length, started + 1, "the moment starts after the reload");
+    assert.deepEqual(
+      [model.cardState("a").renewing, model.cardState("a").renewed],
+      [false, true],
+    );
+  };
+  await renew();
+  await renew();
+  ends[0]();
+  await settle();
+  assert.equal(model.cardState("a").renewed, true, "the first moment's end keeps the second's");
+  ends[1]();
+  await settle();
+  assert.equal(model.cardState("a").renewed, false);
+});
+
+test("a failed renewal shows no done moment", async () => {
+  const clock = fakeClock();
+  let slept = 0;
+  clock.sleep = () => (slept++, new Promise(() => {}));
+  const invoke = async (command) => {
+    if (command === "renew_now") throw new Error("expired");
+    return command === "accounts" ? [{ id: "a", usage: RUNNING }] : [];
+  };
+  const model = new Accounts(invoke, [{ id: "a", usage: RUNNING }], () => {}, () => {}, { clock });
+  await assert.rejects(model.renewNow("a"), /expired/);
+  assert.deepEqual(
+    [model.cardState("a").renewing, model.cardState("a").renewed, slept],
+    [false, false, 0],
+  );
+});
+
 // The card's front no longer shows the token expiry (card-view.test.cjs).
 test("the card's back shows the token expiry", () => {
   const start = source.indexOf("function renewalSection(");
