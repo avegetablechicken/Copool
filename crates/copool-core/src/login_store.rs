@@ -16,7 +16,8 @@
 //! it. A pool without accounts never reads its Live login.
 //!
 //! An account its issuer deactivated stays listed so ([`Standing`]); deleted,
-//! it stays hidden, for the pool to remember the workspace gone.
+//! it stays hidden, for the pool to remember the workspace gone, until the
+//! user imports or signs in to it again.
 //!
 //! A pool may keep its tokens elsewhere than its file (Claude's vault, put
 //! back once the store is read and moved there before it is written), and
@@ -98,7 +99,7 @@ pub(crate) enum Standing {
     /// Its issuer reports it deactivated: it stays listed so.
     Deactivated,
     /// Deleted while deactivated: kept, hidden, so that its workspace is
-    /// known to be gone.
+    /// known to be gone; listed again once imported again.
     Deleted,
 }
 /// What a pool adds to its accounts when it adds nothing.
@@ -495,14 +496,18 @@ impl<P: LoginPool> Logins<P> {
                 .then(|| existing.document.clone());
                 P::keep(existing, login);
                 existing.updated_at = now;
+                // Imported again, a deleted account is listed again: in use
+                // when signed in again, else still deactivated.
                 match kept {
-                    Some(kept) => existing.document = kept,
+                    Some(kept) => {
+                        existing.document = kept;
+                        if existing.standing == Some(Standing::Deleted) {
+                            existing.standing = Some(Standing::Deactivated);
+                        }
+                    }
                     None => {
                         existing.usage_error = None;
-                        // Signed in again: in use, unless the user deleted it.
-                        if existing.standing == Some(Standing::Deactivated) {
-                            existing.standing = None;
-                        }
+                        existing.standing = None;
                     }
                 }
                 if let Some(email) = email {

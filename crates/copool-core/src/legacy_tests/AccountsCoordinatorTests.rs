@@ -854,6 +854,30 @@ async fn testDeletingDeactivatedPendingAccountAlsoDismissesWorkspaceFromFutureDi
         "deleted"
     );
 }
+async fn shown(app: &crate::Application) -> String {
+    app.accounts(Pool::Codex)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == "a")
+        .unwrap()
+        .display_status
+}
+#[tokio::test]
+async fn testImportingADeletedDeactivatedAccountAgainListsItAgain() {
+    let (_dir, app, _) = super::network_fixture::fixture();
+    let mut dead = team("a", "account-1", Some("Team one"));
+    dead["displayStatus"] = "deactivated".into();
+    dead["authJson"]["last_refresh"] = "2099-01-01T00:00:00Z".into();
+    save_fixture(&app, json!({"accounts":[dead.clone()]}));
+    app.delete_account(Pool::Codex, "a").await.unwrap();
+    assert_eq!(shown(&app).await, "deleted");
+    // The same export again: listed, in use once its workspace answers.
+    app.import_json(Pool::Codex, &dead["authJson"].to_string())
+        .await
+        .unwrap();
+    assert_eq!(shown(&app).await, "list");
+}
 #[tokio::test]
 async fn testTrayMenuModelStartBackgroundRefreshRefreshesUsageOnRecurringTick() {
     let (_dir, app, network) = super::network_fixture::fixture();
