@@ -45,7 +45,9 @@ function fixture(target, usage = RUNNING, clock = fakeClock()) {
     },
   };
   vm.createContext(scope);
-  vm.runInContext(source.slice(0, source.indexOf("const ICONS =")), scope);
+  const end = source.indexOf("const ICONS =");
+  assert(end > 0, "app.js's routing ends before its icons");
+  vm.runInContext(source.slice(0, end), scope);
   const invoke = vm.runInContext(`poolInvoke("${target}")`, scope);
   const model = new Accounts(invoke, null, () => {}, () => {}, { pool: target, clock });
   return { calls, model };

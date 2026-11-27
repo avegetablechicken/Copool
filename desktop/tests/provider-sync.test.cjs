@@ -9,8 +9,17 @@ const source = fs
   .replace(/\r\n/g, "\n");
 const start = source.indexOf("function providerSyncChoices(");
 const end = source.indexOf("\nasync function syncProvider", start);
+assert(start >= 0 && end > start, "providerSyncChoices found");
 const appSource = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8")
   .replace(/\r\n/g, "\n");
+/// The app's source from `from` up to `to`, both found.
+function appBetween(from, to) {
+  const start = appSource.indexOf(from);
+  assert(start >= 0, `${from} found`);
+  const end = appSource.indexOf(to, start);
+  assert(end > start, `${to} found after ${from}`);
+  return appSource.slice(start, end);
+}
 test("a delayed refresh cannot put the previous CURRENT tag back on a card", async () => {
   const start = appSource.indexOf("async function refreshView()");
   const end = appSource.indexOf("function applyTheme(", start);
@@ -152,7 +161,7 @@ test("Menu hover suppresses stale focus without moving focus; keyboard restores 
 
 const layoutScope = {};
 vm.createContext(layoutScope);
-vm.runInContext(appSource.slice(appSource.indexOf("function menuPairLayout("), appSource.indexOf("function showMenu(")), layoutScope);
+vm.runInContext(appBetween("function menuPairLayout(", "function showMenu("), layoutScope);
 for (const [name, panel, parentWidth, childWidth, preferred] of [
   ["Codex", { left: 0, right: 640 }, 260, 150, 30],
   ["long Claude label", { left: 0, right: 460 }, 420, 300, 35],
@@ -219,7 +228,7 @@ test("Different pool labels and provider counts produce the same menu origins", 
       document: { body: new Node("body"), querySelector: () => ({ getBoundingClientRect: () => panel }) },
     };
     vm.createContext(scope);
-    vm.runInContext(appSource.slice(appSource.indexOf("let openMenu = null;"), appSource.indexOf('document.addEventListener("pointerdown", (event) => {', appSource.indexOf("let openMenu = null;"))), scope);
+    vm.runInContext(appBetween("let openMenu = null;", 'document.addEventListener("pointerdown", (event) => {'), scope);
     const trigger = new Node("button");
     trigger.id = "import-open";
     trigger.getBoundingClientRect = () => ({ left: 24, top: 40, bottom: 62 });
@@ -273,7 +282,7 @@ test("Crossing parent rows toward Add time can cancel pending dismissal", () => 
     child: { menu: { remove() { removed++; } }, trigger: { setAttribute() {} } },
   };
   vm.createContext(scope);
-  vm.runInContext(appSource.slice(appSource.indexOf("let openSubmenu = null;"), appSource.indexOf("function closeMenu(")), scope);
+  vm.runInContext(appBetween("let openSubmenu = null;", "function closeMenu("), scope);
   vm.runInContext("openSubmenu = child", scope);
   scope.deferSubmenuDismiss();
   assert.equal(removed, 0, "crossing another row must not immediately close the child");
