@@ -851,6 +851,40 @@ async fn agys_login_file_takes_each_switch_and_its_later_logins_are_followed() {
 }
 
 #[tokio::test]
+async fn an_unreadable_agy_login_file_is_left_and_the_item_still_switched() {
+    let h = harness(true).await;
+    for user in ["alice", "bob"] {
+        h.app
+            .import_json(
+                Pool::Antigravity,
+                &json!({"document": login_of(user, &format!("access-{user}"), later()), "wrapped": true})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+    }
+    h.live.sign_in(&login_of("alice", "access-alice", later()));
+    // Where the file should be stands something that cannot be read as one.
+    let path = h.app.antigravity_token_file();
+    fs::create_dir_all(&path).unwrap();
+    let bob = h
+        .app
+        .antigravity_load()
+        .unwrap()
+        .accounts
+        .into_iter()
+        .find(|a| a.email.as_deref() == Some("bob@gmail.com"))
+        .unwrap()
+        .id;
+    h.app.switch_account(Pool::Antigravity, &bob).await.unwrap();
+    assert_eq!(
+        pool_login::antigravity::refresh_token(&h.live.document().value).as_deref(),
+        Some("refresh-bob")
+    );
+    assert!(path.is_dir());
+}
+
+#[tokio::test]
 async fn imports_are_checked_whole_and_folded_into_known_accounts() {
     let h = harness(false).await;
     let alice = login_of("alice", "access-alice", later());

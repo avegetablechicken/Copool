@@ -454,11 +454,16 @@ impl Application {
     /// Returns what the file held, when it was written.
     fn antigravity_write_token_file(&self, login: &Document) -> Result<Option<Option<Vec<u8>>>> {
         let path = self.antigravity_token_file();
-        // A file that cannot be read could not be put back either.
+        // A file that cannot be read could not be put back either: it is
+        // left as it is, and the item takes the login all the same, as agy
+        // could not read the file either.
         let previous = match std::fs::read(&path) {
             Ok(bytes) => Some(bytes),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(format!("Could not read agy's login file: {e}")),
+            Err(e) => {
+                log::warn!("agy's login file could not be read, so is left as it is: {e}");
+                return Ok(None);
+            }
         };
         let agy_ran = path.parent().is_some_and(std::path::Path::is_dir);
         if previous.is_none() && (cfg!(target_os = "macos") || !agy_ran) {
