@@ -330,23 +330,31 @@ impl Application {
                             "aarch64" | "arm64" => "aarch64-unknown-linux-musl",
                             _ => return Err("Unsupported remote CPU architecture".into()),
                         };
-                        let root = std::env::current_exe()
-                            .ok()
-                            .and_then(|p| deployment::find_root(&p));
-                        let binary = deployment::prebuilt(
-                            root.as_deref(),
-                            resources.as_deref(),
-                            &self.paths.data_dir,
-                            target,
-                        )?
-                        .ok_or("Bundled Linux daemon is missing")?;
+                        // Unpacked and read off the async threads: it is large.
+                        let resources = resources.clone();
+                        let cache = self.paths.data_dir.clone();
+                        let daemon = tokio::task::spawn_blocking(move || {
+                            let root = std::env::current_exe()
+                                .ok()
+                                .and_then(|p| deployment::find_root(&p));
+                            let binary = deployment::prebuilt(
+                                root.as_deref(),
+                                resources.as_deref(),
+                                &cache,
+                                target,
+                            )?
+                            .ok_or("Bundled Linux daemon is missing")?;
+                            std::fs::read(binary).map_err(|e| e.to_string())
+                        })
+                        .await
+                        .map_err(|e| e.to_string())??;
                         ssh(
                             &server,
                             &format!(
                                 "cat > {}",
                                 remote::quote(&format!("{stage}/codex-tools-proxyd"))
                             ),
-                            Some(std::fs::read(binary).map_err(|e| e.to_string())?),
+                            Some(daemon),
                             90,
                         )
                         .await?;
