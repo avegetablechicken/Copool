@@ -129,11 +129,12 @@ pub(crate) fn proxy_account_id(login: &Value, stored_google_id: Option<&str>) ->
 /// The Credential an Antigravity Login grants: its token's tokens and
 /// expiry, and the account the document names. What Copool stores of the
 /// account, given as `identity`, stands in for the document's root `email`
-/// and `account_id` where it has no such member: the stored email follows
-/// the ID token's and precedes the document's nested ones, the stored id
-/// follows `google_id` and precedes the document's other ids and its ID
-/// token's subject. One that names no account at all is refused: omp's
-/// `antigravity-cli` keeps each account apart by its email or id.
+/// and `account_id` where it has no such member, or an empty or null one:
+/// the stored email follows the ID token's and precedes the document's
+/// nested ones, the stored id follows `google_id` and precedes the
+/// document's other ids and its ID token's subject. One that names no
+/// account at all is refused: omp's `antigravity-cli` keeps each account
+/// apart by its email or id.
 pub(crate) fn credential(
     login: &Value,
     identity: &super::Identity,
@@ -146,8 +147,9 @@ pub(crate) fn credential(
             ("email", &identity.email),
             ("account_id", &identity.account_id),
         ] {
-            if let Some(stored) = super::non_empty(stored.as_deref()) {
-                root.entry(key).or_insert_with(|| stored.into());
+            let own = super::non_empty(root.get(key).and_then(Value::as_str));
+            if let (None, Some(stored)) = (own, super::non_empty(stored.as_deref())) {
+                root.insert(key.into(), stored.into());
             }
         }
     }
@@ -431,6 +433,16 @@ mod tests {
             (
                 "the stored id and email over the document's other places",
                 json!({"token": token(json!(1_783_850_400)), "accountId": "google-camel", "user": {"email": "user@gmail.com"}}),
+                stored.clone(),
+                expected(
+                    1_783_850_400_000,
+                    Some("google-stored"),
+                    Some("Stored@Gmail.com"),
+                ),
+            ),
+            (
+                "the stored id and email over an empty root email and a null root id",
+                json!({"token": token(json!(1_783_850_400)), "email": " ", "account_id": null}),
                 stored.clone(),
                 expected(
                     1_783_850_400_000,
