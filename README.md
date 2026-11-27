@@ -55,7 +55,8 @@ Copool 是一个跨平台桌面应用（macOS、Windows、Linux），用于管�
 ```bash
 cargo run -p copool-desktop --locked        # run / 运行
 python3 scripts/test_rust.py                # tests / 测试
-python3 scripts/build_rust_desktop.py       # macOS: ad-hoc-signed Copool.app; elsewhere the executable
+python3 scripts/build_rust_desktop.py       # macOS: locally signed Copool.app; Windows: NSIS installer; Linux: the executable
+python3 scripts/restart_copool.py --app …    # restart the copy at that path / 重启该位置的 Copool
 ```
 
 See [docs/rust-cross-platform.md](docs/rust-cross-platform.md) for details, data locations and validation status.

@@ -1,5 +1,7 @@
 # Rust 跨平台版本
 
+2026-11-27（统一构建与重启脚本）：构建入口仍为 `scripts/build_rust_desktop.py`，原来写在其中的 macOS 与 Windows 打包流程分别移入 `scripts/macos_build.py`、`scripts/windows_build.py`，新增 `scripts/linux_build.py` 与共用的 `scripts/build_common.py`；三个平台模块接口相同（`add_arguments`、`prepare`、`build`），入口只按平台分派。新增 `--offline`，产物位置遵循 `CARGO_TARGET_DIR`。Linux 构建在原有可执行文件之外新增 `ldd` 共享库检查，并提供钩子，使 Ubuntu 20.04 这类需要专用 GUI SDK 环境、安装所构建版本的机器只改钩子即可，不再维护独立构建脚本。新增各平台共用的 `scripts/restart_copool.py`，按可执行文件所在位置停止并重新启动 Copool。验证：macOS（Apple Silicon，经 SSH）以统一入口和相对路径 `CARGO_TARGET_DIR` 生成 arm64 release `Copool.app` 0.1.0，UI 检查通过，先签小组件、再签主应用，`codesign --verify --deep --strict` 通过；SSH 会话中登录钥匙串锁定，Apple Development 证书签名报 `errSecInternalComponent`（未改动的小组件钩子即失败，与本次改动无关），因此以 `COPOOL_SIGN_IDENTITY=-` 临时签名验证，证书签名路径未在本次复验。重启脚本在 macOS 上以临时目录中的替身应用包验证（`open` 启动、按包内路径停止，`/Applications/Copool.app` 不受影响）；在 Ubuntu 20.04 上以替身程序验证了停止、超时后强制结束、运行中二进制被替换后仍能识别、启动后立即退出时报错，以及不影响其他位置运行的 Copool。Windows 的构建分派与重启（PowerShell 列进程、`taskkill`）尚未在 Windows 上运行。
+
 2026-11-27（Windows 续期锁 CI）：GitHub Actions `45951515160` 仅 Windows 的 `concurrent_takers_never_hold_the_lock_together` 失败，获取锁返回系统错误 5（Access is denied）；macOS 与 Ubuntu 24.04 通过。Windows 删除目录后，其他线程尚未关闭的目录句柄可使同路径暂时无法重新创建。现在获取 Claude Code 的两把续期锁时，对 Windows 的访问拒绝与共享冲突按原有退避、在原有总等待时间内重试；等旧锁时仍先释放已取到的当前锁，持续到超时的访问错误仍原样报告，其他平台的错误处理不变。保留并发互斥测试，新增 Windows 专用回归测试：用打开的目录句柄维持删除待完成状态，分别验证两把锁的等待、超时错误、旧锁等待时释放当前锁，以及句柄关闭后取得锁并保持互斥。本机 Ubuntu 20.04 使用 native SDK wrapper，核心测试 719 项通过、1 项忽略，13 项续期锁测试及 Rust 格式检查通过；首轮修复 CI `45952609798` 中 macOS、Ubuntu 的测试和构建通过，Windows 原并发测试通过，但新增测试未制造出删除待完成状态：当前 Rust 的 `remove_dir` 可使用立即释放路径名的 POSIX 删除。测试夹具改为显式调用 Win32 `RemoveDirectoryW`，保留句柄来确定性地制造删除待完成状态，所有原断言保留，待下一轮 CI 验证。未打包、安装或使用真实账号。
 
 2026-11-27（登录账号库审查修复）：对 `origin/main..main` 的审查发现并修复以下问题。导入：`login_store` 的导入区分来源（`Origin`）：Live 登录与浏览器登录照旧取代账号已有的 token；导出的 JSON 只有在比已有的一代更新、账号没有 token，或账号的登录已被判定过期时才取代；否则只更新账号信息，账号的错误与停用状态也保持不变，不再用可能已失效的 refresh token 覆盖仍可用的 token（此前去掉多代登录后，旧导出会直接覆盖）。Claude 读取到不一致的登录：Claude Code 的 token 与 `.claude.json` 的 `oauthAccount` 分开写入，在两次写入之间读取会把新账号的 token 配上旧账号的身份；此前 Copool 会按身份认作旧账号并采用这些 token，旧账号自己的 refresh token 随之丢失。现在，当 Claude Code 的登录带着池中从未见过、且比该账号更新的 token 时，先以这个 token 请求一次资料（经共享的账号代理，不用该账号的代理，最多等 5 秒）确认身份：确认是该账号才跟随，是别的账号则按资料认账号。资料请求失败或超时，这个登录按读取失败对待：当前选择保持不变，不采用其 token，Claude Code 可能正在使用的账号也不续期（报错说明无法读取或确认 Claude Code 的登录），一分钟内不重复请求；切换照常进行，此时把它当作不属于任何账号的登录，先备份再写入目标账号。等待首次手动刷新的账号不向上游请求，Claude Code 的续期照旧直接跟随。因此每次 Claude Code 续期当前账号后多一次资料请求。启动：`claude-accounts.json` 无法读取时不再阻止 Copool 打开，Claude 池从空开始，旧文件原样保留，与 Codex 的迁移一致。Claude 的 JSON 导入在写入任何一项之前，先检查所有只凭 token 匹配的项能否唯一确定账号。切换时等不到 Claude Code 的刷新锁，报错改为提示重试切换。另核实审查提出的 Codex 共享 token 疑点：Codex 每个工作区各自登录、token 各不相同，跟随时的共享 token 检查不会误拦，未改。新增测试：套件中旧导出不覆盖更新的 token；Claude 读到不一致的登录时不采用；资料不可达时选择不变、不续期、限制重试且切换照常；资料请求超时不拖住卡片列表；旧导出只救回登录已过期的账号；无法读取的旧存储不阻止启动；JSON 导入整批检查；切换的锁提示。其中旧导出（四个池各一）、读到不一致登录、资料不可达、旧导出救回与整批导入的测试已确认在去掉修复后失败；修复后核心 719 项测试通过，daemon 检查通过（警告数未变）。未在运行的 app 中或用真实账号验证。
@@ -202,16 +204,19 @@ cargo build -p copool-desktop --release --locked
 cargo check --manifest-path resources/proxyd-src/proxyd/Cargo.toml --locked
 ```
 
-构建脚本（在仓库根目录运行）：
+构建脚本（在仓库根目录运行）：各平台共用唯一入口 `scripts/build_rust_desktop.py`，它负责参数、UI 检查和 Cargo 参数（`scripts/build_common.py`），再交给本平台的模块：`macos_build.py`（打包、签名与校验，签名规则在 `macos_signing.py`）、`windows_build.py`（Visual Studio 环境与 NSIS 安装包）、`linux_build.py`（可执行文件及其共享库检查）。Linux 模块留有 `command_prefix`、`after_build`、`installation` 等钩子，供需要专用 GUI 环境或安装所构建版本的机器只改这些钩子，不另写构建脚本。
 
 ```sh
-python3 scripts/build_rust_desktop.py            # macOS：release 版 Copool.app
-python3 scripts/build_rust_desktop.py --debug    # 调试版应用包
+python3 scripts/build_rust_desktop.py            # macOS：release 版 Copool.app；Windows：NSIS 安装包；Linux：可执行文件
+python3 scripts/build_rust_desktop.py --debug    # 调试版
 python3 scripts/build_rust_desktop.py --target universal-apple-darwin
-python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（非 macOS 默认如此）
+python3 scripts/build_rust_desktop.py --no-bundle  # 只构建可执行文件（Linux 始终如此）
+python3 scripts/build_rust_desktop.py --offline  # 只用 Cargo 已下载的依赖
 ```
 
-脚本先运行前端 `node --check` 与 `desktop/tests`（`--skip-checks` 跳过），再用 Tauri CLI 打包；未安装 `cargo tauri` 时通过 `npx @tauri-apps/cli@^2` 调用。打包会经 `beforeBundleCommand` 构建 WidgetKit 扩展，之后先签小组件、再签主应用（ad-hoc，分别使用 `desktop/native` 下的 entitlements），并校验签名、架构和版本。
+`CARGO_TARGET_DIR`（相对路径按调用目录解析）与 `CARGO_BUILD_JOBS` 照常生效，脚本按前者查找产物。脚本先运行前端 `node --check` 与 `desktop/tests`（`--skip-checks` 跳过；未安装 Node 时跳过），再用 Tauri CLI 打包；未安装 `cargo tauri` 时通过 `npx @tauri-apps/cli@^2` 调用。macOS 打包会经 `beforeBundleCommand` 构建 WidgetKit 扩展，之后先签小组件、再签主应用（分别使用 `desktop/native` 下的 entitlements），并校验签名、架构和版本。Linux 构建后在可执行文件运行时的同一环境（命令前缀）下以 `ldd` 检查共享库，缺失即失败；指定 `--target` 交叉构建时不检查。
+
+重启脚本 `scripts/restart_copool.py` 同样各平台共用：只停止可执行文件位于所给位置的 Copool 进程（先 SIGTERM，Windows 为不带 `/F` 的 `taskkill`，超过 `--timeout` 秒仍在则强制结束），等其全部退出、释放数据目录后再从同一位置启动，并确认新进程仍在运行；其他位置运行的 Copool 不受影响，但若它占着单实例，新启动会退出并报错。macOS 用 `--app path/to/Copool.app`（经 `open` 启动），Windows 用 `--app` 指向 `Copool.exe` 或其安装目录，Linux 用 `--app` 指向可执行文件（经 `linux_build.command_prefix()` 启动），未给 `--app` 时重启 `linux_build.installation()` 指明的安装（`main` 上没有）。`--dry-run` 只列出将停止的进程与启动命令。构建从不自动重启或替换已安装的应用。
 
 产物为 `target/<release|debug>/bundle/macos/Copool.app`（指定 `--target` 时位于 `target/<triple>/…`，路径相对仓库根目录）。此包使用正常数据目录，不含烟测账号或测试环境覆盖；最低 macOS 版本为 14.0。2026-10-10 本机以该脚本生成 arm64 release 包并通过 `codesign --verify --deep --strict`；未经公证，不是分发版本。
 

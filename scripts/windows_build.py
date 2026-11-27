@@ -1,11 +1,47 @@
-"""Prepare Visual Studio for the shared desktop build entry point."""
+"""Windows steps of the shared desktop build: Visual Studio's environment and an
+unsigned NSIS installer."""
+import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 
+from build_common import DESKTOP, cargo_args, cargo_build, output_dir, run, target_dir, tauri_cli
 
-def prepare(target):
+
+def add_arguments(parser):
+    pass
+
+
+def prepare(args):
+    args.target = environment(args.target)
+
+
+def build(args):
+    if args.no_bundle:
+        print(f'Executable: {cargo_build(args)}')
+        return
+    config = {'build': {'beforeBundleCommand': None}, 'bundle': {'active': True}}
+    # As a file: npx.cmd passes its arguments through cmd.exe, which
+    # mangles JSON's quotes.
+    config_path = target_dir() / 'tauri-windows-config.json'
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config), encoding='utf-8')
+    command = [*tauri_cli(), 'build', '--bundles', 'nsis', '--ci', '--config', str(config_path)]
+    if args.debug:
+        command.append('--debug')
+    command += ['--target', args.target]
+    run(command + ['--', *cargo_args(args)], cwd=DESKTOP)
+    base = output_dir(args) / 'bundle/nsis'
+    installers = sorted(base.glob('*-setup.exe'))
+    if not installers:
+        raise SystemExit(f'No Windows installer found in {base}')
+    for installer in installers:
+        print(f'Windows installer (unsigned): {installer}')
+
+
+def environment(target):
+    """Imports Visual Studio's C++ environment for the target; returns the target."""
     target = target or 'x86_64-pc-windows-msvc'
     architectures = {'x86_64-pc-windows-msvc': 'x64', 'aarch64-pc-windows-msvc': 'arm64'}
     if target not in architectures:
