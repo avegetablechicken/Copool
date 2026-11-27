@@ -459,7 +459,7 @@ pub(crate) async fn renew_token(
                 .unwrap_or(3600);
             let renewed = Renewed {
                 access: access.to_owned(),
-                expires_at: now_unix_seconds() + lifetime,
+                expires_at: now_unix_seconds().saturating_add(lifetime),
                 lifetime,
                 // An empty refresh token is none: the login keeps its own.
                 refresh: body["refresh_token"]

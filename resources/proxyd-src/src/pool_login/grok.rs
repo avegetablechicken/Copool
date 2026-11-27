@@ -206,7 +206,10 @@ pub(crate) fn signed_in(tokens: &Value, now: i64) -> Result<Value, String> {
         }
     }
     document.insert("refresh_token".into(), refresh.into());
-    document.insert("expires_at".into(), timestamp(now + lifetime).into());
+    document.insert(
+        "expires_at".into(),
+        timestamp(now.saturating_add(lifetime)).into(),
+    );
     document.insert("oidc_issuer".into(), ISSUER.into());
     document.insert("oidc_client_id".into(), CLIENT_ID.into());
     Ok(Value::Object(document))

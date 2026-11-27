@@ -207,7 +207,7 @@ pub(crate) fn apply_renewal(
             if n.as_f64()
                 .is_some_and(|n| n >= super::MILLISECONDS_FROM as f64) =>
         {
-            Value::from(expires_at * 1000)
+            Value::from(expires_at.saturating_mul(1000))
         }
         Some(Value::Number(_)) => Value::from(expires_at),
         _ => chrono::DateTime::from_timestamp(expires_at, 0)
@@ -246,7 +246,9 @@ pub(crate) fn signed_in(tokens: &Value, now: i64) -> Result<Value> {
         "expiry": "",
         "expires_in": expires_in,
     }, "auth_method": "consumer"});
-    apply_renewal(&mut document, access, now + expires_in, expires_in, None);
+    // Saturating: a lifetime too long for the clock is as good as forever.
+    let expires_at = now.saturating_add(expires_in);
+    apply_renewal(&mut document, access, expires_at, expires_in, None);
     let email = text("id_token")
         .and_then(|jwt| jwt.split('.').nth(1))
         .and_then(|payload| {
@@ -522,6 +524,18 @@ mod tests {
         let none = json!({"access_token": " ", "refresh_token": "r", "email": ""});
         assert_eq!(access_token(&none), None);
         assert_eq!(email(&none), None);
+    }
+
+    #[test]
+    fn a_lifetime_too_long_for_the_clock_does_not_overflow() {
+        let tokens = json!({"access_token": "a", "refresh_token": "r", "expires_in": i64::MAX});
+        let document = signed_in(&tokens, 1_783_846_801).unwrap();
+        assert_eq!(document["token"]["expires_in"], i64::MAX);
+        assert_eq!(document["token"]["expiry"], Value::Null);
+        let mut flat =
+            json!({"accessToken": "a", "refreshToken": "r", "expiresAt": 1_000_000_000_000_i64});
+        apply_renewal(&mut flat, "b", i64::MAX, i64::MAX, None);
+        assert_eq!(flat["expiresAt"], i64::MAX);
     }
 
     #[test]

@@ -282,7 +282,7 @@ async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Resu
                 .unwrap_or(6 * 60 * 60);
             Renewed {
                 access: access.to_owned(),
-                expires_at: now_unix_seconds() + lifetime,
+                expires_at: now_unix_seconds().saturating_add(lifetime),
                 refresh: body["refresh_token"].as_str().map(str::to_owned),
             }
         }

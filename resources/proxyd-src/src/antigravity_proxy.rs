@@ -436,6 +436,10 @@ mod tests {
             assert_eq!(renewed["expiresIn"], 3599);
         }
         assert_eq!(renew(json!("s")).await["refreshToken"], "s");
+        // A lifetime too long for the clock saturates.
+        let body = json!({"access_token": "b", "expires_in": i64::MAX});
+        let renewed = renew_remote(&auth, "", &Renews(body)).await.unwrap();
+        assert_eq!(renewed["expiresAt"], i64::MAX);
     }
 
     fn req(model: &str, body: Value) -> Generate {
