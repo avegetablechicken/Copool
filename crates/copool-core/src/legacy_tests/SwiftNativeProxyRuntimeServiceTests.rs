@@ -251,6 +251,8 @@ async fn testHostAPIOnlyDisablesCurrentAuthSyncAfterSuccessfulProxyResponse() {
 #[tokio::test]
 async fn testHostAPIOnlyRecordsActiveCandidateWithoutSwitchingSelection() {
     let (_dir, app) = fixture();
+    // Shared, as the app is: the proxy follows its choice unless told not to.
+    let app = app.into_shared();
     save_fixture(&app, json!({"accounts":[stored("a","a","a")]}));
     let mut settings = app.configuration().unwrap();
     settings.local_proxy_host_api_only = true;
