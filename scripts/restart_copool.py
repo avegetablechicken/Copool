@@ -96,9 +96,26 @@ def processes():
 
 
 def running(scope):
+    try:
+        identity = scope.stat()
+    except OSError:
+        identity = None
+
     def inside(path):
         path = Path(path)
-        return path == scope or scope in path.parents
+        if path == scope or scope in path.parents:
+            return True
+        # The same place by another name: a symlink (macOS's /tmp), a junction
+        # or 8.3 name, another case on a case-insensitive volume.
+        if identity is None or not path.is_absolute():
+            return False
+        for place in (path, *path.parents):
+            try:
+                if os.path.samestat(place.stat(), identity):
+                    return True
+            except OSError:
+                continue
+        return False
     return sorted(pid for pid, path in processes() if pid != os.getpid() and inside(path))
 
 
