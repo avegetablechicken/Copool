@@ -97,7 +97,8 @@ async fn testSaveSub2APIProviderStoresPasswordOutsideSettings() {
             .as_deref(),
         Some("test-secret")
     );
-    for file in ["settings.json", "accounts.json"] {
+    // Nor where the providers are kept now, nor where they were.
+    for file in ["settings.json", crate::codex_pool::FILE, "accounts.json"] {
         let raw = std::fs::read_to_string(app.paths.data_dir.join(file)).unwrap();
         assert!(!raw.contains("test-secret"), "{file}");
     }
