@@ -606,10 +606,15 @@ async function finishEditing() {
   const controller = accountsController;
   const state = controller.editing;
   if (!state || state.saving) return;
-  if (state.proxy && !(await controller.saveProxyDraft(state))) {
-    // Done shows enabled again, to save the corrected proxy.
-    renderEditing();
-    return;
+  if (state.proxy) {
+    const saved = await controller.saveProxyDraft(state);
+    // Turned back, superseded or another pool shown meanwhile: nothing to turn.
+    if (controller !== accountsController || controller.editing !== state) return;
+    if (!saved) {
+      // Done shows enabled again, to save the corrected proxy.
+      renderEditing();
+      return;
+    }
   }
   await turnCard(state.key, -1, () => controller.close(state));
 }

@@ -121,6 +121,31 @@ test("an invalid proxy keeps the card open with its error", async () => {
   assert.equal(controller.editing, null);
 });
 
+test("a card turned back or superseded while its proxy saves is not turned again", async () => {
+  const turned = [];
+  const { scope, controller } = editor([{ id: "card", proxyUrl: "" }, { id: "other", proxyUrl: "" }], {
+    turnCard: (key, direction, change) => (turned.push([key, direction]), change()),
+  });
+  scope.renderEditing = () => turned.push(["render"]);
+  for (const meanwhile of [
+    () => controller.stopEditing(),
+    () => controller.edit("other")(),
+    () => (scope.accountsController = new Accounts(async () => [], [], () => {}, () => {}, { pool: "claude" })),
+  ]) {
+    scope.accountsController = controller;
+    controller.stopEditing();
+    const state = await edited(controller, "card");
+    state.proxy.url = "http://127.0.0.1:1";
+    let save;
+    controller.saveProxyDraft = () => new Promise((resolve) => (save = resolve));
+    const finishing = scope.finishEditing();
+    await meanwhile();
+    save(true);
+    await finishing;
+    assert.deepEqual(turned, []);
+  }
+});
+
 test("which card shows its back is part of what the cards render from", () => {
   // A failed removal closes the back without changing the cards.
   const renderState = between("function renderAccounts(accounts) {", "if (P.cardsEqual(renderState");
