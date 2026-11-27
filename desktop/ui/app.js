@@ -1160,6 +1160,7 @@ function cardControls(actions, full, owner) {
       control.dataset.available = String(shown.available);
       control.title = shown.title;
       control.setAttribute("aria-label", `${shown.title} ${full}`);
+      control.disabled = shown.disabled;
       node.append(control);
     }
   }

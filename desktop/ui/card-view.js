@@ -422,7 +422,8 @@
             label: tr("common.refresh_usage"),
             nextAt: account.nextRefreshAt ?? null,
             spinning: ui.refreshing,
-            disabled: false,
+            // A card refreshing locks its own refresh button.
+            disabled: !!ui.refreshing,
           },
       menu: { label: tr("common.refresh_usage"), disabled: busy },
     });
@@ -449,7 +450,13 @@
       id: target.id,
       button: hidden || current
         ? null
-        : { place: "footer", title: tr("accounts.card.switch_to_this"), available },
+        : {
+            place: "footer",
+            title: tr("accounts.card.switch_to_this"),
+            available,
+            // A switch locks only its own card's switch button.
+            disabled: available === false || ctx.switchingId === target.id,
+          },
       menu: reapply || !current
         ? {
             label: tr("accounts.card.switch_to_this"),
@@ -496,7 +503,7 @@
         // Its first card due.
         nextAt: nextAt.length ? Math.min(...nextAt) : null,
         spinning: refreshing,
-        disabled: uis.some((ui) => ui.hi === "sent"),
+        disabled: refreshing || uis.some((ui) => ui.hi === "sent"),
       },
       menu: {
         label: tr("common.refresh_usage"),

@@ -391,7 +391,8 @@ test("A refresh button spins while its card refreshes and gives way to a hi or r
     place: "footer", label: "common.refresh_usage", nextAt: NOW + 90, spinning: false, disabled: false,
   });
   assert.equal(refresh({ refreshing: true }).spinning, true);
-  assert.equal(refresh({ refreshing: true }).disabled, false);
+  // Spinning, it is locked: a render without syncButtons keeps it so.
+  assert.equal(refresh({ refreshing: true }).disabled, true);
   // A hi or renewal under way shows in its place.
   assert.equal(refresh({ hi: "sent" }), null);
   assert.equal(refresh({ renewing: true }), null);
@@ -409,9 +410,13 @@ test("A card not in use switches; the one in use does not", () => {
   assert.deepEqual(action(view, "switch"), {
     kind: "switch",
     id: "a",
-    button: { place: "footer", title: "accounts.card.switch_to_this", available: false },
+    button: { place: "footer", title: "accounts.card.switch_to_this", available: false, disabled: true },
     menu: { label: "accounts.card.switch_to_this", disabled: true },
   });
+  // An available card's switch button locks only while it is switched to.
+  const switchButton = (switchingId) =>
+    action(V.cardView({ ...card, available: true }, context({ switchingId })), "switch").button.disabled;
+  assert.deepEqual([switchButton(null), switchButton("b"), switchButton("a")], [false, false, true]);
   assert.equal(action(V.cardView({ ...card, available: true }, context()), "switch").menu.disabled, false);
   assert.equal(action(V.cardView({ ...card, available: true }, context({ switchingId: "b" })), "switch").menu.disabled, true);
   assert.equal(action(V.cardView({ ...card, isCurrent: true }, context()), "switch").button, null);
@@ -492,6 +497,9 @@ test("A provider's group shares its cards' warnings, refresh and switch", () => 
   const busy = V.providerView(group, "Team", context({ ui: (id) => ({ refreshing: id === "sub2api-team-3" }) }));
   assert.deepEqual(buttons(busy), ["refresh", "switch"]);
   assert.equal(action(busy, "refresh").button.spinning, true);
+  assert.equal(action(busy, "refresh").button.disabled, true);
+  assert.equal(action(view, "refresh").button.disabled, false);
+  assert.equal(action(view, "switch").button.disabled, false);
   const greeting = V.providerView(group, "Team", context({ ui: (id) => ({ hi: id === "sub2api-team-1" ? "sent" : null }) }));
   assert.equal(action(greeting, "refresh").button.disabled, true);
   // In use, it says so once and has no switch button.

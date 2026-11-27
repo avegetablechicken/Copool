@@ -107,3 +107,19 @@ test("Sign in again pins the workspace only for a card with a workspace tag", ()
   // Without one, whatever the raw plan and team, any workspace may sign in.
   assert.deepEqual(signInAgain(expired), [null, "reauthenticate"]);
 });
+
+test("A card's refresh and switch buttons are painted locked as card-view.js says, without syncButtons", () => {
+  const scope = app();
+  scope.refreshTooltip = () => {};
+  const paint = (account, extra = {}) => {
+    const view = V.cardView(account, { ...context(), ...extra });
+    const controls = scope.cardControls(view.actions, view.full, { account }).children;
+    const disabled = (glyph) => controls.find((c) => c.glyph === glyph)?.disabled;
+    return [disabled("refresh"), disabled("switch")];
+  };
+  const card = { id: "a", email: "a@example.com", isCurrent: false, available: true };
+  assert.deepEqual(paint(card), [false, false]);
+  assert.deepEqual(paint({ ...card, available: false }), [false, true]);
+  assert.deepEqual(paint(card, { switchingId: "a" }), [false, true]);
+  assert.deepEqual(paint(card, { ui: () => ({ refreshing: true }) }), [true, false]);
+});
