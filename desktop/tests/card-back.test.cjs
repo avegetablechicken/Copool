@@ -121,6 +121,12 @@ test("an invalid proxy keeps the card open with its error", async () => {
   assert.equal(controller.editing, null);
 });
 
+test("which card shows its back is part of what the cards render from", () => {
+  // A failed removal closes the back without changing the cards.
+  const renderState = between("function renderAccounts(accounts) {", "if (P.cardsEqual(renderState");
+  assert.match(renderState, /accountsController\.editing\?\.key \?\? null/);
+});
+
 test("a provider's group edits its provider's proxy, saved once through its first card", async () => {
   const cards = [member(1, { proxyUrl: "socks5://h:1" }), member(2, { proxyUrl: "socks5://h:1" }), { id: "solo", proxyUrl: "" }];
   const { controller, saved } = editor(cards);

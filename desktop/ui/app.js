@@ -1467,6 +1467,9 @@ function renderAccounts(accounts) {
     // What each card has under way, and the pool its model switch shows.
     accounts.map((account) => accountsController.cardState(account.id)),
     switchingId,
+    // Which card shows its back: a removal closes it before the cards change,
+    // and they may not change at all when it fails.
+    accountsController.editing?.key ?? null,
     accountsController.adding,
     accountsController.authorizing,
     pool,
