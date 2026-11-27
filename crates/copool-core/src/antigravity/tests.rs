@@ -715,6 +715,98 @@ async fn switching_writes_the_login_in_its_form_and_keeps_an_unknown_one() {
     assert_eq!(*h.live.writes.lock().unwrap(), 2);
 }
 
+/// The login agy's login file holds.
+fn token_file(app: &Application) -> Option<Document> {
+    pool_login::antigravity::decode(&fs::read(app.antigravity_token_file()).ok()?)
+}
+
+#[tokio::test]
+async fn agys_login_file_takes_each_switch_and_its_later_logins_are_followed() {
+    let h = harness(true).await;
+    for user in ["alice", "bob"] {
+        h.app
+            .import_json(
+                Pool::Antigravity,
+                &json!({"document": login_of(user, &format!("access-{user}"), later()), "wrapped": true})
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+    }
+    let id = |user: &str| {
+        h.app
+            .antigravity_load()
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|a| a.email.as_deref() == Some(format!("{user}@gmail.com").as_str()))
+            .unwrap()
+            .id
+    };
+    h.live.sign_in(&login_of("alice", "access-alice", later()));
+    // Before agy has run here, no file is made.
+    h.app
+        .switch_account(Pool::Antigravity, &id("bob"))
+        .await
+        .unwrap();
+    assert!(token_file(&h.app).is_none());
+
+    // Once it has, each switch gives the file the login, unwrapped.
+    fs::create_dir_all(h.app.antigravity_token_file().parent().unwrap()).unwrap();
+    h.app
+        .switch_account(Pool::Antigravity, &id("alice"))
+        .await
+        .unwrap();
+    let file = token_file(&h.app).unwrap();
+    assert!(!file.wrapped);
+    assert_eq!(
+        pool_login::antigravity::refresh_token(&file.value).as_deref(),
+        Some("refresh-alice")
+    );
+    assert!(h.live.document().wrapped);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(h.app.antigravity_token_file())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    // agy over SSH renews there, then signs in to bob there: both followed.
+    let write_file =
+        |document: &Value| fs::write(h.app.antigravity_token_file(), document.to_string()).unwrap();
+    write_file(&login_of("alice", "renewed-over-ssh", later() + 60));
+    let shown = cards(&h.app).await;
+    let alice = shown.iter().find(|a| a.id == id("alice")).unwrap();
+    assert!(alice.is_current);
+    assert_eq!(
+        pool_login::antigravity::access_token(&stored_document(&h.app, &alice.id)).as_deref(),
+        Some("renewed-over-ssh")
+    );
+    write_file(&login_of("bob", "bob-over-ssh", later() + 120));
+    let current: Vec<_> = cards(&h.app)
+        .await
+        .into_iter()
+        .filter(|a| a.is_current)
+        .map(|a| a.id)
+        .collect();
+    assert_eq!(current, [id("bob")]);
+
+    // A login the item refuses leaves the file as it was.
+    let before = fs::read(h.app.antigravity_token_file()).unwrap();
+    h.live
+        .refused
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h
+        .app
+        .switch_account(Pool::Antigravity, &id("alice"))
+        .await
+        .is_err());
+    assert_eq!(fs::read(h.app.antigravity_token_file()).unwrap(), before);
+}
+
 #[tokio::test]
 async fn imports_are_checked_whole_and_folded_into_known_accounts() {
     let h = harness(false).await;

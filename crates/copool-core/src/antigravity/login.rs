@@ -5,7 +5,9 @@
 //! `go-keyring-base64:`, and on macOS reached only through `/usr/bin/security`
 //! (see `super::security`). A switch writes another account's document there,
 //! in the same form; a renewal of the login it holds updates its tokens in
-//! place, and nothing else. The document itself is read and written by
+//! place, and nothing else. Over SSH agy uses `TOKEN_FILE` beside its
+//! settings instead (on macOS only while the Keychain is locked): the pool
+//! writes it alike and reads whichever of the two holds the later login. The document itself is read and written by
 //! `crate::pool_login::antigravity`.
 use crate::vault::KeychainAccess;
 
@@ -13,6 +15,9 @@ type Result<T> = std::result::Result<T, String>;
 
 pub(crate) const SERVICE: &str = "gemini";
 pub(crate) const ACCOUNT: &str = "antigravity";
+/// agy's login file beside its settings, which it uses instead of the item
+/// over SSH: the same document, unwrapped.
+pub(crate) const TOKEN_FILE: &str = "antigravity-oauth-token";
 /// The item, as errors name it.
 pub(super) const ITEM: &str = "the Antigravity login (Keychain item gemini/antigravity)";
 

@@ -181,11 +181,21 @@ impl LoginPool for AntigravityLogins<'_> {
     async fn read_live(&self, access: KeychainAccess) -> Result<Option<Document>> {
         self.0.antigravity_read_live(access).await
     }
+    /// The item and agy's login file alike: the file first, put back
+    /// should the item refuse the login.
     async fn write_live(&self, login: &Document, access: KeychainAccess) -> Result<()> {
-        self.0
+        let previous = self.0.antigravity_write_token_file(login)?;
+        let written = self
+            .0
             .antigravity_live()
             .write(pool_login::antigravity::encode(login), access)
-            .await
+            .await;
+        if written.is_err() {
+            if let Some(previous) = previous {
+                self.0.antigravity_restore_token_file(previous);
+            }
+        }
+        written
     }
     fn document(login: &Document) -> &Value {
         &login.value
@@ -384,12 +394,74 @@ impl Application {
     }
     /// Antigravity's login: none when absent; an error when it cannot be
     /// read or is no login.
+    /// agy's login: the item's, or its login file's when that holds a
+    /// later generation, as agy renews or signs in there over SSH. Out of
+    /// reach of the item, as over SSH it may be, the file's.
     async fn antigravity_read_live(&self, access: KeychainAccess) -> Result<Option<Document>> {
-        match self.antigravity_live().read(access).await? {
-            None => Ok(None),
-            Some(bytes) => pool_login::antigravity::decode(&bytes)
+        let item = match self.antigravity_live().read(access).await {
+            Ok(None) => Ok(None),
+            Ok(Some(bytes)) => pool_login::antigravity::decode(&bytes)
                 .map(Some)
-                .ok_or(CREDENTIALS_INVALID.into()),
+                .ok_or(CREDENTIALS_INVALID.to_owned()),
+            Err(error) => Err(error),
+        };
+        let file = self.antigravity_token_file_login();
+        match (item, file) {
+            (Ok(Some(item)), Some(file)) => Ok(Some(
+                if <AntigravityLogins as LoginPool>::newer(&file.value, &item.value) {
+                    file
+                } else {
+                    item
+                },
+            )),
+            (Ok(item), None) => Ok(item),
+            (Ok(None) | Err(_), Some(file)) => Ok(Some(file)),
+            (Err(error), None) => Err(error),
+        }
+    }
+    /// agy's login file, beside its settings: what it reads instead of the
+    /// item over SSH (on macOS, while the Keychain is locked).
+    fn antigravity_token_file(&self) -> PathBuf {
+        self.antigravity_settings_path()
+            .with_file_name(login::TOKEN_FILE)
+    }
+    /// The login agy's login file holds; none when there is none, or none
+    /// agy could use.
+    fn antigravity_token_file_login(&self) -> Option<Document> {
+        let bytes = std::fs::read(self.antigravity_token_file()).ok()?;
+        pool_login::antigravity::decode(&bytes)
+    }
+    /// Gives agy's login file the login, as agy writes it there: where agy
+    /// keeps one, else once agy has run here (on macOS, where agy keeps its
+    /// login in the Keychain over SSH too, only where it keeps one).
+    /// Returns what the file held, when it was written.
+    fn antigravity_write_token_file(&self, login: &Document) -> Result<Option<Option<Vec<u8>>>> {
+        let path = self.antigravity_token_file();
+        let previous = std::fs::read(&path).ok();
+        let agy_ran = path.parent().is_some_and(std::path::Path::is_dir);
+        if previous.is_none() && (cfg!(target_os = "macos") || !agy_ran) {
+            return Ok(None);
+        }
+        crate::persistence::write_json(&path, &login.value)
+            .map_err(|e| format!("Could not write agy's login file: {e}"))?;
+        Ok(Some(previous))
+    }
+    fn antigravity_restore_token_file(&self, previous: Option<Vec<u8>>) {
+        let path = self.antigravity_token_file();
+        let restored = match previous {
+            Some(bytes) => (|| {
+                use std::io::Write;
+                let parent = path.parent().ok_or("Invalid file path")?;
+                let mut file =
+                    tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+                file.write_all(&bytes).map_err(|e| e.to_string())?;
+                file.persist(&path).map_err(|e| e.to_string())?;
+                Ok::<(), String>(())
+            })(),
+            None => std::fs::remove_file(&path).map_err(|e| e.to_string()),
+        };
+        if let Err(error) = restored {
+            log::warn!("agy's login file was not put back: {error}");
         }
     }
     /// The pool, following the login Antigravity uses.

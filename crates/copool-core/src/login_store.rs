@@ -2,7 +2,7 @@
 //! own and whose tool signs in with one Live login: Codex (its `auth.json`),
 //! Claude (Claude Code's credentials with its `oauthAccount`), Grok (Grok
 //! Build's `auth.json`) and Antigravity (agy's item in the system's
-//! credential store). The store follows the Live login, imports logins, deletes and
+//! credential store, with the login file agy uses instead over SSH). The store follows the Live login, imports logins, deletes and
 //! edits accounts, makes the switch's write to the Live login, and renews
 //! tokens: it uses the Live login's renewal when the tool made one, and
 //! puts its own back there. Each pool supplies only its facts, as a
