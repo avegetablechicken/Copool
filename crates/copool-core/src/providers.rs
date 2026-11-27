@@ -230,7 +230,10 @@ impl Application {
             .find(|m| m.key.eq_ignore_ascii_case(key))
             .ok_or_else(|| crate::provider_registry::PROVIDER_NOT_FOUND.into())
     }
-    fn member_connection(&self, pool: Pool, member: &Member) -> Result<sub2api::Connection> {
+    /// The provider's connection as last saved: a save under way, which
+    /// keeps its password after its record, is waited for.
+    async fn member_connection(&self, pool: Pool, member: &Member) -> Result<sub2api::Connection> {
+        let _saved = self.provider_saves.read().await;
         self.registry(pool).connection(&member.key)
     }
     /// Edits a provider's cards where its pool keeps them; none when it was
@@ -314,7 +317,8 @@ impl Application {
             Pool::Grok => return self.grok_unavailable(),
         };
         let (member, account) = self.card(pool, id)?;
-        self.member_connection(pool, &member)?
+        self.member_connection(pool, &member)
+            .await?
             .test_account(account.id, model)
             .await
     }
@@ -371,7 +375,7 @@ impl Application {
             .collect();
         let _activity: Vec<_> = cards.iter().map(|id| self.begin_refresh(id)).collect();
         let fetched = async {
-            let connection = self.member_connection(pool, &member)?;
+            let connection = self.member_connection(pool, &member).await?;
             let now = now_unix_seconds();
             // A sync lists every account. A failure leaves the cards as they
             // are now, with its error.
@@ -504,12 +508,21 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct Secrets(Mutex<HashMap<String, String>>);
+    struct Secrets(
+        Mutex<HashMap<String, String>>,
+        /// Writes take this long, once started.
+        std::sync::atomic::AtomicU64,
+        /// A write has started.
+        std::sync::atomic::AtomicBool,
+    );
     impl SecretStore for Secrets {
         fn get(&self, id: &str) -> Result<Option<String>> {
             Ok(self.0.lock().unwrap().get(id).cloned())
         }
         fn set(&self, id: &str, value: &str) -> Result<()> {
+            use std::sync::atomic::Ordering::SeqCst;
+            self.2.store(true, SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(self.1.load(SeqCst)));
             self.0.lock().unwrap().insert(id.into(), value.into());
             Ok(())
         }
@@ -655,6 +668,36 @@ mod tests {
                 .password,
             "secret"
         );
+    }
+
+    #[tokio::test]
+    async fn a_connection_is_never_read_half_saved() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let earlier = Earlier::new(json!({}), json!({"accounts": []}));
+        let app = earlier.open();
+        let form = |admin: &str, password: &str| {
+            json!({"id": ID, "name": "my", "username": "admin@example.test",
+                "adminBaseURL": admin, "password": password})
+        };
+        app.save_provider(Pool::Codex, form("https://old.test/api/v1", "old"))
+            .await
+            .unwrap();
+        earlier.secrets.1.store(300, SeqCst);
+        earlier.secrets.2.store(false, SeqCst);
+        let member = app.member(Pool::Codex, ID).unwrap();
+        let (saved, read) = tokio::join!(
+            app.save_provider(Pool::Codex, form("https://new.test/api/v1", "new")),
+            async {
+                // Read while the new password is being kept.
+                while !earlier.secrets.2.load(SeqCst) {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                app.member_connection(Pool::Codex, &member).await.unwrap()
+            }
+        );
+        saved.unwrap();
+        assert!(read.admin_base.contains("new.test"), "{}", read.admin_base);
+        assert_eq!(read.configuration.password, "new");
     }
 
     #[tokio::test]

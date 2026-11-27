@@ -174,6 +174,8 @@ impl<A: Adapter> Registry<'_, A> {
         if draft.as_ref().id.trim().is_empty() {
             draft.as_mut().id = uuid::Uuid::new_v4().to_string();
         }
+        // Its connection is not read until both its record and password are.
+        let _saving = self.app.provider_saves.write().await;
         // A provider the tool does not route yet is saved all the same.
         let routed = self
             .adapter

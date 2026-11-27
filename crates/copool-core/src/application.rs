@@ -338,6 +338,9 @@ pub struct Application {
     pub(crate) state: AppState,
     pub(crate) operations: Mutex<()>,
     proxy_operations: Mutex<()>,
+    /// Held to save a provider, whose password is kept apart from its
+    /// record, and to read its connection: never one half saved.
+    pub(crate) provider_saves: tokio::sync::RwLock<()>,
     pub(crate) codex: crate::login_store::Locks,
     /// Reads of Codex's `auth.json` answer this late with what was there
     /// when asked.
@@ -421,6 +424,7 @@ impl Application {
             state: AppState::default(),
             operations: Mutex::new(()),
             proxy_operations: Mutex::new(()),
+            provider_saves: Default::default(),
             codex: Default::default(),
             #[cfg(test)]
             codex_live_read_delay_ms: Default::default(),
