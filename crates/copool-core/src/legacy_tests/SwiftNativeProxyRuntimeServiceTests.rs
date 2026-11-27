@@ -33,10 +33,31 @@ fn setup_provider(app: &Application, id: &str, base: &str, profile: bool) -> Pro
         username: "admin@example.test".into(),
         allow_insecure_tls: true,
         imported_account_ids: vec![42, 43],
+        cached_accounts: [42, 43]
+            .map(|id| {
+                serde_json::from_value(
+                    json!({"id": id, "name": "Cached", "accountType": "oauth", "status": "active"}),
+                )
+                .unwrap()
+            })
+            .into(),
         ..Default::default()
     };
     store_provider(app, &p);
     p
+}
+#[tokio::test]
+async fn testLoadCandidatesSkipsAProviderNoneOfWhoseAccountsSub2APIStillServes() {
+    let (_dir, app) = fixture();
+    let mut p = setup_provider(&app, "my", "https://sub2.test/v1", false);
+    for account in &mut p.cached_accounts {
+        account.status = "missing".into();
+    }
+    store_provider(&app, &p);
+    let candidates =
+        proxy_integration::candidates_with_keys(&app.paths, |_| Some("provider-api-key".into()))
+            .unwrap();
+    assert!(candidates.is_empty());
 }
 /// Puts a provider in the Codex account store, in place of one with its id.
 fn store_provider(app: &Application, p: &ProviderRecord) {

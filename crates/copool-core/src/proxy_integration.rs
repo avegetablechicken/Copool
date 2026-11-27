@@ -255,22 +255,24 @@ pub(crate) fn candidates_with_keys(
         let Some(key) = resolve_key(def).filter(|s| !s.is_empty()) else {
             continue;
         };
+        // A provider none of whose cards Sub2api still serves is no route,
+        // as in the Claude and Antigravity proxies.
         let ids = &provider.imported_account_ids;
-        let Some(&first) = ids.iter().min() else {
-            continue;
-        };
-        let representative = provider
+        let Some(representative) = provider
             .cached_accounts
             .iter()
-            .filter(|a| ids.contains(&a.id))
+            .filter(|a| ids.contains(&a.id) && a.status.eq_ignore_ascii_case("active"))
             .max_by(|a, b| {
                 crate::ranking::remaining_score(&a.summary(String::new()))
                     .total_cmp(&crate::ranking::remaining_score(&b.summary(String::new())))
             })
-            .cloned();
+            .cloned()
+        else {
+            continue;
+        };
         let route = format!("sub2api-provider:{}", provider.name.to_lowercase());
         let auth = json!({"tokens":{"access_token":key,"account_id":route,"id_token":""},"copoolProvider":{"id":provider.name,"baseUrl":base,"apiKey":key,"allowInsecureTLS":provider.allow_insecure_tls,"preferred":current.id.eq_ignore_ascii_case(&provider.name)}});
-        let stored:StoredAccount=serde_json::from_value(json!({"id":route,"label":provider.name,"accountId":route,"authJson":auth,"proxyUrl":provider.proxy_url.trim(),"addedAt":representative.as_ref().map(|a|a.id).unwrap_or(first),"updatedAt":0,"usage":representative.and_then(|a|a.usage)})).map_err(|e|e.to_string())?;
+        let stored:StoredAccount=serde_json::from_value(json!({"id":route,"label":provider.name,"accountId":route,"authJson":auth,"proxyUrl":provider.proxy_url.trim(),"addedAt":representative.id,"updatedAt":0,"usage":representative.usage})).map_err(|e|e.to_string())?;
         result.push(stored);
     }
     Ok(result)
