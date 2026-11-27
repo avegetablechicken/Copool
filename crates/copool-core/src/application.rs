@@ -2,7 +2,7 @@ use crate::{
     models::*,
     platform::SyncAgent,
     pool::Pool,
-    pool_login::{codex, Identity, OAuthCredential},
+    pool_login::{codex, OAuthCredential},
     proxy_service,
     state::AppState,
     utils::now_unix_seconds,
@@ -549,14 +549,7 @@ impl Application {
                     let Some(app) = pool.upgrade() else {
                         return Ok(());
                     };
-                    if app.codex_follow_proxy(&id, &auth).await? {
-                        let credential = auth
-                            .get("copoolProvider")
-                            .is_none()
-                            .then(|| codex::credential(&auth, &Identity::default()));
-                        app.after_switch(Pool::Codex, credential).await?;
-                    }
-                    Ok(())
+                    app.codex_follow_proxy(&id, &auth).await.map(|_| ())
                 })
             }));
         }

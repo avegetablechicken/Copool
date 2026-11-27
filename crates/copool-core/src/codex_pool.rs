@@ -587,8 +587,10 @@ impl Application {
     /// under the operations lock: a refresh renewing the account meanwhile
     /// has kept its renewal before the switch reads it. The proxy asks on
     /// every answered request, so what Codex already uses is told without
-    /// the lock, which a refresh holds across its requests. Returns whether
-    /// it was switched.
+    /// the lock, which a refresh holds across its requests. The agents a
+    /// switch syncs are given the login written to Codex, not `auth`, which
+    /// a renewal may have replaced meanwhile. Returns whether it was
+    /// switched.
     pub(crate) async fn codex_follow_proxy(&self, id: &str, auth: &Value) -> Result<bool> {
         if self.preferences()?.host_api_only || !self.codex_proxy_switches(id, auth)? {
             return Ok(false);
@@ -599,13 +601,18 @@ impl Application {
         if self.preferences()?.host_api_only || !self.codex_proxy_switches(id, auth)? {
             return Ok(false);
         }
-        if let Some(provider) = auth.get("copoolProvider") {
+        let credential = if let Some(provider) = auth.get("copoolProvider") {
             let provider = provider["id"].as_str().ok_or("Invalid provider")?;
             codex_config::switch(&self.codex_config_path(), provider)?;
             self.publish();
-            return Ok(true);
-        }
-        self.codex_switch_login(id).await?;
+            None
+        } else {
+            let target = self.codex_switch_login(id).await?;
+            let login = codex::normalized_auth_for_write(target.document)?;
+            Some(codex::credential(&login, &Identity::default()))
+        };
+        drop(_op);
+        self.after_switch(Pool::Codex, credential).await?;
         Ok(true)
     }
     /// Whether following the proxy to the account would switch Codex: to

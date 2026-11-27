@@ -466,6 +466,18 @@ async fn testProxySwitchToAnAccountBeingRenewedGivesCodexTheRenewal() {
     );
     let app = std::sync::Arc::new(app);
     app.switch_account(Pool::Codex, "a").await.unwrap();
+    // The agents a switch syncs are given the login Codex is given.
+    let synced = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    app.on_switch_effects({
+        let synced = synced.clone();
+        std::sync::Arc::new(move |_, _, credential| {
+            synced
+                .lock()
+                .unwrap()
+                .push(credential.and_then(Result::ok).map(|c| c.access));
+            Box::pin(async { Ok(Default::default()) })
+        })
+    });
     let b = app.codex_load().unwrap().accounts[1].clone();
     *network.rejected_access_token.lock().unwrap() = b.document["tokens"]["access_token"]
         .as_str()
@@ -499,6 +511,10 @@ async fn testProxySwitchToAnAccountBeingRenewedGivesCodexTheRenewal() {
     let current: Value =
         serde_json::from_slice(&std::fs::read(&app.paths.codex_auth).unwrap()).unwrap();
     assert_eq!(current["tokens"]["access_token"], "refreshed-test-only");
+    assert_eq!(
+        *synced.lock().unwrap(),
+        [Some("refreshed-test-only".to_owned())]
+    );
 }
 #[tokio::test]
 async fn testRefreshUsageDoesNotOverwriteConcurrentProxySwitchProjection() {
