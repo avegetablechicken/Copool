@@ -788,11 +788,16 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn waits_for_delete_pending_current_and_legacy_locks() {
-        use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 
         #[link(name = "kernel32")]
         unsafe extern "system" {
-            fn RemoveDirectoryW(path: *const u16) -> i32;
+            fn SetFileInformationByHandle(
+                handle: *mut std::ffi::c_void,
+                class: i32,
+                info: *const std::ffi::c_void,
+                size: u32,
+            ) -> i32;
         }
 
         for index in 0..2 {
@@ -804,17 +809,26 @@ mod tests {
             // Keep the removed directory alive just as another taker's
             // metadata handle can. Windows cannot recreate it until close.
             let handle = fs::OpenOptions::new()
-                .access_mode(0)
+                .access_mode(0x0001_0000) // DELETE
                 .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
                 .open(path)
                 .unwrap();
-            // Rust's remove_dir can use POSIX deletion, which immediately
-            // frees the name even with open handles. Use the Win32 API to
-            // reproduce deletion pending until the last handle closes.
-            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-            // SAFETY: wide is a live, NUL-terminated UTF-16 path.
+            // remove_dir and RemoveDirectoryW may free the name immediately.
+            // FileDispositionInfo explicitly marks it pending deletion while
+            // this handle stays open, without POSIX deletion semantics.
+            // FILE_DISPOSITION_INFO contains one BOOLEAN, DeleteFile.
+            let delete_file = 1u8;
+            // SAFETY: handle is open with DELETE access; info points to a
+            // live FILE_DISPOSITION_INFO byte with its exact buffer size.
             assert_ne!(
-                unsafe { RemoveDirectoryW(wide.as_ptr()) },
+                unsafe {
+                    SetFileInformationByHandle(
+                        handle.as_raw_handle(),
+                        4, // FileDispositionInfo
+                        (&delete_file as *const u8).cast(),
+                        1,
+                    )
+                },
                 0,
                 "{}",
                 io::Error::last_os_error()
