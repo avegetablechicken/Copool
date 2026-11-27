@@ -46,7 +46,8 @@ def target(app):
             import linux_build
             installed = linux_build.installation()
             if installed:
-                return installed
+                scope, command = installed
+                return Path(scope).expanduser().resolve(), [str(part) for part in command]
         raise SystemExit('Name the copy to restart with --app.')
     app = Path(app).expanduser().resolve()
     if MACOS:
@@ -63,7 +64,7 @@ def target(app):
     if not app.is_file() or not os.access(app, os.X_OK):
         raise SystemExit(f'Not an executable: {app}')
     import linux_build
-    return app, [*linux_build.command_prefix(), str(app)]
+    return app, [*map(str, linux_build.command_prefix()), str(app)]
 
 
 def processes():
