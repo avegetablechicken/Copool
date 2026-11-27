@@ -788,7 +788,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn waits_for_delete_pending_current_and_legacy_locks() {
-        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt};
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn RemoveDirectoryW(path: *const u16) -> i32;
+        }
 
         for index in 0..2 {
             let home = tempfile::tempdir().unwrap();
@@ -803,7 +808,17 @@ mod tests {
                 .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
                 .open(path)
                 .unwrap();
-            fs::remove_dir(path).unwrap();
+            // Rust's remove_dir can use POSIX deletion, which immediately
+            // frees the name even with open handles. Use the Win32 API to
+            // reproduce deletion pending until the last handle closes.
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            // SAFETY: wide is a live, NUL-terminated UTF-16 path.
+            assert_ne!(
+                unsafe { RemoveDirectoryW(wide.as_ptr()) },
+                0,
+                "{}",
+                io::Error::last_os_error()
+            );
             let error = try_lock(path).unwrap_err();
             assert!(retryable_lock_error(&error), "{error}");
 
