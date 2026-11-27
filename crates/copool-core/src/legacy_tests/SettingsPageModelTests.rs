@@ -90,12 +90,17 @@ async fn testSaveSub2APIProviderWhosePasswordIsRefusedKeepsNoneAdded() {
         .save_provider(Pool::Codex, provider("new"))
         .await
         .is_err());
-    // An edit refused its password keeps the provider it edits.
+    // An edit refused its password keeps the provider as it was.
     let mut edit = provider("kept");
     edit["id"] = kept.id.clone().into();
+    edit["username"] = "other@example.test".into();
+    edit["adminBaseURL"] = "https://other.test/api/v1".into();
     assert!(app.save_provider(Pool::Codex, edit).await.is_err());
-    let names: Vec<_> = stored(&app).into_iter().map(|p| p.name).collect();
+    let providers = stored(&app);
+    let names: Vec<_> = providers.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["kept"]);
+    assert_eq!(providers[0].username, kept.username);
+    assert_eq!(providers[0].admin_base_url, kept.admin_base_url);
 }
 #[tokio::test]
 async fn testSaveSub2APIProviderStoresPasswordOutsideSettings() {

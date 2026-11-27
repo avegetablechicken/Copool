@@ -206,31 +206,51 @@ impl<A: Adapter> Registry<'_, A> {
                 }
                 // Kept apart from the store, once the store is saved.
                 let password = std::mem::take(&mut s.password);
-                match existing {
-                    Some(i) => providers[i] = stored.clone(),
-                    None => providers.push(stored.clone()),
-                }
-                Ok((stored, password, existing.is_none()))
+                let previous = match existing {
+                    Some(i) => Some(std::mem::replace(&mut providers[i], stored.clone())),
+                    None => {
+                        providers.push(stored.clone());
+                        None
+                    }
+                };
+                Ok((stored, password, previous))
             })
             .await?;
         // Off the store's lock and the async threads: the credential store
         // may wait for the user to allow it.
-        let (stored, password, added) = stored;
+        let (stored, password, previous) = stored;
         let id = stored.as_ref().id.clone();
         if let Err(error) = self
             .app
             .store_provider_password(A::POOL, &id, password)
             .await
         {
-            // A provider added without its password is not saved: the form
-            // stays to be saved again, and nothing is left of it to remove.
-            if added {
-                self.adapter
-                    .edit_providers(|providers| {
-                        providers.retain(|p| p.as_ref().id != id);
-                        Ok(())
-                    })
-                    .await?;
+            // A save whose password is refused is not made: the form stays
+            // to be saved again, an edited provider as it was, an added one
+            // gone, and what its refreshes cached meanwhile kept.
+            let undone = self
+                .adapter
+                .edit_providers(|providers| {
+                    let Some(i) = providers.iter().position(|p| p.as_ref().id == id) else {
+                        return Ok(());
+                    };
+                    match previous {
+                        Some(mut previous) => {
+                            let (now, was) = (providers[i].as_ref(), previous.as_mut());
+                            was.imported_account_ids = now.imported_account_ids.clone();
+                            was.cached_accounts = now.cached_accounts.clone();
+                            was.proxy_url = now.proxy_url.clone();
+                            providers[i] = previous;
+                        }
+                        None => {
+                            providers.remove(i);
+                        }
+                    }
+                    Ok(())
+                })
+                .await;
+            if let Err(undo) = undone {
+                log::warn!("The provider saved without its password stays saved: {undo}");
             }
             return Err(error);
         }
