@@ -821,18 +821,31 @@ async fn agys_login_file_takes_each_switch_and_its_later_logins_are_followed() {
     let bob = h.app.antigravity_load().unwrap().accounts;
     assert!(bob.iter().find(|a| a.id == id("bob")).unwrap().own.wrapped);
 
-    // A renewal the item refuses stays in the file, the login agy reads.
+    // A renewal the item refuses stays in the file, the login agy reads,
+    // though Google rotated its refresh token: the file must not go back to
+    // the spent one.
     h.live
         .refused
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    h.fake
+        .rotates
         .store(true, std::sync::atomic::Ordering::Relaxed);
     h.app
         .renew_now(Pool::Antigravity, &id("bob"))
         .await
         .unwrap();
+    let file = token_file(&h.app).unwrap().value;
     assert_eq!(
-        pool_login::antigravity::access_token(&token_file(&h.app).unwrap().value).as_deref(),
+        pool_login::antigravity::access_token(&file).as_deref(),
         Some("fresh-refresh-bob")
     );
+    assert_eq!(
+        pool_login::antigravity::refresh_token(&file).as_deref(),
+        Some("rotated-refresh-bob")
+    );
+    h.fake
+        .rotates
+        .store(false, std::sync::atomic::Ordering::Relaxed);
     h.live
         .refused
         .store(false, std::sync::atomic::Ordering::Relaxed);

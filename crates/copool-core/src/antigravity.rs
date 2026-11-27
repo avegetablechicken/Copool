@@ -182,29 +182,18 @@ impl LoginPool for AntigravityLogins<'_> {
         self.0.antigravity_read_live(access).await
     }
     /// The item and agy's login file alike: the file first, put back
-    /// should the item refuse another login. A later generation of the
-    /// login the file held stays there: out of reach of the item, as over
+    /// should the item refuse the login.
+    async fn write_live(&self, login: &Document, access: KeychainAccess) -> Result<()> {
+        self.0.antigravity_write_live(login, access, false).await
+    }
+    /// A renewal the item refuses stays in agy's login file all the same,
+    /// its refresh token rotated or not: out of reach of the item, as over
     /// SSH it may be, the file is the login agy reads, and the later of the
     /// two is read back.
-    async fn write_live(&self, login: &Document, access: KeychainAccess) -> Result<()> {
-        let previous = self.0.antigravity_write_token_file(login)?;
-        let written = self
-            .0
-            .antigravity_live()
-            .write(pool_login::antigravity::encode(login), access)
-            .await;
-        if written.is_err() {
-            if let Some(previous) = previous {
-                let renewed = previous
-                    .as_deref()
-                    .and_then(pool_login::antigravity::decode)
-                    .is_some_and(|held| Self::same_login(&held.value, &login.value));
-                if !renewed {
-                    self.0.antigravity_restore_token_file(previous);
-                }
-            }
-        }
-        written
+    async fn write_renewal(&self, login: &Document) -> Result<()> {
+        self.0
+            .antigravity_write_live(login, KeychainAccess::Background, true)
+            .await
     }
     fn document(login: &Document) -> &Value {
         &login.value
@@ -447,6 +436,26 @@ impl Application {
     fn antigravity_token_file_login(&self) -> Option<Document> {
         let bytes = std::fs::read(self.antigravity_token_file()).ok()?;
         pool_login::antigravity::decode(&bytes)
+    }
+    /// Writes agy's login file, then the item; the file is put back should
+    /// the item refuse the login, unless `renewal` keeps it.
+    async fn antigravity_write_live(
+        &self,
+        login: &Document,
+        access: KeychainAccess,
+        renewal: bool,
+    ) -> Result<()> {
+        let previous = self.antigravity_write_token_file(login)?;
+        let written = self
+            .antigravity_live()
+            .write(pool_login::antigravity::encode(login), access)
+            .await;
+        if written.is_err() && !renewal {
+            if let Some(previous) = previous {
+                self.antigravity_restore_token_file(previous);
+            }
+        }
+        written
     }
     /// Gives agy's login file the login, as agy writes it there: where agy
     /// keeps one, else once agy has run here (on macOS, where agy keeps its

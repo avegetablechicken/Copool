@@ -183,6 +183,13 @@ pub(crate) trait LoginPool: Sync {
         login: &Self::Login,
         access: KeychainAccess,
     ) -> impl Future<Output = Result<()>> + Send;
+    /// Gives the Live login a renewal of the login it holds, silently: as
+    /// [`LoginPool::write_live`] by default. A pool whose Live login lies in
+    /// more than one place may keep the renewal where it was written though
+    /// another place refuses it, which a switch may not.
+    fn write_renewal(&self, login: &Self::Login) -> impl Future<Output = Result<()>> + Send {
+        self.write_live(login, KeychainAccess::Background)
+    }
     fn document(login: &Self::Login) -> &Value;
     fn document_mut(login: &mut Self::Login) -> &mut Value;
     /// The account's login, as the Live login would hold it.
@@ -801,7 +808,7 @@ impl<P: LoginPool> Logins<P> {
                 return Ok(());
             }
             P::apply(renewed, P::document_mut(&mut live));
-            self.0.write_live(&live, KeychainAccess::Background).await
+            self.0.write_renewal(&live).await
         }
         .await;
         if let Err(error) = outcome {
