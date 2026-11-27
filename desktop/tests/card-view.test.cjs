@@ -169,6 +169,11 @@ test("Claude cards add a Fable row when reported; Codex Free's monthly quota sta
     { label: "5h", text: "--" },
     { label: "1m", text: "60%" },
   ]);
+  // The second value is the window its label names: a week reported without
+  // data leaves the month's place, and a pool without months shows its week.
+  const emptyWeek = { ...free, usage: { ...free.usage, oneWeek: { usedPercent: null } } };
+  assert.deepEqual(V.cardView(emptyWeek, context({ collapsed: true })).compact[1], { label: "1m", text: "40%" });
+  assert.deepEqual(V.cardView(free, context({ pool: "claude", collapsed: true })).compact[1], { label: "1w", text: "--" });
 });
 
 test("Used percent floors and remaining percent ceils in a card's rows", () => {

@@ -289,13 +289,14 @@
       const rounded = P.roundDisplayPercent(value, mode);
       return { label, text: rounded === null ? "--" : `${rounded}%` };
     };
-    const second =
-      MONTHLY_POOLS.includes(ctx.pool) && !windows.oneWeek.available && windows.oneMonth.available
-        ? "1m"
-        : "1w";
+    // The month only where the full card's rows show it in the week's place.
+    const monthly =
+      MONTHLY_POOLS.includes(ctx.pool) && !windows.oneWeek.available && windows.oneMonth.available;
     return [
       item(P.displayPercent(account.usage?.fiveHour, mode), "5h"),
-      item(P.displayPercent(account.usage?.oneWeek ?? account.usage?.oneMonth, mode), second),
+      monthly
+        ? item(P.displayPercent(account.usage?.oneMonth, mode), "1m")
+        : item(P.displayPercent(account.usage?.oneWeek, mode), "1w"),
     ];
   }
   /// The footer's credits and, where the pool banks them, resets, each with
