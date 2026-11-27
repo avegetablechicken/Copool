@@ -503,13 +503,11 @@ impl Connection {
         let client = self.client()?;
         let mut token = self.admin_token(&client).await?;
         let mut retried = false;
-        // A Claude or Antigravity card Sub2api stopped serving, such as one
-        // whose token expired, says why; the Codex pool drops it.
+        // A card Sub2api stopped serving, such as one whose token expired,
+        // says why, in every pool.
         let inactive_shown = |id: i64| {
-            pool != Pool::Codex
-                && ids
-                    .unwrap_or(&self.configuration.imported_account_ids)
-                    .contains(&id)
+            ids.unwrap_or(&self.configuration.imported_account_ids)
+                .contains(&id)
         };
         let mut items = Vec::new();
         let mut page = 1usize;
@@ -523,9 +521,7 @@ impl Connection {
                 ("sort_by", "name".into()),
                 ("sort_order", "asc".into()),
             ];
-            if pool == Pool::Codex
-                || (ids.is_none() && self.configuration.imported_account_ids.is_empty())
-            {
+            if ids.is_none() && self.configuration.imported_account_ids.is_empty() {
                 query.push(("status", "active".into()));
             }
             let response = client
