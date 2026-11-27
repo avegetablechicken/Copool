@@ -279,6 +279,19 @@ fn shares_token<P: LoginPool>(a: &Value, b: &Value) -> bool {
     same(P::access_token) || same(P::refresh_token)
 }
 
+/// Where an imported login came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Origin {
+    /// The tool's Live login, which becomes current: in use, it replaces
+    /// the account's whatever its expiry.
+    Live,
+    /// A sign-in, as fresh as a login gets.
+    SignIn,
+    /// An export, perhaps of an earlier generation whose refresh token is
+    /// spent: it replaces only an earlier one.
+    Export,
+}
+
 /// What a usage request said of the token it was given.
 pub(crate) enum Asked<T> {
     Answered(T),
@@ -454,9 +467,9 @@ impl<P: LoginPool> Logins<P> {
         Ok(store)
     }
 
-    /// Adds or updates the account of a login; returns its id and whether
-    /// it waits for a manual refresh.
-    pub(crate) async fn upsert(&self, login: P::Login, current: bool) -> Result<(String, bool)> {
+    /// Adds or updates the account of a login, as it came; returns its id
+    /// and whether it waits for a manual refresh.
+    pub(crate) async fn upsert(&self, login: P::Login, origin: Origin) -> Result<(String, bool)> {
         let defer = !self.0.app().preferences()?.request_new_accounts;
         let now = now_unix_seconds();
         let _lock = self.0.locks().store.lock().await;
@@ -468,7 +481,16 @@ impl<P: LoginPool> Logins<P> {
             .find(|a| P::same_account(a, &login));
         let (id, waiting) = match found {
             Some(existing) => {
+                // An export of an earlier generation names the account but
+                // leaves its tokens: its refresh token may be spent.
+                let kept = (origin == Origin::Export
+                    && !P::newer(P::document(&login), &existing.document)
+                    && P::access_token(&existing.document).is_some())
+                .then(|| existing.document.clone());
                 P::keep(existing, login);
+                if let Some(kept) = kept {
+                    existing.document = kept;
+                }
                 existing.updated_at = now;
                 existing.usage_error = None;
                 // Signed in again: in use, unless the user deleted it.
@@ -504,7 +526,7 @@ impl<P: LoginPool> Logins<P> {
                 (id, defer)
             }
         };
-        if current {
+        if origin == Origin::Live {
             *P::current(&mut store) = Some(id.clone());
         }
         self.save(&store)?;
@@ -513,11 +535,15 @@ impl<P: LoginPool> Logins<P> {
     /// Imports logins, checked whole before, without switching to them;
     /// returns the accounts to refresh now, the others waiting for a manual
     /// refresh.
-    pub(crate) async fn import(&self, logins: Vec<P::Login>) -> Result<Vec<String>> {
+    pub(crate) async fn import(
+        &self,
+        logins: Vec<P::Login>,
+        origin: Origin,
+    ) -> Result<Vec<String>> {
         let _op = self.0.locks().operations.lock().await;
         let mut fresh = Vec::new();
         for login in logins {
-            let (id, waiting) = self.upsert(login, false).await?;
+            let (id, waiting) = self.upsert(login, origin).await?;
             if !waiting {
                 fresh.push(id);
             }
@@ -533,7 +559,7 @@ impl<P: LoginPool> Logins<P> {
     ) -> Result<Option<String>> {
         let _op = self.0.locks().operations.lock().await;
         let live = self.0.read_live(access).await?.ok_or(not_found)?;
-        let (id, waiting) = self.upsert(live, true).await?;
+        let (id, waiting) = self.upsert(live, Origin::Live).await?;
         Ok((!waiting).then_some(id))
     }
     /// Changes the store under its lock, saving it.
@@ -968,7 +994,7 @@ pub(crate) mod suite {
     pub(crate) async fn imports_are_checked_whole_and_folded_into_known_accounts<F: Fixture>() {
         let f = F::open(true).await;
         let alice = F::login("alice", "access-alice", later());
-        assert_eq!(import(&f, json!([alice])).await.unwrap(), 1);
+        assert_eq!(import(&f, json!([alice.clone()])).await.unwrap(), 1);
         // One login without a refresh token refuses the whole import.
         let bob = F::login("bob", "access-bob", later());
         assert!(import(&f, json!([bob, F::no_login()])).await.is_err());
@@ -978,6 +1004,12 @@ pub(crate) mod suite {
         assert_eq!(import(&f, newer).await.unwrap(), 1);
         let cards = f.app().accounts(F::POOL).await.unwrap();
         assert_eq!(cards.len(), 1);
+        assert_eq!(
+            F::access(&f.stored(&cards[0].id)).as_deref(),
+            Some("access-alice-2")
+        );
+        // An earlier one, an old export, leaves the account's tokens.
+        assert_eq!(import(&f, alice).await.unwrap(), 1);
         assert_eq!(
             F::access(&f.stored(&cards[0].id)).as_deref(),
             Some("access-alice-2")

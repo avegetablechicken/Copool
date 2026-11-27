@@ -1,7 +1,7 @@
 //! Claude Code account pool: the logins Copool keeps, the one Claude Code uses
 //! (the macOS Keychain or `.credentials.json`, with `oauthAccount` in
 //! `.claude.json`), OAuth usage and switching.
-use crate::login_store::{Account, Asked, LoginPool, Logins, RenewalLock};
+use crate::login_store::{Account, Asked, LoginPool, Logins, Origin, RenewalLock};
 use crate::{
     account_network::Response,
     application::{Application, SwitchExecution},
@@ -558,9 +558,11 @@ pub(crate) struct State {
     vault_problem: std::sync::Mutex<Option<String>>,
     /// The store's locks.
     pub(crate) logins: crate::login_store::Locks,
-    /// Claude Code's logins without `oauthAccount` that a profile named:
-    /// by access token, the account it names.
+    /// Claude Code's login as its profile named it: by access token, the
+    /// account it names.
     named: std::sync::Mutex<std::collections::BTreeMap<String, Value>>,
+    /// The access token whose profile could not be asked last, and when.
+    unconfirmed: std::sync::Mutex<Option<(String, i64)>>,
     /// Reads of Claude Code's login answer this late (tests).
     #[cfg(test)]
     live_read_delay_ms: std::sync::atomic::AtomicU64,
@@ -581,6 +583,7 @@ impl Default for State {
             vault_problem: Default::default(),
             logins: Default::default(),
             named: Default::default(),
+            unconfirmed: Default::default(),
             #[cfg(test)]
             live_read_delay_ms: Default::default(),
             #[cfg(not(test))]
@@ -692,21 +695,29 @@ impl Live {
     }
 }
 
+/// How long a login whose profile could not be asked waits to ask again,
+/// in seconds.
+const UNCONFIRMED_RETRY: i64 = 60;
+
 /// The store's file, and the one it was first copied from.
 const STORE_FILE: &str = "claude-pool.json";
 const EARLIER_STORE_FILE: &str = "claude-accounts.json";
 /// Copies the accounts an earlier version kept in `claude-accounts.json`
 /// to the store's file once, its `oauth` as `document`. The earlier file
 /// stays as it was, for that version to read; the tokens the vault keeps,
-/// by account id, serve both.
+/// by account id, serve both. One that cannot be read is left behind, as
+/// Codex's is: the pool starts empty, and Copool opens.
 pub(crate) fn migrate(paths: &crate::Paths) -> Result<()> {
     let target = paths.data_dir.join(STORE_FILE);
     let source = paths.data_dir.join(EARLIER_STORE_FILE);
     if target.exists() || !source.exists() {
         return Ok(());
     }
-    let mut store: Value = serde_json::from_slice(&fs::read(&source).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Invalid Claude account store: {e}"))?;
+    let bytes = fs::read(&source).map_err(|e| e.to_string())?;
+    let Ok(mut store) = serde_json::from_slice::<Value>(&bytes) else {
+        log::warn!("{EARLIER_STORE_FILE} cannot be read; the Claude pool starts empty");
+        return Ok(());
+    };
     for account in store["accounts"].as_array_mut().into_iter().flatten() {
         if let Some(account) = account.as_object_mut() {
             if let Some(oauth) = account.remove("oauth") {
@@ -715,8 +726,15 @@ pub(crate) fn migrate(paths: &crate::Paths) -> Result<()> {
         }
     }
     // As the store reads it: what it no longer keeps stays behind.
-    let store: Store =
-        serde_json::from_value(store).map_err(|e| format!("Invalid Claude account store: {e}"))?;
+    let store = match serde_json::from_value::<Store>(store) {
+        Ok(store) => store,
+        Err(error) => {
+            log::warn!(
+                "{EARLIER_STORE_FILE} cannot be read ({error}); the Claude pool starts empty"
+            );
+            return Ok(());
+        }
+    };
     write_json(&target, &store)
 }
 
@@ -765,7 +783,10 @@ impl LoginPool for ClaudeLogins<'_> {
                 .load(std::sync::atomic::Ordering::Relaxed);
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
-        Ok(live.map(|live| self.0.claude_named(live)))
+        Ok(match live {
+            Some(live) => Some(self.0.claude_confirmed(self.0.claude_named(live)).await),
+            None => None,
+        })
     }
     /// Gives Claude Code the login where it read the one replaced, keeping
     /// the rest of its credentials, then its `oauthAccount`, unless the
@@ -1193,6 +1214,7 @@ const CLAUDE_CODE_LOCK_WAIT: std::time::Duration = if cfg!(test) {
     std::time::Duration::from_secs(10)
 };
 const CLAUDE_CODE_RENEWING: &str = "Claude Code is renewing its login; retry usage";
+const CLAUDE_CODE_RENEWING_SWITCH: &str = "Claude Code is renewing its login; retry the switch";
 const CLAUDE_CODE_LOCK_UNAVAILABLE: &str = "Cannot take Claude Code's login refresh lock";
 
 /// Claude Code's refresh lock over the login kept in `location`. Claude Code
@@ -1648,7 +1670,7 @@ impl Application {
         &self,
         oauth: Value,
         account: Value,
-        current: bool,
+        origin: Origin,
     ) -> Result<(String, String, bool)> {
         let label = label_of(&account);
         // A login without its account is matched by its tokens until a
@@ -1659,7 +1681,7 @@ impl Application {
             held: Held::File,
             inferred: false,
         };
-        let (id, waiting) = self.claude_logins().upsert(login, current).await?;
+        let (id, waiting) = self.claude_logins().upsert(login, origin).await?;
         Ok((id, label, waiting))
     }
     /// The pool's account for this login, by its identity or else its
@@ -1696,7 +1718,7 @@ impl Application {
         let live = read_live_with_access(&self.claude_location(), KeychainAccess::Interactive)
             .await?
             .ok_or("error.claude.login_not_found")?;
-        let (id, label, waiting) = self.claude_import_live(live, true).await?;
+        let (id, label, waiting) = self.claude_import_live(live, Origin::Live).await?;
         drop(_op);
         if !waiting {
             let _ = self.claude_refresh_usage_scoped(&id, None).await;
@@ -1730,9 +1752,13 @@ impl Application {
         }
         let _op = self.claude.logins.operations.lock().await;
         let _ = self.claude_unlock().await;
+        // A nameless login matched by its tokens must match one account.
+        for live in logins.iter().filter(|live| live.account.is_none()) {
+            self.claude_known(live.oauth().ok_or(invalid)?, None)?;
+        }
         let mut fresh = Vec::new();
         for live in logins {
-            let (id, _, waiting) = self.claude_import_live(live, false).await?;
+            let (id, _, waiting) = self.claude_import_live(live, Origin::Export).await?;
             if !waiting {
                 fresh.push(id);
             }
@@ -1746,7 +1772,7 @@ impl Application {
     async fn claude_import_live(
         &self,
         live: Live,
-        current: bool,
+        origin: Origin,
     ) -> Result<(String, String, bool)> {
         let oauth = live.oauth().ok_or("error.claude.login_not_found")?.clone();
         let account = match live.account.clone() {
@@ -1772,7 +1798,7 @@ impl Application {
                 None => json!({}),
             },
         };
-        self.claude_upsert(oauth, account, current).await
+        self.claude_upsert(oauth, account, origin).await
     }
     /// Stores a browser sign-in without changing Claude Code's login.
     pub(crate) async fn claude_import_login(&self, tokens: Value) -> Result<String> {
@@ -1803,7 +1829,7 @@ impl Application {
         }
         let _op = self.claude.logins.operations.lock().await;
         let _ = self.claude_unlock().await;
-        let (id, label, waiting) = self.claude_upsert(oauth, account, false).await?;
+        let (id, label, waiting) = self.claude_upsert(oauth, account, Origin::SignIn).await?;
         drop(_op);
         if !waiting {
             let _ = self.claude_refresh_usage_scoped(&id, None).await;
@@ -1848,7 +1874,11 @@ impl Application {
         // login being left over it: switch only while it renews nothing, and
         // read the login being left under the same lock. Waited for before
         // the store's lock, which the cards are read under.
-        let claude_code = logins.0.renewal_lock().await?;
+        let for_switch = |error: String| match error.as_str() {
+            CLAUDE_CODE_RENEWING => CLAUDE_CODE_RENEWING_SWITCH.to_owned(),
+            _ => error,
+        };
+        let claude_code = logins.0.renewal_lock().await.map_err(for_switch)?;
         let live = logins.0.read_live(access).await?;
         // Settings that replace the login give way to the official ones
         // recorded when leaving them, or else lose only what replaces it.
@@ -1868,7 +1898,7 @@ impl Application {
             Some(Some(render_settings(&stripped, settings.as_deref())?))
         };
         if let Some(lock) = &claude_code {
-            lock.held()?;
+            lock.held().map_err(for_switch)?;
         }
         let target = logins
             .switch(
@@ -1904,17 +1934,100 @@ impl Application {
         execution.login_overrides = login_overrides(&location);
         Ok(execution)
     }
-    /// Claude Code's login, with the account its profile named when it
-    /// keeps no `oauthAccount` (`identify_live_rotation`).
+    /// Claude Code's login, with the account its profile named for its
+    /// access token (`identify_live_rotation`, `claude_confirmed`) in place
+    /// of the `oauthAccount` it keeps, if any.
     fn claude_named(&self, mut live: Live) -> Live {
-        if live.account.is_none() {
-            let token = live.oauth().and_then(|o| text(&o["accessToken"]));
-            let named = token.and_then(|t| self.claude.named.lock().unwrap().get(&t).cloned());
-            if let Some(named) = named {
+        let token = live.oauth().and_then(|o| text(&o["accessToken"]));
+        let named = token.and_then(|t| self.claude.named.lock().unwrap().get(&t).cloned());
+        if let Some(named) = named {
+            if live.account.as_ref().and_then(identity) != identity(&named) {
                 live.account = Some(named);
                 live.inferred = true;
             }
         }
+        live
+    }
+    /// Claude Code keeps its tokens and its `oauthAccount` apart and writes
+    /// them one after the other: a read in between pairs a new login's
+    /// tokens with the account it replaced. Tokens the pool has not seen,
+    /// later than those of the account the login names, are that
+    /// account's once their profile says so, else the account it names;
+    /// an account waiting for a manual refresh takes them as they come.
+    /// Until it answers, they are no account's: none is followed or
+    /// renewed with them, and Claude Code's `oauthAccount` is never
+    /// written for them.
+    async fn claude_confirmed(&self, mut live: Live) -> Live {
+        let Some(named) = live.account.as_ref().and_then(identity) else {
+            return live;
+        };
+        let Some(oauth) = live.oauth().cloned() else {
+            return live;
+        };
+        let (Some(token), Ok(store), false) = (
+            text(&oauth["accessToken"]),
+            self.claude_load(),
+            live.inferred,
+        ) else {
+            return live;
+        };
+        if store
+            .accounts
+            .iter()
+            .any(|a| same_tokens(&a.document, &oauth))
+        {
+            return live;
+        }
+        let Some(account) = store
+            .accounts
+            .iter()
+            .find(|a| identity(&a.own.account).as_ref() == Some(&named))
+        else {
+            return live;
+        };
+        if !ClaudeLogins::newer(&oauth, &account.document) {
+            return live;
+        }
+        let unconfirmed = |mut live: Live| {
+            live.account = None;
+            live.inferred = true;
+            live
+        };
+        // Nothing goes upstream for an account waiting for a manual
+        // refresh: Claude Code's renewals are followed as they come.
+        if account.first_request_pending {
+            return live;
+        }
+        let now = now_unix_seconds();
+        if let Some((failed, at)) = &*self.claude.unconfirmed.lock().unwrap() {
+            if *failed == token && now - at < UNCONFIRMED_RETRY {
+                return unconfirmed(live);
+            }
+        }
+        // Not yet known to be the account's: never its proxy.
+        let profile = match self.account_proxy("") {
+            Ok(proxy) => self
+                .claude_network()
+                .profile(&self.claude_api_root(), &token, &proxy)
+                .await
+                .ok(),
+            Err(_) => None,
+        };
+        let Some(profiled) = profile
+            .map(|profile| profile_account(Some(&profile), &Value::Null).0)
+            .filter(|profiled| identity(profiled).is_some())
+        else {
+            *self.claude.unconfirmed.lock().unwrap() = Some((token, now));
+            return unconfirmed(live);
+        };
+        if identity(&profiled) != Some(named) {
+            live.account = Some(profiled.clone());
+            live.inferred = true;
+        }
+        // Only Claude Code's login as it is now needs its name.
+        let mut known = self.claude.named.lock().unwrap();
+        known.clear();
+        known.insert(token, profiled);
         live
     }
     /// Names a nameless login Claude Code holds by its own access token:
@@ -4592,6 +4705,11 @@ mod tests {
         hello_accounts: Mutex<Vec<String>>,
         /// Profile requests fail, as when the profile is out of reach.
         profile_fails: std::sync::atomic::AtomicBool,
+        /// Claude Code's files: the profile of its access token is the
+        /// account they name, as when Claude Code wrote both.
+        claude_code: Mutex<Option<Location>>,
+        /// The profile of an access token, before any other answer.
+        profiles: Mutex<std::collections::BTreeMap<String, Value>>,
     }
     impl Network for Fake {
         fn usage<'a>(
@@ -4655,10 +4773,30 @@ mod tests {
                 )
             })
         }
-        fn profile<'a>(&'a self, api: &'a str, _: &'a str, proxy: &'a str) -> Response<'a, Value> {
+        fn profile<'a>(
+            &'a self,
+            api: &'a str,
+            token: &'a str,
+            proxy: &'a str,
+        ) -> Response<'a, Value> {
             Box::pin(async move {
                 self.api_roots.lock().unwrap().push(api.into());
                 self.profile_proxies.lock().unwrap().push(proxy.into());
+                if let Some(profile) = self.profiles.lock().unwrap().get(token) {
+                    return Ok(profile.clone());
+                }
+                let claude_code = self.claude_code.lock().unwrap().clone();
+                let live = match claude_code {
+                    Some(location) => read_live(&location).await.ok().flatten(),
+                    None => None,
+                };
+                if let Some(live) = live {
+                    let holds = live.oauth().and_then(|o| text(&o["accessToken"]));
+                    let account = live.account.filter(|_| holds.as_deref() == Some(token));
+                    if let Some(account) = account {
+                        return Ok(profile_of(&account));
+                    }
+                }
                 if self
                     .profile_fails
                     .load(std::sync::atomic::Ordering::Relaxed)
@@ -4792,8 +4930,16 @@ mod tests {
         let location = Location::files(dir.path().join("claude"));
         app.set_claude_location(location.clone());
         let fake = Arc::new(Fake::default());
+        *fake.claude_code.lock().unwrap() = Some(location.clone());
         app.set_claude_network(fake.clone());
         (app, location, fake)
+    }
+    /// The profile Claude answers for an `oauthAccount`'s login.
+    fn profile_of(account: &Value) -> Value {
+        json!({
+            "account": {"uuid": account["accountUuid"], "email": account["emailAddress"]},
+            "organization": {"uuid": account["organizationUuid"], "name": account["organizationName"]}
+        })
     }
     fn live_access(location: &Location) -> String {
         let document: Value =
@@ -5114,6 +5260,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_new_login_read_beside_the_account_it_replaced_never_becomes_its() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let stored = || app.claude_load().unwrap().accounts[0].clone();
+        let alice = stored();
+        // Claude Code signs in to carol: her tokens are written, alice's
+        // oauthAccount not yet replaced.
+        let torn = || {
+            let (mut oauth, _) = login("carol", LATER + 1);
+            oauth["accessToken"] = "carol-access".into();
+            write_json(
+                &location.credentials_file(),
+                &json!({"claudeAiOauth": oauth}),
+            )
+            .unwrap();
+        };
+        torn();
+        let (_, carol) = login("carol", LATER);
+        fake.profiles
+            .lock()
+            .unwrap()
+            .insert("carol-access".into(), profile_of(&carol));
+        app.accounts(Pool::Claude).await.unwrap();
+        assert_eq!(stored().document, alice.document);
+        assert_eq!(app.claude_load().unwrap().current_account_id, None);
+        // Claude Code's oauthAccount is left for Claude Code to write.
+        let config: Value =
+            serde_json::from_slice(&fs::read(location.account_file()).unwrap()).unwrap();
+        assert_eq!(config["oauthAccount"]["accountUuid"], "acct-alice");
+    }
+
+    #[tokio::test]
+    async fn a_new_login_is_no_accounts_until_its_profile_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, location, fake) = app(&dir).await;
+        sign_in(&location, "alice", LATER);
+        app.claude_import_current().await.unwrap();
+        let alice = app.claude_load().unwrap().accounts[0].clone();
+        let (mut oauth, _) = login("carol", LATER + 1);
+        oauth["accessToken"] = "carol-access".into();
+        write_json(
+            &location.credentials_file(),
+            &json!({"claudeAiOauth": oauth}),
+        )
+        .unwrap();
+        *fake.claude_code.lock().unwrap() = None;
+        fake.profile_fails
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        app.accounts(Pool::Claude).await.unwrap();
+        let store = app.claude_load().unwrap();
+        assert_eq!(store.accounts[0].document, alice.document);
+        assert_eq!(store.current_account_id, None);
+        // Asked once within a minute, however often the cards are read.
+        let asked = fake.profile_proxies.lock().unwrap().len();
+        app.accounts(Pool::Claude).await.unwrap();
+        assert_eq!(fake.profile_proxies.lock().unwrap().len(), asked);
+    }
+
+    #[tokio::test]
     async fn a_later_login_written_during_a_renewal_is_followed_afterwards() {
         let dir = tempfile::tempdir().unwrap();
         let (app, location, fake) = waiting_app(&dir);
@@ -5426,7 +5633,7 @@ mod tests {
             app.claude.logins.store.try_lock().is_ok()
         });
         let error = switched.unwrap_err();
-        assert!(error.contains(CLAUDE_CODE_RENEWING), "{error}");
+        assert_eq!(error, CLAUDE_CODE_RENEWING_SWITCH);
         assert!(read);
         assert_eq!(live_access(&location), "bob-access");
         for lock in locks.iter().rev() {
@@ -5969,7 +6176,10 @@ mod tests {
             .await
             .unwrap();
         let (oauth, account) = login("new", LATER);
-        let (id, _, _) = app.claude_upsert(oauth, account, false).await.unwrap();
+        let (id, _, _) = app
+            .claude_upsert(oauth, account, Origin::Export)
+            .await
+            .unwrap();
         app.save_account_proxy(Pool::Claude, &id, "socks5://127.0.0.1:8002")
             .await
             .unwrap();
@@ -6082,6 +6292,44 @@ mod tests {
         drop(app);
         let (app, _, _) = waiting_app(&dir);
         assert!(app.claude_load().unwrap().accounts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_json_import_keeps_none_of_a_list_one_entry_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _, _) = waiting_app(&dir);
+        let export = |user: &str| {
+            let (oauth, account) = login(user, LATER);
+            json!({"claudeAiOauth": oauth, "oauthAccount": account})
+        };
+        app.claude_import_json(&json!([export("alice"), export("bob")]).to_string())
+            .await
+            .unwrap();
+        // Two cards hold alice's tokens, each with its own proxy.
+        let mut store = app.claude_load().unwrap();
+        store.accounts[1].document = store.accounts[0].document.clone();
+        store.accounts[1].proxy_url = "http://127.0.0.1:8001".into();
+        app.claude_save(&store).unwrap();
+        let (nameless, _) = login("alice", LATER);
+        let list = json!([export("carol"), {"claudeAiOauth": nameless}]);
+        assert!(app.claude_import_json(&list.to_string()).await.is_err());
+        assert_eq!(app.claude_load().unwrap().accounts.len(), 2);
+    }
+
+    #[test]
+    fn copool_opens_with_an_earlier_store_it_cannot_read() {
+        for earlier in ["not json", r#"{"accounts": [{"id": 1}]}"#] {
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("data");
+            fs::create_dir_all(&data).unwrap();
+            fs::write(data.join(EARLIER_STORE_FILE), earlier).unwrap();
+            let (app, _, _) = waiting_app(&dir);
+            assert!(app.claude_load().unwrap().accounts.is_empty());
+            assert_eq!(
+                fs::read_to_string(data.join(EARLIER_STORE_FILE)).unwrap(),
+                earlier
+            );
+        }
     }
 
     /// The Claude pool as the store's suite drives it.

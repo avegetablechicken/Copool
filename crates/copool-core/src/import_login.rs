@@ -22,7 +22,9 @@ impl Application {
         // A new account waits for a manual refresh unless the user opted in.
         let contact = existing.as_ref().is_some_and(|a| !a.first_request_pending)
             || (existing.is_none() && self.preferences()?.request_new_accounts);
-        self.codex_logins().import(vec![document.clone()]).await?;
+        self.codex_logins()
+            .import(vec![document.clone()], crate::login_store::Origin::SignIn)
+            .await?;
         let account = self
             .codex_load()?
             .accounts

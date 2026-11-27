@@ -434,21 +434,31 @@ impl Application {
     /// Stores a browser sign-in's login without switching to it.
     pub(crate) async fn antigravity_import_login(&self, document: Value) -> Result<usize> {
         pool_login::antigravity::refresh_token(&document).ok_or(CREDENTIALS_INVALID)?;
-        self.antigravity_import(vec![Document {
-            value: document,
-            wrapped: cfg!(target_os = "macos"),
-        }])
+        self.antigravity_import(
+            vec![Document {
+                value: document,
+                wrapped: cfg!(target_os = "macos"),
+            }],
+            crate::login_store::Origin::SignIn,
+        )
         .await
     }
     /// Imports exported logins without switching to them; the whole
     /// document is checked before any is stored.
     pub(crate) async fn antigravity_import_json(&self, content: &str) -> Result<usize> {
-        self.antigravity_import(parse_import(content).ok_or(CREDENTIALS_INVALID)?)
-            .await
+        self.antigravity_import(
+            parse_import(content).ok_or(CREDENTIALS_INVALID)?,
+            crate::login_store::Origin::Export,
+        )
+        .await
     }
-    async fn antigravity_import(&self, documents: Vec<Document>) -> Result<usize> {
+    async fn antigravity_import(
+        &self,
+        documents: Vec<Document>,
+        origin: crate::login_store::Origin,
+    ) -> Result<usize> {
         let count = documents.len();
-        for id in self.antigravity_logins().import(documents).await? {
+        for id in self.antigravity_logins().import(documents, origin).await? {
             let _ = self.antigravity_refresh(&id, None).await;
         }
         Ok(count)

@@ -471,7 +471,10 @@ impl Application {
             logins.push(document);
         }
         let count = logins.len();
-        let fresh = self.codex_logins().import(logins).await?;
+        let fresh = self
+            .codex_logins()
+            .import(logins, crate::login_store::Origin::Export)
+            .await?;
         self.codex_logins()
             .change(|store| {
                 // A workspace with an account is no longer only seen.

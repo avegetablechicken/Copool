@@ -425,17 +425,25 @@ impl Application {
     /// Stores a browser sign-in's login without switching to it.
     pub(crate) async fn grok_import_login(&self, document: Value) -> Result<usize> {
         let document = pool_login::grok::sign_in_of(&document).ok_or(CREDENTIALS_INVALID)?;
-        self.grok_import(vec![document]).await
+        self.grok_import(vec![document], crate::login_store::Origin::SignIn)
+            .await
     }
     /// Imports exported logins without switching to them; the whole
     /// document is checked before any is stored.
     pub(crate) async fn grok_import_json(&self, content: &str) -> Result<usize> {
-        self.grok_import(parse_import(content).ok_or(CREDENTIALS_INVALID)?)
-            .await
+        self.grok_import(
+            parse_import(content).ok_or(CREDENTIALS_INVALID)?,
+            crate::login_store::Origin::Export,
+        )
+        .await
     }
-    async fn grok_import(&self, documents: Vec<Value>) -> Result<usize> {
+    async fn grok_import(
+        &self,
+        documents: Vec<Value>,
+        origin: crate::login_store::Origin,
+    ) -> Result<usize> {
         let count = documents.len();
-        for id in self.grok_logins().import(documents).await? {
+        for id in self.grok_logins().import(documents, origin).await? {
             let _ = self.grok_refresh(&id, None).await;
         }
         Ok(count)
