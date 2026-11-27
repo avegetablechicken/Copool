@@ -629,7 +629,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_card_sub2api_stops_serving_says_why_instead_of_its_last_error() {
+    async fn only_active_sub2api_accounts_keep_their_cards() {
         use axum::{extract::Request, routing::any, Json, Router};
         let items = std::sync::Arc::new(Mutex::new(json!([
             {"id": 7, "name": "claude-team", "platform": "anthropic", "type": "oauth", "status": "active",
@@ -686,10 +686,9 @@ mod tests {
         };
         app.refresh_usage(Pool::Claude, &card).await.unwrap();
         assert_eq!(shown(&app), ("active".into(), true, None));
-        // Only the full listing asks for active accounts.
+        // Both syncing and refreshing a card ask for active accounts.
         let asked = queries.lock().unwrap().clone();
-        assert!(asked[0].contains("status=active"));
-        assert!(!asked.last().unwrap().contains("status="));
+        assert!(asked.iter().all(|query| query.contains("status=active")));
 
         // A provider refresh discovers a second account and fetches its usage immediately.
         items.lock().unwrap().as_array_mut().unwrap().push(json!({
@@ -714,23 +713,30 @@ mod tests {
             "extra": {"email_address": "upstream@example.com"},
             "type": "oauth", "status": "error", "error_message": "Token expired"}]);
         app.refresh_usage(Pool::Claude, &card).await.unwrap();
-        assert_eq!(
-            shown(&app),
-            ("deactivated".into(), false, Some("Token expired".into()))
-        );
+        let cards = app.provider_cards(Pool::Claude, None).unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].label, "new-account");
 
         *items.lock().unwrap() = json!([]);
         app.refresh_provider(Pool::Claude, &saved.id, false)
             .await
             .unwrap();
-        assert_eq!(
-            shown(&app),
-            (
-                "deactivated".into(),
-                false,
-                Some("The account is no longer in Sub2api".into())
-            )
-        );
+        assert!(app.provider_cards(Pool::Claude, None).unwrap().is_empty());
+
+        // Hiding every card must not stop future refreshes of this provider.
+        *items.lock().unwrap() = json!([{"id": 7, "name": "claude-team", "platform": "anthropic",
+            "extra": {"email_address": "upstream@example.com"},
+            "type": "oauth", "status": "active", "schedulable": true}]);
+        app.refresh_provider(Pool::Claude, &saved.id, false)
+            .await
+            .unwrap();
+        assert_eq!(shown(&app), ("active".into(), true, None));
+
+        items.lock().unwrap()[0]["schedulable"] = false.into();
+        app.refresh_provider(Pool::Claude, &saved.id, false)
+            .await
+            .unwrap();
+        assert!(app.provider_cards(Pool::Claude, None).unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -236,6 +236,7 @@ impl Member {
     pub(crate) fn summaries(&self, pool: Pool, current: bool) -> Vec<AccountSummary> {
         self.cached
             .iter()
+            .filter(|a| a.status.eq_ignore_ascii_case("active"))
             .map(|a| {
                 let mut summary = a.summary(self.card_id(pool, a.id));
                 summary.is_current = current;
@@ -246,8 +247,9 @@ impl Member {
     }
     /// Takes a refresh's accounts: a sync's are the provider's accounts from
     /// then on. A refresh of every card adds those it discovers; an account
-    /// it asked about (`ids`, every one without) and no longer lists says so
-    /// instead of its last error.
+    /// it asked about (`ids`, every one without) and no longer lists loses
+    /// its card. Keep the imported ids so a provider with no active accounts
+    /// still refreshes and can show them again when reactivated.
     pub(crate) fn adopt(
         &mut self,
         fetched: Vec<Account>,
@@ -266,11 +268,7 @@ impl Member {
         let missing = |a: &Account| {
             ids.is_none_or(|ids| ids.contains(&a.id)) && !fetched.iter().any(|f| f.id == a.id)
         };
-        for cached in self.cached.iter_mut().filter(|a| missing(a)) {
-            cached.status = "missing".into();
-            cached.usage = None;
-            cached.usage_error = Some("The account is no longer in Sub2api".into());
-        }
+        self.cached.retain(|a| !missing(a));
         for account in fetched {
             if !self.imported.contains(&account.id) {
                 // Refreshing some cards adds none: one removed while the
@@ -503,27 +501,19 @@ impl Connection {
         let client = self.client()?;
         let mut token = self.admin_token(&client).await?;
         let mut retried = false;
-        // A card Sub2api stopped serving, such as one whose token expired,
-        // says why, in every pool.
-        let inactive_shown = |id: i64| {
-            ids.unwrap_or(&self.configuration.imported_account_ids)
-                .contains(&id)
-        };
         let mut items = Vec::new();
         let mut page = 1usize;
         loop {
-            let mut query = vec![
+            let query = vec![
                 ("page", page.to_string()),
                 ("page_size", "200".into()),
                 ("platform", platform(pool).into()),
                 ("type", "oauth".into()),
+                ("status", "active".into()),
                 ("lite", "1".into()),
                 ("sort_by", "name".into()),
                 ("sort_order", "asc".into()),
             ];
-            if ids.is_none() && self.configuration.imported_account_ids.is_empty() {
-                query.push(("status", "active".into()));
-            }
             let response = client
                 .get(format!("{}/admin/accounts", self.admin_base))
                 .bearer_auth(&token)
@@ -573,30 +563,10 @@ impl Connection {
                 continue;
             }
             let status = item["status"].as_str().unwrap_or_default();
-            if !status.eq_ignore_ascii_case("active") {
-                // Shown as deactivated, with Sub2api's reason.
-                if inactive_shown(id) {
-                    accounts.push(Account {
-                        id,
-                        name: item["name"].as_str().unwrap_or_default().into(),
-                        email: listed_email(&item),
-                        account_id: None,
-                        account_type: "oauth".into(),
-                        status: if status.is_empty() { "unknown" } else { status }.into(),
-                        plan_type: listed_plan(pool, &item),
-                        usage: None,
-                        usage_error: Some(
-                            item["error_message"]
-                                .as_str()
-                                .map(str::trim)
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| format!("The account is {status} in Sub2api")),
-                        ),
-                        provider_id: Some(self.configuration.provider_id.clone()),
-                        outdated_version: None,
-                    });
-                }
+            // Check locally too: a server may ignore the status filter.
+            // Older servers may omit schedulable; an explicit false disables
+            // an otherwise active account. Rate limits alone do not hide it.
+            if !status.eq_ignore_ascii_case("active") || item["schedulable"] == false {
                 continue;
             }
             let mut account = Account {
@@ -764,6 +734,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_pool_fetches_usage_only_for_active_enabled_accounts() {
+        use axum::{extract::Request, routing::any, Json, Router};
+        use serde_json::json;
+        use std::sync::{Arc, Mutex};
+
+        for pool in Pool::ALL {
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let seen = requests.clone();
+            let router = Router::new().fallback(any(move |request: Request| {
+                let seen = seen.clone();
+                async move {
+                    let path = request.uri().path();
+                    seen.lock().unwrap().push(request.uri().to_string());
+                    let data = if path == "/api/v1/auth/login" {
+                        json!({"access_token": "admin"})
+                    } else if path == "/api/v1/admin/accounts" {
+                        // Deliberately ignore the query's status filter to test
+                        // local filtering, including accounts already imported.
+                        let mut items = json!([
+                            {"id": 1, "status": "active", "schedulable": true,
+                             "rate_limit_reset_at": "2099-01-01T00:00:00Z"},
+                            {"id": 2, "status": "active"},
+                            {"id": 3, "status": "active", "schedulable": false},
+                            {"id": 4, "status": "inactive"},
+                            {"id": 5, "status": "disabled"},
+                            {"id": 6, "status": "error"},
+                            {"id": 7}
+                        ]);
+                        for item in items.as_array_mut().unwrap() {
+                            item["platform"] = super::platform(pool).into();
+                            item["type"] = "oauth".into();
+                        }
+                        json!({"items": items, "pages": 1})
+                    } else {
+                        json!({"seven_day": {"utilization": 34, "resets_at": null}})
+                    };
+                    Json(json!({"code": 0, "data": data}))
+                }
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}/api/v1", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            let mut connection = super::Connection {
+                configuration: crate::settings::Provider {
+                    provider_id: "p".into(),
+                    username: "admin@example.com".into(),
+                    password: "secret".into(),
+                    ..Default::default()
+                },
+                definition: crate::codex_config::Definition {
+                    id: "p".into(),
+                    base_url: None,
+                    wire_api: None,
+                    env_key: None,
+                    requires_openai_auth: None,
+                },
+                admin_base: base,
+            };
+            // Initial sync, provider refresh and targeted card refresh agree.
+            for targeted in [false, false, true] {
+                let ids = [1, 2, 3, 4, 5, 6, 7];
+                let fetched = connection
+                    .fetch_accounts(pool, targeted.then_some(ids.as_slice()), 0)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    fetched.iter().map(|a| a.id).collect::<Vec<_>>(),
+                    [1, 2],
+                    "{pool:?}"
+                );
+                connection.configuration.imported_account_ids = ids.to_vec();
+            }
+            let requests = requests.lock().unwrap();
+            let listings: Vec<_> = requests
+                .iter()
+                .filter(|uri| uri.starts_with("/api/v1/admin/accounts?"))
+                .collect();
+            assert_eq!(listings.len(), 3);
+            assert!(listings.iter().all(|uri| uri.contains("status=active")));
+            let quota: Vec<_> = requests
+                .iter()
+                .filter(|uri| uri.ends_with("/quota") || uri.ends_with("/usage"))
+                .collect();
+            assert_eq!(quota.len(), 6);
+            assert!(quota
+                .iter()
+                .all(|uri| uri.contains("/accounts/1/") || uri.contains("/accounts/2/")));
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn rounds_reuse_one_login_until_the_server_rejects_it_or_the_password_changes() {
         use axum::{extract::Request, http::StatusCode, response::IntoResponse, routing::any};
         use std::sync::{Arc, Mutex};
@@ -858,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn an_account_sub2api_no_longer_lists_says_so_in_every_pool() {
+    fn inactive_and_missing_accounts_lose_their_cards_in_every_pool() {
         let mut member = Member {
             key: "p".into(),
             name: "p".into(),
@@ -866,15 +928,22 @@ mod tests {
             imported: vec![42, 43],
             cached: vec![account(42, 10.), account(43, 10.)],
         };
-        member.adopt(vec![account(43, 30.)], None, false);
+        // Old cached inactive cards are hidden even before a refresh succeeds.
+        member.cached[0].status = "disabled".into();
+        for pool in Pool::ALL {
+            assert_eq!(member.summaries(pool, false).len(), 1);
+        }
+        // Refreshing one card does not remove an unrelated card.
+        member.adopt(vec![], Some(&[42]), false);
+        assert_eq!(member.cached.iter().map(|a| a.id).collect::<Vec<_>>(), [43]);
+        member.adopt(vec![], None, false);
         assert_eq!(member.imported, [42, 43]);
-        let gone = &member.cached[0];
-        assert_eq!((gone.id, gone.status.as_str()), (42, "missing"));
-        assert!(gone.usage.is_none());
-        assert_eq!(
-            gone.usage_error.as_deref(),
-            Some("The account is no longer in Sub2api")
-        );
+        for pool in Pool::ALL {
+            assert!(member.summaries(pool, false).is_empty());
+        }
+        member.adopt(vec![account(42, 30.)], None, false);
+        assert_eq!(member.cached.len(), 1);
+        assert_eq!(member.cached[0].id, 42);
     }
 
     #[test]

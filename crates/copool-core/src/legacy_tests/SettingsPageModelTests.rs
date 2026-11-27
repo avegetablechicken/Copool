@@ -329,8 +329,8 @@ async fn testRefreshAdoptsUpstreamMembershipChanges() {
     app.refresh_provider(Pool::Codex, &p.id, false)
         .await
         .unwrap();
-    // A refresh adds the account Sub2api now lists and marks the one it no
-    // longer lists, as in every pool.
+    // A refresh adds the account Sub2api now lists and hides the one it no
+    // longer lists, just like a new sync.
     let p = named(&app, "my");
     assert_eq!(p.imported_account_ids, [42, 43, 44]);
     assert_eq!(
@@ -338,13 +338,10 @@ async fn testRefreshAdoptsUpstreamMembershipChanges() {
             .iter()
             .map(|a| (a.id, a.status.as_str()))
             .collect::<Vec<_>>(),
-        [(42, "missing"), (43, "active"), (44, "active")]
+        [(43, "active"), (44, "active")]
     );
-    assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 3);
-    assert!(p
-        .cached_accounts
-        .iter()
-        .all(|a| a.usage.is_some() == (a.id != 42)));
+    assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 2);
+    assert!(p.cached_accounts.iter().all(|a| a.usage.is_some()));
     // A sync takes the accounts as they are.
     app.refresh_provider(Pool::Codex, &p.id, true)
         .await
@@ -782,7 +779,7 @@ async fn deleted_sub2api_provider_stays_removed_until_explicit_sync() {
 }
 
 #[tokio::test]
-async fn refreshing_one_card_marks_an_account_sub2api_no_longer_lists() {
+async fn refreshing_one_card_hides_an_account_sub2api_no_longer_lists() {
     let (_dir, app, _) = fixture();
     let ids = Arc::new(Mutex::new(vec![42, 43]));
     let server = upstream(ids.clone(), Default::default()).await;
@@ -791,34 +788,21 @@ async fn refreshing_one_card_marks_an_account_sub2api_no_longer_lists() {
     app.refresh_provider(Pool::Codex, &p.id, true)
         .await
         .unwrap();
-    // Only the account Sub2api no longer lists says so; the other stays as
-    // it was, as in every pool.
+    // Only the account Sub2api no longer lists disappears; the other stays.
     *ids.lock().unwrap() = vec![43];
     app.refresh_usage(Pool::Codex, &card(&p, 42)).await.unwrap();
-    assert_eq!(cards(&app).await, [card(&p, 42), card(&p, 43)]);
-    let missing = |id: &str| {
-        let app = &app;
-        let id = id.to_owned();
-        async move {
-            let card = app
-                .accounts(Pool::Codex)
-                .await
-                .unwrap()
-                .into_iter()
-                .find(|a| a.id == id)
-                .unwrap();
-            !card.available
-                && card.usage.is_none()
-                && card.usage_error.as_deref() == Some("The account is no longer in Sub2api")
-        }
-    };
-    assert!(missing(&card(&p, 42)).await);
-    assert!(!missing(&card(&p, 43)).await);
-    // Its last account gone, the provider keeps both cards, marked.
+    assert_eq!(cards(&app).await, [card(&p, 43)]);
+    let remaining = app.accounts(Pool::Codex).await.unwrap().remove(0);
+    assert!(remaining.available && remaining.usage.is_some() && remaining.usage_error.is_none());
+    // Its last account gone, the provider has no cards but stays imported.
     ids.lock().unwrap().clear();
     app.refresh_usage(Pool::Codex, &card(&p, 43)).await.unwrap();
-    assert!(missing(&card(&p, 43)).await);
+    assert!(cards(&app).await.is_empty());
     assert_eq!(named(&app, "my").imported_account_ids, [42, 43]);
+    // A full background round finds accounts reactivated in Sub2api.
+    *ids.lock().unwrap() = vec![42];
+    app.refresh_recurring(Pool::Codex, 0).await.unwrap();
+    assert_eq!(cards(&app).await, [card(&p, 42)]);
 }
 /// The Codex pool's card ids, sorted.
 async fn cards(app: &Application) -> Vec<String> {
