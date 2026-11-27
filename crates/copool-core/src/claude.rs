@@ -792,7 +792,8 @@ impl LoginPool for ClaudeLogins<'_> {
     /// Gives Claude Code the login where it read the one replaced, keeping
     /// the rest of its credentials, then its `oauthAccount`, unless the
     /// account is the one it names already; a failed write puts the
-    /// credentials back.
+    /// credentials back, a failure to write the file beside the Keychain
+    /// item too.
     async fn write_live(&self, login: &Live, access: KeychainAccess) -> Result<()> {
         let location = self.0.claude_location();
         let current = read_live_with_access(&location, access).await?;
@@ -800,20 +801,25 @@ impl LoginPool for ClaudeLogins<'_> {
         let held = current.as_ref().map(|c| c.held);
         let mut document = previous.clone().unwrap_or_else(|| json!({}));
         document["claudeAiOauth"] = Self::document(login).clone();
-        write_credentials(&location, &document, held, access).await?;
-        let previous_account = current.and_then(|c| c.account);
+        let rollback = |error: String| async {
+            let restored = match &previous {
+                Some(previous) => write_credentials(&location, previous, held, access).await,
+                None => remove_credentials(&location, access).await,
+            };
+            restored
+                .map_err(|rollback| format!("{error}; rollback failed: {rollback}"))
+                .and(Err(error))
+        };
+        if let Err(error) = write_credentials(&location, &document, held, access).await {
+            return rollback(error).await;
+        }
+        let previous_account = current.as_ref().and_then(|c| c.account.clone());
         if login.inferred || login.account == previous_account {
             return Ok(());
         }
         if let Err(error) = write_account(&location, login.account.as_ref().unwrap_or(&Value::Null))
         {
-            let restored = match &previous {
-                Some(previous) => write_credentials(&location, previous, held, access).await,
-                None => remove_credentials(&location, access).await,
-            };
-            return restored
-                .map_err(|rollback| format!("{error}; rollback failed: {rollback}"))
-                .and(Err(error));
+            return rollback(error).await;
         }
         Ok(())
     }
