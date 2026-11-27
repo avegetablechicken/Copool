@@ -380,7 +380,10 @@ impl Application {
                             .await?;
                         ssh(
                             &server,
-                            &format!("cat > {}", remote::quote(&format!("{stage}/accounts.json"))),
+                            &format!(
+                                "umask 077; cat > {}",
+                                remote::quote(&format!("{stage}/accounts.json"))
+                            ),
                             Some(payload),
                             90,
                         )

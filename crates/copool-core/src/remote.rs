@@ -189,11 +189,12 @@ pub(crate) fn install_command(
         ),
         (unit, 644, format!("/etc/systemd/system/{unit}")),
     ] {
+        // Its mode set before it leaves the private stage: the logins are
+        // never readable by others where they land.
+        let staged = quote(&format!("{stage}/{name}"));
         command.push_str(&format!(
-            "mv {} {}; chmod {mode} {}; ",
-            quote(&format!("{stage}/{name}")),
+            "chmod {mode} {staged}; mv {staged} {}; ",
             quote(&dest),
-            quote(&dest)
         ));
     }
     command.push_str(&format!("rm -rf {}; systemctl daemon-reload; systemctl enable {} >/dev/null 2>&1 || true; if systemctl is-active --quiet {}; then systemctl restart {}; else systemctl start {}; fi",quote(stage),quote(unit),quote(unit),quote(unit),quote(unit)));
@@ -207,7 +208,7 @@ pub(crate) fn sync_command(
     checksum: &str,
 ) -> String {
     let mut command = unchanged_since(dir, checksum);
-    command+=&format!("DIR={}; UNIT={}; mkdir -p \"$DIR\"; mv {} \"$DIR/accounts.json\"; chmod 600 \"$DIR/accounts.json\"; rm -rf {}; ",quote(dir),quote(unit),quote(&format!("{stage}/accounts.json")),quote(stage));
+    command+=&format!("DIR={}; UNIT={}; mkdir -p \"$DIR\"; chmod 600 {staged}; mv {staged} \"$DIR/accounts.json\"; rm -rf {}; ",quote(dir),quote(unit),quote(stage),staged=quote(&format!("{stage}/accounts.json")));
     command.push_str(if restart{r#"if [ -f "/etc/systemd/system/$UNIT" ] || [ -f "/lib/systemd/system/$UNIT" ] || [ -f "/usr/lib/systemd/system/$UNIT" ]; then systemctl restart "$UNIT"; fi;"#}else{"true"});
     command
 }
