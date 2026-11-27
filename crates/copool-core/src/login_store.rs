@@ -1215,6 +1215,31 @@ pub(crate) mod suite {
         );
     }
 
+    pub(crate) async fn a_renewal_never_replaces_a_later_login_saved_while_it_was_written<
+        F: Fixture,
+    >() {
+        let f = F::open(true).await;
+        f.sign_in(&F::login("alice", "access-alice", later()));
+        f.app().import_current(F::POOL).await.unwrap();
+        let id = f.id_of("alice");
+        // Once renewed, Copool writes the renewal back to the tool, whose
+        // login reads slowly. Meanwhile the tool renews the login itself,
+        // and the cards, listed, follow it.
+        f.delay_live_reads(300);
+        let follow_later = async {
+            while f.renewals() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            f.sign_in(&F::login("alice", "later-alice", later() + 86_400 * 30));
+            f.delay_live_reads(0);
+            f.app().accounts(F::POOL).await.unwrap();
+            assert_eq!(F::access(&f.stored(&id)).as_deref(), Some("later-alice"));
+        };
+        let (renewed, ()) = tokio::join!(f.app().renew_now(F::POOL, &id), follow_later);
+        renewed.unwrap();
+        assert_eq!(F::access(&f.stored(&id)).as_deref(), Some("later-alice"));
+    }
+
     pub(crate) async fn the_account_in_use_is_not_renewed_while_its_live_login_cannot_be_read<
         F: Fixture,
     >() {
@@ -1267,6 +1292,7 @@ macro_rules! login_store_suite {
             a_refused_token_keeps_its_login_over_an_earlier_one_the_tool_holds,
             a_renewal_never_replaces_a_login_the_tool_renewed_meanwhile,
             a_renewal_never_replaces_a_token_the_tool_renewed_for_longer,
+            a_renewal_never_replaces_a_later_login_saved_while_it_was_written,
             the_account_in_use_is_not_renewed_while_its_live_login_cannot_be_read,
         );
     };
