@@ -161,9 +161,12 @@ pub(crate) fn same_oauth_generation(a: &Value, b: &Value) -> bool {
         .all(|key| a[*key] == b[*key])
 }
 
-/// Whether `a` is a later generation of the same login than `b`.
+/// Whether `a` is a later generation of the same login than `b`. One
+/// without a refresh token is none: a renewal keeps its refresh token, and
+/// taking it would lose `b`'s.
 pub(crate) fn newer_login(a: &Value, b: &Value) -> bool {
     text(&a["accessToken"]).is_some()
+        && text(&a["refreshToken"]).is_some()
         && text(&a["refreshToken"]) != text(&b["refreshToken"])
         && expires_at(a) > expires_at(b)
 }
@@ -391,6 +394,24 @@ mod tests {
         ] {
             assert_eq!(credential(&login, &identity).unwrap_err(), error);
         }
+    }
+
+    #[test]
+    fn a_later_generation_has_its_own_refresh_token() {
+        let stored = json!({"accessToken": "a", "refreshToken": "r", "expiresAt": 1});
+        let later =
+            |refresh: Value| json!({"accessToken": "b", "refreshToken": refresh, "expiresAt": 2});
+        assert!(newer_login(&later(json!("s")), &stored));
+        assert!(!newer_login(&later(json!("r")), &stored));
+        for refresh in [json!(""), json!(" "), Value::Null] {
+            assert!(!newer_login(&later(refresh.clone()), &stored), "{refresh}");
+        }
+        assert!(!newer_login(
+            &json!({"accessToken": "b", "expiresAt": 2}),
+            &stored
+        ));
+        let earlier = json!({"accessToken": "b", "refreshToken": "s", "expiresAt": 0});
+        assert!(!newer_login(&earlier, &stored));
     }
 
     #[test]
