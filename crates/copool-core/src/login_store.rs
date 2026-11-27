@@ -482,20 +482,28 @@ impl<P: LoginPool> Logins<P> {
         let (id, waiting) = match found {
             Some(existing) => {
                 // An export of an earlier generation names the account but
-                // leaves its tokens: its refresh token may be spent.
+                // leaves its tokens, which still work: its refresh token
+                // may be spent.
+                let signed_out = existing
+                    .usage_error
+                    .as_deref()
+                    .is_some_and(|e| e.starts_with(P::SIGN_IN_EXPIRED));
                 let kept = (origin == Origin::Export
+                    && !signed_out
                     && !P::newer(P::document(&login), &existing.document)
                     && P::access_token(&existing.document).is_some())
                 .then(|| existing.document.clone());
                 P::keep(existing, login);
-                if let Some(kept) = kept {
-                    existing.document = kept;
-                }
                 existing.updated_at = now;
-                existing.usage_error = None;
-                // Signed in again: in use, unless the user deleted it.
-                if existing.standing == Some(Standing::Deactivated) {
-                    existing.standing = None;
+                match kept {
+                    Some(kept) => existing.document = kept,
+                    None => {
+                        existing.usage_error = None;
+                        // Signed in again: in use, unless the user deleted it.
+                        if existing.standing == Some(Standing::Deactivated) {
+                            existing.standing = None;
+                        }
+                    }
                 }
                 if let Some(email) = email {
                     existing.label = email.clone();
