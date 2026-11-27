@@ -69,10 +69,13 @@ def target(app):
 def processes():
     """(pid, executable path) of the processes this user can see."""
     if WINDOWS:
-        script = ('Get-CimInstance Win32_Process | Where-Object ExecutablePath | '
+        # PowerShell writes redirected output in the OEM code page unless told
+        # otherwise, which Python would decode as another and garble paths.
+        script = ('[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); '
+                  'Get-CimInstance Win32_Process | Where-Object ExecutablePath | '
                   'ForEach-Object { "$($_.ProcessId)`t$($_.ExecutablePath)" }')
         output = subprocess.run(['powershell', '-NoProfile', '-Command', script],
-                                capture_output=True, text=True, check=True).stdout
+                                capture_output=True, encoding='utf-8', check=True).stdout
         rows = (line.split('\t', 1) for line in output.splitlines() if '\t' in line)
         return [(int(pid), path) for pid, path in rows]
     if MACOS:
