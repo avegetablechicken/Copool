@@ -1971,11 +1971,15 @@ impl Application {
         let Some(oauth) = live.oauth().cloned() else {
             return Ok(live);
         };
-        let (Some(token), Ok(store), false) = (
-            text(&oauth["accessToken"]),
-            self.claude_load(),
-            live.inferred,
-        ) else {
+        let (Some(token), false) = (text(&oauth["accessToken"]), live.inferred) else {
+            return Ok(live);
+        };
+        // Its profile named it already (`claude_named`): not asked again,
+        // which a renewal holding Claude Code's refresh lock would wait for.
+        if self.claude.named.lock().unwrap().contains_key(&token) {
+            return Ok(live);
+        }
+        let Ok(store) = self.claude_load() else {
             return Ok(live);
         };
         if store
