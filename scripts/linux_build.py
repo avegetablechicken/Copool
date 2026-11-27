@@ -1,8 +1,9 @@
 """Linux steps of the shared desktop build: the executable, checked for its libraries.
 
-A machine whose GUI libraries need their own environment, or that installs
-what it builds, changes only the hooks below: `command_prefix`, `after_build`
-and `installation`, with any options of its own in `add_arguments`.
+The build only builds. A machine whose GUI libraries need their own
+environment, or that installs builds for restart_copool.py to restart,
+changes only the hooks below: `command_prefix`, `installation` and `install`,
+with any options of its own in `add_arguments`.
 """
 import subprocess
 
@@ -24,15 +25,17 @@ def command_prefix():
     return []
 
 
-def after_build(args, binary, prefix):
-    """What follows a successful build, e.g. installing it."""
-
-
 def installation():
     """The installed copy that restart_copool.py restarts by default, as
     (directory its executables run from, command that starts it); None when
     nothing is installed."""
     return None
+
+
+def install(binary):
+    """Installs a build as the copy `installation` names, for
+    `restart_copool.py --install`; a machine that installs nothing refuses."""
+    raise SystemExit('This machine installs no builds: linux_build.install is not set up.')
 
 
 def check_libraries(binary, prefix):
@@ -49,4 +52,3 @@ def build(args):
     if not args.target:
         check_libraries(binary, prefix)
     print(f'Executable: {binary}')
-    after_build(args, binary, prefix)
