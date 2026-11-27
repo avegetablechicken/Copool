@@ -682,6 +682,21 @@ test("Escape cancels only the new greeting time, including when the field blurs"
   assert.deepEqual(state.schedule.times, []);
 });
 
+test("Say hi now waits while its card refreshes, greets or renews", () => {
+  const { scope } = cardFields();
+  const state = { adding: null, schedule: { auto: false, times: [] } };
+  let disabled;
+  scope.backButton = (_label, _run, off) => ((disabled = off), { tag: "button" });
+  const offered = (ui) => {
+    scope.accountsController.cardState = () => ({ refreshing: false, hi: null, renewing: false, ...ui });
+    scope.greetingSection({ id: "a" }, state);
+    return !disabled;
+  };
+  assert.equal(offered({}), true);
+  for (const ui of [{ refreshing: true }, { hi: "sent" }, { hi: "received" }, { renewing: true }])
+    assert.equal(offered(ui), false, JSON.stringify(ui));
+});
+
 test("what the greeting times do shows on their name, a failed greeting under it", () => {
   const label = greetingTimesLabel(null);
   assert.equal(label.title, "accounts.say_hi.times_help");

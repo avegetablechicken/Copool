@@ -831,7 +831,8 @@ function renewalSection(account) {
 function greetingSection(account, state) {
   const schedule = state.schedule;
   const ui = accountsController.cardState(account.id);
-  const busy = !!ui.hi || ui.refreshing;
+  // The controller turns a hi away while the card refreshes or renews.
+  const busy = !!ui.hi || ui.refreshing || ui.renewing;
   const section = backSection(
     tr("accounts.say_hi.title"),
     backButton(
