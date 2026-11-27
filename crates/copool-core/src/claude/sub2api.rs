@@ -185,7 +185,7 @@ impl Application {
         &self,
         edit: impl FnOnce(&mut Vec<Provider>) -> Result<T>,
     ) -> Result<T> {
-        let _lock = self.claude.lock.lock().await;
+        let _lock = self.claude.logins.store.lock().await;
         let mut store = self.claude_store_file()?;
         let result = edit(&mut store.providers)?;
         crate::persistence::write_json(&self.claude_store_path(), &store)?;
@@ -238,7 +238,7 @@ impl Application {
         if !account.status.eq_ignore_ascii_case("active") {
             return Err("Account is deactivated".into());
         }
-        let _lock = self.claude.lock.lock().await;
+        let _lock = self.claude.logins.store.lock().await;
         let mut store = self.claude_load()?;
         let p = store
             .providers

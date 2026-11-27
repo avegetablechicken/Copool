@@ -390,12 +390,7 @@ impl Application {
         let result = self.refresh_login(pool, id, Some(&mut renewed)).await;
         if !renewed {
             result?;
-            return Err(match pool {
-                Pool::Codex | Pool::Antigravity | Pool::Grok => "The token was not renewed",
-                // Claude Code renewed the login meanwhile.
-                Pool::Claude => crate::claude::CREDENTIALS_CHANGED,
-            }
-            .into());
+            return Err("The token was not renewed".into());
         }
         if failed {
             let _ = self.refresh_usage(pool, id).await;

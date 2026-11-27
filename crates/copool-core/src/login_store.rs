@@ -1,7 +1,8 @@
 //! The account store of a pool whose logins Copool keeps in a file of its
 //! own and whose tool signs in with one Live login: Codex (its `auth.json`),
-//! Grok (Grok Build's `auth.json`) and Antigravity (agy's item in the
-//! system's credential store). The store follows the Live login, imports logins, deletes and
+//! Claude (Claude Code's credentials with its `oauthAccount`), Grok (Grok
+//! Build's `auth.json`) and Antigravity (agy's item in the system's
+//! credential store). The store follows the Live login, imports logins, deletes and
 //! edits accounts, makes the switch's write to the Live login, and renews
 //! tokens: it uses the Live login's renewal when the tool made one, and
 //! puts its own back there. Each pool supplies only its facts, as a
@@ -17,9 +18,11 @@
 //! An account its issuer deactivated stays listed so ([`Standing`]); deleted,
 //! it stays hidden, for the pool to remember the workspace gone.
 //!
-//! Every pool is meant to keep its accounts here; Claude has yet to: its
-//! login (its tokens and its `oauthAccount`), its vault and Claude Code's
-//! refresh lock are to be its pool's facts.
+//! A pool may keep its tokens elsewhere than its file (Claude's vault, put
+//! back once the store is read and moved there before it is written), and
+//! name its tool's renewal lock, held from a renewal's reread of the Live
+//! login to its write-back. Of two generations of an account's login, the
+//! later is kept, as the pool tells them apart.
 use crate::{
     application::Application,
     models::{AccountSummary, Renewal, UsageSnapshot, RENEWAL_OFF},
@@ -196,6 +199,15 @@ pub(crate) trait LoginPool: Sync {
     fn name(document: &Value) -> Option<String> {
         Self::email(document)
     }
+    /// The email of a login: its document's, unless the login keeps it
+    /// beside the document.
+    fn login_email(login: &Self::Login) -> Option<String> {
+        Self::email(Self::document(login))
+    }
+    /// The label a login gives a new account.
+    fn login_name(login: &Self::Login) -> Option<String> {
+        Self::name(Self::document(login))
+    }
     /// Whether two documents are generations of one login.
     fn same_login(a: &Value, b: &Value) -> bool;
     /// Whether `a` is a later generation than `b`: by default, its access
@@ -210,8 +222,8 @@ pub(crate) trait LoginPool: Sync {
     /// What the pool adds to the account's card.
     fn summarize(_account: &Account<Self::Own>, _summary: &mut AccountSummary) {}
     /// Whether a login is the account's.
-    fn same_account(account: &Account<Self::Own>, document: &Value) -> bool {
-        Self::same_login(&account.document, document)
+    fn same_account(account: &Account<Self::Own>, login: &Self::Login) -> bool {
+        Self::same_login(&account.document, Self::document(login))
     }
     /// The account's id at its issuer, for its card.
     fn account_id(account: &Account<Self::Own>) -> String;
@@ -240,6 +252,11 @@ pub(crate) trait LoginPool: Sync {
     /// tool and Copool never both spend one refresh token: none by default.
     fn renewal_lock(&self) -> impl Future<Output = Result<Option<Box<dyn RenewalLock>>>> + Send {
         async { Ok(None) }
+    }
+    /// What a switch keeps of a Live login the pool does not hold: its
+    /// document by default.
+    fn backed_up(login: &Self::Login) -> Value {
+        Self::document(login).clone()
     }
 }
 
@@ -391,7 +408,7 @@ impl<P: LoginPool> Logins<P> {
         };
         let document = P::document(live);
         let accounts = P::accounts(store);
-        let found = accounts.iter().position(|a| P::same_account(a, document));
+        let found = accounts.iter().position(|a| P::same_account(a, live));
         if let Some(i) = found {
             let others = accounts.iter().enumerate().filter(|(j, _)| *j != i);
             if others
@@ -439,16 +456,16 @@ impl<P: LoginPool> Logins<P> {
 
     /// Adds or updates the account of a login; returns its id and whether
     /// it waits for a manual refresh.
-    async fn upsert(&self, login: P::Login, current: bool) -> Result<(String, bool)> {
+    pub(crate) async fn upsert(&self, login: P::Login, current: bool) -> Result<(String, bool)> {
         let defer = !self.0.app().preferences()?.request_new_accounts;
         let now = now_unix_seconds();
         let _lock = self.0.locks().store.lock().await;
         let mut store = self.load()?;
-        let email = P::email(P::document(&login));
-        let name = P::name(P::document(&login));
+        let email = P::login_email(&login);
+        let name = P::login_name(&login);
         let found = P::accounts_mut(&mut store)
             .iter_mut()
-            .find(|a| P::same_account(a, P::document(&login)));
+            .find(|a| P::same_account(a, &login));
         let (id, waiting) = match found {
             Some(existing) => {
                 P::keep(existing, login);
@@ -621,7 +638,10 @@ impl<P: LoginPool> Logins<P> {
                 return Err("The account holds no tokens".into());
             }
             if let Some(live) = live.as_ref().filter(|_| P::current(&mut store).is_none()) {
-                write_json(&self.0.app().paths.data_dir.join(backup), P::document(live))?;
+                write_json(
+                    &self.0.app().paths.data_dir.join(backup),
+                    &P::backed_up(live),
+                )?;
             }
             (target, leave(&mut store)?)
         };
@@ -675,8 +695,9 @@ impl<P: LoginPool> Logins<P> {
             .await
             .ok()
             .flatten()?;
+        let renewed = P::same_account(account, &live);
         let live = P::document(&live);
-        let renewed = P::same_account(account, live)
+        let renewed = renewed
             && P::access_token(live).is_some()
             && P::access_token(live) != P::access_token(document)
             && P::expiry(live).is_none_or(|e| e > now + EXPIRY_MARGIN);
@@ -907,6 +928,11 @@ pub(crate) mod suite {
         fn without_expiry(login: &Value) -> Value;
         /// A login without a refresh token, which no import takes.
         fn no_login() -> Value;
+        /// `login` as the pool's browser sign-in hands it over: as it is,
+        /// unless the pool's sign-in answers in another form.
+        fn browser_sign_in(login: &Value) -> Value {
+            login.clone()
+        }
         fn access(document: &Value) -> Option<String>;
         /// The access token a renewal of `user`'s login hands out.
         fn renewed(user: &str) -> String;
@@ -963,7 +989,10 @@ pub(crate) mod suite {
         f.sign_in(&F::login("alice", "access-alice", later()));
         f.app().import_current(F::POOL).await.unwrap();
         let bob = F::login("bob", "access-bob", later());
-        f.app().import_sign_in(F::POOL, bob, None).await.unwrap();
+        f.app()
+            .import_sign_in(F::POOL, F::browser_sign_in(&bob), None)
+            .await
+            .unwrap();
         let cards = f.app().accounts(F::POOL).await.unwrap();
         assert_eq!(cards.len(), 2);
         let current: Vec<_> = cards
@@ -1011,7 +1040,10 @@ pub(crate) mod suite {
         // A refused token of an account the tool does not use is renewed;
         // the tool's login stays as it was.
         let bob = F::login("bob", "expired-bob", later());
-        f.app().import_sign_in(F::POOL, bob, None).await.unwrap();
+        f.app()
+            .import_sign_in(F::POOL, F::browser_sign_in(&bob), None)
+            .await
+            .unwrap();
         assert_eq!(
             F::access(&f.stored(&f.id_of("bob"))),
             Some(F::renewed("bob"))
@@ -1024,7 +1056,7 @@ pub(crate) mod suite {
         let f = F::open(false).await;
         let expired = F::login("alice", "access-alice", now_unix_seconds() - 10);
         f.app()
-            .import_sign_in(F::POOL, expired, None)
+            .import_sign_in(F::POOL, F::browser_sign_in(&expired), None)
             .await
             .unwrap();
         let id = f.id_of("alice");
@@ -1046,7 +1078,7 @@ pub(crate) mod suite {
         let f = F::open(false).await;
         let refused = F::login("alice", "expired-alice", later());
         f.app()
-            .import_sign_in(F::POOL, refused, None)
+            .import_sign_in(F::POOL, F::browser_sign_in(&refused), None)
             .await
             .unwrap();
         let id = f.id_of("alice");
@@ -1105,7 +1137,10 @@ pub(crate) mod suite {
         f.sign_in(&F::login("alice", "expired-alice", later()));
         f.app().import_current(F::POOL).await.unwrap();
         let bob = F::login("bob", "expired-bob", later());
-        f.app().import_sign_in(F::POOL, bob, None).await.unwrap();
+        f.app()
+            .import_sign_in(F::POOL, F::browser_sign_in(&bob), None)
+            .await
+            .unwrap();
         let (alice, bob) = (f.id_of("alice"), f.id_of("bob"));
         f.app().release_new_accounts(F::POOL, None).await.unwrap();
         // Renewing the account the tool uses would rotate the refresh token

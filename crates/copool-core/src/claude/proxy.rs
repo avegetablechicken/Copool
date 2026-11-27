@@ -108,10 +108,10 @@ impl Application {
             let mut stored: StoredAccount = serde_json::from_value(json!({
                 "id": account.id,
                 "label": account.label,
-                "email": text(&account.account["emailAddress"]),
-                "accountId": text(&account.account["accountUuid"]).unwrap_or_default(),
-                "planType": plan(&account.oauth),
-                "authJson": {"claudeAiOauth": account.oauth},
+                "email": text(&account.own.account["emailAddress"]),
+                "accountId": text(&account.own.account["accountUuid"]).unwrap_or_default(),
+                "planType": plan(&account.document),
+                "authJson": {"claudeAiOauth": account.document},
                 "proxyUrl": account.proxy_url,
                 "addedAt": account.added_at,
                 "updatedAt": account.updated_at,
@@ -224,7 +224,7 @@ impl Application {
         if !renewed {
             result?;
         }
-        Ok(json!({"claudeAiOauth": account.oauth}))
+        Ok(json!({"claudeAiOauth": account.document}))
     }
     /// As the Codex proxy: unless the local proxy only hosts the API, the
     /// account it chose becomes the one Claude Code uses.
@@ -291,16 +291,16 @@ impl Application {
     /// Takes the logins a server's daemon renewed since they were uploaded:
     /// a later generation of a login replaces the pool's.
     pub(crate) async fn claude_adopt_remote_logins(&self, remote: &Value) -> Result<()> {
-        let _lock = self.claude.lock.lock().await;
+        let _lock = self.claude.logins.store.lock().await;
         let mut store = self.claude_load()?;
         let mut changed = false;
         for found in remote["accounts"].as_array().into_iter().flatten() {
             let oauth = crate::pool_login::claude::oauth(&found["authJson"]);
             if let Some(account) = store.accounts.iter_mut().find(|a| {
                 found["id"].as_str() == Some(a.id.as_str())
-                    && crate::pool_login::claude::newer_login(oauth, &a.oauth)
+                    && crate::pool_login::claude::newer_login(oauth, &a.document)
             }) {
-                changed |= account.adopt(oauth);
+                changed |= super::adopt(account, oauth);
             }
         }
         if changed {

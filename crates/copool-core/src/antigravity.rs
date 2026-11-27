@@ -221,7 +221,8 @@ impl LoginPool for AntigravityLogins<'_> {
     }
     /// Its login, or one of the same Google account's email: Google may
     /// have rotated the refresh token.
-    fn same_account(account: &Stored, document: &Value) -> bool {
+    fn same_account(account: &Stored, login: &Document) -> bool {
+        let document = Self::document(login);
         let email = pool_login::antigravity::email(document);
         Self::same_login(&account.document, document) || email.is_some() && account.email == email
     }

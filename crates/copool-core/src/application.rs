@@ -437,6 +437,7 @@ impl Application {
         };
         app.mark_kept_tunnel_token()?;
         crate::codex_pool::migrate(&app.paths)?;
+        crate::claude::migrate(&app.paths)?;
         app.migrate_codex_providers()?;
         app.preferences()?;
         Ok(app)
