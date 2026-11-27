@@ -80,6 +80,24 @@ fn config(app: &Application, definitions: &[(&str, &str)], selected: &str) {
     std::fs::write(app.codex_config_path(), text).unwrap();
 }
 #[tokio::test]
+async fn testSaveSub2APIProviderWhosePasswordIsRefusedKeepsNoneAdded() {
+    let (_dir, app, secrets) = fixture();
+    let kept = save(&app, provider("kept")).await;
+    secrets
+        .deny_writes
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(app
+        .save_provider(Pool::Codex, provider("new"))
+        .await
+        .is_err());
+    // An edit refused its password keeps the provider it edits.
+    let mut edit = provider("kept");
+    edit["id"] = kept.id.clone().into();
+    assert!(app.save_provider(Pool::Codex, edit).await.is_err());
+    let names: Vec<_> = stored(&app).into_iter().map(|p| p.name).collect();
+    assert_eq!(names, ["kept"]);
+}
+#[tokio::test]
 async fn testSaveSub2APIProviderStoresPasswordOutsideSettings() {
     let (_dir, app, secrets) = fixture();
     let mut draft = provider("my");

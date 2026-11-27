@@ -81,6 +81,8 @@ struct MemorySecrets {
     sets: std::sync::Mutex<Vec<String>>,
     removed: std::sync::Mutex<Vec<String>>,
     deny_reads: std::sync::atomic::AtomicBool,
+    /// Writes are refused, as when the user denies the credential store.
+    deny_writes: std::sync::atomic::AtomicBool,
 }
 impl crate::credentials::SecretStore for MemorySecrets {
     fn get(&self, id: &str) -> Result<Option<String>, String> {
@@ -92,6 +94,9 @@ impl crate::credentials::SecretStore for MemorySecrets {
     }
     fn set(&self, id: &str, password: &str) -> Result<(), String> {
         self.sets.lock().unwrap().push(id.into());
+        if self.deny_writes.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("The user denied access".into());
+        }
         self.values
             .lock()
             .unwrap()

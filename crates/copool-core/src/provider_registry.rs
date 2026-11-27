@@ -210,15 +210,30 @@ impl<A: Adapter> Registry<'_, A> {
                     Some(i) => providers[i] = stored.clone(),
                     None => providers.push(stored.clone()),
                 }
-                Ok((stored, password))
+                Ok((stored, password, existing.is_none()))
             })
             .await?;
         // Off the store's lock and the async threads: the credential store
         // may wait for the user to allow it.
-        let (stored, password) = stored;
-        self.app
-            .store_provider_password(A::POOL, &stored.as_ref().id, password)
-            .await?;
+        let (stored, password, added) = stored;
+        let id = stored.as_ref().id.clone();
+        if let Err(error) = self
+            .app
+            .store_provider_password(A::POOL, &id, password)
+            .await
+        {
+            // A provider added without its password is not saved: the form
+            // stays to be saved again, and nothing is left of it to remove.
+            if added {
+                self.adapter
+                    .edit_providers(|providers| {
+                        providers.retain(|p| p.as_ref().id != id);
+                        Ok(())
+                    })
+                    .await?;
+            }
+            return Err(error);
+        }
         let mut shown = stored;
         self.adapter.present(&mut shown);
         serde_json::to_value(shown).map_err(invalid)
