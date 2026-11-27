@@ -73,10 +73,7 @@ fn token_mut(document: &mut Value) -> Option<&mut Map<String, Value>> {
 fn first(document: &Value, keys: &[&str]) -> Option<String> {
     let token = token(document)?;
     keys.iter()
-        .find_map(|key| token.get(*key).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
+        .find_map(|key| super::non_empty(token.get(*key).and_then(Value::as_str)))
 }
 pub(crate) fn access_token(document: &Value) -> Option<String> {
     first(document, &ACCESS_KEYS)
@@ -107,10 +104,10 @@ pub(crate) fn email(document: &Value) -> Option<String> {
         "/token/email",
     ]
     .iter()
-    .find_map(|path| document.pointer(path).and_then(Value::as_str))
-    .map(str::trim)
-    .filter(|email| email.contains('@'))
-    .map(str::to_owned)
+    .find_map(|path| {
+        let email = document.pointer(path).and_then(Value::as_str)?.trim();
+        email.contains('@').then(|| email.to_owned())
+    })
 }
 /// The Google account a document names: its own id, else its ID token's
 /// subject.
@@ -499,6 +496,20 @@ mod tests {
             expiry(&json!({"expiry": 100_000_000_000_i64})),
             Some(100_000_000)
         );
+    }
+
+    #[test]
+    fn an_empty_member_gives_way_to_the_next_one() {
+        let document = json!({"token": {"access_token": "", "accessToken": "a",
+            "refresh_token": " ", "refreshToken": "r"},
+            "id_token_email": "", "email": "alice", "account": {"email": " alice@gmail.com "}});
+        assert_eq!(access_token(&document).as_deref(), Some("a"));
+        assert_eq!(refresh_token(&document).as_deref(), Some("r"));
+        assert_eq!(email(&document).as_deref(), Some("alice@gmail.com"));
+        assert!(decode(document.to_string().as_bytes()).is_some());
+        let none = json!({"access_token": " ", "refresh_token": "r", "email": ""});
+        assert_eq!(access_token(&none), None);
+        assert_eq!(email(&none), None);
     }
 
     #[test]
