@@ -75,8 +75,10 @@ def processes():
         script = ('[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); '
                   'Get-CimInstance Win32_Process | Where-Object ExecutablePath | '
                   'ForEach-Object { "$($_.ProcessId)`t$($_.ExecutablePath)" }')
+        # Its errors may still come in the OEM code page: they are only shown.
         output = subprocess.run(['powershell', '-NoProfile', '-Command', script],
-                                capture_output=True, encoding='utf-8', check=True).stdout
+                                capture_output=True, encoding='utf-8', errors='replace',
+                                check=True).stdout
         rows = (line.split('\t', 1) for line in output.splitlines() if '\t' in line)
         return [(int(pid), path) for pid, path in rows]
     if MACOS:
