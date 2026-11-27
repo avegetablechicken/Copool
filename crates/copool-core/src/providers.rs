@@ -206,17 +206,20 @@ impl Application {
     }
     /// Keeps a form's password in the keyring, never in the settings; a
     /// blank one keeps the saved one, which is never read while editing.
-    pub(crate) fn store_provider_password(
+    pub(crate) async fn store_provider_password(
         &self,
         pool: Pool,
         id: &str,
-        password: &str,
+        password: String,
     ) -> Result<()> {
-        if !password.is_empty() {
-            self.secrets
-                .set(&sub2api::password_secret(pool, id), password)?;
+        if password.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let secrets = self.secrets.clone();
+        let key = sub2api::password_secret(pool, id);
+        tokio::task::spawn_blocking(move || secrets.set(&key, &password))
+            .await
+            .map_err(|e| e.to_string())?
     }
     fn members(&self, pool: Pool) -> Result<Vec<Member>> {
         self.registry(pool).members()

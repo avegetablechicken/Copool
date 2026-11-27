@@ -204,15 +204,20 @@ impl<A: Adapter> Registry<'_, A> {
                     // The provider's card sets its proxy, not its settings.
                     s.proxy_url = old.proxy_url.clone();
                 }
-                self.app
-                    .store_provider_password(A::POOL, &s.id, &s.password)?;
-                s.password.clear();
+                // Kept apart from the store, once the store is saved.
+                let password = std::mem::take(&mut s.password);
                 match existing {
                     Some(i) => providers[i] = stored.clone(),
                     None => providers.push(stored.clone()),
                 }
-                Ok(stored)
+                Ok((stored, password))
             })
+            .await?;
+        // Off the store's lock and the async threads: the credential store
+        // may wait for the user to allow it.
+        let (stored, password) = stored;
+        self.app
+            .store_provider_password(A::POOL, &stored.as_ref().id, password)
             .await?;
         let mut shown = stored;
         self.adapter.present(&mut shown);
