@@ -449,9 +449,15 @@ async fn testRefreshUsageDoesNotOverwriteConcurrentProxySwitchProjection() {
     };
     network.started.notified().await;
     let b = app.codex_load().unwrap().accounts[1].clone();
-    assert!(app.codex_follow_proxy(&b.id, &b.document).await.unwrap());
+    // The proxy's switch waits for the refresh under way, then follows it.
+    let follow = {
+        let app = app.clone();
+        tokio::spawn(async move { app.codex_follow_proxy(&b.id, &b.document).await })
+    };
+    tokio::task::yield_now().await;
     network.resume.notify_one();
     task.await.unwrap().unwrap();
+    assert!(follow.await.unwrap().unwrap());
     let store = app.codex_load().unwrap();
     assert_eq!(store.current_account_id.as_deref(), Some("b"));
     let current: Value =

@@ -583,12 +583,15 @@ impl Application {
             .await
     }
     /// The account the proxy chose, which it reached with `auth`: unless the
-    /// proxy only hosts the API, Codex is switched to it. Returns whether it
+    /// proxy only hosts the API, Codex is switched to it, as any switch is,
+    /// under the operations lock: a refresh renewing the account meanwhile
+    /// has kept its renewal before the switch reads it. Returns whether it
     /// was.
     pub(crate) async fn codex_follow_proxy(&self, id: &str, auth: &Value) -> Result<bool> {
         if self.preferences()?.host_api_only {
             return Ok(false);
         }
+        let _op = self.codex.operations.lock().await;
         let config = self.codex_config_path();
         if let Some(provider) = auth.get("copoolProvider") {
             let provider = provider["id"].as_str().ok_or("Invalid provider")?;
