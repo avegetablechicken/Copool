@@ -912,8 +912,13 @@ impl LoginPool for ClaudeLogins<'_> {
     fn sealed(&self, store: &Store) -> Result<Value> {
         self.0.claude_sealed(store)
     }
+    /// Where Claude Code keeps its login in the Keychain, the login may be
+    /// kept without its directory, which Claude Code creates to lock it;
+    /// elsewhere the login is kept in that directory.
     async fn renewal_lock(&self) -> Result<Option<Box<dyn RenewalLock>>> {
-        Ok(claude_code_lock(&self.0.claude_location(), false)
+        let location = self.0.claude_location();
+        let login_kept = location.keychain.is_some();
+        Ok(claude_code_lock(&location, login_kept)
             .await?
             .map(|lock| Box::new(ClaudeCodeLock(lock)) as Box<dyn RenewalLock>))
     }
