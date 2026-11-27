@@ -821,6 +821,22 @@ async fn agys_login_file_takes_each_switch_and_its_later_logins_are_followed() {
     let bob = h.app.antigravity_load().unwrap().accounts;
     assert!(bob.iter().find(|a| a.id == id("bob")).unwrap().own.wrapped);
 
+    // A renewal the item refuses stays in the file, the login agy reads.
+    h.live
+        .refused
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    h.app
+        .renew_now(Pool::Antigravity, &id("bob"))
+        .await
+        .unwrap();
+    assert_eq!(
+        pool_login::antigravity::access_token(&token_file(&h.app).unwrap().value).as_deref(),
+        Some("fresh-refresh-bob")
+    );
+    h.live
+        .refused
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
     // A login the item refuses leaves the file as it was.
     let before = fs::read(h.app.antigravity_token_file()).unwrap();
     h.live

@@ -182,7 +182,10 @@ impl LoginPool for AntigravityLogins<'_> {
         self.0.antigravity_read_live(access).await
     }
     /// The item and agy's login file alike: the file first, put back
-    /// should the item refuse the login.
+    /// should the item refuse another login. A later generation of the
+    /// login the file held stays there: out of reach of the item, as over
+    /// SSH it may be, the file is the login agy reads, and the later of the
+    /// two is read back.
     async fn write_live(&self, login: &Document, access: KeychainAccess) -> Result<()> {
         let previous = self.0.antigravity_write_token_file(login)?;
         let written = self
@@ -192,7 +195,13 @@ impl LoginPool for AntigravityLogins<'_> {
             .await;
         if written.is_err() {
             if let Some(previous) = previous {
-                self.0.antigravity_restore_token_file(previous);
+                let renewed = previous
+                    .as_deref()
+                    .and_then(pool_login::antigravity::decode)
+                    .is_some_and(|held| Self::same_login(&held.value, &login.value));
+                if !renewed {
+                    self.0.antigravity_restore_token_file(previous);
+                }
             }
         }
         written
