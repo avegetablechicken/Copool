@@ -938,18 +938,21 @@
     }
     applyLocal(proxy, configuration, tunnel) {
       const cf = configuration.cloudflared || {};
+      // A field the configuration leaves out keeps what the app held, not
+      // the draft, which may hold an edit not yet saved.
+      const held =
+        this.lastSyncedConfiguration?.cloudflared || this.tunnelConfiguration;
       return this.applySnapshot({
         syncedAt: Date.now(),
         proxyStatus: proxy,
         preferredProxyPortText:
           configuration.preferredPortText || DEFAULT_PROXY_PORTS[this.pool],
         cloudflaredStatus: tunnel || this.tunnelStatus,
-        publicAccessEnabled: cf.enabled ?? this.tunnelConfiguration.enabled,
-        cloudflaredTunnelMode:
-          cf.tunnelMode || this.tunnelConfiguration.tunnelMode,
-        cloudflaredUseHTTP2: cf.useHTTP2 ?? this.tunnelConfiguration.useHTTP2,
+        publicAccessEnabled: cf.enabled ?? held.enabled,
+        cloudflaredTunnelMode: cf.tunnelMode || held.tunnelMode,
+        cloudflaredUseHTTP2: cf.useHTTP2 ?? held.useHTTP2,
         cloudflaredNamedInput: {
-          hostname: cf.namedHostname ?? this.tunnelConfiguration.namedHostname,
+          hostname: cf.namedHostname ?? held.namedHostname,
           apiToken: "",
           accountID: this.tunnelConfiguration.accountId
             ? ""
@@ -986,13 +989,19 @@
         snapshot.preferredProxyPortText ||
         String(snapshot.preferredProxyPort || DEFAULT_PROXY_PORTS[this.pool]);
       const named = snapshot.cloudflaredNamedInput || {};
-      Object.assign(this.tunnelConfiguration, {
+      const synced = {
         enabled: !!snapshot.publicAccessEnabled,
         tunnelMode: snapshot.cloudflaredTunnelMode || "quick",
         useHTTP2: !!snapshot.cloudflaredUseHTTP2,
         namedHostname: named.hostname || "",
-        hasAPIToken: !!named.hasAPIToken,
-      });
+      };
+      // The draft keeps what was edited since the app last held it, until it
+      // is saved: a snapshot read before then would undo the edit.
+      const held = this.lastSyncedConfiguration?.cloudflared;
+      for (const [key, value] of Object.entries(synced))
+        if (!held || this.tunnelConfiguration[key] === held[key])
+          this.tunnelConfiguration[key] = value;
+      this.tunnelConfiguration.hasAPIToken = !!named.hasAPIToken;
       for (const [local, remote] of [
         ["apiToken", "apiToken"],
         ["accountId", "accountID"],
@@ -1006,12 +1015,7 @@
       this.remoteLogs = normalized.remoteLogs;
       this.lastSyncedConfiguration = {
         preferredPortText: this.preferredPortText,
-        cloudflared: {
-          enabled: this.tunnelConfiguration.enabled,
-          tunnelMode: this.tunnelConfiguration.tunnelMode,
-          useHTTP2: this.tunnelConfiguration.useHTTP2,
-          namedHostname: this.tunnelConfiguration.namedHostname,
-        },
+        cloudflared: synced,
       };
       this.lastAppliedSnapshot = normalized;
       this.onUpdate();
@@ -1097,12 +1101,33 @@
         { style: "success", key: "proxy.notice.api_key_refreshed" },
       );
     }
-    async updateTunnel(patch) {
+    /// Saves the tunnel's draft, with `patch` applied; what it saved is then
+    /// what the app holds, which later snapshots are compared with.
+    async updateTunnel(patch = {}) {
       Object.assign(this.tunnelConfiguration, patch);
-      await this.invoke("save_tunnel_configuration", {
-        value: structuredClone(this.tunnelConfiguration),
-      });
+      const value = structuredClone(this.tunnelConfiguration);
+      await this.invoke("save_tunnel_configuration", { value });
+      this.holdTunnel(value);
       this.onUpdate();
+    }
+    /// Takes the tunnel configuration the app holds, as at launch, into the
+    /// draft.
+    adoptTunnel(cloudflared = {}) {
+      Object.assign(this.tunnelConfiguration, cloudflared);
+      this.holdTunnel(this.tunnelConfiguration);
+    }
+    /// Records `value` as the tunnel configuration the app holds.
+    holdTunnel(value) {
+      this.lastSyncedConfiguration = {
+        preferredPortText: this.preferredPortText,
+        ...this.lastSyncedConfiguration,
+        cloudflared: {
+          enabled: !!value.enabled,
+          tunnelMode: value.tunnelMode || "quick",
+          useHTTP2: !!value.useHTTP2,
+          namedHostname: value.namedHostname || "",
+        },
+      };
     }
     setPublicAccessEnabled(value) {
       return this.updateTunnel({ enabled: value });

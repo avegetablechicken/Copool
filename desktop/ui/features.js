@@ -1032,10 +1032,7 @@ initializeFeatures = async () => {
   }
   renderRemotes();
   for (const controller of Object.values(proxyControllers))
-    Object.assign(
-      controller.tunnelConfiguration,
-      controller.localConfiguration(configurationCache).cloudflared,
-    );
+    controller.adoptTunnel(controller.localConfiguration(configurationCache).cloudflared);
   renderTunnelControls();
 };
 function renderPendingWorkspaces() {
@@ -1097,10 +1094,10 @@ function renderPendingWorkspaces() {
 /// The tunnel's save as the pool shown, waiting while its hostname is typed
 /// (controllers.js's PendingSave): Swift's scheduleProxyConfigurationSync.
 const tunnelSave = new window.CopoolControllers.PendingSave();
-/// Saves the tunnel of the pool shown now, after one still waiting for
+/// Saves the tunnel draft of the pool shown now, after one still waiting for
 /// another pool.
-function tunnelSaver(controller = proxyController, config = tunnelConfiguration) {
-  return () => action(() => controller.updateTunnel(config), null, false);
+function tunnelSaver(controller = proxyController) {
+  return () => action(() => controller.updateTunnel(), null, false);
 }
 async function saveTunnelConfiguration() {
   await tunnelSave.now(proxyController, tunnelSaver());

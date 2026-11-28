@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { Proxy } = require("../ui/controllers.js");
+const { Proxy, PendingSave } = require("../ui/controllers.js");
 const P = require("../ui/presentation.js");
 const legacy = (suite, name, fn) => test(`${suite}.${name}`, fn);
 const snapshot = () => ({
@@ -537,4 +537,40 @@ test("each pool's proxy page shows its own proxy, tunnel and remote servers", as
     calls.find(([command]) => command === "start_proxy"),
     ["start_proxy", { port: 9900, pool: "claude" }],
   );
+});
+
+test("a hostname typed is saved as typed, though a snapshot read before it arrives first", async () => {
+  const writes = [];
+  const model = new Proxy(async (command, args) => {
+    if (command === "save_tunnel_configuration") writes.push(args.value);
+  });
+  const old = {
+    preferredPortText: "8787",
+    cloudflared: { enabled: true, tunnelMode: "named", namedHostname: "old.example.com" },
+  };
+  const tunnel = { installed: true, running: false };
+  model.applyLocal({ running: true, port: 8787 }, old, tunnel);
+  const timers = new Map();
+  const save = new PendingSave(350, {
+    setTimeout: (run) => (timers.set(1, run), 1),
+    clearTimeout: (id) => timers.delete(id),
+  });
+  // As features.js's hostname field: the draft edited, its save waiting.
+  model.tunnelConfiguration.namedHostname = "new.example.com";
+  save.schedule(model, () => model.updateTunnel());
+  // A background refresh read before the save keeps the draft.
+  model.applyLocal({ running: true, port: 8787 }, old, tunnel);
+  assert.equal(model.tunnelConfiguration.namedHostname, "new.example.com");
+  await save.flush();
+  assert.deepEqual(writes.map((value) => value.namedHostname), ["new.example.com"]);
+  // Once saved, a snapshot of what the app holds is taken again, edits elsewhere too.
+  const later = structuredClone(old);
+  later.cloudflared.namedHostname = "elsewhere.example.com";
+  model.applyLocal({ running: true, port: 8787 }, later, tunnel);
+  assert.equal(model.tunnelConfiguration.namedHostname, "elsewhere.example.com");
+  // A field the configuration leaves out keeps the one held, not the draft's.
+  model.tunnelConfiguration.useHTTP2 = true;
+  model.applyLocal({ running: true, port: 8787 }, { cloudflared: {} }, tunnel);
+  assert.equal(model.tunnelConfiguration.useHTTP2, true);
+  assert.equal(model.lastSyncedConfiguration.cloudflared.useHTTP2, false);
 });
