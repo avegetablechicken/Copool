@@ -2,14 +2,11 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const vm = require("node:vm");
 const { Accounts, poolInvoke } = require("../ui/controllers.js");
+const CardBack = require("../ui/card-back.js");
+const dom = require("./fake-dom.cjs");
 
 // The application's pool routing with the real accounts controller.
-// Windows checkouts may end lines with CRLF; the slices below look for LF.
-const source = fs
-  .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
-  .replace(/\r\n/g, "\n");
 /// A clock that moves only as the controller waits.
 function fakeClock() {
   const clock = { at: Date.now() };
@@ -56,19 +53,43 @@ for (const target of ["claude", "codex"]) {
   });
 }
 
+/// A card's renewal section, on a back whose renewals and actions are
+/// recorded, its card's token expiring at `expiresAt` (Unix seconds).
+function renewalSection(renewal, expiresAt = Date.now() / 1000 + 3 * 3600) {
+  const calls = [];
+  const controller = {
+    cardState: () => ({ refreshing: false, hi: null, renewing: false }),
+    setRenewal: (id, choice) => calls.push(["setRenewal", id, choice]),
+  };
+  const back = CardBack.create({
+    el: dom.el,
+    button: dom.button,
+    tr: (key, ...args) => [key, ...args].join(" "),
+    locale: "en",
+    controller,
+    renewNow: (account) => calls.push(["renewNow", account.id]),
+    action: (task) => task(),
+  });
+  const account = { id: "a", renewal, tokenExpiresAt: expiresAt };
+  return { section: back.renewalSection(account), calls };
+}
+
 test("a card's back offers renew now, then auto renew as a switch", () => {
-  const start = source.indexOf("function renewalSection(");
-  assert(start >= 0, "renewalSection found");
-  const end = source.indexOf("\n}\n", start);
-  assert(end > start, "renewalSection end found");
-  const body = source.slice(start, end);
-  const now = body.indexOf('tr("accounts.renewal.now")');
-  const auto = body.indexOf('tr("accounts.renewal.auto")');
-  assert(now >= 0 && auto > now, "renew now comes first, then auto renew");
-  assert.match(body, /\(\) => renewNow\(account\)/);
-  assert.match(body, /account\.renewal === "always"/);
-  assert.match(body, /on \? "always" : "never"/);
-  assert(!source.includes("RENEWALS"));
+  const { section, calls } = renewalSection("always");
+  const now = section.find((n) => n.tag === "button" && n.textContent === "accounts.renewal.now");
+  const auto = section.field("renewal-auto");
+  assert(now && auto, "renew now and auto renew shown");
+  const order = [...section.nodes()];
+  assert(order.indexOf(now) < order.indexOf(auto), "renew now comes first, then auto renew");
+  assert.equal(auto.parent.children[0].textContent, "accounts.renewal.auto");
+  assert.equal(auto.checked, true);
+  assert.equal(renewalSection("never").section.field("renewal-auto").checked, false);
+  now.click();
+  auto.checked = false;
+  auto.onchange();
+  auto.checked = true;
+  auto.onchange();
+  assert.deepEqual(calls, [["renewNow", "a"], ["setRenewal", "a", "never"], ["setRenewal", "a", "always"]]);
   const locales = fs.readFileSync(path.join(__dirname, "../ui/locales.js"), "utf8");
   for (const key of [
     "accounts.renewal.title",
@@ -169,13 +190,11 @@ test("a failed renewal shows no done moment", async () => {
 
 // The card's front no longer shows the token expiry (card-view.test.cjs).
 test("the card's back shows the token expiry", () => {
-  const start = source.indexOf("function renewalSection(");
-  assert(start >= 0, "renewalSection found");
-  const stop = source.indexOf("\n}\n", start);
-  assert(stop > start, "renewalSection's end found");
-  assert.match(source.slice(start, stop), /P\.tokenExpiry\(account\.tokenExpiresAt/);
+  const detail = (expiresAt) =>
+    renewalSection("always", expiresAt).section.find((n) => n.className === "back-detail").textContent;
+  assert.match(detail(Date.now() / 1000 + 3 * 3600), /^accounts\.renewal\.expires_format /);
+  assert.equal(detail(Date.now() / 1000 - 60), "accounts.renewal.expired");
 });
-
 
 test("saying hi goes to the Claude pool, locks the card's refresh without spinning it and reloads it", async () => {
   const { model, calls } = fixture("claude");

@@ -3,8 +3,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const P = require("../ui/presentation.js");
 const V = require("../ui/card-view.js");
+const CardBack = require("../ui/card-back.js");
 const { Accounts } = require("../ui/controllers.js");
+const dom = require("./fake-dom.cjs");
 
 // Windows checkouts may end lines with CRLF; the markers below are one line.
 const source = fs
@@ -18,16 +21,8 @@ function between(from, to) {
   assert(end > start, `${to} found after ${from}`);
   return source.slice(start, end);
 }
-// The editing rules are the pool's controller's; app.js's editCard and
-// cancelEditing only turn the cards.
-const editingGlue = between(
-  "/// Turns a card over to its settings (the controller's edit)",
-  "/// Renders the card being edited again",
-);
-const proxyHints = between(
-  "/// The shared account proxy a blank proxy uses",
-  "/// Turns a card over to its settings (the controller's edit)",
-);
+// The editing rules are the pool's controller's; card-back.js's editCard
+// and cancelEditing only turn the cards.
 /// One of the Sub2api provider "team"'s cards.
 const member = (n, extra = {}) => ({
   id: `sub2api-team-${n}`,
@@ -38,8 +33,8 @@ const member = (n, extra = {}) => ({
 });
 
 /// A Codex pool's controller over `accounts`, whose proxy saves are recorded
-/// (or fail with `scope.failSave`), and app.js's editing over it, whose card
-/// turns are run at once.
+/// (or fail with `scope.failSave`), and card-back.js over it (`back`), whose
+/// host is `scope` and whose card turns are run at once.
 function editor(accounts, extra = {}) {
   const saved = [];
   const invoke = async (command, args) => {
@@ -51,21 +46,33 @@ function editor(accounts, extra = {}) {
     return [];
   };
   const controller = new Accounts(invoke, accounts, () => {}, () => {}, { pool: "codex" });
-  const scope = {
-    P: require("../ui/presentation.js"),
-    V,
-    accountsController: controller,
+  const scope = host({ controller, ...extra });
+  return { scope, back: CardBack.create(scope), controller, saved };
+}
+/// A card back's host, as app.js gives it: fake nodes, a Codex card in
+/// English, and recorded or idle actions, which `extra` replaces.
+function host(extra = {}) {
+  return {
+    el: dom.el,
+    button: dom.button,
+    tr: (key, ...args) => [key, ...args].join(" "),
+    locale: "en",
     pool: "codex",
     collapsed: false,
     preferences: { accountProxyUrl: "" },
-    tr: (key, ...args) => [key, ...args].join(" "),
-    notice: () => {},
+    cardContext: () => ({ pool: "codex", locale: "en", tr: (key) => key }),
+    providerTitle: () => "Team",
     turnCard: (_key, _direction, change) => change(),
+    renderEditing: () => {},
+    focusBackField: () => {},
+    notice: () => {},
+    action: (task) => task(),
+    queuePreferenceSave: async () => {},
+    renewNow: () => {},
+    greet: () => {},
+    removeCards: () => {},
     ...extra,
   };
-  vm.createContext(scope);
-  vm.runInContext(proxyHints + editingGlue, scope);
-  return { scope, controller, saved };
 }
 /// The card of `key` turned over to edit it.
 async function edited(controller, key) {
@@ -100,13 +107,13 @@ test("a card's proxy saves none as direct, restores it and inherits again when b
 });
 
 test("an invalid proxy keeps the card open with its error", async () => {
-  const { scope, controller, saved } = editor([{ id: "card", proxyUrl: "" }]);
+  const { scope, back, controller, saved } = editor([{ id: "card", proxyUrl: "" }]);
   scope.failSave = "Invalid account proxy URL";
   let rendered = 0;
   scope.renderEditing = () => rendered++;
   const state = await edited(controller, "card");
   state.proxy.url = "ftp://x";
-  await scope.finishEditing();
+  await back.finishEditing();
   assert.equal(controller.editing, state);
   assert.equal(state.proxyError, "Invalid account proxy URL");
   // The error shows with Done enabled, to try again.
@@ -116,29 +123,29 @@ test("an invalid proxy keeps the card open with its error", async () => {
   // Corrected, it saves and the card turns back.
   scope.failSave = null;
   state.proxy.url = "http://127.0.0.1:1";
-  await scope.finishEditing();
+  await back.finishEditing();
   assert.deepEqual(saved, [["card", "http://127.0.0.1:1"]]);
   assert.equal(controller.editing, null);
 });
 
 test("a card turned back or superseded while its proxy saves is not turned again", async () => {
   const turned = [];
-  const { scope, controller } = editor([{ id: "card", proxyUrl: "" }, { id: "other", proxyUrl: "" }], {
+  const { scope, back, controller } = editor([{ id: "card", proxyUrl: "" }, { id: "other", proxyUrl: "" }], {
     turnCard: (key, direction, change) => (turned.push([key, direction]), change()),
   });
   scope.renderEditing = () => turned.push(["render"]);
   for (const meanwhile of [
     () => controller.stopEditing(),
     () => controller.edit("other")(),
-    () => (scope.accountsController = new Accounts(async () => [], [], () => {}, () => {}, { pool: "claude" })),
+    () => (scope.controller = new Accounts(async () => [], [], () => {}, () => {}, { pool: "claude" })),
   ]) {
-    scope.accountsController = controller;
+    scope.controller = controller;
     controller.stopEditing();
     const state = await edited(controller, "card");
     state.proxy.url = "http://127.0.0.1:1";
     let save;
     controller.saveProxyDraft = () => new Promise((resolve) => (save = resolve));
-    const finishing = scope.finishEditing();
+    const finishing = back.finishEditing();
     await meanwhile();
     save(true);
     await finishing;
@@ -205,20 +212,20 @@ test("a card that greets reads its greeting schedule as it turns over, and saves
 });
 
 test("a blank card proxy is described and shown as the shared account proxy when one is set", () => {
-  const { scope } = editor([]);
+  const { scope, back } = editor([]);
   scope.preferences.accountProxyUrl = " socks5://127.0.0.1:7891 ";
-  assert.equal(scope.proxyHelp({}), "accounts.proxy.shared_help");
-  assert.equal(scope.proxyPlaceholder({}), "socks5://127.0.0.1:7891");
+  assert.equal(back.proxyHelp({}), "accounts.proxy.shared_help");
+  assert.equal(back.proxyPlaceholder({}), "socks5://127.0.0.1:7891");
   // A Sub2api provider's cards never take the shared proxy.
   const provider = { sourceTag: "SUB2API" };
-  assert.equal(scope.proxyHelp(provider), "accounts.proxy.system_help");
-  assert.equal(scope.proxyPlaceholder(provider), "http://127.0.0.1:7890");
+  assert.equal(back.proxyHelp(provider), "accounts.proxy.system_help");
+  assert.equal(back.proxyPlaceholder(provider), "http://127.0.0.1:7890");
   scope.preferences.accountProxyUrl = "direct://";
-  assert.equal(scope.proxyHelp({}), "accounts.proxy.shared_help");
-  assert.equal(scope.proxyPlaceholder({}), "direct://");
+  assert.equal(back.proxyHelp({}), "accounts.proxy.shared_help");
+  assert.equal(back.proxyPlaceholder({}), "direct://");
   scope.preferences.accountProxyUrl = "";
-  assert.equal(scope.proxyHelp({}), "accounts.proxy.system_help");
-  assert.equal(scope.proxyPlaceholder({}), "http://127.0.0.1:7890");
+  assert.equal(back.proxyHelp({}), "accounts.proxy.system_help");
+  assert.equal(back.proxyPlaceholder({}), "http://127.0.0.1:7890");
 });
 
 test("other cards shown end editing at once without saving, and a turn under way never shows", async () => {
@@ -234,19 +241,35 @@ test("other cards shown end editing at once without saving, and a turn under way
   assert.equal(saved.length, 0);
 });
 
+/// app.js's keyboard handling over a card back and its controller.
+function keyboard(back, controller, globals) {
+  const scope = vm.createContext({
+    P,
+    V,
+    accountsController: controller,
+    pool: controller.pool,
+    collapsed: false,
+    menus: { handleKey: () => false },
+    TOOLBAR_SHORTCUTS: {},
+    navigator: { userAgent: "Mac" },
+    editCard: (key) => back.editCard(key),
+    cancelEditing: () => back.cancelEditing(),
+    ...globals,
+  });
+  vm.runInContext(between("let menuBarNavigation", "/// Refreshes one account"), scope);
+  return scope;
+}
+
 test("Escape cancels card editing and only a fresh press can hide the panel", () => {
   const document = new EventTarget();
   document.querySelector = () => null;
   const commands = [];
-  const { scope, controller, saved } = editor([{ id: "card", proxyUrl: "" }], {
+  const { back, controller, saved } = editor([{ id: "card", proxyUrl: "" }]);
+  keyboard(back, controller, {
     document,
     selectedPage: "accounts",
-    menus: { handleKey: () => false },
-    TOOLBAR_SHORTCUTS: {},
-    navigator: { userAgent: "Mac" },
     invoke: async (command) => commands.push(command),
   });
-  vm.runInContext(between("let menuBarNavigation", "/// Refreshes one account"), scope);
   function escape(repeat = false) {
     const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape", repeat });
     document.dispatchEvent(event);
@@ -282,16 +305,13 @@ test("Return flips the hovered account card to edit, unless a focused UI element
       : null;
 
   const accounts = [{ id: "solo", proxyUrl: "" }, member(1), member(2)];
-  const { scope, controller } = editor(accounts, {
+  const { back, controller } = editor(accounts);
+  const scope = keyboard(back, controller, {
     document,
     selectedPage: "accounts",
     reorderingAccounts: false,
-    menus: { handleKey: () => false },
-    TOOLBAR_SHORTCUTS: {},
-    navigator: { userAgent: "Mac" },
     invoke: async () => null,
   });
-  vm.runInContext(between("let menuBarNavigation", "/// Refreshes one account"), scope);
 
   function pressEnter(extra = {}) {
     const event = Object.assign(new Event("keydown", { cancelable: true }), {
@@ -344,28 +364,28 @@ test("Return flips the hovered account card to edit, unless a focused UI element
 test("a card turning over is turned back by Escape or by another card's edit", async () => {
   // Turns wait until run, as an animation's first half does.
   const turns = [];
-  const { scope, controller } = editor([{ id: "a", proxyUrl: "" }, { id: "b", proxyUrl: "" }], {
+  const { back, controller } = editor([{ id: "a", proxyUrl: "" }, { id: "b", proxyUrl: "" }], {
     turnCard: (key, direction, change) =>
       new Promise((resolve) => turns.push({ key, direction, run: () => Promise.resolve(change()).then(resolve) })),
   });
   // Escape while the card is edge-on: its back never shows.
-  const first = scope.editCard("a");
-  scope.cancelEditing();
+  const first = back.editCard("a");
+  back.cancelEditing();
   await turns.shift().run();
   await first;
   assert.equal(controller.editing, null);
   // A card being turned over is not turned again.
-  const second = scope.editCard("a");
+  const second = back.editCard("a");
   assert.equal(controller.edit("a"), null);
   // Another card edited meanwhile is the one that shows its back.
-  const third = scope.editCard("b");
+  const third = back.editCard("b");
   await turns.shift().run();
   await turns.shift().run();
   await Promise.all([second, third]);
   assert.equal(controller.editing.key, "b");
   // Editing another card turns this one back, without saving; should the
   // other's back show first, this one's turn does not close it.
-  const fourth = scope.editCard("a");
+  const fourth = back.editCard("a");
   assert.deepEqual(turns.map(({ key, direction }) => [key, direction]), [["b", -1], ["a", 1]]);
   await turns.pop().run();
   await fourth;
@@ -374,21 +394,16 @@ test("a card turning over is turned back by Escape or by another card's edit", a
   assert.equal(turns.length, 0);
 });
 
-const greeting = between("/// Saves a greeting schedule", "/// A card's background refresh: the pool's intervals");
 test("greeting times are added in order once and removed by value", async () => {
   const saves = [];
   const invoke = async (command, args) => saves.push([command, args]);
-  const scope = {
-    // The schedule goes to the card's pool through its controller.
-    accountsController: new Accounts(invoke, [], () => {}, () => {}, { pool: "claude" }),
+  // The schedule goes to the card's pool through its controller.
+  const back = CardBack.create(host({
+    controller: new Accounts(invoke, [], () => {}, () => {}, { pool: "claude" }),
     notice: (error) => {
       throw error;
     },
-    renderEditing: () => {},
-  };
-  vm.createContext(scope);
-  vm.runInContext(greeting, scope);
-  const P = require("../ui/presentation.js");
+  }));
   const add = (times, time) => P.withGreetingTime(times, time);
   assert.deepEqual(add(["12:30"], "08:00"), ["08:00", "12:30"]);
   assert.equal(add(["08:00"], "08:00"), null, "a time already set");
@@ -396,9 +411,9 @@ test("greeting times are added in order once and removed by value", async () => 
   assert.deepEqual(P.withoutGreetingTime(["08:00", "12:30"], "08:00"), ["12:30"]);
   // Saving keeps Auto and shows the times saved on the card.
   const state = { schedule: { auto: true, times: ["08:00"], lastError: null } };
-  await scope.saveGreeting("a", state, true, []);
+  await back.saveGreeting("a", state, true, []);
   assert.deepEqual(saves, [["set_greeting_schedule", { id: "a", auto: true, times: [] }]]);
-  assert.deepEqual(Array.from(state.schedule.times), []);
+  assert.deepEqual(state.schedule.times, []);
   assert.equal(state.schedule.auto, true);
 });
 
@@ -475,51 +490,44 @@ test("refresh intervals offer the one set and speed up to a fifth, no sooner tha
   assert.equal(P.formatInterval(300, "zh-Hans"), "5分钟");
 });
 
-const refreshSection = between("/// A card's background refresh: the pool's intervals", "/// Removal, confirmed by a second click.");
 /// A pool's refresh section on a card in use: each row's label, field,
 /// line under it and tooltip, and the refresh each control saves.
 function refreshRows(pool, refresh, key = "acct", cards) {
   const saved = [];
-  const scope = {
+  const scope = host({
     pool,
-    locale: "en",
     preferences: { refresh: { [pool]: refresh, ...(cards ? { cards } : {}) } },
-    P: {
-      refreshChoices: () => ({ seconds: [refresh.seconds], fullEvery: [1] }),
-      formatInterval: (seconds) => `${seconds}s`,
-      fastRefreshSeconds: (seconds) => seconds / 5,
-    },
-    tr: (key, ...args) => [key, ...args].join(" "),
-    el: () => ({ dataset: {}, append() {} }),
-    backSection: () => ({ group: { rows: [], append(...rows) { this.rows.push(...rows); } } }),
-    backRow: (label, control, note, tip) => ({ label, control, note, tip }),
-    backSwitch: (field, on, label, onchange) => ({ dataset: { backField: field }, on, onchange }),
     // As the app's queue: each patch on the preferences the last left.
     queuePreferenceSave: async (patch) => {
       const value = typeof patch === "function" ? patch(scope.preferences) : patch;
       scope.preferences = { ...scope.preferences, ...value };
       saved.push(value);
     },
-    notice: () => {},
-    renderEditing: () => {},
+  });
+  const section = CardBack.create(scope).refreshSection(true, key);
+  /// The row of a control: its label, its control, the line under the label
+  /// and the label's tooltip.
+  const field = (name) => {
+    const control = section.field(name);
+    if (!control) return undefined;
+    const label = control.parent.children[0];
+    const note = label.children.find((n) => n.className === "back-note");
+    return { label: label.textContent, control, note: note?.textContent ?? null, tip: label.title || null };
   };
-  vm.createContext(scope);
-  vm.runInContext(refreshSection, scope);
-  const rows = scope.refreshSection(true, key).group.rows;
-  return {
-    rows,
-    saved,
-    scope,
-    field: (name) => rows.find((r) => r.control.dataset.backField === name),
-  };
+  return { saved, scope, field };
+}
+/// Turns a switch of a card's back on or off, as a click does.
+function flip(control, on) {
+  control.checked = on;
+  control.onchange();
 }
 
 test("two refresh changes made before the card renders again both stay, on the card alone", async () => {
   const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
   const other = { other: { adaptive: true } };
   const { field, scope } = refreshRows("claude", refresh, "acct", { claude: other });
-  field("refresh-backoff").control.onchange(false);
-  field("refresh-adaptive").control.onchange(false);
+  flip(field("refresh-backoff").control, false);
+  flip(field("refresh-adaptive").control, false);
   const fullEvery = field("refresh-full-every").control;
   fullEvery.value = "2";
   fullEvery.onchange();
@@ -536,19 +544,19 @@ test("a card's switches follow its pool's until it sets its own", () => {
   const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
   const cards = { claude: { acct: { adaptive: false } }, codex: { other: { backoff: false } } };
   const own = refreshRows("claude", refresh, "acct", cards);
-  assert.equal(own.field("refresh-adaptive").control.on, false);
-  assert.equal(own.field("refresh-backoff").control.on, true);
+  assert.equal(own.field("refresh-adaptive").control.checked, false);
+  assert.equal(own.field("refresh-backoff").control.checked, true);
   // Another card, or the same key in another pool, has the pool's.
-  assert.equal(refreshRows("claude", refresh, "other", cards).field("refresh-adaptive").control.on, true);
-  assert.equal(refreshRows("codex", refresh, "acct", cards).field("refresh-adaptive").control.on, true);
-  assert.equal(refreshRows("claude", { ...refresh, adaptive: false }).field("refresh-adaptive").control.on, false);
+  assert.equal(refreshRows("claude", refresh, "other", cards).field("refresh-adaptive").control.checked, true);
+  assert.equal(refreshRows("codex", refresh, "acct", cards).field("refresh-adaptive").control.checked, true);
+  assert.equal(refreshRows("claude", { ...refresh, adaptive: false }).field("refresh-adaptive").control.checked, false);
 });
 
 test("a Sub2api provider's cards share their speed-up and have no slow-down", async () => {
   const refresh = { seconds: 300, fullEvery: 1, adaptive: true, backoff: true };
   const { field, scope } = refreshRows("claude", refresh, "sub2api:p");
   assert.equal(field("refresh-backoff"), undefined);
-  field("refresh-adaptive").control.onchange(false);
+  flip(field("refresh-adaptive").control, false);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(JSON.parse(JSON.stringify(scope.preferences.refresh.cards)), {
     claude: { "sub2api:p": { adaptive: false } },
@@ -568,15 +576,15 @@ test("only Claude's own accounts offer the slow-down after HTTP 429, on by defau
   const { field, saved } = refreshRows("claude", refresh);
   const backoff = field("refresh-backoff");
   assert.equal(backoff.label, "accounts.refresh.backoff");
-  assert.equal(backoff.control.on, true);
+  assert.equal(backoff.control.checked, true);
   // What it does shows on its name, on or off, as does the speed-up's.
   assert.deepEqual([backoff.note, backoff.tip], [null, "accounts.refresh.backoff_help"]);
   assert.deepEqual(
     [field("refresh-adaptive").note, field("refresh-adaptive").tip],
-    [null, "accounts.refresh.adaptive_help_format 60s"],
+    [null, "accounts.refresh.adaptive_help_format 1 minute"],
   );
   // Turned off, it saves on the card.
-  backoff.control.onchange(false);
+  flip(backoff.control, false);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(JSON.parse(JSON.stringify(saved)), [
     { refresh: { claude: refresh, cards: { claude: { acct: { backoff: false } } } } },
@@ -587,60 +595,37 @@ test("only Claude's own accounts offer the slow-down after HTTP 429, on by defau
   );
 });
 
-const greetingSectionSource = between("/// Saying hi now, automatically, and at which times.", "/// Saves a greeting schedule");
-const proxySectionSource = between("/// The proxy, saved with Done or Return.", "/// The token's time left");
+/// A card back whose greetings and proxy are read on a Codex Plus card
+/// with nothing under way, and the inputs it built.
 function cardFields() {
   const inputs = [];
-  const node = (tag, className = "", text = "") => ({
-    tag,
-    className,
-    text,
-    title: "",
-    dataset: {},
-    children: [],
-    append(...nodes) {
-      this.children.push(...nodes);
-    },
-    setAttribute() {},
-  });
-  const scope = {
-    accountsController: { cardState: () => ({ refreshing: false, hi: null }) },
-    V: { canSayHi: () => true },
-    cardContext: () => ({}),
-    tr: (key) => key,
+  const scope = host({
+    controller: { cardState: () => ({ refreshing: false, hi: null }) },
     el: (...args) => {
-      const field = node(...args);
+      const field = dom.el(...args);
       if (field.tag === "input") inputs.push(field);
       return field;
     },
-    button: () => node("button"),
-    backSection: () => Object.assign(node("div"), { group: node("div", "back-group") }),
-    backButton: () => node("button"),
-    backRow: () => node("label", "back-row"),
-    backSwitch: () => node("input", "switch"),
-    backHelp: () => node("p"),
-    proxyHelp: () => "",
-    proxyPlaceholder: () => "",
-  };
-  vm.createContext(scope);
-  vm.runInContext(greetingSectionSource + proxySectionSource, scope);
-  return { scope, inputs };
+  });
+  return { scope, back: CardBack.create(scope), inputs };
 }
+const greeter = { id: "a", usage: { planType: "plus" } };
 function greetingTimesLabel(lastError) {
-  const { scope } = cardFields();
+  const { back } = cardFields();
   const state = { adding: null, schedule: { auto: false, times: ["08:00"], lastError } };
-  const section = scope.greetingSection({ id: "a" }, state);
-  const daily = section.group.children.find((n) => n.className === "back-row back-stack");
+  const section = back.greetingSection(greeter, state);
+  const daily = section.find((n) => n.className === "back-row back-stack");
   return daily.children.find((n) => n.className === "back-label");
 }
 
-test("Escape leaves the proxy field with its draft intact; Enter still finishes editing", () => {
-  const { scope, inputs } = cardFields();
+test("Escape leaves the proxy field with its draft intact; Enter still finishes editing", async () => {
+  const { scope, back, inputs } = cardFields();
   const state = { proxy: { enabled: true, url: "" } };
   let finished = 0;
   let blurred = 0;
-  scope.finishEditing = () => finished++;
-  scope.proxySection(state, {});
+  // Enter finishes editing: the card's proxy saves through its controller.
+  scope.controller = { editing: state, saveProxyDraft: async () => (finished++, false) };
+  back.proxySection(state, {});
   const [url] = inputs;
   url.blur = () => blurred++;
   url.value = "http://draft:1";
@@ -659,14 +644,15 @@ test("Escape leaves the proxy field with its draft intact; Enter still finishes 
   assert.equal(finished, 0);
   assert.equal(state.proxy.url, "http://draft:1");
   url.onkeydown(Object.assign(new Event("keydown", { cancelable: true }), { key: "Enter" }));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(finished, 1);
 });
 
 test("Escape cancels only the new greeting time, including when the field blurs", () => {
-  const { scope, inputs } = cardFields();
+  const { scope, back, inputs } = cardFields();
   const state = { adding: "12:30", schedule: { auto: false, times: [] } };
-  scope.greetingSection({ id: "a" }, state);
-  const [time] = inputs;
+  back.greetingSection(greeter, state);
+  const time = inputs.find((input) => input.dataset.backField === "greeting-time");
   time.isConnected = true;
   scope.renderEditing = () => time.onblur();
   const esc = Object.assign(new Event("keydown", { cancelable: true }), { key: "Escape" });
@@ -678,14 +664,12 @@ test("Escape cancels only the new greeting time, including when the field blurs"
 });
 
 test("Say hi now waits while its card refreshes, greets or renews", () => {
-  const { scope } = cardFields();
+  const { scope, back } = cardFields();
   const state = { adding: null, schedule: { auto: false, times: [] } };
-  let disabled;
-  scope.backButton = (_label, _run, off) => ((disabled = off), { tag: "button" });
   const offered = (ui) => {
-    scope.accountsController.cardState = () => ({ refreshing: false, hi: null, renewing: false, ...ui });
-    scope.greetingSection({ id: "a" }, state);
-    return !disabled;
+    scope.controller.cardState = () => ({ refreshing: false, hi: null, renewing: false, ...ui });
+    const section = back.greetingSection(greeter, state);
+    return !section.find((n) => n.textContent === "accounts.say_hi.now").disabled;
   };
   assert.equal(offered({}), true);
   for (const ui of [{ refreshing: true }, { hi: "sent" }, { hi: "received" }, { renewing: true }])
