@@ -277,22 +277,96 @@ esac"#,
         "again"
     );
     take_log();
-    // So does the daemon run by no unit.
-    std::fs::remove_file(&stuck).unwrap();
-    std::fs::write(&state, "inactive\n").unwrap();
-    std::fs::remove_file(dir.join("codex-tools-proxyd")).unwrap();
-    std::fs::copy("/bin/sleep", dir.join("codex-tools-proxyd")).unwrap();
-    let mut daemon = std::process::Command::new(dir.join("codex-tools-proxyd"))
-        .arg("30")
-        .spawn()
-        .unwrap();
-    let outside = run(&sync_command(dir_s, "unit", stage_s, false, &checksum));
-    daemon.kill().unwrap();
-    daemon.wait().unwrap();
-    assert!(String::from_utf8_lossy(&outside.stderr).contains(DAEMON_NOT_HELD));
+}
+/// Run by no unit, the daemon is found from `/proc`, which only Linux has:
+/// at its path, behind a link, and replaced while it runs.
+#[cfg(target_os = "linux")]
+#[test]
+fn testSyncRefusesADaemonNoUnitRuns() {
+    let d = tempfile::tempdir().unwrap();
+    let (dir, stage, bin, elsewhere) = (
+        d.path().join("srv"),
+        d.path().join("stage"),
+        d.path().join("bin"),
+        d.path().join("elsewhere"),
+    );
+    for path in [&dir, &stage, &bin, &elsewhere] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    // No unit is loaded.
+    executable(&bin.join("systemctl"), "echo LoadState=not-found; exit 3");
+    std::fs::write(dir.join("accounts.json"), "kept").unwrap();
+    let checksum = String::from_utf8_lossy(
+        &std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!("cksum < '{}'", dir.join("accounts.json").display()),
+            ])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_owned();
+    let daemon = dir.join("codex-tools-proxyd");
+    let sync = || {
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("accounts.json"), "uploaded").unwrap();
+        std::process::Command::new("sh")
+            .args([
+                "-c",
+                &sync_command(
+                    dir.to_str().unwrap(),
+                    "unit",
+                    stage.to_str().unwrap(),
+                    false,
+                    &checksum,
+                ),
+            ])
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .output()
+            .unwrap()
+    };
+    let refused_while = |start: &dyn Fn() -> std::process::Child, after: &dyn Fn()| {
+        let mut running = start();
+        after();
+        let output = sync();
+        running.kill().unwrap();
+        running.wait().unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(DAEMON_NOT_HELD),
+            "{output:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("accounts.json")).unwrap(),
+            "kept"
+        );
+    };
+    let spawn = || {
+        std::process::Command::new(&daemon)
+            .arg("30")
+            .spawn()
+            .unwrap()
+    };
+    // At its path.
+    std::fs::copy("/bin/sleep", &daemon).unwrap();
+    refused_while(&spawn, &|| {});
+    // Replaced while it runs.
+    refused_while(&spawn, &|| {
+        std::fs::remove_file(&daemon).unwrap();
+        std::fs::copy("/bin/sleep", &daemon).unwrap();
+    });
+    // Behind a link.
+    std::fs::remove_file(&daemon).unwrap();
+    let target = elsewhere.join("codex-tools-proxyd-build");
+    std::fs::copy("/bin/sleep", &target).unwrap();
+    std::os::unix::fs::symlink(&target, &daemon).unwrap();
+    refused_while(&spawn, &|| {});
+    // None running, the sync goes on.
+    assert!(sync().status.success());
     assert_eq!(
         std::fs::read_to_string(dir.join("accounts.json")).unwrap(),
-        "again"
+        "uploaded"
     );
 }
 #[cfg(unix)]

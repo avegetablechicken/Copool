@@ -165,8 +165,9 @@ pub(crate) const DAEMON_NOT_HELD: &str = "copool-remote-daemon-not-held";
 /// argument). Else, and always when `stop` (for a command that restarts the
 /// daemon anyway), by stopping its unit, whatever it is doing: `systemctl
 /// stop` also cancels a start or an automatic restart under way. The unit
-/// must then be inactive, and no process may run the daemon's binary (one
-/// no unit runs, or left by its unit), or the command is refused with
+/// must then be inactive, and no process may run the daemon's binary, as
+/// it lies at the end of any links (one no unit runs, or left by its unit;
+/// on Linux, from `/proc`), or the command is refused with
 /// [`DAEMON_NOT_HELD`]. A unit stopped that was not inactive is started
 /// again however the command ends, unless it says otherwise.
 fn hold_accounts(dir: &str, unit: &str, checksum: &str, stop: bool) -> String {
@@ -181,8 +182,8 @@ fn hold_accounts(dir: &str, unit: &str, checksum: &str, stop: bool) -> String {
             "systemctl stop \"$UNIT\" || exit 1; ",
             "case \"$(systemctl is-active \"$UNIT\" 2>/dev/null)\" in inactive|failed) ;; *) echo {held} >&2; exit 1 ;; esac; ",
             "fi; ",
-            "BIN=\"$(cd \"$DIR\" && pwd -P)/codex-tools-proxyd\"; ",
-            "for P in /proc/[0-9]*; do case \"$(readlink \"$P/exe\" 2>/dev/null)\" in \"$BIN\"|\"$BIN (deleted)\") echo {held} >&2; exit 1 ;; esac; done; ",
+            "LINK=\"$(cd \"$DIR\" && pwd -P)/codex-tools-proxyd\"; BIN=$(readlink -f \"$LINK\" 2>/dev/null) || BIN=\"$LINK\"; ",
+            "for P in /proc/[0-9]*; do case \"$(readlink \"$P/exe\" 2>/dev/null)\" in \"$BIN\"|\"$BIN (deleted)\"|\"$LINK\"|\"$LINK (deleted)\") echo {held} >&2; exit 1 ;; esac; done; ",
             "fi; ",
             "F=\"$DIR/accounts.json\"; CURRENT=\"\"; [ -f \"$F\" ] && CURRENT=$(cksum < \"$F\"); ",
             "if [ \"$CURRENT\" != {c} ]; then echo {changed} >&2; exit 75; fi; ",
