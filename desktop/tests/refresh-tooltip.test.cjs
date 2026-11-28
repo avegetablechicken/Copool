@@ -50,98 +50,26 @@ test("The toolbar follows the full refresh", () => {
   assert.match(body("refreshView"), /invoke\("next_full_refresh_at", \{ pool \}\)/);
 });
 
-test("Refreshing a provider's only account refreshes the entire provider", () => {
-  const calls = [];
-  const context = {
-    accountsController: { refresh: (id) => { calls.push(["account", id]); return Promise.resolve(false); } },
-    refreshProvider: (group) => calls.push(["provider", group.key, group.accounts[0].id]),
-    refreshView: () => Promise.resolve(),
-    notice: () => {},
-    providerKey: P.providerKey,
-  };
-  // The cards shown, with the refresh keys the core gives them.
-  context.accountsCache = [
-    { id: "claude-sub2api-team-7", refresh: { key: "sub2api:team" } },
-    { id: "sub2api-work-42", refresh: { key: "sub2api:work" } },
-    { id: "official", refresh: { key: "official" } },
-  ];
-  vm.createContext(context);
-  vm.runInContext(body("refreshUsage"), context);
-  context.refreshUsage("claude-sub2api-team-7");
-  context.refreshUsage("sub2api-work-42");
-  context.refreshUsage("official");
-  context.refreshUsage();
-  assert.deepEqual(calls, [
-    ["provider", "team", "claude-sub2api-team-7"],
-    ["provider", "work", "sub2api-work-42"],
-    ["account", "official"],
-    ["account", null],
-  ]);
-});
-
 test("Cmd+1 to Cmd+4 select the pool both pages share, in place on the proxy page but for Grok", () => {
-  const app = fs
-    .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
-    .replace(/\r\n/g, "\n");
-  const start = app.indexOf('  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3", "4"]');
-  const end = app.indexOf('  } else if (mod && event.key === ",") {', start);
-  assert(start >= 0 && end > start, "pool shortcut branch found");
   for (const [page, key, expected] of [
-    ["proxy", "2", [["pool", "claude"]]],
-    ["proxy", "1", [["pool", "codex"]]],
-    ["accounts", "2", [["pool", "claude"]]],
-    ["settings", "1", [["page", "accounts"], ["pool", "codex"]]],
-    ["proxy", "3", [["pool", "antigravity"]]],
-    ["accounts", "3", [["pool", "antigravity"]]],
+    ["proxy", "2", { pool: "claude", page: null }],
+    ["proxy", "1", { pool: "codex", page: null }],
+    ["accounts", "2", { pool: "claude", page: null }],
+    ["settings", "1", { pool: "codex", page: "accounts" }],
+    ["proxy", "3", { pool: "antigravity", page: null }],
+    ["accounts", "3", { pool: "antigravity", page: null }],
     // Grok has no proxy page: its accounts are shown.
-    ["proxy", "4", [["page", "accounts"], ["pool", "grok"]]],
-    ["accounts", "4", [["pool", "grok"]]],
-  ]) {
-    const calls = [];
-    const scope = {
-      ACCOUNT_POOLS: ["codex", "claude", "antigravity", "grok"],
-      PROXY_POOLS: ["codex", "claude", "antigravity"],
-      selectedPage: page,
-      showProxyPool: (target) => calls.push(["proxy only", target]),
-      showAccountsPool: (target) => calls.push(["accounts only", target]),
-      showPool: (target) => calls.push(["pool", target]),
-      showPage: (target) => calls.push(["page", target]),
-    };
-    vm.createContext(scope);
-    vm.runInContext(
-      `function route(event, mod) { if (false) {\n${app.slice(start, end)}  } }`,
-      scope,
-    );
-    scope.route({ key, preventDefault() {} }, true);
-    assert.deepEqual(calls, expected, `${page} Cmd+${key}`);
-  }
+    ["proxy", "4", { pool: "grok", page: "accounts" }],
+    ["accounts", "4", { pool: "grok", page: null }],
+  ])
+    assert.deepEqual(P.poolShortcut(page, key), expected, `${page} Cmd+${key}`);
+  assert.equal(P.poolShortcut("accounts", "5"), null);
 });
 
 test("Selecting a pool on either page selects it on both, but Grok only on the accounts page", () => {
-  const app = fs
-    .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
-    .replace(/\r\n/g, "\n");
-  const start = app.indexOf("function showPool(next) {");
-  const end = app.indexOf("\n}\n", start);
-  assert(start >= 0 && end > start, "showPool found");
-  const calls = [];
-  const scope = {
-    ACCOUNT_POOLS: ["codex", "claude", "antigravity", "grok"],
-    PROXY_POOLS: ["codex", "claude", "antigravity"],
-    showAccountsPool: (target) => calls.push(["accounts", target]),
-    showProxyPool: (target) => calls.push(["proxy", target]),
-  };
-  vm.createContext(scope);
-  vm.runInContext(app.slice(start, end + 2), scope);
-  scope.showPool("claude");
-  scope.showPool("unknown");
-  scope.showPool("grok");
-  assert.deepEqual(calls, [["accounts", "claude"], ["proxy", "claude"], ["accounts", "grok"]]);
-  assert.match(
-    app,
-    /copy\.onclick = \(\) => showPool\(target\);/,
-    "the proxy page's pool buttons select the shared pool",
-  );
+  assert.deepEqual(P.poolSelection("claude"), { accounts: "claude", proxy: "claude" });
+  assert.equal(P.poolSelection("unknown"), null);
+  assert.deepEqual(P.poolSelection("grok"), { accounts: "grok", proxy: null });
 });
 
 test("A visible meter changes from red to amber without a data refresh", () => {

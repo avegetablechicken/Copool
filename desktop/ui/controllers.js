@@ -8,6 +8,56 @@
   else root.CopoolControllers = api;
 })(globalThis, function (P, V) {
   const messageOf = (error) => error?.message || error?.code || String(error);
+  /// The commands of one pool: every one names the pool it acts on. Only
+  /// Codex has workspaces.
+  function poolInvoke(invoke, target) {
+    return (command, args = {}) => {
+      if (target !== "codex" && command === "workspace_directory")
+        return Promise.resolve([]);
+      if (target !== "codex" && command === "cancel_workspace_refresh")
+        return Promise.resolve(null);
+      return invoke(command, { ...args, pool: target });
+    };
+  }
+  /// A save typed for one owner (a pool, or its proxy page's controller),
+  /// made once typing pauses for `delay` ms or at once by `flush`. One
+  /// scheduled for another owner is made first, so that it stays the one
+  /// it was typed for. `timers` ({ setTimeout, clearTimeout }) for tests.
+  class PendingSave {
+    constructor(delay = 350, timers = globalThis) {
+      this.delay = delay;
+      this.timers = timers;
+      this.timer = null;
+      this.pending = null;
+    }
+    /// Saves `run` once typing pauses; a save waiting for another owner is
+    /// made now.
+    schedule(owner, run) {
+      if (this.pending && this.pending.owner !== owner) this.flush();
+      this.cancel();
+      this.pending = { owner, run };
+      this.timer = this.timers.setTimeout(() => this.flush(), this.delay);
+    }
+    /// Saves `run` now, after any save waiting for another owner; one waiting
+    /// for this owner is replaced.
+    async now(owner, run) {
+      if (this.pending && this.pending.owner !== owner) await this.flush();
+      this.cancel();
+      return run();
+    }
+    /// Makes the save waiting, if any.
+    flush() {
+      const pending = this.pending;
+      this.cancel();
+      return pending ? pending.run() : Promise.resolve();
+    }
+    /// Drops the save waiting, if any.
+    cancel() {
+      if (this.timer !== null) this.timers.clearTimeout(this.timer);
+      this.timer = null;
+      this.pending = null;
+    }
+  }
   /// The Sub2api provider forms of each pool: what they show. Everything
   /// else about them is the same: cards name a provider by its id.
   const PROVIDER_FORMS = {
@@ -130,6 +180,20 @@
     }
     name(provider) {
       return provider?.name || "";
+    }
+    /// The title of a Sub2api card's provider: its saved name, else its id,
+    /// as one synced before the provider list was read names it.
+    cardTitle(account) {
+      const key = P.providerKey(account);
+      return (key !== null && this.name(this.find(key))) || key || "Sub2api";
+    }
+    /// The import menu's Sub2api choices: the saved providers, each syncing
+    /// its cards with `sync(key)`.
+    syncChoices(sync) {
+      return this.persisted.map((provider) => ({
+        label: this.name(provider),
+        run: () => sync(this.key(provider)),
+      }));
     }
     /// The saved provider whose cards carry this key.
     find(key) {
@@ -601,6 +665,13 @@
         }
         this.onUpdate();
       }
+    }
+    /// Refreshes one card, or every card without an id: a Sub2api
+    /// provider's card refreshes with all of its provider's.
+    refreshCard(id = null) {
+      const account = id === null ? null : this.accounts.find((a) => a.id === id);
+      const provider = account ? P.providerKey(account) : null;
+      return provider === null ? this.refresh(id) : this.refreshProvider(provider, [id]);
     }
     /// Every card of one Sub2api provider in a single pass; only its cards
     /// show as refreshing.
@@ -1229,5 +1300,5 @@
       }
     }
   }
-  return { Settings, Providers, Accounts, Proxy };
+  return { Settings, Providers, Accounts, Proxy, PendingSave, poolInvoke };
 });

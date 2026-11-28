@@ -779,3 +779,42 @@ test("A provider's cards are removed together with one reload", async () => {
   assert.equal(db.calls.filter(([command]) => command === "accounts").length, 1);
   assert.equal(db.mutations, 1);
 });
+
+test("A load answered after a later one leaves the later one's cards", async () => {
+  // The app renders the controller's cards once its other requests are in,
+  // so an older refresh never shows the previous CURRENT tag again.
+  const answers = [];
+  const invoke = (command) =>
+    command === "accounts" ? new Promise((resolve) => answers.push(resolve)) : Promise.resolve([]);
+  const model = new Accounts(invoke, []);
+  const older = model.load();
+  const newer = model.load();
+  await new Promise((resolve) => setImmediate(resolve));
+  answers[1]([{ id: "a", isCurrent: false }]);
+  await newer;
+  answers[0]([{ id: "a", isCurrent: true }]);
+  assert.deepEqual(await older, [{ id: "a", isCurrent: false }]);
+  assert.equal(model.accounts[0].isCurrent, false);
+});
+
+test("Refreshing a provider's only card refreshes the entire provider", async () => {
+  const calls = [];
+  const invoke = async (command, args) => {
+    if (command === "refresh_usage" || command === "refresh_provider") calls.push([command, args]);
+    return [];
+  };
+  // The cards shown, with the refresh keys the core gives them.
+  const cards = [
+    { id: "claude-sub2api-team-7", refresh: { key: "sub2api:team" } },
+    { id: "sub2api-work-42", refresh: { key: "sub2api:work" } },
+    { id: "official", refresh: { key: "official" } },
+  ];
+  for (const id of ["claude-sub2api-team-7", "sub2api-work-42", "official", null])
+    await new Accounts(invoke, structuredClone(cards)).refreshCard(id);
+  assert.deepEqual(calls, [
+    ["refresh_provider", { id: "team", sync: false }],
+    ["refresh_provider", { id: "work", sync: false }],
+    ["refresh_usage", { id: "official" }],
+    ["refresh_usage", { id: null }],
+  ]);
+});

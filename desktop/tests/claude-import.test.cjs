@@ -1,39 +1,22 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require("node:vm");
-const { Accounts } = require("../ui/controllers.js");
+const { Accounts, poolInvoke } = require("../ui/controllers.js");
 
-// Run the application's pool routing with the real accounts controller.
-const source = fs.readFileSync(path.join(__dirname, "../ui/app.js"), "utf8");
+// The application's pool routing with the real accounts controller.
 function fixture(target, cancelled = false) {
   const calls = [];
   let rows = [];
-  const scope = {
-    navigator: { userAgent: "Linux" },
-    localStorage: { getItem: () => target },
-    window: {
-      __TAURI__: {
-        core: {
-          invoke: async (command, args) => {
-            calls.push([command, args.pool]);
-            if (command === "import_account_file") {
-              if (cancelled) return null;
-              rows = [{ id: "imported", label: "Imported account", updatedAt: 1 }];
-              return 1;
-            }
-            if (command === "accounts") return rows;
-            return [];
-          },
-        },
-      },
-    },
+  const invoke = async (command, args) => {
+    calls.push([command, args.pool]);
+    if (command === "import_account_file") {
+      if (cancelled) return null;
+      rows = [{ id: "imported", label: "Imported account", updatedAt: 1 }];
+      return 1;
+    }
+    if (command === "accounts") return rows;
+    return [];
   };
-  vm.createContext(scope);
-  vm.runInContext(source.slice(0, source.indexOf("const ICONS =")), scope);
-  const invoke = vm.runInContext(`poolInvoke("${target}")`, scope);
-  return { calls, model: new Accounts(invoke) };
+  return { calls, model: new Accounts(poolInvoke(invoke, target)) };
 }
 for (const target of ["claude", "codex"]) {
   test(`${target} file import uses its own pool and reloads imported accounts`, async () => {

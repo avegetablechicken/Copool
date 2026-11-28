@@ -212,6 +212,12 @@
   function hasBack(target, pool) {
     return !!target && (!!target.group || !target.grouped || supportsSayHi(target.account, pool));
   }
+  /// The key a card's own refresh switches are saved under, as the core
+  /// names it (refresh_plan.rs): an account's id, or `sub2api:<provider>`
+  /// for a Sub2api provider's cards, which refresh together.
+  function refreshKey(target) {
+    return (target.group ? target.group.accounts[0] : target.account).refresh.key;
+  }
   /// The card a provider's switch goes through: any active one will do.
   function switchTarget(group) {
     return group.accounts.find((a) => a.available !== false) || group.accounts[0];
@@ -628,5 +634,6 @@
     helloTarget,
     canSayHi,
     hasBack,
+    refreshKey,
   };
 });

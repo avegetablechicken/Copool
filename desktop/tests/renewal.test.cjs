@@ -3,8 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { Accounts } = require("../ui/controllers.js");
-const V = require("../ui/card-view.js");
+const { Accounts, poolInvoke } = require("../ui/controllers.js");
 
 // The application's pool routing with the real accounts controller.
 // Windows checkouts may end lines with CRLF; the slices below look for LF.
@@ -26,30 +25,14 @@ const RUNNING = { fiveHour: { usedPercent: 1, resetAt: 4102444800 } };
 function fixture(target, usage = RUNNING, clock = fakeClock()) {
   const calls = [];
   let renewal = "always";
-  const scope = {
-    navigator: { userAgent: "Linux" },
-    localStorage: { getItem: () => target },
-    window: {
-      __TAURI__: {
-        core: {
-          invoke: async (command, args) => {
-            // Arguments built inside the app's context, as plain data.
-            calls.push([command, JSON.parse(JSON.stringify(args))]);
-            if (command === "set_renewal") renewal = args.renewal;
-            if (command === "accounts" && args.pool === target)
-              return [{ id: "a", label: "Alice", updatedAt: 1, renewal, usage }];
-            return [];
-          },
-        },
-      },
-    },
+  const invoke = async (command, args) => {
+    calls.push([command, structuredClone(args)]);
+    if (command === "set_renewal") renewal = args.renewal;
+    if (command === "accounts" && args.pool === target)
+      return [{ id: "a", label: "Alice", updatedAt: 1, renewal, usage }];
+    return [];
   };
-  vm.createContext(scope);
-  const end = source.indexOf("const ICONS =");
-  assert(end > 0, "app.js's routing ends before its icons");
-  vm.runInContext(source.slice(0, end), scope);
-  const invoke = vm.runInContext(`poolInvoke("${target}")`, scope);
-  const model = new Accounts(invoke, null, () => {}, () => {}, { pool: target, clock });
+  const model = new Accounts(poolInvoke(invoke, target), null, () => {}, () => {}, { pool: target, clock });
   return { calls, model };
 }
 

@@ -3,13 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const { Providers } = require("../ui/controllers.js");
-// Windows checkouts may end lines with CRLF; the markers below look for LF.
-const source = fs
-  .readFileSync(require("node:path").join(__dirname, "../ui/features.js"), "utf8")
-  .replace(/\r\n/g, "\n");
-const start = source.indexOf("function providerSyncChoices(");
-const end = source.indexOf("\nasync function syncProvider", start);
-assert(start >= 0 && end > start, "providerSyncChoices found");
+const P = require("../ui/presentation.js");
 const appSource = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8")
   .replace(/\r\n/g, "\n");
 /// The app's source from `from` up to `to`, both found.
@@ -20,34 +14,7 @@ function appBetween(from, to) {
   assert(end > start, `${to} found after ${from}`);
   return appSource.slice(start, end);
 }
-test("a delayed refresh cannot put the previous CURRENT tag back on a card", async () => {
-  const start = appSource.indexOf("async function refreshView()");
-  const end = appSource.indexOf("function applyTheme(", start);
-  assert.ok(start >= 0 && end > start, "refreshView found");
-  let finishOld;
-  const waiting = new Promise(resolve => { finishOld = resolve; });
-  const controller = { accounts: [{ isCurrent: true }], load() { return this.accounts; } };
-  const rendered = [];
-  const scope = {
-    accountsController: controller, pool: "grok", configurationCache: {},
-    proxyController: { invoke() {}, localConfiguration() {}, applyLocal() {} },
-    invoke() {}, refreshFeatureState: () => waiting,
-    renderAccounts: cards => rendered.push(cards[0].isCurrent),
-    renderPendingWorkspaces() {}, syncButtons() {},
-  };
-  vm.createContext(scope);
-  vm.runInContext(appSource.slice(start, end), scope);
-  const older = scope.refreshView();
-  controller.accounts = [{ isCurrent: false }];
-  scope.refreshFeatureState = () => {};
-  await scope.refreshView();
-  finishOld();
-  await older;
-  assert.deepEqual(rendered, [false, false]);
-});
-
 test("Import shows provider sync only for pools with saved providers", () => {
-  assert(start >= 0 && end > start, "providerSyncChoices found");
   const calls = [];
   const providerControllers = {
     claude: new Providers(null, "claude"),
@@ -61,58 +28,34 @@ test("Import shows provider sync only for pools with saved providers", () => {
     { id: "x1", name: "Codex One" },
     { id: "x2", name: "Codex Two" },
   ];
-  const trigger = {};
-  let items;
-  const scope = {
-    providerControllers,
-    syncProvider: (target, key) => calls.push([target, key]),
-    $: () => trigger,
-    openMenu: null,
-    tr: (key) => key,
-    showMenu: (_, choices) => { items = choices; },
-  };
-  vm.createContext(scope);
-  vm.runInContext(source.slice(start, end), scope);
-  const handlerStart = appSource.indexOf('$("import-open").onclick =');
-  const handlerEnd = appSource.indexOf("\n};", handlerStart);
-  assert(handlerStart >= 0 && handlerEnd > handlerStart, "Import click handler found");
-  vm.runInContext(appSource.slice(handlerStart, handlerEnd + 3), scope);
-  scope.pool = "claude";
-  trigger.onclick();
+  const menu = (target) =>
+    P.importMenu((key) => key, {
+      importCurrent() {},
+      importFile() {},
+      providers: providerControllers[target].syncChoices((key) => calls.push([target, key])),
+    });
+  let items = menu("claude");
   assert.equal(items[2].label, "accounts.action.import_sub2api");
   assert.equal(items[2].children[1].label, "Claude Two");
   items[2].children[1].run();
   providerControllers.claude.persisted = [];
-  trigger.onclick();
-  assert.deepEqual(Array.from(items, item => item.label), [
+  assert.deepEqual(Array.from(menu("claude"), (item) => item.label), [
     "accounts.action.import_current_auth", "accounts.action.import_auth_file",
   ]);
-  scope.pool = "codex";
-  trigger.onclick();
-  items[2].children[0].run();
+  menu("codex")[2].children[0].run();
   // Every pool's cards name the provider by its id.
   assert.deepEqual(calls, [["claude", "c2"], ["codex", "x1"]]);
 });
 
 test("Add unofficial provider offers the pools as children of Sub2API", () => {
-  const start = source.indexOf('$("provider-add").onclick =');
-  const end = source.indexOf("\n};", start);
-  assert.ok(start >= 0 && end > start, "Add provider handler found");
-  const trigger = {};
-  const pools = ["codex", "claude", "antigravity", "grok"];
   const added = [];
-  let items;
-  vm.runInNewContext(source.slice(start, end + 3), {
-    $: () => trigger, openMenu: null, PROVIDER_POOLS: pools,
-    tr: key => key, brandIcon: pool => pool, addProvider: pool => added.push(pool),
-    showMenu: (_, choices) => { items = choices; },
-  });
-  trigger.onclick({ currentTarget: trigger });
+  const items = P.providerAddMenu((key) => key, (pool) => pool, (pool) => added.push(pool));
   assert.equal(items.length, 1);
   assert.equal(items[0].label, "Sub2API");
-  assert.deepEqual(Array.from(items[0].children, child => child.label), pools.map(pool => `pool.${pool}`));
+  assert.deepEqual(Array.from(items[0].children, (child) => child.label), P.ACCOUNT_POOLS.map((pool) => `pool.${pool}`));
+  assert.deepEqual(Array.from(items[0].children, (child) => child.icon), P.ACCOUNT_POOLS);
   for (const child of items[0].children) child.run();
-  assert.deepEqual(added, pools);
+  assert.deepEqual(added, P.ACCOUNT_POOLS);
 });
 
 test("Menu hover suppresses stale focus without moving focus; keyboard restores it", () => {

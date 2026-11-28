@@ -2,7 +2,6 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const vm = require("node:vm");
 const P = require("../ui/presentation.js");
 
 const root = path.resolve(__dirname, "../..");
@@ -14,15 +13,6 @@ const read = (relativePath, newline) =>
     .replace(/\n/g, newline);
 // Each reading below takes either line ending, as a Windows checkout has.
 const lf = (text) => text.replace(/\r\n/g, "\n");
-
-function extractFunction(text, name) {
-  const source = lf(text);
-  const start = source.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `missing function ${name}`);
-  const end = source.indexOf("\n}\n", start);
-  assert.notEqual(end, -1, `unterminated function ${name}`);
-  return source.slice(start, end + 2);
-}
 
 for (const [format, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
   test(`Settings page exposes display theme options (${format})`, () => {
@@ -57,42 +47,11 @@ for (const [format, newline] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
         assert.match(selector, /:not\(\[data-theme="light"\]\)/, selector);
     }
   });
-
-  test(`applyTheme updates root dataset, color-scheme meta, and storage (${format})`, () => {
-    const fnSource = extractFunction(read("desktop/ui/app.js", newline), "applyTheme");
-    const storage = new Map();
-    const meta = { content: "light dark" };
-    const rootElement = { dataset: {} };
-    const scope = {
-      P,
-      document: {
-        documentElement: rootElement,
-        querySelector: (selector) => (selector === 'meta[name="color-scheme"]' ? meta : null),
-      },
-      localStorage: {
-        setItem: (key, value) => storage.set(key, value),
-      },
-    };
-    vm.runInNewContext(`${fnSource}\nthis.applyTheme = applyTheme;`, scope);
-
-    scope.applyTheme("dark");
-    assert.equal(rootElement.dataset.theme, "dark");
-    assert.equal(meta.content, "dark");
-    assert.equal(storage.get("copool.theme"), "dark");
-
-    scope.applyTheme("light");
-    assert.equal(rootElement.dataset.theme, "light");
-    assert.equal(meta.content, "light");
-    assert.equal(storage.get("copool.theme"), "light");
-
-    scope.applyTheme("system");
-    assert.equal("theme" in rootElement.dataset, false);
-    assert.equal(meta.content, "light dark");
-    assert.equal(storage.get("copool.theme"), "system");
-
-    scope.applyTheme("unknown");
-    assert.equal("theme" in rootElement.dataset, false);
-    assert.equal(meta.content, "light dark");
-    assert.equal(storage.get("copool.theme"), "system");
-  });
 }
+
+test("A theme sets the root's data-theme, the color-scheme meta and the saved value", () => {
+  assert.deepEqual(P.themeAttributes("dark"), { dataTheme: "dark", colorScheme: "dark", saved: "dark" });
+  assert.deepEqual(P.themeAttributes("light"), { dataTheme: "light", colorScheme: "light", saved: "light" });
+  assert.deepEqual(P.themeAttributes("system"), { dataTheme: null, colorScheme: "light dark", saved: "system" });
+  assert.deepEqual(P.themeAttributes("unknown"), { dataTheme: null, colorScheme: "light dark", saved: "system" });
+});

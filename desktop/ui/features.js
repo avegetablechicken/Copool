@@ -212,15 +212,6 @@ function renderProviders(target = null) {
     root.append(form);
   }
 }
-/// The import menu's Sub2api choices: the pool's saved providers.
-function providerSyncChoices(target) {
-  const providers = providerControllers[target];
-  if (!providers) return [];
-  return providers.persisted.map((provider) => ({
-    label: providers.name(provider),
-    run: () => syncProvider(target, providers.key(provider)),
-  }));
-}
 /// Imports the accounts of one provider, restoring removed cards.
 async function syncProvider(target, key) {
   const controller = poolControllers[target];
@@ -354,14 +345,7 @@ $("provider-add").onclick = ({ currentTarget: trigger }) => {
     closeMenu(true);
     return;
   }
-  showMenu(trigger, [{
-    label: "Sub2API",
-    children: PROVIDER_POOLS.map((target) => ({
-      label: tr(`pool.${target}`),
-      icon: brandIcon(target),
-      run: () => addProvider(target),
-    })),
-  }]);
+  showMenu(trigger, P.providerAddMenu(tr, brandIcon, addProvider));
 };
 /// A new provider's form opens, ready to fill in.
 function addProvider(target) {
@@ -1112,34 +1096,19 @@ function renderPendingWorkspaces() {
   }
   root.append(block);
 }
+/// The tunnel's save as the pool shown, waiting while its hostname is typed
+/// (controllers.js's PendingSave): Swift's scheduleProxyConfigurationSync.
+const tunnelSave = new window.CopoolControllers.PendingSave();
+/// Saves the tunnel of the pool shown now, after one still waiting for
+/// another pool.
+function tunnelSaver(controller = proxyController, config = tunnelConfiguration) {
+  return () => action(() => controller.updateTunnel(config), null, false);
+}
 async function saveTunnelConfiguration() {
-  // A save still waiting for another pool is made; this pool's is this one.
-  if (pendingTunnelSave?.controller !== proxyController) await savePendingTunnel();
-  clearTimeout(tunnelSaveTimer);
-  pendingTunnelSave = null;
-  await action(
-    () => proxyController.updateTunnel(tunnelConfiguration),
-    null,
-    false,
-  );
+  await tunnelSave.now(proxyController, tunnelSaver());
 }
-let tunnelSaveTimer;
-/// The save waiting, as the pool it was scheduled for.
-let pendingTunnelSave = null;
-function savePendingTunnel() {
-  clearTimeout(tunnelSaveTimer);
-  const pending = pendingTunnelSave;
-  pendingTunnelSave = null;
-  if (!pending) return Promise.resolve();
-  return action(() => pending.controller.updateTunnel(pending.config), null, false);
-}
-/// Swift's scheduleProxyConfigurationSync: a 350 ms debounce, saving the
-/// pool shown now even if another is shown by then.
 function scheduleTunnelSave() {
-  if (pendingTunnelSave && pendingTunnelSave.controller !== proxyController) savePendingTunnel();
-  clearTimeout(tunnelSaveTimer);
-  pendingTunnelSave = { controller: proxyController, config: tunnelConfiguration };
-  tunnelSaveTimer = setTimeout(savePendingTunnel, 350);
+  tunnelSave.schedule(proxyController, tunnelSaver());
 }
 
 async function refreshFeatureState() {

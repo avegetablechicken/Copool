@@ -374,7 +374,7 @@ test("a card turning over is turned back by Escape or by another card's edit", a
   assert.equal(turns.length, 0);
 });
 
-const greeting = between("/// The times with a new one, in order;", "/// The key a card's own refresh switches are saved under");
+const greeting = between("/// Saves a greeting schedule", "/// A card's background refresh: the pool's intervals");
 test("greeting times are added in order once and removed by value", async () => {
   const saves = [];
   const invoke = async (command, args) => saves.push([command, args]);
@@ -388,14 +388,12 @@ test("greeting times are added in order once and removed by value", async () => 
   };
   vm.createContext(scope);
   vm.runInContext(greeting, scope);
-  const add = (times, time) => {
-    const result = scope.withGreetingTime(times, time);
-    return result && Array.from(result);
-  };
+  const P = require("../ui/presentation.js");
+  const add = (times, time) => P.withGreetingTime(times, time);
   assert.deepEqual(add(["12:30"], "08:00"), ["08:00", "12:30"]);
   assert.equal(add(["08:00"], "08:00"), null, "a time already set");
   assert.equal(add(["08:00"], ""), null, "a cleared time input");
-  assert.deepEqual(Array.from(scope.withoutGreetingTime(["08:00", "12:30"], "08:00")), ["12:30"]);
+  assert.deepEqual(P.withoutGreetingTime(["08:00", "12:30"], "08:00"), ["12:30"]);
   // Saving keeps Auto and shows the times saved on the card.
   const state = { schedule: { auto: true, times: ["08:00"], lastError: null } };
   await scope.saveGreeting("a", state, true, []);
@@ -556,10 +554,7 @@ test("a Sub2api provider's cards share their speed-up and have no slow-down", as
     claude: { "sub2api:p": { adaptive: false } },
   });
   // The key is the core's, the card's or its provider's cards' (refresh_plan.rs).
-  const refreshKey = vm.runInNewContext(
-    `${between("/// The key a card's own refresh switches are saved under", "/// A card's background refresh: the pool's intervals")}; refreshKey`,
-    {},
-  );
+  const { refreshKey } = V;
   const member = { id: "claude-sub2api-p-3", sourceTag: "SUB2API", refresh: { key: "sub2api:p" } };
   assert.equal(refreshKey({ group: { key: "p", accounts: [member] } }), "sub2api:p");
   assert.equal(refreshKey({ account: member }), "sub2api:p");
@@ -592,7 +587,7 @@ test("only Claude's own accounts offer the slow-down after HTTP 429, on by defau
   );
 });
 
-const greetingSectionSource = between("/// Saying hi now, automatically, and at which times.", "/// The times with a new one, in order;");
+const greetingSectionSource = between("/// Saying hi now, automatically, and at which times.", "/// Saves a greeting schedule");
 const proxySectionSource = between("/// The proxy, saved with Done or Return.", "/// The token's time left");
 function cardFields() {
   const inputs = [];

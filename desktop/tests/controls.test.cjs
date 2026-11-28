@@ -154,15 +154,6 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
   const fs = require("node:fs");
   const path = require("node:path");
   const vm = require("node:vm");
-  const source = fs
-    .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
-    .replace(/\r\n/g, "\n");
-  const start = source.indexOf("function switchNotice(execution, from) {");
-  assert.notEqual(start, -1, "switchNotice start marker not found");
-  const end = source.indexOf("\n}\n", start);
-  assert.notEqual(end, -1, "switchNotice end marker not found");
-  const snippet = source.slice(start, end + 2);
-
   const localeScope = { window: {} };
   vm.runInNewContext(
     fs
@@ -171,14 +162,9 @@ test("SwitchNoticeReportsPiAndOmpSyncSuccessAndErrors", () => {
     localeScope,
   );
   const en = localeScope.window.COPOOL_LOCALES.en;
-  const scope = {
-    P,
-    // The pool on screen now; the notice names the one switched in.
-    pool: "grok",
-    tr: (key, ...args) => P.formatLocalized(en[key] ?? key, args),
-  };
-  vm.runInNewContext(snippet, scope);
-  assert.equal(typeof scope.switchNotice, "function");
+  const tr = (key, ...args) => P.formatLocalized(en[key] ?? key, args);
+  // The notice names the pool switched in, whichever is on screen now.
+  const scope = { tr, switchNotice: (execution, from) => P.switchNotice(execution, from, tr) };
 
   // The agents the core synced, in its order; an unknown one says nothing.
   const ok = scope.switchNotice({

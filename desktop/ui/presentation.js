@@ -739,7 +739,128 @@
     if (!navigating || modified || inText || handled) return null;
     return key === "ArrowLeft" ? "left" : key === "ArrowRight" ? "right" : null;
   }
+  /// The account pools, left to right as their buttons, for ⌘1–⌘4 and the
+  /// way the cards slide; every one has Sub2api providers.
+  const ACCOUNT_POOLS = ["codex", "claude", "antigravity", "grok"];
+  /// The pools with an API proxy: all but Grok.
+  const PROXY_POOLS = ["codex", "claude", "antigravity"];
+  /// The pools a pool chosen on either page shows: the accounts and proxy
+  /// pages share one, but for Grok, which has no proxy. Null for no pool.
+  function poolSelection(next) {
+    if (!ACCOUNT_POOLS.includes(next)) return null;
+    return { accounts: next, proxy: PROXY_POOLS.includes(next) ? next : null };
+  }
+  /// What ⌘1–⌘4 (`key`) shows from `page`: its pool, on the accounts page
+  /// unless the proxy page shows that pool's proxy too.
+  function poolShortcut(page, key) {
+    const pool = ACCOUNT_POOLS[Number(key) - 1];
+    if (!pool) return null;
+    const stays = page === "accounts" || (page === "proxy" && PROXY_POOLS.includes(pool));
+    return { pool, page: stays ? null : "accounts" };
+  }
+  /// How a theme applies to the page: its `data-theme` (null for the
+  /// system's), the color-scheme meta and the value saved for the next start.
+  function themeAttributes(value) {
+    const theme = resolveTheme(value);
+    return {
+      dataTheme: theme === "system" ? null : theme,
+      colorScheme: theme === "system" ? "light dark" : theme,
+      saved: theme,
+    };
+  }
+  /// The greeting times with a new one, in order; null for no time or one
+  /// already set.
+  function withGreetingTime(times, time) {
+    if (!/^\d{2}:\d{2}$/.test(time) || times.includes(time)) return null;
+    return [...times, time].sort();
+  }
+  function withoutGreetingTime(times, time) {
+    return times.filter((t) => t !== time);
+  }
+  /// Swift's buildSwitchNotice: the switch in pool `from`, then what followed
+  /// it, in `tr`'s words. `from` is the pool asked, which another may have
+  /// replaced on screen.
+  function switchNotice(execution, from, tr) {
+    let error = false;
+    const segments = [
+      execution.provider
+        ? tr(
+            {
+              claude: "accounts.notice.claude_provider_switched_format",
+              antigravity: "accounts.notice.antigravity_provider_switched_format",
+              grok: "accounts.notice.grok_provider_switched_format",
+            }[from] || "accounts.notice.provider_switched_format",
+            execution.provider,
+          )
+        : tr(
+            {
+              claude: "accounts.notice.claude_switch_done",
+              antigravity: "accounts.notice.antigravity_switch_done",
+              grok: "accounts.notice.grok_switch_done",
+            }[from] || "accounts.notice.switch_done",
+          ),
+    ];
+    // settings.json keys that keep Claude Code off the account login.
+    if (execution.loginOverrides?.length) {
+      error = true;
+      segments.push(
+        tr("accounts.notice.claude_settings_override_format", execution.loginOverrides.join(", ")),
+      );
+    }
+    for (const outcome of execution.agentSync || []) {
+      const message = agentSyncNotice(outcome);
+      if (!message) continue;
+      if (message.error) error = true;
+      segments.push(tr(message.key, ...message.args));
+    }
+    if (execution.editorRestartError) {
+      error = true;
+      segments.push(tr("accounts.notice.editor_restart_failed_format", execution.editorRestartError));
+    } else if (execution.restartedEditors?.length)
+      segments.push(
+        tr("accounts.notice.editor_restarted_format", execution.restartedEditors.join(" / ")),
+      );
+    if (execution.launchError) {
+      error = true;
+      segments.push(execution.launchError);
+    }
+    return { text: segments.join(" · "), error };
+  }
+  /// The import menu: the pool's current login, a file, and its Sub2api
+  /// providers' cards (`providers`, the providers' choices) when it has any.
+  function importMenu(tr, { importCurrent, importFile, providers }) {
+    const items = [
+      { label: tr("accounts.action.import_current_auth"), run: importCurrent },
+      { label: tr("accounts.action.import_auth_file"), run: importFile },
+    ];
+    if (providers.length)
+      items.push({ label: tr("accounts.action.import_sub2api"), children: providers });
+    return items;
+  }
+  /// Adding an unofficial provider: Sub2API, then the pool whose form opens.
+  function providerAddMenu(tr, icon, add) {
+    return [
+      {
+        label: "Sub2API",
+        children: ACCOUNT_POOLS.map((pool) => ({
+          label: tr(`pool.${pool}`),
+          icon: icon(pool),
+          run: () => add(pool),
+        })),
+      },
+    ];
+  }
   return {
+    ACCOUNT_POOLS,
+    PROXY_POOLS,
+    poolSelection,
+    poolShortcut,
+    themeAttributes,
+    withGreetingTime,
+    withoutGreetingTime,
+    switchNotice,
+    importMenu,
+    providerAddMenu,
     providerKey,
     proxyOwner,
     formatLocalized,

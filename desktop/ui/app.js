@@ -18,11 +18,7 @@ let locale = "en";
 let noticeTimer;
 let nativeIcons = {};
 let iconFrame = 0;
-// The account pools, left to right as their buttons, for ⌘1–⌘4 and the way
-// the cards slide.
-const ACCOUNT_POOLS = ["codex", "claude", "antigravity", "grok"];
-// The pools with an API proxy: all but Grok.
-const PROXY_POOLS = ["codex", "claude", "antigravity"];
+const { ACCOUNT_POOLS, PROXY_POOLS } = P;
 // The pools with Sub2api providers: every account pool.
 const PROVIDER_POOLS = ACCOUNT_POOLS;
 // The account pool on the accounts page: Codex, Claude Code, Antigravity or
@@ -45,17 +41,8 @@ let resetDisplay =
   localStorage.getItem("copool.resetDisplay") === "countdown"
     ? "countdown"
     : "exact";
-/// The commands of one pool: every one names the pool it acts on. Only
-/// Codex has workspaces.
-function poolInvoke(target) {
-  return (command, args = {}) => {
-    if (target !== "codex" && command === "workspace_directory")
-      return Promise.resolve([]);
-    if (target !== "codex" && command === "cancel_workspace_refresh")
-      return Promise.resolve(null);
-    return invoke(command, { ...args, pool: target });
-  };
-}
+/// The commands of one pool (controllers.js).
+const poolInvoke = (target) => window.CopoolControllers.poolInvoke(invoke, target);
 const ICONS = {
   folder: '<path d="M2 5h7l2 3h9v12H2Z"/>',
   network:
@@ -486,17 +473,9 @@ async function droppingNewCards(origin, task) {
 }
 /// The provider of a Sub2api card (presentation.js).
 const providerKey = P.providerKey;
-/// The saved Sub2api provider a card belongs to, if any.
-function accountProvider(account) {
-  const key = providerKey(account);
-  return key === null ? null : (providerControllers[pool]?.find(key) ?? null);
-}
+/// The title of a Sub2api card's provider (controllers.js).
 function providerTitle(account) {
-  return (
-    providerControllers[pool]?.name(accountProvider(account)) ||
-    providerKey(account) ||
-    "Sub2api"
-  );
+  return providerControllers[pool].cardTitle(account);
 }
 /// The proxy an account's requests go through: its own, which for a Sub2api
 /// card is its provider's, else the default account proxy; blank for the
@@ -717,7 +696,7 @@ function cardBack(target) {
   if (account && !grouped && account.renewal) node.append(renewalSection(account));
   if (account && V.supportsSayHi(account, pool) && state.schedule)
     node.append(greetingSection(account, state));
-  if (!grouped) node.append(refreshSection(current, refreshKey(target)));
+  if (!grouped) node.append(refreshSection(current, V.refreshKey(target)));
   if (!grouped) node.append(removalSection(state, cards, !!group));
   return node;
 }
@@ -861,7 +840,7 @@ function greetingSection(account, state) {
   for (const time of schedule.times) {
     const chip = el("span", "back-time", time);
     const remove = button("", "close", "back-time-remove", () =>
-      saveGreeting(account.id, state, schedule.auto, withoutGreetingTime(schedule.times, time)),
+      saveGreeting(account.id, state, schedule.auto, P.withoutGreetingTime(schedule.times, time)),
     );
     remove.title = tr("accounts.say_hi.remove");
     remove.setAttribute("aria-label", `${tr("accounts.say_hi.remove")} ${time}`);
@@ -879,7 +858,7 @@ function greetingSection(account, state) {
     const commit = () => {
       if (!input.isConnected || state.adding === null) return;
       state.adding = null;
-      const times = withGreetingTime(schedule.times, input.value);
+      const times = P.withGreetingTime(schedule.times, input.value);
       if (times) saveGreeting(account.id, state, schedule.auto, times);
       else renderEditing();
     };
@@ -916,14 +895,6 @@ function greetingSection(account, state) {
   section.group.append(daily);
   return section;
 }
-/// The times with a new one, in order; null for no time or one already set.
-function withGreetingTime(times, time) {
-  if (!/^\d{2}:\d{2}$/.test(time) || times.includes(time)) return null;
-  return [...times, time].sort();
-}
-function withoutGreetingTime(times, time) {
-  return times.filter((t) => t !== time);
-}
 /// Saves a greeting schedule, then shows it on the card being edited.
 async function saveGreeting(id, state, auto, times) {
   const controller = accountsController;
@@ -933,12 +904,6 @@ async function saveGreeting(id, state, auto, times) {
     notice(error, true);
   }
   if (controller.editing === state) renderEditing();
-}
-/// The key a card's own refresh switches are saved under, as the core names
-/// it: an account's id, or `sub2api:<provider>` for a Sub2api provider's
-/// cards, which refresh together.
-function refreshKey(target) {
-  return (target.group ? target.group.accounts[0] : target.account).refresh.key;
 }
 /// A card's background refresh: the pool's intervals, which all its cards
 /// share (the card in use's only on its own card), and the card's own
@@ -1927,14 +1892,15 @@ async function refreshView() {
   );
   syncButtons();
 }
+/// Applies a theme as presentation.js's themeAttributes has it.
 function applyTheme(value) {
-  const theme = P.resolveTheme(value);
-  if (theme === "system") delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = theme;
+  const theme = P.themeAttributes(value);
+  if (theme.dataTheme === null) delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme.dataTheme;
   const meta = document.querySelector('meta[name="color-scheme"]');
-  if (meta) meta.content = theme === "system" ? "light dark" : theme;
+  if (meta) meta.content = theme.colorScheme;
   try {
-    localStorage.setItem("copool.theme", theme);
+    localStorage.setItem("copool.theme", theme.saved);
   } catch {}
 }
 function syncGeneralSelectLabels() {
@@ -2169,12 +2135,12 @@ function slidePoolIn(direction) {
     if (animation) animation.id = "pool";
   }
 }
-/// Selects the pool on both pages: the accounts and proxy pages show the
-/// same upstream, but for Grok, which has no proxy.
+/// Selects the pool on both pages (presentation.js's poolSelection).
 function showPool(next) {
-  if (!ACCOUNT_POOLS.includes(next)) return;
-  showAccountsPool(next);
-  if (PROXY_POOLS.includes(next)) showProxyPool(next);
+  const shown = P.poolSelection(next);
+  if (!shown) return;
+  showAccountsPool(shown.accounts);
+  if (shown.proxy) showProxyPool(shown.proxy);
 }
 function showAccountsPool(next) {
   document
@@ -2235,7 +2201,7 @@ function showProxyPool(next) {
   $("proxy-auto-start").dataset.preference = PROXY_PREFERENCES[next].autoStart;
   if (next === proxyPool && proxyController === proxyControllers[next]) return;
   // A port being typed is the pool left's.
-  savePortNow();
+  portSave.flush();
   proxyPool = next;
   closeMenu();
   proxyController = proxyControllers[next];
@@ -2663,28 +2629,19 @@ $("import-open").onclick = () => {
     closeMenu(true);
     return;
   }
-  const items = [
-    {
-      label: tr("accounts.action.import_current_auth"),
-      run: () =>
+  const target = pool;
+  showMenu(
+    $("import-open"),
+    P.importMenu(tr, {
+      importCurrent: () =>
         importAccounts(
           () => accountsController.importCurrent(),
           "accounts.notice.imported_format",
         ),
-    },
-    {
-      label: tr("accounts.action.import_auth_file"),
-      run: () => importAccountFile(),
-    },
-  ];
-  const providers = providerSyncChoices(pool);
-  if (providers.length) {
-    items.push({
-      label: tr("accounts.action.import_sub2api"),
-      children: providers,
-    });
-  }
-  showMenu($("import-open"), items);
+      importFile: () => importAccountFile(),
+      providers: providerControllers[target].syncChoices((key) => syncProvider(target, key)),
+    }),
+  );
 };
 // Opened by keyboard navigation of the menu bar (macOS 27); see menuBarStep.
 let menuBarNavigation = false;
@@ -2806,15 +2763,11 @@ document.addEventListener("keydown", (event) => {
     settingsController.quit().catch((error) => notice(error, true));
   } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3", "4"].includes(event.key)) {
     event.preventDefault();
-    const target = ACCOUNT_POOLS[Number(event.key) - 1];
     // The pool is shared, so the proxy page switches in place; Grok's
     // accounts have no proxy page.
-    if (
-      (selectedPage !== "proxy" || !PROXY_POOLS.includes(target)) &&
-      selectedPage !== "accounts"
-    )
-      showPage("accounts");
-    showPool(target);
+    const shortcut = P.poolShortcut(selectedPage, event.key);
+    if (shortcut.page) showPage(shortcut.page);
+    showPool(shortcut.pool);
   } else if (mod && event.key === ",") {
     event.preventDefault();
     showPage("settings");
@@ -2830,11 +2783,9 @@ document.addEventListener("keydown", (event) => {
 /// takes no panel-wide lock: each card updates and becomes operable again as
 /// its own refresh lands ("copool-changed"), while the others stay usable.
 function refreshUsage(id = null) {
-  const account = id === null ? null : accountsCache.find((a) => a.id === id);
-  const provider = account ? providerKey(account) : null;
-  if (provider !== null) return refreshProvider({ key: provider, accounts: [account] });
+  // A Sub2api provider's card refreshes with its provider's (controllers.js).
   accountsController
-    .refresh(id)
+    .refreshCard(id)
     .then((done) => {
       // As Swift: only a manual refresh of every account reports success.
       if (done && id === null) notice(tr("accounts.notice.usage_refreshed"));
@@ -2853,65 +2804,8 @@ function refreshProvider(group) {
     .finally(() => refreshView().catch((error) => notice(error, true)));
 }
 $("refresh-all").onclick = () => refreshUsage();
-/// Swift's buildSwitchNotice: the switch in pool `from`, then what followed
-/// it. `from` is the pool asked, which another may have replaced on screen.
-function switchNotice(execution, from) {
-  let error = false;
-  const segments = [
-    execution.provider
-      ? tr(
-          {
-            claude: "accounts.notice.claude_provider_switched_format",
-            antigravity: "accounts.notice.antigravity_provider_switched_format",
-            grok: "accounts.notice.grok_provider_switched_format",
-          }[from] || "accounts.notice.provider_switched_format",
-          execution.provider,
-        )
-      : tr(
-          {
-            claude: "accounts.notice.claude_switch_done",
-            antigravity: "accounts.notice.antigravity_switch_done",
-            grok: "accounts.notice.grok_switch_done",
-          }[from] || "accounts.notice.switch_done",
-        ),
-  ];
-  // settings.json keys that keep Claude Code off the account login.
-  if (execution.loginOverrides?.length) {
-    error = true;
-    segments.push(
-      tr(
-        "accounts.notice.claude_settings_override_format",
-        execution.loginOverrides.join(", "),
-      ),
-    );
-  }
-  for (const outcome of execution.agentSync || []) {
-    const message = P.agentSyncNotice(outcome);
-    if (!message) continue;
-    if (message.error) error = true;
-    segments.push(tr(message.key, ...message.args));
-  }
-  if (execution.editorRestartError) {
-    error = true;
-    segments.push(
-      tr(
-        "accounts.notice.editor_restart_failed_format",
-        execution.editorRestartError,
-      ),
-    );
-  } else if (execution.restartedEditors.length)
-    segments.push(
-      tr(
-        "accounts.notice.editor_restarted_format",
-        execution.restartedEditors.join(" / "),
-      ),
-    );
-  if (execution.launchError) {
-    error = true;
-    segments.push(execution.launchError);
-  }
-  return { text: segments.join(" · "), error };
-}
+/// A switch's notice, in the pool it was asked for (presentation.js).
+const switchNotice = (execution, from) => P.switchNotice(execution, from, tr);
 /// A switch locks only its own card's switch button and Smart Switch.
 async function switchAccount(account) {
   if (switchingId !== null) return;
@@ -2972,24 +2866,16 @@ $("proxy-refresh").onclick = () =>
 $("proxy-key-refresh").onclick = () =>
   action(() => proxyController.rotateKey(), null, false);
 // The preferred port is saved as it is edited, as updatePreferredPortText,
-// as the port of the pool it was typed for.
-let portSaveTimer;
-let pendingPortSave = null;
-function savePortNow() {
-  clearTimeout(portSaveTimer);
-  const save = pendingPortSave;
-  pendingPortSave = null;
-  if (save) save();
-}
+// as the port of the pool it was typed for (controllers.js's PendingSave).
+const portSave = new window.CopoolControllers.PendingSave();
 $("proxy-port").oninput = () => {
-  clearTimeout(portSaveTimer);
-  pendingPortSave = null;
+  portSave.cancel();
   const port = Number($("proxy-port").value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return;
   const key = PROXY_PREFERENCES[proxyPool].port;
-  pendingPortSave = () =>
-    queuePreferenceSave({ [key]: port }).catch((error) => notice(error, true));
-  portSaveTimer = setTimeout(savePortNow, 350);
+  portSave.schedule(proxyPool, () =>
+    queuePreferenceSave({ [key]: port }).catch((error) => notice(error, true)),
+  );
 };
 $("toggle-key").onclick = () => {
   proxyKeyRevealed = !proxyKeyRevealed;
