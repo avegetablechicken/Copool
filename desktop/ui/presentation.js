@@ -663,6 +663,15 @@
     const ordered = [...saved, ...entries.filter((e) => !rank.has(keyOf(e)))];
     return [...ordered.filter(isCurrent), ...ordered.filter((e) => !isCurrent(e))];
   }
+  /// How a list scrolled to `scrollTop`, which can scroll to `end`, keeps a
+  /// card that moved by `shift` where it stood: the offset to scroll to, and
+  /// the space to add at its end to scroll that far, which only a card being
+  /// edited keeps (`editing`); a card it cannot hold that way moves.
+  function heldScroll(shift, scrollTop, end, editing) {
+    const wanted = scrollTop + shift;
+    const space = editing && wanted > end ? Math.ceil(wanted - end) : 0;
+    return { scrollTop: Math.max(0, Math.min(wanted, end + space)), space };
+  }
   function needsReauthentication(
     account,
     translated = "Sign-in expired. Please sign in again.",
@@ -877,6 +886,7 @@
     switchNotice,
     importMenu,
     providerAddMenu,
+    heldScroll,
     providerKey,
     proxyOwner,
     formatLocalized,

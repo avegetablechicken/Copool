@@ -327,3 +327,15 @@ test("Used percent floors and remaining percent ceils", () => {
     args: [],
   });
 });
+
+test("a turned card stays where it stood, the list keeping space at its end while it is edited", () => {
+  // A back 66px shorter, the list scrolled to its end: scrolling back needs
+  // 66px more, which an edited card keeps.
+  assert.deepEqual(P.heldScroll(66, 376, 376, true), { scrollTop: 442, space: 66 });
+  // Turned back, the front is taller again: no space is needed.
+  assert.deepEqual(P.heldScroll(-10, 100, 500, false), { scrollTop: 90, space: 0 });
+  assert.deepEqual(P.heldScroll(30, 100, 500, false), { scrollTop: 130, space: 0 });
+  // Without an edited card nothing is added, and the list stops at its ends.
+  assert.deepEqual(P.heldScroll(66, 376, 376, false), { scrollTop: 376, space: 0 });
+  assert.deepEqual(P.heldScroll(-50, 20, 500, true), { scrollTop: 0, space: 0 });
+});

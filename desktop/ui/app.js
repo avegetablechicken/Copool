@@ -546,8 +546,35 @@ function renderEditing() {
   renderedAccountsState = undefined;
   renderAccounts(accountsCache);
 }
+/// The space kept at the end of the list while a card is edited (holdInPlace).
+let editingSpace = 0;
+function keepEditingSpace(px) {
+  editingSpace = px;
+  $("accounts").style.paddingBottom = px ? `${px}px` : "";
+}
+/// Where an entry stands in the list's view, by its layout alone: neither the
+/// turn nor a hovered card's lift moves it.
+function viewTop(entry) {
+  return entry.offsetTop - $("accounts-page").scrollTop;
+}
+/// Scrolls the list so that `holder`, the entry of a card just turned, stands
+/// where it stood before the turn (`top`, its viewTop then). A
+/// back shorter than its front, as a provider's group has, near the end of a
+/// scrolled list would otherwise pull the list up to its new end and the card
+/// with it: while a card is edited, the list keeps the space it needs at its
+/// end.
+function holdInPlace(holder, top) {
+  const scroller = $("accounts-page");
+  const shift = viewTop(holder) - top;
+  if (!shift) return;
+  const end = scroller.scrollHeight - scroller.clientHeight;
+  const held = P.heldScroll(shift, scroller.scrollTop, end, !!accountsController.editing);
+  if (held.space) keepEditingSpace(editingSpace + held.space);
+  scroller.scrollTop = held.scrollTop;
+}
 /// Turns the card of `key` edge-on, makes `change`, renders, and turns the
-/// card's other side in, growing it as the cards below slide down.
+/// card's other side in, growing it as the cards below slide down. The card
+/// stays where it stood (holdInPlace).
 async function turnCard(key, direction, change) {
   const list = $("accounts");
   const find = () =>
@@ -556,6 +583,7 @@ async function turnCard(key, direction, change) {
   const node = find();
   const entry = node?.closest("[data-reorder-id]");
   const before = entry?.offsetHeight;
+  const top = entry && viewTop(entry);
   const keyboardFocus = node?.contains(document.activeElement) &&
     document.activeElement.matches(":focus-visible");
   const raised = !still && node?.matches(":hover, :has(:focus-visible), .flip-raised, .hover-hold");
@@ -581,6 +609,8 @@ async function turnCard(key, direction, change) {
   }
   const next = find();
   if (!next) return;
+  const holder = next.closest("[data-reorder-id]");
+  if (holder && top !== undefined) holdInPlace(holder, top);
   if (keyboardFocus && document.activeElement === document.body)
     next.querySelector(":scope > :first-child > .card-edit, :scope > .back-head > .back-done")?.focus({ preventScroll: true });
   if (still) return;
@@ -592,7 +622,6 @@ async function turnCard(key, direction, change) {
     ],
     { duration: FLIP_HALF_MS, easing: "cubic-bezier(0.1, 0.45, 0.45, 1)" },
   );
-  const holder = next.closest("[data-reorder-id]");
   const after = holder?.offsetHeight;
   // Reveal the extra height without cropping the lifted card's outer shadow.
   if (before && after > before)
@@ -653,6 +682,8 @@ document.addEventListener(
 );
 function renderAccounts(accounts) {
   if (reorderingAccounts) return;
+  // Only an edited card keeps space at the list's end (holdInPlace).
+  if (editingSpace && !accountsController.editing) keepEditingSpace(0);
   const renderState = cardFaces.renderState(accounts);
   if (P.cardsEqual(renderState, renderedAccountsState)) return;
   renderedAccountsState = structuredClone(renderState);
