@@ -72,8 +72,9 @@ pub(crate) trait PoolOps: Send + Sync {
     /// its Sub2api providers' cards, sorted for display. `accounts` adds
     /// their tags and refresh.
     fn cards(&self) -> Response<'_, Vec<AccountSummary>>;
-    /// The cards whose usage a background round compares; `cards` unless
-    /// reading those would ask for the Keychain.
+    /// The cards whose usage a background round compares and a hi to a
+    /// third-party pool checks; `cards` unless following the tool's login
+    /// would ask for the Keychain.
     fn usage_cards(&self) -> Response<'_, Vec<AccountSummary>> {
         self.cards()
     }

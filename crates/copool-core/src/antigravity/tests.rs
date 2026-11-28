@@ -8,6 +8,8 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub(crate) struct Live {
     bytes: Mutex<Option<Vec<u8>>>,
+    /// How many times it was read, as `security` would be run.
+    reads: Mutex<usize>,
     writes: Mutex<usize>,
     /// Writes are refused, as when the item needs authorization.
     refused: std::sync::atomic::AtomicBool,
@@ -19,6 +21,7 @@ pub(crate) struct Live {
 }
 impl LiveStore for Live {
     fn read(&self, _: KeychainAccess) -> Response<'_, Option<Vec<u8>>> {
+        *self.reads.lock().unwrap() += 1;
         let bytes = self.bytes.lock().unwrap().clone();
         let delay = self
             .read_delay_ms
@@ -1130,7 +1133,10 @@ async fn a_hi_starts_each_idle_five_hour_window() {
         .map(|m| m.1.clone())
         .collect();
     assert_eq!(models, ["gemini-3.8-flash-low", "gpt-oss-120b-medium"]);
-    // The card's model switch chooses one pool alone, idle or not.
+    // The card's model switch chooses one pool alone, idle or not, and
+    // which pools the card reports is read without agy's login, which is
+    // in the Keychain on macOS.
+    let reads = *h.live.reads.lock().unwrap();
     for (third_party, model) in [
         (true, "gpt-oss-120b-medium"),
         (false, "gemini-3.8-flash-low"),
@@ -1153,6 +1159,7 @@ async fn a_hi_starts_each_idle_five_hour_window() {
             assert_eq!(models, [model]);
         }
     }
+    assert_eq!(*h.live.reads.lock().unwrap(), reads);
     // A card reporting no third-party pool's usage has none to greet.
     {
         let _lock = h.app.antigravity.logins.store.lock().await;

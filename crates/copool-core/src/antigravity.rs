@@ -253,6 +253,10 @@ impl PoolOps for AntigravityLogins<'_> {
     fn cards(&self) -> Response<'_, Vec<AccountSummary>> {
         Box::pin(self.0.antigravity_accounts())
     }
+    fn usage_cards(&self) -> Response<'_, Vec<AccountSummary>> {
+        // Without the login agy uses, which is in the Keychain on macOS.
+        Box::pin(async move { self.0.antigravity_usage_cards() })
+    }
     fn provider_in_use(&self) -> Option<String> {
         self.0.antigravity_provider_in_use()
     }
@@ -556,6 +560,17 @@ impl Application {
             .collect();
         crate::ranking::sort_for_display(&mut summaries);
         Ok(summaries)
+    }
+    /// The pool's cards as stored, without reading agy's login, which is in
+    /// the Keychain on macOS.
+    fn antigravity_usage_cards(&self) -> Result<Vec<AccountSummary>> {
+        let store = self.antigravity_load()?;
+        Ok(store
+            .accounts
+            .iter()
+            .map(|a| Logins::<AntigravityLogins>::summary(a, false))
+            .chain(self.provider_cards(Pool::Antigravity, None)?)
+            .collect())
     }
     /// The provider agy uses: on the Gemini API, the provider last applied;
     /// else none, its login.
