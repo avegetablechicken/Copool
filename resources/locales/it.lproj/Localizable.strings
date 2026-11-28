@@ -608,17 +608,19 @@
 "accounts.refresh.interval_format" = "Aggiorna ogni %@";
 
 "settings.cliproxyapi.name" = "Nome";
-"settings.cliproxyapi.name_placeholder" = "Un nome per questo provider CLIProxyAPI";
 "settings.cliproxyapi.management_base_url" = "Sito di gestione";
-"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
 "settings.cliproxyapi.management_key" = "Chiave di gestione";
-"settings.cliproxyapi.management_key_placeholder" = "Chiave segreta remote-management di CLIProxyAPI";
 "settings.cliproxyapi.management_key_keep" = "Lascia vuoto per mantenere la chiave salvata";
 "settings.cliproxyapi.codex_hint" = "Codex passa al fornitore di modelli con questo nome in config.toml.";
-"settings.cliproxyapi.base_url_placeholder" = "Vuoto: il sito di gestione";
+"settings.cliproxyapi.base_url" = "Indirizzo API";
+"settings.cliproxyapi.api_key_variable" = "Variabile della chiave API";
 "settings.notice.cliproxyapi_saved" = "Impostazioni del provider CLIProxyAPI salvate";
 "accounts.notice.cliproxyapi_imported_format" = "%@ account CLIProxyAPI sincronizzati";
+"accounts.notice.cliproxyapi_none_format" = "CLIProxyAPI non ha credenziali %@ abilitate";
 "accounts.notice.cliproxyapi_removed" = "Account CLIProxyAPI rimosso da Copool";
 "error.cliproxyapi.management_unavailable" = "L’API di gestione di CLIProxyAPI non è disponibile: imposta remote-management.secret-key (e allow-remote per un altro computer) e non eseguirlo in modalità Home.";
 "error.cliproxyapi.management_key_refused" = "CLIProxyAPI ha rifiutato la chiave di gestione.";
 "error.cliproxyapi.duplicate_provider" = "Esiste già un fornitore CLIProxyAPI con questo sito di gestione e questa chiave.";
+"error.cliproxyapi.configuration_incomplete" = "Compila nome, sito di gestione e chiave di gestione del provider CLIProxyAPI prima di salvare.";
+"error.cliproxyapi.invalid_base_url" = "Il sito di gestione o l’indirizzo API di CLIProxyAPI non è valido.";
+"error.cliproxyapi.duplicate_name" = "Un altro provider CLIProxyAPI ha già questo nome.";

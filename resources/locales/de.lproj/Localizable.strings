@@ -608,17 +608,19 @@
 "accounts.refresh.interval_format" = "Alle %@ aktualisieren";
 
 "settings.cliproxyapi.name" = "Name";
-"settings.cliproxyapi.name_placeholder" = "Ein Name für diesen CLIProxyAPI-Anbieter";
 "settings.cliproxyapi.management_base_url" = "Verwaltungsadresse";
-"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
 "settings.cliproxyapi.management_key" = "Verwaltungsschlüssel";
-"settings.cliproxyapi.management_key_placeholder" = "Geheimer remote-management-Schlüssel von CLIProxyAPI";
 "settings.cliproxyapi.management_key_keep" = "Leer lassen, um den gespeicherten Schlüssel zu behalten";
 "settings.cliproxyapi.codex_hint" = "Codex wechselt zum Modellanbieter dieses Namens in config.toml.";
-"settings.cliproxyapi.base_url_placeholder" = "Leer: die Verwaltungsseite";
+"settings.cliproxyapi.base_url" = "API-Adresse";
+"settings.cliproxyapi.api_key_variable" = "API-Schlüssel-Variable";
 "settings.notice.cliproxyapi_saved" = "CLIProxyAPI-Anbietereinstellungen gespeichert";
 "accounts.notice.cliproxyapi_imported_format" = "%@ CLIProxyAPI-Konten synchronisiert";
+"accounts.notice.cliproxyapi_none_format" = "CLIProxyAPI hat keine aktivierten %@-Zugangsdaten";
 "accounts.notice.cliproxyapi_removed" = "CLIProxyAPI-Konto aus Copool entfernt";
 "error.cliproxyapi.management_unavailable" = "Die Verwaltungs-API von CLIProxyAPI ist nicht verfügbar: Setze remote-management.secret-key (und allow-remote für einen anderen Rechner) und betreibe es nicht im Home-Modus.";
 "error.cliproxyapi.management_key_refused" = "CLIProxyAPI hat den Verwaltungsschlüssel abgelehnt.";
 "error.cliproxyapi.duplicate_provider" = "Ein CLIProxyAPI-Anbieter mit dieser Verwaltungsseite und diesem Schlüssel existiert bereits.";
+"error.cliproxyapi.configuration_incomplete" = "Gib vor dem Speichern Name, Verwaltungsseite und Verwaltungsschlüssel des CLIProxyAPI-Anbieters an.";
+"error.cliproxyapi.invalid_base_url" = "Die Verwaltungsseite oder API-Adresse von CLIProxyAPI ist ungültig.";
+"error.cliproxyapi.duplicate_name" = "Ein anderer CLIProxyAPI-Anbieter hat bereits diesen Namen.";

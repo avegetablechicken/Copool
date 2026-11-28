@@ -312,26 +312,12 @@
       }
     }
   }
-  /// The switch's fields each pool keeps of a CLIProxyAPI provider, as
-  /// `[key, label]` (cliproxyapi/shared.rs): Codex's is the provider of its
-  /// name in `config.toml`.
-  const CLIPROXYAPI_POOL_FIELDS = {
-    claude: [
-      ["baseURL", "settings.sub2api.claude_base_url"],
-      ["apiKeyVariable", "settings.sub2api.claude_api_key_variable"],
-    ],
-    antigravity: [
-      ["baseURL", "settings.sub2api.antigravity_base_url"],
-      ["apiKeyVariable", "settings.sub2api.antigravity_api_key_variable"],
-    ],
-    grok: [
-      ["baseURL", "settings.sub2api.grok_base_url"],
-      ["apiKeyVariable", "settings.sub2api.grok_api_key_variable"],
-    ],
-  };
   /// The CLIProxyAPI providers, which every pool shares: those saved and
-  /// the forms editing them, each with what every pool shares of it and
-  /// each pool's switch (`pools`), any of which may be left blank.
+  /// the forms editing them, each with what every pool shares of it: its
+  /// management site and key, and the address of its API and the variable
+  /// holding its API key, which every pool's switch takes and may be left
+  /// blank (cliproxyapi/shared.rs). Codex's switch is the provider of its
+  /// name in `config.toml`.
   class CliProxyApiProviders {
     constructor(invoke, onUpdate = () => {}) {
       this.invoke = invoke;
@@ -347,35 +333,33 @@
         ["name", "settings.cliproxyapi.name"],
         ["adminBaseURL", "settings.cliproxyapi.management_base_url"],
         ["password", "settings.cliproxyapi.management_key", "password"],
+        ["baseURL", "settings.cliproxyapi.base_url"],
+        ["apiKeyVariable", "settings.cliproxyapi.api_key_variable"],
       ];
     }
-    /// The pools whose switch a form edits, with their fields.
-    poolFields() {
-      return Object.entries(CLIPROXYAPI_POOL_FIELDS);
+    /// A field's placeholder: the API address left blank is the root of
+    /// the management site typed, as the core takes it; no other field has
+    /// one.
+    placeholder(key, provider) {
+      if (key !== "baseURL") return "";
+      const site = String(provider?.adminBaseURL || "").trim().replace(/\/+$/, "");
+      return site.replace(/\/v[08]\/management$/, "").replace(/\/+$/, "");
     }
     blank(id) {
-      const pools = Object.fromEntries(
-        Object.entries(CLIPROXYAPI_POOL_FIELDS).map(([pool, fields]) => [
-          pool,
-          Object.fromEntries(fields.map(([key]) => [key, ""])),
-        ]),
-      );
       return {
         id,
         kind: "cliproxyapi",
         name: "",
         adminBaseURL: "",
         password: "",
+        baseURL: "",
+        apiKeyVariable: "",
         allowInsecureTLS: false,
-        pools,
       };
     }
     /// A form's draft of a saved provider, its key blank, which keeps it.
     draft(saved) {
-      const draft = { ...this.blank(saved.id), ...structuredClone(saved), password: "" };
-      for (const [pool, fields] of Object.entries(CLIPROXYAPI_POOL_FIELDS))
-        for (const [key] of fields) draft.pools[pool] = { ...draft.pools[pool], [key]: saved.pools?.[pool]?.[key] || "" };
-      return draft;
+      return { ...this.blank(saved.id), ...structuredClone(saved), password: "" };
     }
     isSaved(id) {
       return this.persisted.some((p) => p.id === id);

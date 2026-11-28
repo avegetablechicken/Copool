@@ -628,17 +628,19 @@
 "accounts.refresh.interval_format" = "%@마다 새로고침";
 
 "settings.cliproxyapi.name" = "이름";
-"settings.cliproxyapi.name_placeholder" = "이 CLIProxyAPI 공급자의 이름";
 "settings.cliproxyapi.management_base_url" = "관리 사이트";
-"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
 "settings.cliproxyapi.management_key" = "관리 키";
-"settings.cliproxyapi.management_key_placeholder" = "CLIProxyAPI remote-management 비밀 키";
 "settings.cliproxyapi.management_key_keep" = "비워 두면 저장된 키를 유지합니다";
 "settings.cliproxyapi.codex_hint" = "Codex는 config.toml에서 같은 이름의 모델 공급자로 전환합니다.";
-"settings.cliproxyapi.base_url_placeholder" = "비워 두면 관리 사이트";
+"settings.cliproxyapi.base_url" = "API 주소";
+"settings.cliproxyapi.api_key_variable" = "API 키 변수";
 "settings.notice.cliproxyapi_saved" = "CLIProxyAPI 공급자 설정을 저장했습니다";
 "accounts.notice.cliproxyapi_imported_format" = "CLIProxyAPI 계정 %@개를 동기화했습니다";
+"accounts.notice.cliproxyapi_none_format" = "CLIProxyAPI에 활성화된 %@ 자격 증명이 없습니다";
 "accounts.notice.cliproxyapi_removed" = "CLIProxyAPI 계정을 Copool에서 제거했습니다";
 "error.cliproxyapi.management_unavailable" = "CLIProxyAPI 관리 API를 사용할 수 없습니다. remote-management.secret-key를 설정하고(다른 컴퓨터에서는 allow-remote도), Home 모드로 실행하지 마세요.";
 "error.cliproxyapi.management_key_refused" = "CLIProxyAPI가 관리 키를 거부했습니다.";
 "error.cliproxyapi.duplicate_provider" = "관리 사이트와 키가 같은 CLIProxyAPI 공급자가 이미 있습니다.";
+"error.cliproxyapi.configuration_incomplete" = "저장하기 전에 CLIProxyAPI 공급자의 이름, 관리 사이트, 관리 키를 입력하세요.";
+"error.cliproxyapi.invalid_base_url" = "CLIProxyAPI 관리 사이트 또는 API 주소가 올바르지 않습니다.";
+"error.cliproxyapi.duplicate_name" = "같은 이름의 CLIProxyAPI 공급자가 이미 있습니다.";

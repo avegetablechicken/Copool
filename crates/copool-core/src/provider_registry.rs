@@ -238,16 +238,19 @@ impl<A: Adapter> Registry<'_, A> {
     }
     /// The pool's record of a CLIProxyAPI provider it keeps nothing of yet:
     /// its tool's gateway the server's root (CLIProxyAPI serves its API and
-    /// management API alike), Claude Code's set by address, the rest as a
-    /// saved form's are decided. None of its cards are imported.
+    /// management API alike), Claude Code's set by address, its API key in
+    /// the variable every pool's form names unless it names another, the
+    /// rest as a saved form's are decided. None of its cards are imported.
     fn fresh(&self, shared: &Shared) -> Result<A::Provider> {
         let root = strip_suffix(
             &shared.admin_base_url,
             &["/v8/management", "/v0/management"],
         );
-        let mut p: A::Provider =
-            serde_json::from_value(serde_json::json!({"mode": "address", "baseURL": root}))
-                .map_err(|e| e.to_string())?;
+        let mut p: A::Provider = serde_json::from_value(serde_json::json!({
+            "mode": "address", "baseURL": root,
+            "apiKeyVariable": crate::cliproxyapi::shared::API_KEY_VARIABLE,
+        }))
+        .map_err(|e| e.to_string())?;
         p.as_mut().id = shared.id.clone();
         p.as_mut().kind = Kind::CliProxyApi;
         shared.apply(p.as_mut());
@@ -313,18 +316,6 @@ impl<A: Adapter> Registry<'_, A> {
                 return Err(CONFIGURATION_INCOMPLETE.into());
             }
         }
-        // A CLIProxyAPI provider is every pool's: its name is unique among
-        // every pool's providers.
-        let mut elsewhere = Vec::new();
-        if kind == Kind::CliProxyApi {
-            for pool in Pool::ALL.into_iter().filter(|p| *p != A::POOL) {
-                let listed = self.app.registry(pool).providers()?;
-                elsewhere.extend(listed.as_array().into_iter().flatten().map(|p| {
-                    let text = |key: &str| p[key].as_str().unwrap_or_default().to_owned();
-                    (text("id"), text("name"))
-                }));
-            }
-        }
         let shared = self.app.cliproxyapi_providers()?;
         let stored = self
             .adapter
@@ -332,13 +323,17 @@ impl<A: Adapter> Registry<'_, A> {
                 let r = draft.as_ref();
                 let existing = providers.iter().position(|p| p.as_ref().id == r.id);
                 let known = shared_of(&shared, r);
-                let duplicate = providers.iter().any(|p| {
-                    p.as_ref().id != r.id && p.as_ref().name.eq_ignore_ascii_case(&r.name)
-                }) || shared
-                    .iter()
-                    .map(|s| (&s.id, &s.name))
-                    .chain(elsewhere.iter().map(|(id, name)| (id, name)))
-                    .any(|(id, name)| *id != r.id && name.eq_ignore_ascii_case(&r.name));
+                // A name is unique among the providers of its kind: a
+                // Sub2api one's in its pool, a CLIProxyAPI one's, which is
+                // every pool's, among them all.
+                let other = |id: &str, name: &str| id != r.id && name.eq_ignore_ascii_case(&r.name);
+                let duplicate = match r.kind {
+                    Kind::Sub2api => providers.iter().any(|p| {
+                        let p = p.as_ref();
+                        p.kind == Kind::Sub2api && other(&p.id, &p.name)
+                    }),
+                    Kind::CliProxyApi => shared.iter().any(|s| other(&s.id, &s.name)),
+                };
                 crate::provider_accounts::validate_form(
                     r.kind,
                     &r.name,
@@ -1033,10 +1028,10 @@ mod tests {
             }
         }
         // A pool keeping nothing of it yet switches to the server's root,
-        // with its own key variable.
+        // with the key variable every pool's form names by default.
         let agy = &app.providers(Pool::Antigravity).unwrap()[0];
         assert_eq!(agy["baseURL"], "http://cpa.example.com:8317");
-        assert_eq!(agy["apiKeyVariable"], "GEMINI_API_KEY");
+        assert_eq!(agy["apiKeyVariable"], "CLIPROXYAPI_API_KEY");
 
         // A pool's cards are its own; their proxy is every pool's.
         app.registry(Pool::Grok)
@@ -1074,8 +1069,10 @@ mod tests {
             app.providers(Pool::Antigravity).unwrap()[0]["apiKeyVariable"],
             "CPA_KEY"
         );
-        // Grok's names none of its own: its switch asks for one.
-        assert_eq!(app.providers(Pool::Grok).unwrap()[0]["apiKeyVariable"], "");
+        assert_eq!(
+            app.providers(Pool::Grok).unwrap()[0]["apiKeyVariable"],
+            "CLIPROXYAPI_API_KEY"
+        );
         assert_eq!(
             secrets
                 .get(&crate::cliproxyapi::shared::key_secret(&id))
@@ -1085,17 +1082,18 @@ mod tests {
         );
         assert_eq!(app.provider_cards(Pool::Grok, None).unwrap().len(), 1);
 
-        // A Sub2api provider of the same name is refused in any pool.
-        assert_eq!(
-            app.save_provider(
+        // A Sub2api provider of the same name is no duplicate of it.
+        let sub2api = app
+            .save_provider(
                 Pool::Codex,
                 json!({"name": "renamed", "username": "admin", "password": "p",
                     "adminBaseURL": "https://relay.example.com"}),
             )
             .await
-            .unwrap_err(),
-            "error.sub2api.duplicate_provider"
-        );
+            .unwrap();
+        app.remove_provider(Pool::Codex, sub2api["id"].as_str().unwrap())
+            .await
+            .unwrap();
 
         // Removed in one pool, it leaves every pool, with its key.
         app.remove_provider(Pool::Codex, &id).await.unwrap();
@@ -1112,7 +1110,7 @@ mod tests {
     }
 
     // A CLIProxyAPI provider is saved for every pool from one form, with
-    // each pool's switch; another of the same site and key is refused, one
+    // one API key variable and each pool's gateway; another of the same site and key is refused, one
     // with another key is not.
     #[tokio::test]
     async fn a_cliproxyapi_form_is_saved_for_every_pool_and_once() {
@@ -1121,8 +1119,7 @@ mod tests {
         let (app, secrets) = open(dir.path());
         let form = |name: &str, key: &str| {
             json!({"name": name, "adminBaseURL": "http://cpa.example.com:8317", "password": key,
-                "pools": {"grok": {"baseURL": "", "apiKeyVariable": ""},
-                    "antigravity": {"baseURL": "http://gateway.example.com:8317", "apiKeyVariable": "CPA_KEY"}}})
+                "apiKeyVariable": "CPA_KEY", "baseURL": ""})
         };
         let saved = app
             .save_cliproxyapi_provider(form("Relay", "one"))
@@ -1130,15 +1127,17 @@ mod tests {
             .unwrap();
         let id = saved["id"].as_str().unwrap().to_owned();
         assert_eq!(saved["kind"], "cliproxyapi");
-        assert_eq!(saved["pools"]["antigravity"]["apiKeyVariable"], "CPA_KEY");
-        assert_eq!(
-            saved["pools"]["antigravity"]["baseURL"],
-            "http://gateway.example.com:8317"
-        );
-        // Grok Build names no variable until it is switched to it.
-        assert_eq!(saved["pools"]["grok"]["apiKeyVariable"], "");
-        // Claude Code's follows the management site, as left blank.
-        assert_eq!(saved["pools"]["claude"]["baseURL"], "");
+        assert_eq!(saved["apiKeyVariable"], "CPA_KEY");
+        // Every pool's tool sends the key its one variable holds.
+        for pool in [Pool::Claude, Pool::Antigravity, Pool::Grok] {
+            assert_eq!(
+                app.registry(pool).providers().unwrap()[0]["apiKeyVariable"],
+                "CPA_KEY",
+                "{pool:?}"
+            );
+        }
+        // Its API follows the management site, as left blank.
+        assert_eq!(saved["baseURL"], "");
         assert_eq!(
             app.registry(Pool::Claude).providers().unwrap()[0]["baseURL"],
             "http://cpa.example.com:8317"
@@ -1187,9 +1186,17 @@ mod tests {
         // duplicate.
         let mut edit = second.clone();
         edit["password"] = json!("");
-        edit["pools"]["grok"]["apiKeyVariable"] = json!("GROK_CPA");
+        edit["apiKeyVariable"] = json!("");
         let edited = app.save_cliproxyapi_provider(edit).await.unwrap();
-        assert_eq!(edited["pools"]["grok"]["apiKeyVariable"], "GROK_CPA");
+        // A blank variable is the default one, shown blank.
+        assert_eq!(edited["apiKeyVariable"], "");
+        let grok = app.registry(Pool::Grok).providers().unwrap();
+        let grok = grok
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == second["id"]);
+        assert_eq!(grok.unwrap()["apiKeyVariable"], "CLIPROXYAPI_API_KEY");
         // Its key changed to the first's is refused.
         let mut same = second.clone();
         same["password"] = json!("one");
@@ -1199,7 +1206,7 @@ mod tests {
         );
         // A form a pool refuses saves nothing in any.
         let mut invalid = form("Third", "three");
-        invalid["pools"]["antigravity"]["apiKeyVariable"] = json!("not a variable");
+        invalid["apiKeyVariable"] = json!("not a variable");
         assert!(app.save_cliproxyapi_provider(invalid).await.is_err());
         assert_eq!(
             app.cliproxyapi_provider_list()
@@ -1261,36 +1268,86 @@ mod tests {
         );
     }
 
-    // A gateway its form leaves blank follows the management site: listed
-    // blank, it moves with the site; one typed stays.
+    // A CLIProxyAPI form a pool refuses says so in CLIProxyAPI's words.
     #[tokio::test]
-    async fn a_blank_gateway_follows_the_management_site() {
+    async fn a_refused_cliproxyapi_form_is_worded_as_cliproxyapis() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _) = open(dir.path());
+        let form = |name: &str, site: &str, key: &str| json!({"name": name, "adminBaseURL": site, "password": key});
+        let site = "http://cpa.example.com:8317";
+        app.save_cliproxyapi_provider(form("Relay", site, "one"))
+            .await
+            .unwrap();
+        for (form, error) in [
+            (
+                form("", site, "two"),
+                "error.cliproxyapi.configuration_incomplete",
+            ),
+            (
+                form("Other", "", "two"),
+                "error.cliproxyapi.configuration_incomplete",
+            ),
+            (
+                form("Other", "http://other.example.com:8317", ""),
+                "error.cliproxyapi.configuration_incomplete",
+            ),
+            (
+                form("Other", "not a site", "two"),
+                "error.cliproxyapi.invalid_base_url",
+            ),
+            (
+                form("RELAY", "http://other.example.com:8317", "two"),
+                "error.cliproxyapi.duplicate_name",
+            ),
+        ] {
+            assert_eq!(
+                app.save_cliproxyapi_provider(form.clone())
+                    .await
+                    .unwrap_err(),
+                error,
+                "{form}"
+            );
+        }
+    }
+
+    // An API address its form leaves blank follows the management site:
+    // listed blank, every pool's gateway moves with the site; one typed,
+    // whichever pool's gateway it is, is every pool's and stays.
+    #[tokio::test]
+    async fn a_blank_api_address_follows_the_management_site() {
         let dir = tempfile::tempdir().unwrap();
         let (app, _) = open(dir.path());
         let saved = app
-            .save_cliproxyapi_provider(json!({"name": "Relay", "adminBaseURL": "http://old.example.com:8317",
-                "password": "key", "pools": {"antigravity": {"baseURL": "http://typed.example.com"}}}))
+            .save_cliproxyapi_provider(json!({"name": "Relay",
+                "adminBaseURL": "http://old.example.com:8317", "password": "key"}))
             .await
             .unwrap();
-        assert_eq!(saved["pools"]["claude"]["baseURL"], "");
-        assert_eq!(saved["pools"]["grok"]["baseURL"], "");
-        assert_eq!(
-            saved["pools"]["antigravity"]["baseURL"],
-            "http://typed.example.com"
-        );
+        assert_eq!(saved["baseURL"], "");
         let mut edit = saved.clone();
         edit["adminBaseURL"] = json!("http://new.example.com:8317");
-        app.save_cliproxyapi_provider(edit).await.unwrap();
+        let edited = app.save_cliproxyapi_provider(edit).await.unwrap();
+        // Codex's gateway is its `config.toml` provider's.
+        const TOOLS: [Pool; 3] = [Pool::Claude, Pool::Antigravity, Pool::Grok];
         let gateway = |pool| app.registry(pool).providers().unwrap()[0]["baseURL"].clone();
-        assert_eq!(gateway(Pool::Claude), "http://new.example.com:8317");
-        assert_eq!(gateway(Pool::Grok), "http://new.example.com:8317");
-        assert_eq!(gateway(Pool::Antigravity), "http://typed.example.com");
+        for pool in TOOLS {
+            assert_eq!(gateway(pool), "http://new.example.com:8317", "{pool:?}");
+        }
+        let mut typed = edited.clone();
+        typed["baseURL"] = json!("http://api.example.com/v1/");
+        let typed = app.save_cliproxyapi_provider(typed).await.unwrap();
+        assert_eq!(typed["baseURL"], "http://api.example.com");
+        let mut moved = typed.clone();
+        moved["adminBaseURL"] = json!("http://third.example.com:8317");
+        app.save_cliproxyapi_provider(moved).await.unwrap();
+        for pool in TOOLS {
+            assert_eq!(gateway(pool), "http://api.example.com", "{pool:?}");
+        }
     }
 
     // What reads a pool's store as kept (its switch, its local API proxy)
     // sees a CLIProxyAPI provider as edited in another pool; a Codex one
     // `config.toml` names nothing of is reached all the same; its name is
-    // unique among every pool's providers, Sub2api's too; one saved by its
+    // unique among the CLIProxyAPI providers, not Sub2api's; one saved by its
     // gateway alone is reached there by every pool; and a refresh ending
     // after its provider was removed keeps nothing of it.
     #[tokio::test]
@@ -1303,15 +1360,27 @@ mod tests {
         )
         .await
         .unwrap();
-        let refused = app
+        let taken = app
             .save_provider(
                 Pool::Grok,
                 json!({"kind": "cliproxyapi", "name": "taken", "apiKeyVariable": "K",
-                    "adminBaseURL": "http://cpa.example.com:8317", "password": "key"}),
+                    "adminBaseURL": "http://taken.example.com:8317", "password": "key"}),
+            )
+            .await
+            .unwrap();
+        // Another CLIProxyAPI provider of its name is refused, in any pool.
+        let refused = app
+            .save_provider(
+                Pool::Codex,
+                json!({"kind": "cliproxyapi", "name": "TAKEN",
+                    "adminBaseURL": "http://other.example.com:8317", "password": "key"}),
             )
             .await
             .unwrap_err();
         assert_eq!(refused, "error.sub2api.duplicate_provider");
+        app.remove_provider(Pool::Grok, taken["id"].as_str().unwrap())
+            .await
+            .unwrap();
         // Its gateway alone: its management site is the server the gateway
         // is on.
         let saved = app

@@ -608,17 +608,19 @@
 "accounts.refresh.interval_format" = "Actualizar cada %@";
 
 "settings.cliproxyapi.name" = "Nombre";
-"settings.cliproxyapi.name_placeholder" = "Un nombre para este proveedor CLIProxyAPI";
 "settings.cliproxyapi.management_base_url" = "Sitio de administración";
-"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
 "settings.cliproxyapi.management_key" = "Clave de administración";
-"settings.cliproxyapi.management_key_placeholder" = "Clave secreta remote-management de CLIProxyAPI";
 "settings.cliproxyapi.management_key_keep" = "Déjalo vacío para conservar la clave guardada";
 "settings.cliproxyapi.codex_hint" = "Codex cambia al proveedor de modelos con este nombre en config.toml.";
-"settings.cliproxyapi.base_url_placeholder" = "En blanco: el sitio de administración";
+"settings.cliproxyapi.base_url" = "Dirección de la API";
+"settings.cliproxyapi.api_key_variable" = "Variable de la clave API";
 "settings.notice.cliproxyapi_saved" = "Ajustes del proveedor CLIProxyAPI guardados";
 "accounts.notice.cliproxyapi_imported_format" = "Se sincronizaron %@ cuentas de CLIProxyAPI";
+"accounts.notice.cliproxyapi_none_format" = "CLIProxyAPI no tiene credenciales de %@ habilitadas";
 "accounts.notice.cliproxyapi_removed" = "Cuenta de CLIProxyAPI eliminada de Copool";
 "error.cliproxyapi.management_unavailable" = "La API de administración de CLIProxyAPI no está disponible: configura remote-management.secret-key (y allow-remote para otro equipo) y no lo ejecutes en modo Home.";
 "error.cliproxyapi.management_key_refused" = "CLIProxyAPI rechazó la clave de administración.";
 "error.cliproxyapi.duplicate_provider" = "Ya existe un proveedor de CLIProxyAPI con este sitio de administración y esta clave.";
+"error.cliproxyapi.configuration_incomplete" = "Completa el nombre, el sitio de administración y la clave de administración del proveedor CLIProxyAPI antes de guardar.";
+"error.cliproxyapi.invalid_base_url" = "El sitio de administración o la dirección de la API de CLIProxyAPI no es válida.";
+"error.cliproxyapi.duplicate_name" = "Ya hay otro proveedor CLIProxyAPI con este nombre.";

@@ -353,12 +353,16 @@ function renderToolbar() {
   label($("collapse-all"), collapse.label);
   $("collapse-all").setAttribute("aria-expanded", String(!collapsed));
 }
-function notice(message, error = false) {
+/// Shows a notice: done (green), an error (`tone` true, red) or a warning
+/// (`tone` "warning", yellow: nothing failed, but nothing came of it).
+function notice(message, tone = false) {
+  const error = tone === true;
   clearTimeout(noticeTimer);
   $("notice-text").textContent = tr(
     message instanceof Error ? message.message : String(message),
   );
   $("notice").classList.toggle("error", error);
+  $("notice").classList.toggle("warning", tone === "warning");
   $("notice").hidden = false;
   // As NoticeMessage.autoDismissDelay: 3 s, or 5 s for errors.
   noticeTimer = setTimeout(

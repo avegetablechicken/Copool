@@ -11,7 +11,7 @@ use crate::{
     provider_registry::{Kind, ProviderRecord},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Value};
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -83,71 +83,81 @@ impl Application {
     }
 }
 
-/// The switch's own fields a pool keeps of a CLIProxyAPI provider: its
-/// tool's gateway and the variable holding its API key. Codex's is the
-/// provider `config.toml` names as the provider is named.
-const SWITCH_FIELDS: [(Pool, &[&str]); 3] = [
-    (Pool::Claude, &["baseURL", "apiKeyVariable"]),
-    (Pool::Antigravity, &["baseURL", "apiKeyVariable"]),
-    (Pool::Grok, &["baseURL", "apiKeyVariable"]),
-];
+/// The variable holding a CLIProxyAPI provider's API key, which every
+/// pool's tool sends, unless its form names another.
+pub(crate) const API_KEY_VARIABLE: &str = "CLIPROXYAPI_API_KEY";
 /// A provider with the same management site and key is the same one.
 pub(crate) const DUPLICATE: &str = "error.cliproxyapi.duplicate_provider";
 
+/// A pool's refusal of a form as CLIProxyAPI's settings word it: the pools
+/// share the checks of Sub2api's forms, and their messages.
+fn own_error(error: String) -> String {
+    match error.as_str() {
+        "error.sub2api.configuration_incomplete" => "error.cliproxyapi.configuration_incomplete",
+        "error.sub2api.invalid_base_url" => "error.cliproxyapi.invalid_base_url",
+        "error.sub2api.duplicate_provider" => "error.cliproxyapi.duplicate_name",
+        _ => return error,
+    }
+    .to_owned()
+}
+
 impl Application {
     /// The CLIProxyAPI providers for the settings, without their keys: what
-    /// every pool shares of each, and each pool's switch (`pools`). A
-    /// gateway its management site gives is blank, as its form left it: it
-    /// follows the site as the site is edited.
+    /// every pool shares of each, with the address its API is reached at
+    /// (`baseURL`) and the variable holding its API key, as every pool's
+    /// switch takes them. Each is blank when its default is: the address
+    /// then follows the management site as the site is edited.
     pub fn cliproxyapi_provider_list(&self) -> Result<Value> {
-        let listed: Vec<(Pool, Value)> = SWITCH_FIELDS
-            .iter()
-            .map(|(pool, _)| Ok((*pool, self.registry(*pool).providers()?)))
-            .collect::<Result<_>>()?;
+        // Every pool's record names the same; Claude's is read.
+        let registry = self.registry(Pool::Claude);
+        let listed = registry.providers()?;
         let providers = self
             .cliproxyapi_providers()?
             .into_iter()
             .map(|shared| {
                 let mut value = serde_json::to_value(&shared).map_err(|e| e.to_string())?;
                 value["kind"] = Kind::CliProxyApi.name().into();
-                let mut pools = Map::new();
-                for ((pool, fields), (_, listed)) in SWITCH_FIELDS.iter().zip(&listed) {
-                    let record = listed
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .find(|p| p["id"] == shared.id.as_str());
-                    let mut own: Map<String, Value> = fields
-                        .iter()
-                        .map(|f| {
-                            (
-                                (*f).to_owned(),
-                                record
-                                    .and_then(|r| r[*f].as_str())
-                                    .unwrap_or_default()
-                                    .into(),
-                            )
-                        })
-                        .collect();
-                    let default = self.registry(*pool).default_gateway(&shared)?;
-                    if own.get("baseURL").and_then(Value::as_str) == Some(default.as_str()) {
-                        own.insert("baseURL".into(), "".into());
-                    }
-                    pools.insert(pool.name().to_owned(), own.into());
+                let record = listed
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|p| p["id"] == shared.id.as_str());
+                let text = |key: &str| {
+                    record
+                        .and_then(|r| r[key].as_str())
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                let mut address = text("baseURL");
+                if address == registry.default_gateway(&shared)? {
+                    address.clear();
                 }
-                value["pools"] = pools.into();
+                let mut variable = text("apiKeyVariable");
+                if variable == API_KEY_VARIABLE {
+                    variable.clear();
+                }
+                value["baseURL"] = address.into();
+                value["apiKeyVariable"] = variable.into();
                 Ok(value)
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(providers.into())
     }
     /// Saves a CLIProxyAPI provider for every pool: what they share, its
-    /// key (blank keeps the saved one), and each pool's switch as `pools`
-    /// gives it. One with another's management site and key is refused, as
+    /// key (blank keeps the saved one), and the address of its API (blank:
+    /// its management site's root) and the variable holding its API key,
+    /// which every pool's switch takes, each pool's tool its own gateway
+    /// at that address. One with another's management site and key is refused, as
     /// is a form any pool refuses, before any is saved.
     pub async fn save_cliproxyapi_provider(&self, draft: Value) -> Result<Value> {
+        self.save_cliproxyapi_form(draft).await.map_err(own_error)
+    }
+    async fn save_cliproxyapi_form(&self, draft: Value) -> Result<Value> {
         let text = |key: &str| draft[key].as_str().unwrap_or_default().trim().to_owned();
         let id = text("id");
+        if text("adminBaseURL").is_empty() {
+            return Err("error.sub2api.configuration_incomplete".into());
+        }
         let site = crate::cliproxyapi::management_base(&text("adminBaseURL"))
             .map_err(|_| "error.sub2api.invalid_base_url".to_owned())?;
         let key = match text("password") {
@@ -161,34 +171,31 @@ impl Application {
                 return Err(DUPLICATE.into());
             }
         }
-        let form = |pool: Pool| {
-            let mut form = serde_json::json!({
+        // The API's root, whichever pool's gateway was typed.
+        let address = crate::provider_registry::strip_suffix(&text("baseURL"), &["/v1"]);
+        let form = || {
+            json!({
                 "id": id, "kind": Kind::CliProxyApi.name(), "name": text("name"),
                 "adminBaseURL": text("adminBaseURL"),
                 "allowInsecureTLS": draft["allowInsecureTLS"].as_bool().unwrap_or(false),
                 "mode": "address", "password": "",
-            });
-            for (key, value) in draft["pools"][pool.name()]
-                .as_object()
-                .into_iter()
-                .flatten()
-            {
-                if let Some(value) = value.as_str() {
-                    form[key] = value.into();
-                }
-            }
-            form
+                "apiKeyVariable": match text("apiKeyVariable") {
+                    variable if variable.is_empty() => API_KEY_VARIABLE.to_owned(),
+                    variable => variable,
+                },
+                "baseURL": address,
+            })
         };
         for pool in Pool::ALL {
-            self.registry(pool).check(form(pool))?;
+            self.registry(pool).check(form())?;
         }
         // The first pool's save keeps what they share and the key, the
-        // others' their switch. A new one any pool fails to save is removed
+        // others their record of it. A new one any pool fails to save is removed
         // whole: none is left half saved.
         let new = id.is_empty();
         let mut id = id.clone();
         for (i, pool) in Pool::ALL.into_iter().enumerate() {
-            let mut form = form(pool);
+            let mut form = form();
             form["id"] = id.clone().into();
             if i == 0 {
                 form["password"] = text("password").into();

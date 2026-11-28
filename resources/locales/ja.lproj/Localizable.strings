@@ -628,17 +628,19 @@
 "accounts.refresh.interval_format" = "%@ごとに更新";
 
 "settings.cliproxyapi.name" = "名前";
-"settings.cliproxyapi.name_placeholder" = "この CLIProxyAPI プロバイダの名前";
 "settings.cliproxyapi.management_base_url" = "管理サイト";
-"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
 "settings.cliproxyapi.management_key" = "管理キー";
-"settings.cliproxyapi.management_key_placeholder" = "CLIProxyAPI の remote-management シークレットキー";
 "settings.cliproxyapi.management_key_keep" = "空欄のままにすると保存済みのキーを維持します";
 "settings.cliproxyapi.codex_hint" = "Codex は config.toml 内の同じ名前のモデルプロバイダに切り替わります。";
-"settings.cliproxyapi.base_url_placeholder" = "空欄なら管理サイト";
+"settings.cliproxyapi.base_url" = "API アドレス";
+"settings.cliproxyapi.api_key_variable" = "API キーの環境変数";
 "settings.notice.cliproxyapi_saved" = "CLIProxyAPI プロバイダの設定を保存しました";
 "accounts.notice.cliproxyapi_imported_format" = "%@ 件の CLIProxyAPI アカウントを同期しました";
+"accounts.notice.cliproxyapi_none_format" = "CLIProxyAPI に有効な %@ の認証情報がありません";
 "accounts.notice.cliproxyapi_removed" = "CLIProxyAPI アカウントを Copool から削除しました";
 "error.cliproxyapi.management_unavailable" = "CLIProxyAPI の管理 API を利用できません。remote-management.secret-key を設定し（別のマシンからは allow-remote も）、Home モードで実行しないでください。";
 "error.cliproxyapi.management_key_refused" = "CLIProxyAPI が管理キーを拒否しました。";
 "error.cliproxyapi.duplicate_provider" = "管理サイトとキーが同じ CLIProxyAPI プロバイダがすでにあります。";
+"error.cliproxyapi.configuration_incomplete" = "保存する前に CLIProxyAPI プロバイダの名前、管理サイト、管理キーを入力してください。";
+"error.cliproxyapi.invalid_base_url" = "CLIProxyAPI の管理サイトまたは API アドレスが無効です。";
+"error.cliproxyapi.duplicate_name" = "同じ名前の CLIProxyAPI プロバイダがすでにあります。";

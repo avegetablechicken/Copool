@@ -70,7 +70,7 @@ test("A pool's forms are its Sub2api providers', signed in by an administrator",
   }
 });
 
-test("A CLIProxyAPI form is every pool's: what they share, each pool's switch, and its key kept", async () => {
+test("A CLIProxyAPI form is every pool's: what they share, one API address and key variable, and its key kept", async () => {
   globalThis.crypto ??= require("node:crypto").webcrypto;
   const calls = [];
   let saved = null;
@@ -85,25 +85,35 @@ test("A CLIProxyAPI form is every pool's: what they share, each pool's switch, a
   };
   const providers = new CliProxyApiProviders(invoke);
   await providers.load();
-  assert.deepEqual(providers.fields().map(([key]) => key), ["name", "adminBaseURL", "password"]);
+  assert.deepEqual(providers.fields().map(([key]) => key), ["name", "adminBaseURL", "password", "baseURL", "apiKeyVariable"]);
   assert.equal(providers.fields()[2][1], "settings.cliproxyapi.management_key");
-  // Codex switches to the provider of its name in config.toml.
-  assert.deepEqual(providers.poolFields().map(([pool]) => pool), ["claude", "antigravity", "grok"]);
   const id = providers.add();
   const form = providers.providers.get(id);
   assert.equal(form.kind, "cliproxyapi");
+  // Only the API address has a placeholder: the management site's root.
+  assert.equal(providers.placeholder("baseURL", form), "");
+  form.adminBaseURL = " http://cpa.example.com:8317/v8/management/ ";
+  assert.equal(providers.placeholder("baseURL", form), "http://cpa.example.com:8317");
+  form.adminBaseURL = "http://cpa.example.com:8317";
+  assert.equal(providers.placeholder("baseURL", form), "http://cpa.example.com:8317");
+  for (const [key] of providers.fields())
+    if (key !== "baseURL") assert.equal(providers.placeholder(key, form), "", key);
   Object.assign(form, { name: "Relay", adminBaseURL: "http://a:8317", password: "key" });
-  form.pools.grok.apiKeyVariable = "CPA_KEY";
+  form.apiKeyVariable = "CPA_KEY";
+  form.baseURL = "http://api.example.com";
   await providers.save(id);
   const [, { value }] = calls.find(([name]) => name === "save_cliproxyapi_provider");
   // A new one is named by the core.
   assert.equal(value.id, "");
   assert.equal(value.password, "key");
-  assert.deepEqual(value.pools.grok, { baseURL: "", apiKeyVariable: "CPA_KEY" });
+  // One address and one variable for every pool's switch.
+  assert.equal(value.apiKeyVariable, "CPA_KEY");
+  assert.equal(value.baseURL, "http://api.example.com");
+  assert.equal("pools" in value, false);
   assert.deepEqual([...providers.providers.keys()], ["cpa-1"]);
   // Saved, its key is blank in the form, which keeps it.
   assert.equal(providers.providers.get("cpa-1").password, "");
-  assert.equal(providers.providers.get("cpa-1").pools.grok.apiKeyVariable, "CPA_KEY");
+  assert.equal(providers.providers.get("cpa-1").apiKeyVariable, "CPA_KEY");
   assert.equal(providers.isSaved("cpa-1"), true);
   assert.equal(providers.notice, "settings.notice.cliproxyapi_saved");
   await providers.remove("cpa-1");
@@ -116,7 +126,7 @@ test("A failed CLIProxyAPI save shows what it left saved", async () => {
   let listed = [];
   const providers = new CliProxyApiProviders(async (name) => {
     if (name === "cliproxyapi_providers") return listed;
-    listed = [{ id: "half", kind: "cliproxyapi", name: "Relay", pools: {} }];
+    listed = [{ id: "half", kind: "cliproxyapi", name: "Relay" }];
     throw new Error("disk full");
   });
   const id = providers.add();
@@ -375,4 +385,11 @@ test("The arrows reach a menu's first row down and its last up when none is focu
   assert.equal(document.activeElement, rows[0]);
   key("ArrowUp");
   assert.equal(document.activeElement, rows[2]);
+});
+
+test("A CLIProxyAPI sync that finds no accounts says it has none, not that it synced 0", () => {
+  assert.deepEqual(P.providerSyncNotice("cliproxyapi", 3, "Claude"), ["accounts.notice.cliproxyapi_imported_format", 3, false]);
+  assert.deepEqual(P.providerSyncNotice("cliproxyapi", 0, "Claude"), ["accounts.notice.cliproxyapi_none_format", "Claude", "warning"]);
+  assert.deepEqual(P.providerSyncNotice(undefined, 2, "Codex"), ["accounts.notice.sub2api_imported_format", 2, false]);
+  assert.deepEqual(P.providerSyncNotice("sub2api", 0, "Codex"), ["accounts.notice.sub2api_imported_format", 0, false]);
 });

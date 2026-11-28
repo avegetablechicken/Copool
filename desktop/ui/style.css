@@ -29,6 +29,7 @@
   --green: #28cd41;
   --red: #ff3b30;
   --orange: #ff9500;
+  --yellow: #ffcc00;
   --blue: #007aff;
   --text-red: #d70015;
   --pink: #ff2d55;
@@ -69,6 +70,7 @@
   --green: #32d74b;
   --red: #ff453a;
   --orange: #ff9f0a;
+  --yellow: #ffd60a;
   --blue: #0a84ff;
   --text-red: #ff6961;
   --pink: #ff375f;
@@ -101,6 +103,7 @@
     --green: #32d74b;
     --red: #ff453a;
     --orange: #ff9f0a;
+    --yellow: #ffd60a;
     --blue: #0a84ff;
     --text-red: #ff6961;
     --pink: #ff375f;
@@ -121,6 +124,7 @@
     --green: -apple-system-green;
     --red: -apple-system-red;
     --orange: -apple-system-orange;
+    --yellow: -apple-system-yellow;
     --blue: -apple-system-blue;
     --gray: -apple-system-gray;
   }
@@ -2520,29 +2524,12 @@ button.usage-reset:hover {
   border-top: 0.5px solid var(--separator);
 }
 
-/* A CLIProxyAPI provider's form: what every pool shares, then each pool's switch. */
-.provider-hint,
-.provider-pool {
+/* A CLIProxyAPI provider's form: how Codex is switched to it. */
+.provider-hint {
   grid-column: 1 / -1;
   margin: 0;
   color: var(--secondary);
-}
-
-.provider-hint {
   font-size: 0.92em;
-}
-
-.provider-pool {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.provider-pool .provider-brand {
-  flex: none;
-  width: 12px;
-  height: 12px;
 }
 
 .provider-chevron.collapsed {
@@ -3121,6 +3108,11 @@ dialog > .dialog-actions {
 
 #notice.error .message-dot {
   background: var(--red);
+}
+
+/* Nothing failed, but nothing came of it either. */
+#notice.warning .message-dot {
+  background: var(--yellow);
 }
 
 #notice-text {

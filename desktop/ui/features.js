@@ -73,22 +73,24 @@ const proxyControllers = Object.fromEntries(
   }),
 );
 let proxyController = proxyControllers[proxyPool];
-function providerField(form, provider, key, label, type, saved, keep, { optional = false, placeholder = null } = {}) {
+/// `placeholder`, when given, is its text as is ("" for none) instead of
+/// the label's own; a saved password's keeps the saved one all the same.
+function providerField(form, provider, key, label, type, saved, keep, { placeholder } = {}) {
   const row = el("label", "row provider-field");
   row.append(el("span", "", tr(label)));
   const input = el("input");
   input.type = type || "text";
-  input.required = !optional && label === "settings.sub2api.grok_api_key_variable";
+  input.required = label === "settings.sub2api.grok_api_key_variable";
   input.value = provider[key] || "";
   input.autocomplete = type === "password" ? "new-password" : "off";
   input.setAttribute("aria-label", tr(label));
   input.oninput = () => (provider[key] = input.value);
   // Only a saved provider has a password to keep, as in the SwiftUI form.
-  input.placeholder = tr(
-    type === "password" && saved ? keep : placeholder || `${label}_placeholder`,
-  );
+  if (type === "password" && saved) input.placeholder = tr(keep);
+  else input.placeholder = placeholder ?? tr(`${label}_placeholder`);
   row.append(input);
   form.append(row);
+  return input;
 }
 /// The Claude settings file a provider names, typed or chosen with a
 /// button inside its field.
@@ -181,6 +183,14 @@ function providerForm({ key, title, brand, saved, provider, remove, removed, fil
     body.append(actions);
     form.append(body);
   }
+  // Enter confirms the field it is typed in, as leaving it does; only the
+  // button saves.
+  form.onkeydown = (event) => {
+    const field = event.target;
+    if (event.key !== "Enter" || event.isComposing || field.tagName !== "INPUT" || field.type === "checkbox") return;
+    event.preventDefault();
+    field.dispatchEvent(new Event("change"));
+  };
   form.onsubmit = (event) => {
     event.preventDefault();
     action(async () => {
@@ -233,8 +243,7 @@ function renderProviders(target = null) {
     }),
   );
 }
-/// The CLIProxyAPI providers' forms, one each for every pool: what the
-/// pools share, then each pool's switch.
+/// The CLIProxyAPI providers' forms, one each for every pool.
 function renderCliProxyApiProviders() {
   const root = $("cliproxyapi-provider-forms");
   const rerender = renderCliProxyApiProviders;
@@ -259,19 +268,17 @@ function renderCliProxyApiProviders() {
         savedNotice: "settings.notice.cliproxyapi_saved",
         rerender,
         fill(body) {
+          const inputs = {};
           for (const [key, label, type] of cliProxyApiProviders.fields())
-            providerField(body, provider, key, label, type, saved, "settings.cliproxyapi.management_key_keep");
+            inputs[key] = providerField(body, provider, key, label, type, saved, "settings.cliproxyapi.management_key_keep", {
+              placeholder: cliProxyApiProviders.placeholder(key, provider),
+            });
+          // The API address left blank is the management site's root,
+          // shown once the site is confirmed (Enter or leaving it).
+          inputs.adminBaseURL.onchange = () => {
+            inputs.baseURL.placeholder = cliProxyApiProviders.placeholder("baseURL", provider);
+          };
           body.append(el("p", "provider-hint", tr("settings.cliproxyapi.codex_hint")));
-          for (const [pool, fields] of cliProxyApiProviders.poolFields()) {
-            const heading = el("div", "provider-pool");
-            heading.append(brandIcon(pool), el("span", "", tr(`pool.${pool}`)));
-            body.append(heading);
-            for (const [key, label] of fields)
-              providerField(body, provider.pools[pool], key, label, "text", saved, null, {
-                optional: true,
-                placeholder: key === "baseURL" ? "settings.cliproxyapi.base_url_placeholder" : null,
-              });
-          }
         },
       });
     }),
@@ -293,11 +300,9 @@ async function syncProvider(target, key) {
       const count = await invoke("refresh_provider", { pool: target, id: key, sync: true });
       // The cards' providers, as the sync left them.
       await providerControllers[target].load();
-      const synced =
-        providerControllers[target].find(key)?.kind === "cliproxyapi"
-          ? "accounts.notice.cliproxyapi_imported_format"
-          : "accounts.notice.sub2api_imported_format";
-      notice(tr(synced, count));
+      const kind = providerControllers[target].find(key)?.kind;
+      const [synced, argument, tone] = P.providerSyncNotice(kind, count, tr(`pool.${target}`));
+      notice(tr(synced, argument), tone);
     }));
   } finally {
     controller.importing = false;

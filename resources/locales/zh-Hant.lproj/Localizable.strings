@@ -608,17 +608,19 @@
 "accounts.refresh.interval_format" = "每%@重新整理";
 
 "settings.cliproxyapi.name" = "名稱";
-"settings.cliproxyapi.name_placeholder" = "為此 CLIProxyAPI 提供方命名";
 "settings.cliproxyapi.management_base_url" = "管理位址";
-"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
 "settings.cliproxyapi.management_key" = "管理金鑰";
-"settings.cliproxyapi.management_key_placeholder" = "CLIProxyAPI 的 remote-management 金鑰";
 "settings.cliproxyapi.management_key_keep" = "留空以保留已儲存的金鑰";
 "settings.cliproxyapi.codex_hint" = "Codex 會切換到 config.toml 中同名的模型供應商。";
-"settings.cliproxyapi.base_url_placeholder" = "留空則使用管理網站";
+"settings.cliproxyapi.base_url" = "API 位址";
+"settings.cliproxyapi.api_key_variable" = "API key 變數";
 "settings.notice.cliproxyapi_saved" = "CLIProxyAPI 提供方設定已儲存";
 "accounts.notice.cliproxyapi_imported_format" = "已同步 %@ 個 CLIProxyAPI 帳號";
+"accounts.notice.cliproxyapi_none_format" = "CLIProxyAPI 中沒有已啟用的 %@ 憑證";
 "accounts.notice.cliproxyapi_removed" = "已從 Copool 移除 CLIProxyAPI 帳號";
 "error.cliproxyapi.management_unavailable" = "CLIProxyAPI 的管理 API 無法使用：請設定 remote-management.secret-key（從其他機器存取還需開啟 allow-remote），且不要以 Home 模式執行。";
 "error.cliproxyapi.management_key_refused" = "CLIProxyAPI 拒絕了此管理金鑰。";
 "error.cliproxyapi.duplicate_provider" = "已存在管理網站和金鑰都相同的 CLIProxyAPI 供應商。";
+"error.cliproxyapi.configuration_incomplete" = "請先填寫 CLIProxyAPI 提供方的名稱、管理站點和管理密鑰。";
+"error.cliproxyapi.invalid_base_url" = "CLIProxyAPI 的管理站點或 API 位址無效。";
+"error.cliproxyapi.duplicate_name" = "已有同名的 CLIProxyAPI 提供方。";

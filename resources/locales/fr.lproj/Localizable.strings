@@ -608,17 +608,19 @@
 "accounts.refresh.interval_format" = "Actualiser toutes les %@";
 
 "settings.cliproxyapi.name" = "Nom";
-"settings.cliproxyapi.name_placeholder" = "Un nom pour ce fournisseur CLIProxyAPI";
 "settings.cliproxyapi.management_base_url" = "Site d’administration";
-"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
 "settings.cliproxyapi.management_key" = "Clé d’administration";
-"settings.cliproxyapi.management_key_placeholder" = "Clé secrète remote-management de CLIProxyAPI";
 "settings.cliproxyapi.management_key_keep" = "Laisser vide pour conserver la clé enregistrée";
 "settings.cliproxyapi.codex_hint" = "Codex bascule vers le fournisseur de modèles de ce nom dans config.toml.";
-"settings.cliproxyapi.base_url_placeholder" = "Vide : le site de gestion";
+"settings.cliproxyapi.base_url" = "Adresse de l’API";
+"settings.cliproxyapi.api_key_variable" = "Variable de la clé API";
 "settings.notice.cliproxyapi_saved" = "Réglages du fournisseur CLIProxyAPI enregistrés";
 "accounts.notice.cliproxyapi_imported_format" = "%@ comptes CLIProxyAPI synchronisés";
+"accounts.notice.cliproxyapi_none_format" = "CLIProxyAPI n’a aucun identifiant %@ activé";
 "accounts.notice.cliproxyapi_removed" = "Compte CLIProxyAPI retiré de Copool";
 "error.cliproxyapi.management_unavailable" = "L’API d’administration de CLIProxyAPI est indisponible : définissez remote-management.secret-key (et allow-remote pour une autre machine) et ne l’exécutez pas en mode Home.";
 "error.cliproxyapi.management_key_refused" = "CLIProxyAPI a refusé la clé d’administration.";
 "error.cliproxyapi.duplicate_provider" = "Un fournisseur CLIProxyAPI avec ce site de gestion et cette clé existe déjà.";
+"error.cliproxyapi.configuration_incomplete" = "Indiquez le nom, le site de gestion et la clé de gestion du fournisseur CLIProxyAPI avant d’enregistrer.";
+"error.cliproxyapi.invalid_base_url" = "Le site de gestion ou l’adresse de l’API CLIProxyAPI n’est pas valide.";
+"error.cliproxyapi.duplicate_name" = "Un autre fournisseur CLIProxyAPI porte déjà ce nom.";
