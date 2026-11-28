@@ -5,6 +5,10 @@
 //! for. Everything done with the cards (editing one, choosing the best,
 //! switching automatically, renewing at once, saying hi, refreshing by hand
 //! and in background rounds) is implemented here once, for both pools.
+/// A pool's request to its service or tool, answered later.
+pub(crate) type Response<'a, T> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = std::result::Result<T, String>> + Send + 'a>,
+>;
 use crate::{
     application::{eligible, Application, SmartSwitchOutcome, SwitchExecution},
     models::{AccountSummary, Renewal, StoredAccount},

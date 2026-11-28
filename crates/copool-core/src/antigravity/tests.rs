@@ -1,5 +1,5 @@
 use super::*;
-use crate::{account_network::Response, Preferences};
+use crate::{pool::Response, Preferences};
 use serde_json::json;
 use std::fs;
 use std::sync::Mutex;

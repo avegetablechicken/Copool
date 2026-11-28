@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    account_network::Response, models::RENEWAL_OFF, platform::SyncAgent, AgentSync,
-    AgentSyncOutcome, Preferences,
+    models::RENEWAL_OFF, platform::SyncAgent, pool::Response, AgentSync, AgentSyncOutcome,
+    Preferences,
 };
 use serde_json::json;
 use std::sync::Mutex;

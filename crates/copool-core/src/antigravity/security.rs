@@ -11,7 +11,7 @@
 //! answer then counts as unavailable. Calls take turns, so that waiting
 //! approvals do not pile up.
 use super::login::{ACCOUNT, ITEM, SERVICE};
-use crate::{account_network::Response, vault::KeychainAccess};
+use crate::{pool::Response, vault::KeychainAccess};
 use std::{sync::Arc, time::Duration};
 
 type Result<T> = std::result::Result<T, String>;

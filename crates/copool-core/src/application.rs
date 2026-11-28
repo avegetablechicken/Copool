@@ -227,7 +227,7 @@ type SwitchEffect = Arc<
         + Sync,
 >;
 impl Preferences {
-    fn from_settings(settings: crate::settings::Settings) -> Result<Self> {
+    pub(crate) fn from_settings(settings: crate::settings::Settings) -> Result<Self> {
         let agent_sync = SyncAgent::ALL
             .into_iter()
             .map(|agent| {
@@ -334,7 +334,7 @@ pub struct Application {
     /// Copool's own Keychain item, holding `secrets` and the Claude pool's
     /// tokens; none off macOS and for injected secrets.
     pub(crate) keychain: Option<Arc<crate::vault::Item>>,
-    pub(crate) network: Arc<dyn crate::account_network::AccountNetwork>,
+    pub(crate) network: Arc<dyn crate::codex::api::AccountNetwork>,
     pub(crate) state: AppState,
     pub(crate) operations: Mutex<()>,
     proxy_operations: Mutex<()>,
@@ -413,7 +413,7 @@ impl Application {
         file.try_lock()
             .map_err(|_| "This Copool data directory is already in use")?;
         let instance_lock = InstanceLock { file };
-        let network = Arc::new(crate::account_network::Network {
+        let network = Arc::new(crate::codex::api::Network {
             codex_config: paths.codex_auth.with_file_name("config.toml"),
         });
         let app = Self {
@@ -505,59 +505,6 @@ impl Application {
         } else {
             Ok(SwitchExecution::default())
         }
-    }
-    fn storage(&self) -> proxy_service::ProxyStorageContext {
-        let mut storage = proxy_service::new_proxy_storage_context(
-            self.paths.data_dir.clone(),
-            self.state.store_lock.clone(),
-            false,
-        );
-        let paths = self.paths.clone();
-        storage.account_proxy = Some(Arc::new(move || {
-            let settings = crate::repository::load_settings(&paths.data_dir.join("settings.json"))?;
-            Ok(Preferences::from_settings(settings)?.account_proxy_url)
-        }));
-        storage.prefer_local_selection = true;
-        storage.active_auth_path = Some(self.paths.codex_auth.clone());
-        // Always resolved here: the engine's own fallback reads ~/.codex, not
-        // the Codex configuration Copool uses.
-        storage.upstream_base_url = Some(crate::usage::chatgpt_base_origin(
-            crate::codex::config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
-        ));
-        // The pool keeps its logins, renews them and refreshes their usage.
-        storage.read_store = false;
-        storage.refresh_usage = false;
-        let paths = self.paths.clone();
-        storage.provider_candidates = Some(Arc::new(move || {
-            let mut candidates = crate::codex::proxy_candidates(&paths)?;
-            candidates.extend(crate::proxy_integration::candidates(&paths)?);
-            Ok(candidates)
-        }));
-        if let Some(app) = self.shared() {
-            let pool = Arc::downgrade(&app);
-            storage.renew_candidate = Some(Arc::new(move |id, rejected| {
-                let pool = pool.clone();
-                Box::pin(async move {
-                    pool.upgrade()
-                        .ok_or("Copool is closing")?
-                        .codex_renew_login(&id, &rejected)
-                        .await
-                })
-            }));
-            // A failover the proxy made switches Codex to the account that
-            // answered.
-            let pool = Arc::downgrade(&app);
-            storage.on_selected = Some(Arc::new(move |id, auth| {
-                let pool = pool.clone();
-                Box::pin(async move {
-                    let Some(app) = pool.upgrade() else {
-                        return Ok(());
-                    };
-                    app.codex_follow_proxy(&id, &auth).await.map(|_| ())
-                })
-            }));
-        }
-        storage
     }
     pub fn preferences(&self) -> Result<Preferences> {
         let mut settings = self.configuration()?;
@@ -684,7 +631,7 @@ impl Application {
     /// The pool's API proxy, as the engine runs it for that pool.
     pub(crate) fn proxy_storage(&self, pool: Pool) -> proxy_service::ProxyStorageContext {
         match pool {
-            Pool::Codex => self.storage(),
+            Pool::Codex => self.codex_proxy_storage(),
             Pool::Claude => self.claude_proxy_storage(),
             Pool::Antigravity => self.antigravity_proxy_storage(),
             // Never started: Copool has no Grok proxy.

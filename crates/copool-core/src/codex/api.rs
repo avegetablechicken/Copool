@@ -1,7 +1,9 @@
-use crate::{codex::workspaces::Metadata, models::UsageSnapshot};
+//! Codex's requests to ChatGPT: a login's usage, its renewal and the
+//! workspaces it belongs to, and the errors that say it expired or was
+//! deactivated.
+use super::workspaces::Metadata;
+use crate::{models::UsageSnapshot, pool::Response};
 use serde_json::Value;
-use std::{future::Future, pin::Pin};
-pub(crate) type Response<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
 pub(crate) trait AccountNetwork: Send + Sync {
     fn usage<'a>(&'a self, auth: &'a Value, proxy: &'a str) -> Response<'a, UsageSnapshot>;
     fn refresh<'a>(&'a self, auth: &'a Value, proxy: &'a str) -> Response<'a, Value>;

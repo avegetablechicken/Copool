@@ -23,13 +23,8 @@ pub(super) const ITEM: &str = "the Antigravity login (Keychain item gemini/antig
 
 /// Where Antigravity's login item is kept; tests use memory.
 pub(crate) trait LiveStore: Send + Sync {
-    fn read(&self, access: KeychainAccess)
-        -> crate::account_network::Response<'_, Option<Vec<u8>>>;
-    fn write(
-        &self,
-        bytes: Vec<u8>,
-        access: KeychainAccess,
-    ) -> crate::account_network::Response<'_, ()>;
+    fn read(&self, access: KeychainAccess) -> crate::pool::Response<'_, Option<Vec<u8>>>;
+    fn write(&self, bytes: Vec<u8>, access: KeychainAccess) -> crate::pool::Response<'_, ()>;
 }
 
 /// The item in the system's credential store: on macOS through
@@ -67,7 +62,7 @@ fn with_entry<T: Send + 'static>(
 }
 #[cfg(not(target_os = "macos"))]
 impl LiveStore for SystemStore {
-    fn read(&self, _: KeychainAccess) -> crate::account_network::Response<'_, Option<Vec<u8>>> {
+    fn read(&self, _: KeychainAccess) -> crate::pool::Response<'_, Option<Vec<u8>>> {
         Box::pin(async {
             tokio::task::spawn_blocking(|| {
                 with_entry(|entry| match entry.get_secret() {
@@ -80,7 +75,7 @@ impl LiveStore for SystemStore {
             .map_err(|e| e.to_string())?
         })
     }
-    fn write(&self, bytes: Vec<u8>, _: KeychainAccess) -> crate::account_network::Response<'_, ()> {
+    fn write(&self, bytes: Vec<u8>, _: KeychainAccess) -> crate::pool::Response<'_, ()> {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 with_entry(move |entry| {

@@ -2,6 +2,7 @@ use super::*;
 use crate::application::SmartSwitchOutcome;
 use crate::claude_api::*;
 use crate::models::ResetKind;
+use crate::pool::Response;
 use crate::Preferences;
 use std::sync::Mutex;
 
@@ -3651,7 +3652,7 @@ async fn a_hi_is_said_as_claude_code_in_a_terminal_session() {
     assert_eq!(status, 200);
     let (headers, body) = seen.lock().unwrap().take().unwrap();
     let header = |name: &str| headers.get(name).unwrap().to_str().unwrap().to_owned();
-    assert_eq!(header("user-agent"), INTERACTIVE_USER_AGENT);
+    assert_eq!(header("user-agent"), api::INTERACTIVE_USER_AGENT);
     assert_eq!(header("x-app"), "cli");
     assert_eq!(header("authorization"), "Bearer token");
     let user: Value = serde_json::from_str(body["metadata"]["user_id"].as_str().unwrap()).unwrap();

@@ -32,14 +32,14 @@ async fn save(app: &Application, form: Value) -> ProviderRecord {
 }
 /// The Codex providers as stored.
 fn stored(app: &Application) -> Vec<ProviderRecord> {
-    crate::providers::codex_providers(&app.paths).unwrap()
+    crate::codex::codex_providers(&app.paths).unwrap()
 }
 fn named(app: &Application, name: &str) -> ProviderRecord {
     stored(app).into_iter().find(|p| p.name == name).unwrap()
 }
 /// Edits the stored Codex providers directly.
 async fn put(app: &Application, edit: impl FnOnce(&mut Vec<ProviderRecord>) + Send) {
-    crate::providers::CodexAdapter(app)
+    crate::codex::ProviderAdapter(app)
         .edit_providers(|providers| {
             edit(providers);
             Ok(())

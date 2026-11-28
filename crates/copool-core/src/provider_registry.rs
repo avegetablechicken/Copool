@@ -414,7 +414,7 @@ impl Application {
     /// A pool's Provider registry.
     pub(crate) fn registry(&self, pool: Pool) -> Box<dyn ProviderRegistry + '_> {
         match pool {
-            Pool::Codex => registry(self, crate::providers::CodexAdapter(self)),
+            Pool::Codex => registry(self, crate::codex::ProviderAdapter(self)),
             Pool::Claude => registry(self, crate::claude::ProviderAdapter(self)),
             Pool::Antigravity => registry(self, crate::antigravity::ProviderAdapter(self)),
             Pool::Grok => registry(self, crate::grok::ProviderAdapter(self)),

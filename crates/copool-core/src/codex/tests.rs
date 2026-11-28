@@ -1,6 +1,6 @@
 use super::workspaces::Metadata;
 use super::*;
-use crate::account_network::{AccountNetwork, Response};
+use crate::{codex::api::AccountNetwork, pool::Response};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use std::sync::Mutex;
 
@@ -311,7 +311,7 @@ async fn a_deactivated_workspace_stays_listed_until_deleted_then_hidden() {
         ("deactivated", false)
     );
     assert!(f.app.switch_account(Pool::Codex, &id).await.is_err());
-    assert!(proxy_candidates(&f.app.paths).unwrap().is_empty());
+    assert!(proxy::proxy_candidates(&f.app.paths).unwrap().is_empty());
     f.app.delete_account(Pool::Codex, &id).await.unwrap();
     let store = f.app.codex_load().unwrap();
     assert_eq!(store.accounts[0].standing, Some(Standing::Deleted));

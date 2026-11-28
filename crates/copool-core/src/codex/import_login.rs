@@ -1,6 +1,9 @@
 use crate::{
-    account_network, codex::CodexLogins, login_store::LoginPool, pool_login::codex,
-    utils::now_unix_seconds, Application,
+    codex::{api, CodexLogins},
+    login_store::LoginPool,
+    pool_login::codex,
+    utils::now_unix_seconds,
+    Application,
 };
 use serde_json::Value;
 impl Application {
@@ -33,7 +36,7 @@ impl Application {
             .ok_or("The login was not imported")?;
         if contact {
             if let Err(error) = self.codex_refresh_account(&account.id, true, None).await {
-                if account_network::deactivated(&error) {
+                if api::deactivated(&error) {
                     // A deactivated workspace joins only as seen.
                     if existing.is_none() {
                         self.codex_logins()

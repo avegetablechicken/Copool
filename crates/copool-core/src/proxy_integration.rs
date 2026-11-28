@@ -226,7 +226,7 @@ pub(crate) fn candidates_with_keys(
     paths: &Paths,
     resolve_key: impl Fn(&config::Definition) -> Option<String>,
 ) -> Result<Vec<StoredAccount>, String> {
-    let providers = crate::providers::codex_providers(paths)?;
+    let providers = crate::codex::codex_providers(paths)?;
     let config = paths.codex_auth.with_file_name("config.toml");
     let defs = config::definitions(&config);
     let current = config::resolve_path(&config);

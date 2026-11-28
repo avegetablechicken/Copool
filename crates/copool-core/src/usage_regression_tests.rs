@@ -143,7 +143,7 @@ fn every_codex_request_reads_the_configuration_copool_uses() {
     )
     .unwrap();
     let configured = "https://127.0.0.1:8787/backend-api";
-    let network = crate::account_network::Network {
+    let network = crate::codex::api::Network {
         codex_config: config.clone(),
     };
     assert_eq!(network.origin(), configured);
