@@ -1058,7 +1058,9 @@ main > section.page-leaving {
   pointer-events: auto;
 }
 
-.account-group:has(.account-member:is(:hover, .hover-hold)) > :first-child > .card-edit {
+/* A provider's card hovered over one of its cards with an edit button of its
+   own shows that one alone; over one without, its own, as an ordinary card. */
+.account-group:has(.account-member:is(:hover, .hover-hold) > :first-child > .card-edit) > :first-child > .card-edit {
   opacity: 0;
   pointer-events: none;
 }
