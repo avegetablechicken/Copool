@@ -409,6 +409,70 @@ test("greeting times are added in order once and removed by value", async () => 
   assert.equal(state.schedule.auto, true);
 });
 
+test("greeting edits made one after another each keep the ones before", async () => {
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const requests = [];
+  let fail = null;
+  const invoke = (command, args) => {
+    if (command === "greeting_schedule")
+      return Promise.resolve({ auto: false, times: ["08:00", "12:00"], lastError: null });
+    if (command !== "set_greeting_schedule") return Promise.resolve([]);
+    return new Promise((resolve, reject) =>
+      requests.push({ args, resolve: () => (fail ? reject(new Error(fail)) : resolve()) }),
+    );
+  };
+  const card = { id: "a", usage: { planType: "plus" }, proxyUrl: "" };
+  const controller = new Accounts(invoke, [card], () => {}, () => {}, { pool: "codex" });
+  const notices = [];
+  let renders = 0;
+  const back = CardBack.create(
+    host({ controller, renderEditing: () => renders++, notice: (error) => notices.push(error.message) }),
+  );
+  const state = await edited(controller, "a");
+  // Auto turned on, then a time removed before the first save is made: the
+  // draft shows both at once, and one save sends both.
+  let section = back.greetingSection(card, state);
+  const auto = section.field("greeting-auto");
+  auto.checked = true;
+  auto.onchange();
+  section.find((node) => node.classList.contains("back-time-remove")).click();
+  assert.deepEqual(state.schedule, { auto: true, times: ["12:00"], lastError: null });
+  assert.ok(renders >= 2);
+  await tick();
+  assert.deepEqual(requests.map((r) => r.args), [{ id: "a", auto: true, times: ["12:00"] }]);
+  requests[0].resolve();
+  await tick();
+  assert.equal(requests.length, 1);
+  // An edit made while a save is under way waits for it, then sends the
+  // draft with every edit made.
+  section = back.greetingSection(card, state);
+  section.field("greeting-auto").checked = false;
+  section.field("greeting-auto").onchange();
+  await tick();
+  section.find((node) => node.classList.contains("back-time-remove")).click();
+  await tick();
+  assert.equal(requests.length, 2);
+  requests[1].resolve();
+  await tick();
+  assert.deepEqual(requests.map((r) => r.args).slice(1), [
+    { id: "a", auto: false, times: ["12:00"] },
+    { id: "a", auto: false, times: [] },
+  ]);
+  requests[2].resolve();
+  await tick();
+  // One that fails is told, and the draft shows the schedule saved again.
+  fail = "offline";
+  section = back.greetingSection(card, state);
+  section.field("greeting-auto").checked = true;
+  section.field("greeting-auto").onchange();
+  assert.equal(state.schedule.auto, true);
+  await tick();
+  requests[3].resolve();
+  await tick();
+  assert.deepEqual(notices, ["offline"]);
+  assert.deepEqual(state.schedule, { auto: false, times: [], lastError: null });
+});
+
 // Which items a card's menu has is card-view.js's (card-view.test.cjs);
 // here, what they run.
 test("a card's menu runs its card's actions, a provider's for its group", () => {

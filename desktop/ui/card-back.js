@@ -221,7 +221,9 @@
       );
       return section;
     }
-    /// Saying hi now, automatically, and at which times.
+    /// Saying hi now, automatically, and at which times. Each edit is made
+    /// to the draft as it is then (`state.schedule`), which an edit made
+    /// before it has changed already.
     function greetingSection(account, state) {
       const schedule = state.schedule;
       const ui = host.controller.cardState(account.id);
@@ -241,7 +243,7 @@
         backRow(
           tr("accounts.say_hi.auto"),
           backSwitch("greeting-auto", schedule.auto, tr("accounts.say_hi.auto"), (on) =>
-            saveGreeting(account.id, state, on, schedule.times),
+            saveGreeting(account.id, state, on, state.schedule.times),
           ),
           tr("accounts.say_hi.auto_help"),
         ),
@@ -255,7 +257,12 @@
       for (const time of schedule.times) {
         const chip = el("span", "back-time", time);
         const remove = button("", "close", "back-time-remove", () =>
-          saveGreeting(account.id, state, schedule.auto, P.withoutGreetingTime(schedule.times, time)),
+          saveGreeting(
+            account.id,
+            state,
+            state.schedule.auto,
+            P.withoutGreetingTime(state.schedule.times, time),
+          ),
         );
         remove.title = tr("accounts.say_hi.remove");
         remove.setAttribute("aria-label", `${tr("accounts.say_hi.remove")} ${time}`);
@@ -273,8 +280,8 @@
         const commit = () => {
           if (!input.isConnected || state.adding === null) return;
           state.adding = null;
-          const times = P.withGreetingTime(schedule.times, input.value);
-          if (times) saveGreeting(account.id, state, schedule.auto, times);
+          const times = P.withGreetingTime(state.schedule.times, input.value);
+          if (times) saveGreeting(account.id, state, state.schedule.auto, times);
           else host.renderEditing();
         };
         input.oninput = () => {
@@ -310,11 +317,14 @@
       section.group.append(daily);
       return section;
     }
-    /// Saves a greeting schedule, then shows it on the card being edited.
+    /// Shows a greeting schedule on the card being edited at once, and again
+    /// once it is saved (or put back, when it could not be).
     async function saveGreeting(id, state, auto, times) {
       const controller = host.controller;
+      const saved = controller.saveGreeting(state, id, auto, times);
+      if (controller.editing === state) host.renderEditing();
       try {
-        await controller.saveGreeting(state, id, auto, times);
+        await saved;
       } catch (error) {
         host.notice(error, true);
       }

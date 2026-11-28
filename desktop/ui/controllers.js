@@ -536,6 +536,11 @@
         proxyError: null,
         saving: false,
         schedule: null,
+        // The schedule last saved (as read, at first), the edits made to the
+        // draft's and the save of it under way (saveGreeting).
+        greetingSaved: null,
+        greetingEdits: 0,
+        greetingSaving: null,
         adding: null,
         confirmRemove: false,
       };
@@ -550,6 +555,8 @@
       this.turning = key;
       return async () => {
         state.schedule = await schedule;
+        if (state.schedule)
+          state.greetingSaved = { auto: state.schedule.auto, times: [...(state.schedule.times || [])] };
         if (generation !== this.turnGeneration) return;
         this.turning = null;
         this.editing = state;
@@ -595,10 +602,29 @@
         state.saving = false;
       }
     }
-    /// Saves an account's greeting schedule, then keeps it in the draft.
-    async saveGreeting(state, id, auto, times) {
-      await this.invoke("set_greeting_schedule", { id, auto, times });
+    /// Takes an account's greeting schedule into the draft at once, then
+    /// saves it after any save of the draft still under way: each save sends
+    /// the draft as it is then, so a later edit is never undone by an
+    /// earlier one, and one already sent is not sent again. A save that
+    /// fails, with no later edit to save, puts back the schedule saved.
+    saveGreeting(state, id, auto, times) {
       state.schedule = { ...state.schedule, auto, times };
+      const generation = (state.greetingEdits = (state.greetingEdits ?? 0) + 1);
+      const save = async () => {
+        const draft = { auto: state.schedule.auto, times: [...state.schedule.times] };
+        if (JSON.stringify(draft) === JSON.stringify(state.greetingSaved)) return;
+        try {
+          await this.invoke("set_greeting_schedule", { id, ...draft });
+          state.greetingSaved = draft;
+        } catch (error) {
+          if (generation === state.greetingEdits && state.greetingSaved)
+            state.schedule = { ...state.schedule, ...state.greetingSaved };
+          throw error;
+        }
+      };
+      const result = (state.greetingSaving ?? Promise.resolve()).then(save, save);
+      state.greetingSaving = result.catch(() => {});
+      return result;
     }
     /// Says hi with an account, which starts its 5h window, then refreshes
     /// its card over the next minutes until the window shows: by these
