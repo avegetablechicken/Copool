@@ -2701,16 +2701,17 @@ async fn refresh_proxy_candidate_usage(
         .filter(|c| c.auth_json.get("copoolProvider").is_none())
     {
         let result = match storage.pool {
-            Pool::Antigravity => antigravity::remote_usage(storage, &candidate).await,
-            Pool::Codex => {
-                fetch_usage_snapshot_from(
-                    &origin,
-                    &candidate.access_token,
-                    &candidate.account_id,
-                    &candidate.proxy_url,
-                )
+            Pool::Antigravity => antigravity::remote_usage(storage, &candidate)
                 .await
-            }
+                .map(|usage| (usage, Value::Null)),
+            Pool::Codex => fetch_usage_snapshot_from(
+                &origin,
+                &candidate.access_token,
+                &candidate.account_id,
+                &candidate.proxy_url,
+            )
+            .await
+            .map(|usage| (usage, Value::Null)),
             Pool::Claude => {
                 crate::claude_api::fetch_usage(
                     &origin,
@@ -2728,7 +2729,7 @@ async fn refresh_proxy_candidate_usage(
 async fn persist_candidate_usage_result(
     storage: &ProxyStorageContext,
     account_id: &str,
-    result: Result<UsageSnapshot, String>,
+    result: Result<(UsageSnapshot, Value), String>,
 ) {
     let _guard = match lock_store(storage).await {
         Ok(guard) => guard,
@@ -2755,9 +2756,9 @@ async fn persist_candidate_usage_result(
     };
 
     match result {
-        Ok(mut usage) => {
+        Ok((mut usage, body)) => {
             if storage.pool == Pool::Claude {
-                crate::claude_api::retain_known_resets(&mut usage, account.usage.as_ref());
+                crate::claude_api::retain_known_resets(&mut usage, account.usage.as_ref(), &body);
             }
             account.usage = Some(usage);
             account.usage_error = None;
@@ -5403,6 +5404,61 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             compare_proxy_candidates(&older, &newer),
             std::cmp::Ordering::Less
         );
+    }
+
+    #[tokio::test]
+    async fn remote_claude_reset_retention_respects_the_response_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut storage = new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        storage.pool = super::Pool::Claude;
+        let inventory = json!({"cedar_ember": {"eligible": true, "grants": [
+            {"resets_left": 2, "ends_at": 2000}
+        ]}});
+        for (body, expected) in [
+            (json!({}), Some(2)),
+            (
+                json!({"cedar_ember": {"eligible": false, "ineligible_reason": "surface"}}),
+                Some(2),
+            ),
+            (
+                json!({"cedar_ember": {"eligible": false, "ineligible_reason": "cli_version"}}),
+                Some(2),
+            ),
+            (
+                json!({"cedar_ember": {"eligible": false, "ineligible_reason": "plan"}}),
+                None,
+            ),
+            (json!({"cedar_ember": {"eligible": false}}), None),
+            // Null says no more than an absent block.
+            (json!({"cedar_ember": null}), Some(2)),
+            (
+                json!({"cedar_ember": {"eligible": true, "grants": []}}),
+                Some(0),
+            ),
+        ] {
+            let previous = crate::claude_api::usage_snapshot(&inventory, None, 1000).unwrap();
+            let store = serde_json::from_value(json!({"accounts": [{
+                "id": "alice", "label": "alice", "accountId": "alice", "authJson": {},
+                "addedAt": 1, "updatedAt": 1, "usage": previous
+            }]}))
+            .unwrap();
+            let path = account_store_path_from_data_dir(dir.path());
+            save_store_to_path(&path, &store).unwrap();
+            let latest = crate::claude_api::usage_snapshot(&body, None, 1100).unwrap();
+            persist_candidate_usage_result(&storage, "alice", Ok((latest, body.clone()))).await;
+            let saved = load_store_from_path(&path).unwrap();
+            let latest = saved.accounts[0].usage.as_ref().unwrap();
+            assert_eq!(latest.remaining_reset_count, expected, "{body}");
+            if expected != Some(2) {
+                assert!(latest.reset_grants.is_empty());
+                assert!(latest.reset_expiries.is_empty());
+                assert_eq!(latest.resets_last_confirmed_at, None);
+            }
+        }
     }
 
     #[tokio::test]

@@ -476,6 +476,8 @@ type Stored = Account<Own>;
 /// What a refresh's usage request learned.
 struct Answer {
     usage: UsageSnapshot,
+    /// Retention distinguishes missing reset inventory from explicit revocation.
+    usage_body: Value,
     /// The account its profile named, when asked.
     profiled: Option<Value>,
     /// Its plan, for its login: `subscriptionType` and `rateLimitTier`.
@@ -2116,7 +2118,11 @@ impl Application {
                 match &used.outcome {
                     Ok(Some(answer)) => {
                         let mut usage = answer.usage.clone();
-                        crate::claude_api::retain_known_resets(&mut usage, target.usage.as_ref());
+                        crate::claude_api::retain_known_resets(
+                            &mut usage,
+                            target.usage.as_ref(),
+                            &answer.usage_body,
+                        );
                         target.usage = Some(usage);
                         target.usage_error = None;
                         for (key, value) in &answer.plan {
@@ -2241,6 +2247,7 @@ impl Application {
         }
         Ok(Some(Answer {
             usage,
+            usage_body: body,
             profiled,
             plan: learned,
         }))

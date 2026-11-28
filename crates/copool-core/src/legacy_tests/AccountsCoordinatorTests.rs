@@ -1338,7 +1338,7 @@ fn testBackgroundRefreshComparesUsageWithoutFetchTimes() {
         };
     let before = cards(25., 1);
     assert_eq!(before.len(), 1);
-    assert!(before["acct"].get("fetchedAt").is_none());
+    assert_eq!(before["acct"]["fetchedAt"], 1);
     // A new fetch time alone is no change.
     assert!(!usage_changed(&before, &cards(25., 2)));
     assert!(usage_changed(&before, &cards(26., 2)));
@@ -1360,4 +1360,33 @@ fn testBackgroundRefreshComparesUsageWithoutFetchTimes() {
     );
     assert!(!usage_changed(&empty, &blank));
     assert!(!usage_changed(&before, &empty));
+}
+
+#[test]
+fn rolling_sub2api_windows_end_speedup_without_changing_other_cards() {
+    let cards = |at: i64| {
+        let mut a = account("sub2api-relay-1", 0., 0., false);
+        // Non-Plus 5h and weekly windows retain their timers in Sub2API mapping.
+        a.usage = Some(crate::usage::parse_payload(serde_json::json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {"used_percent": 0, "limit_window_seconds": 18000, "reset_at": at + 18000},
+                "secondary_window": {"used_percent": 0, "limit_window_seconds": 604800, "reset_at": at + 604800}
+            }
+        }), at).unwrap());
+        usage_values(&[a])
+    };
+    let key = card_key(Pool::Codex, "sub2api-relay-1");
+    let mut fast = std::collections::BTreeMap::from([(key.clone(), 0), ("other".into(), 0)]);
+    let mut before = cards(1000);
+    for at in [1060, 1120] {
+        let after = cards(at);
+        let changed = changed_cards(&before, &after).next().is_some();
+        assert!(!changed);
+        track_speed_up(&mut fast, &key, true, changed, true);
+        assert_eq!(after["sub2api-relay-1"]["oneWeek"]["resetAt"], at + 604800);
+        before = after;
+    }
+    assert!(!fast.contains_key(&key));
+    assert_eq!(fast.get("other"), Some(&0));
 }

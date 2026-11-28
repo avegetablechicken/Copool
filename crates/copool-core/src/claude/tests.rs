@@ -153,7 +153,7 @@ fn retained_resets_expire_without_advancing_the_confirmation_time() {
         }
         for (now, count) in [(20, 1), (25, 1), (30, 0), (40, 0)] {
             let mut next = unknown(now);
-            crate::claude_api::retain_known_resets(&mut next, Some(&previous));
+            crate::claude_api::retain_known_resets(&mut next, Some(&previous), &json!({}));
             assert_eq!(next.remaining_reset_count, Some(count));
             assert_eq!(next.resets_last_confirmed_at, Some(10));
             assert!(next.reset_expiries.iter().all(|at| *at > now));
@@ -161,9 +161,91 @@ fn retained_resets_expire_without_advancing_the_confirmation_time() {
         }
     }
     let mut next = unknown(30);
-    crate::claude_api::retain_known_resets(&mut next, Some(&unknown(10)));
+    crate::claude_api::retain_known_resets(&mut next, Some(&unknown(10)), &json!({}));
     assert_eq!(next.remaining_reset_count, None);
     assert_eq!(next.resets_last_confirmed_at, None);
+}
+
+#[test]
+fn reset_retention_distinguishes_client_capability_from_revocation() {
+    let previous = usage_snapshot(
+        &json!({"cedar_ember": {"eligible": true, "grants": [
+            {"resets_left": 1, "ends_at": 20},
+            {"resets_left": 2, "ends_at": 40},
+            {"resets_left": 1}
+        ]}}),
+        None,
+        10,
+    )
+    .unwrap();
+    for body in [
+        json!({}),
+        json!({"cedar_ember": {"eligible": false, "ineligible_reason": "cli_version", "grants": []}}),
+        json!({"cedar_ember": {"eligible": false, "ineligible_reason": "surface"}}),
+        // Null says no more than an absent block.
+        json!({"cedar_ember": null}),
+    ] {
+        let mut latest = usage_snapshot(&body, None, 30).unwrap();
+        retain_known_resets(&mut latest, Some(&previous), &body);
+        assert_eq!(latest.remaining_reset_count, Some(3), "{body}");
+        assert_eq!(latest.reset_expiries, [40, 40]);
+        assert_eq!(latest.resets_last_confirmed_at, Some(10));
+        let mut absent = usage_snapshot(&body, None, 30).unwrap();
+        retain_known_resets(&mut absent, None, &body);
+        assert_eq!(absent.remaining_reset_count, None);
+    }
+    for block in [
+        json!({"eligible": false}),
+        json!({"eligible": false, "ineligible_reason": "plan"}),
+        json!({"eligible": false, "ineligible_reason": "unknown"}),
+        json!({"eligible": true}),
+        json!({"eligible": true, "grants": "invalid"}),
+        json!([]),
+        json!("invalid"),
+    ] {
+        let body = json!({"cedar_ember": block});
+        let mut latest = usage_snapshot(&body, None, 30).unwrap();
+        retain_known_resets(&mut latest, Some(&previous), &body);
+        assert_eq!(latest.remaining_reset_count, None, "{body}");
+        assert!(latest.reset_grants.is_empty());
+        assert!(latest.reset_expiries.is_empty());
+        assert_eq!(latest.resets_last_confirmed_at, None);
+    }
+    let body = json!({"cedar_ember": {"eligible": true, "grants": []}});
+    let mut latest = usage_snapshot(&body, None, 30).unwrap();
+    retain_known_resets(&mut latest, Some(&previous), &body);
+    assert_eq!(latest.remaining_reset_count, Some(0));
+}
+
+#[tokio::test]
+async fn explicit_reset_revocation_clears_the_saved_inventory() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, location, fake) = app(&dir).await;
+    sign_in(&location, "alice", LATER);
+    let inventory = json!({"cedar_ember": {"eligible": true, "grants": [
+        {"resets_left": 2, "ends_at": "2099-01-01T00:00:00Z"}
+    ]}});
+    fake.usage.lock().unwrap().push((200, inventory.clone()));
+    app.claude_import_current().await.unwrap();
+    let stored = || app.claude_load().unwrap().accounts[0].clone();
+    let id = stored().id;
+    for block in [
+        json!({"eligible": false, "ineligible_reason": "plan"}),
+        json!({"eligible": false}),
+    ] {
+        fake.usage.lock().unwrap().push((200, inventory.clone()));
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
+        assert_eq!(stored().usage.unwrap().remaining_reset_count, Some(2));
+        fake.usage
+            .lock()
+            .unwrap()
+            .push((200, json!({"cedar_ember": block})));
+        app.refresh_usage(Pool::Claude, &id).await.unwrap();
+        let usage = stored().usage.unwrap();
+        assert_eq!(usage.remaining_reset_count, None);
+        assert!(usage.reset_grants.is_empty());
+        assert_eq!(usage.resets_last_confirmed_at, None);
+    }
 }
 
 #[test]

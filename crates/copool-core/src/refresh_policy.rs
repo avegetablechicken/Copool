@@ -10,6 +10,8 @@ pub(crate) const FAST_REFRESH_UNCHANGED_ROUNDS: u8 = 2;
 /// Small reset timestamp shifts (sub-second rounding or server clock jitter)
 /// that do not count as a usage change when all other window fields match.
 const RESET_AT_JITTER_SECONDS: u64 = 5;
+const IDLE_RESET_WINDOW_TOLERANCE_SECONDS: i64 = 90;
+const IDLE_RESET_DRIFT_TOLERANCE_SECONDS: i64 = 15;
 const WINDOW_KEYS: [&str; 6] = [
     "fiveHour",
     "oneWeek",
@@ -282,29 +284,16 @@ pub(crate) fn card_key(pool: Pool, id: &str) -> String {
         None => id.to_owned(),
     }
 }
-/// Each card's usage, without fetch/clock metadata that varies across polls
-/// even when usage has not changed.
+/// Each card's usage, including the observation times needed to recognize
+/// idle rolling resets. The comparison ignores metadata changes themselves.
 pub(crate) fn usage_values(accounts: &[AccountSummary]) -> BTreeMap<String, Value> {
     accounts
         .iter()
         .filter_map(|a| {
-            let mut usage = serde_json::to_value(a.usage.as_ref()?).ok()?;
-            strip_usage_metadata(&mut usage);
+            let usage = serde_json::to_value(a.usage.as_ref()?).ok()?;
             Some((a.id.clone(), usage))
         })
         .collect()
-}
-fn strip_usage_metadata(usage: &mut Value) {
-    let Some(object) = usage.as_object_mut() else {
-        return;
-    };
-    object.remove("fetchedAt");
-    object.remove("resetsLastConfirmedAt");
-    for key in WINDOW_KEYS {
-        if let Some(window) = object.get_mut(key).and_then(Value::as_object_mut) {
-            window.remove("clockOffsetSeconds");
-        }
-    }
 }
 /// The cards whose usage changed: their values differ, or they have usage
 /// for the first time. A card losing its usage is no change.
@@ -341,13 +330,23 @@ fn same_usage(previous: &Value, current: &Value) -> bool {
         let av = a.get(key).unwrap_or(&Value::Null);
         let bv = b.get(key).unwrap_or(&Value::Null);
         if WINDOW_KEYS.contains(&key) {
-            same_window(av, bv)
+            same_window(
+                av,
+                bv,
+                previous["fetchedAt"].as_i64(),
+                current["fetchedAt"].as_i64(),
+            )
         } else {
             av == bv
         }
     })
 }
-fn same_window(previous: &Value, current: &Value) -> bool {
+fn same_window(
+    previous: &Value,
+    current: &Value,
+    previous_fetched_at: Option<i64>,
+    current_fetched_at: Option<i64>,
+) -> bool {
     let (Some(a), Some(b)) = (previous.as_object(), current.as_object()) else {
         return previous == current;
     };
@@ -362,13 +361,66 @@ fn same_window(previous: &Value, current: &Value) -> bool {
         let bv = b.get(key).unwrap_or(&Value::Null);
         if key == "resetAt" {
             match (av.as_i64(), bv.as_i64()) {
-                (Some(x), Some(y)) => x.abs_diff(y) <= RESET_AT_JITTER_SECONDS,
+                (Some(x), Some(y)) => {
+                    x.abs_diff(y) <= RESET_AT_JITTER_SECONDS
+                        || rolling_idle_reset(
+                            previous,
+                            current,
+                            previous_fetched_at,
+                            current_fetched_at,
+                        )
+                }
                 _ => av == bv,
             }
         } else {
             av == bv
         }
     })
+}
+
+/// Both readings must describe an unused full window, and its deadline must
+/// move with the observation time. A single 0% reading can also be a newly
+/// started window, so it is not sufficient to discard a reset change.
+fn rolling_idle_reset(
+    previous: &Value,
+    current: &Value,
+    previous_fetched_at: Option<i64>,
+    current_fetched_at: Option<i64>,
+) -> bool {
+    let (Some(period), Some(before), Some(after), Some(previous_at), Some(current_at)) = (
+        previous["windowSeconds"].as_i64(),
+        previous["resetAt"].as_i64(),
+        current["resetAt"].as_i64(),
+        previous_fetched_at,
+        current_fetched_at,
+    ) else {
+        return false;
+    };
+    if period <= 0
+        || current["windowSeconds"].as_i64() != Some(period)
+        || previous["usedPercent"].as_f64() != Some(0.0)
+        || current["usedPercent"].as_f64() != Some(0.0)
+        || previous_at <= 0
+        || current_at <= 0
+    {
+        return false;
+    }
+    // Widen before arithmetic: timestamps and clock offsets can come from
+    // cached or upstream data, including values outside a meaningful range.
+    let observed = |at: i64, window: &Value| {
+        i128::from(at) + i128::from(window["clockOffsetSeconds"].as_i64().unwrap_or(0))
+    };
+    let previous_at = observed(previous_at, previous);
+    let current_at = observed(current_at, current);
+    let elapsed = current_at - previous_at;
+    let shift = i128::from(after) - i128::from(before);
+    let tolerance = i128::from((period / 10).min(IDLE_RESET_WINDOW_TOLERANCE_SECONDS));
+    let drift = i128::from(IDLE_RESET_DRIFT_TOLERANCE_SECONDS).min(tolerance);
+    elapsed > 0
+        && shift > 0
+        && (i128::from(before) - previous_at - i128::from(period)).abs() <= tolerance
+        && (i128::from(after) - current_at - i128::from(period)).abs() <= tolerance
+        && (shift - elapsed).abs() <= drift
 }
 
 pub(crate) fn snapshot_is_fresh(synced_at: Option<i64>, now: i64, window: i64) -> bool {
@@ -490,6 +542,68 @@ mod tests {
         spent["remainingResetCount"] = serde_json::json!(0);
         let after = BTreeMap::from([("a".to_owned(), spent)]);
         assert!(changed_cards(&before, &after).eq(["a"]));
+    }
+
+    #[test]
+    fn rolling_idle_resets_ignore_only_the_deadline_change() {
+        let reading = |at: i64, offset: i64| {
+            serde_json::json!({
+                "fetchedAt": at,
+                "oneWeek": {"usedPercent": 0.0, "windowSeconds": 604800,
+                    "resetAt": at + offset + 604800, "clockOffsetSeconds": offset}
+            })
+        };
+        let before = reading(1000, 0);
+        let after = reading(1060, 0);
+        assert!(same_usage(&before, &after));
+        // Clock corrections and small request-time differences still describe
+        // the same rolling placeholder.
+        assert!(same_usage(&before, &reading(1060, 3600)));
+        let mut rounded = after.clone();
+        rounded["oneWeek"]["resetAt"] = (1060 + 604800 + 7).into();
+        assert!(same_usage(&before, &rounded));
+        let mut fixed = after.clone();
+        fixed["oneWeek"]["resetAt"] = before["oneWeek"]["resetAt"].clone();
+        assert!(same_usage(&before, &fixed));
+
+        // A zero reading is insufficient on its own. No metadata, a started
+        // window, nonzero usage or a deadline moving differently stays a change.
+        for (field, value) in [
+            ("fetchedAt", serde_json::json!(null)),
+            ("fetchedAt", serde_json::json!(0)),
+            ("fetchedAt", serde_json::json!(1000)),
+            ("fetchedAt", serde_json::json!(900)),
+            ("usedPercent", serde_json::json!(1.0)),
+            ("windowSeconds", serde_json::json!(0)),
+            ("windowSeconds", serde_json::json!(18000)),
+            ("resetAt", serde_json::json!(null)),
+            ("resetAt", serde_json::json!(1000 + 604800 + 20)),
+            ("resetAt", serde_json::json!(1000 + 604800 - 60)),
+        ] {
+            let mut changed = after.clone();
+            if field == "fetchedAt" {
+                changed[field] = value;
+            } else {
+                changed["oneWeek"][field] = value;
+            }
+            assert!(!same_usage(&before, &changed), "{field}: {changed}");
+        }
+        for used in [0.0, 1.0] {
+            let mut first = reading(1000, 0);
+            let mut next = reading(1060, 0);
+            for snapshot in [&mut first, &mut next] {
+                snapshot["oneWeek"]["usedPercent"] = used.into();
+                if used == 0.0 {
+                    // A window already partway through its week.
+                    snapshot["oneWeek"]["resetAt"] =
+                        (snapshot["oneWeek"]["resetAt"].as_i64().unwrap() - 86400).into();
+                }
+            }
+            assert!(!same_usage(&first, &next));
+        }
+        let mut spent = after;
+        spent["remainingResetCount"] = 0.into();
+        assert!(!same_usage(&before, &spent));
     }
 
     #[test]
