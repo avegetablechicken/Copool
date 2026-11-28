@@ -98,6 +98,7 @@
 "accounts.action.import_auth_file" = "Importa file JSON";
 "accounts.action.import_sub2api" = "Sincronizza provider non ufficiali";
 "accounts.notice.sub2api_imported_format" = "Sincronizzati %@ account Sub2api";
+"accounts.notice.sub2api_none_format" = "Questo provider Sub2api non ha account %@";
 "accounts.notice.sub2api_removed" = "Account Sub2api rimosso da Copool";
 "accounts.sub2api.section_title" = "Account Sub2api";
 "accounts.sub2api.remove" = "Rimuovi da Copool";

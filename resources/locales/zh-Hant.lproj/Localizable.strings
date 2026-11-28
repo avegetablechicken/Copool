@@ -98,6 +98,7 @@
 "accounts.action.import_auth_file" = "匯入 JSON 檔案";
 "accounts.action.import_sub2api" = "同步非官方 Provider";
 "accounts.notice.sub2api_imported_format" = "已同步 %@ 個 Sub2api 帳號";
+"accounts.notice.sub2api_none_format" = "該 Sub2api 提供方沒有 %@ 帳號";
 "accounts.notice.sub2api_removed" = "已從 Copool 移除 Sub2api 帳號";
 "accounts.sub2api.section_title" = "Sub2api 帳號";
 "accounts.sub2api.remove" = "從 Copool 移除";

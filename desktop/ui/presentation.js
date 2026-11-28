@@ -895,13 +895,14 @@
     return kind === "cliproxyapi" ? "CLIProxyAPI" : "Sub2api";
   }
   /// What a provider's sync tells, as `[key, argument, tone]`: how many of
-  /// its accounts it synced, or, a CLIProxyAPI one synced none without
-  /// failing, that it has none for the pool (whose name is the argument),
-  /// as a warning (app.js's `notice`).
+  /// its accounts it synced, or, synced none without failing, that the
+  /// provider has none for the pool (whose name is the argument), as a
+  /// warning (app.js's `notice`).
   function providerSyncNotice(kind, count, pool) {
-    if (kind !== "cliproxyapi") return ["accounts.notice.sub2api_imported_format", count, false];
-    if (Number(count) > 0) return ["accounts.notice.cliproxyapi_imported_format", count, false];
-    return ["accounts.notice.cliproxyapi_none_format", pool, "warning"];
+    const cpa = kind === "cliproxyapi";
+    if (Number(count) > 0)
+      return [cpa ? "accounts.notice.cliproxyapi_imported_format" : "accounts.notice.sub2api_imported_format", count, false];
+    return [cpa ? "accounts.notice.cliproxyapi_none_format" : "accounts.notice.sub2api_none_format", pool, "warning"];
   }
   return {
     ACCOUNT_POOLS,

@@ -387,9 +387,9 @@ test("The arrows reach a menu's first row down and its last up when none is focu
   assert.equal(document.activeElement, rows[2]);
 });
 
-test("A CLIProxyAPI sync that finds no accounts says it has none, not that it synced 0", () => {
+test("A sync that finds no accounts says the provider has none, not that it synced 0", () => {
   assert.deepEqual(P.providerSyncNotice("cliproxyapi", 3, "Claude"), ["accounts.notice.cliproxyapi_imported_format", 3, false]);
   assert.deepEqual(P.providerSyncNotice("cliproxyapi", 0, "Claude"), ["accounts.notice.cliproxyapi_none_format", "Claude", "warning"]);
   assert.deepEqual(P.providerSyncNotice(undefined, 2, "Codex"), ["accounts.notice.sub2api_imported_format", 2, false]);
-  assert.deepEqual(P.providerSyncNotice("sub2api", 0, "Codex"), ["accounts.notice.sub2api_imported_format", 0, false]);
+  assert.deepEqual(P.providerSyncNotice("sub2api", 0, "Codex"), ["accounts.notice.sub2api_none_format", "Codex", "warning"]);
 });

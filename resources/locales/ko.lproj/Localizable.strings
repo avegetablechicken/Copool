@@ -98,6 +98,7 @@
 "accounts.action.import_auth_file" = "JSON 파일 가져오기";
 "accounts.action.import_sub2api" = "비공식 Provider 동기화";
 "accounts.notice.sub2api_imported_format" = "Sub2api 계정 %@개를 동기화했습니다";
+"accounts.notice.sub2api_none_format" = "이 Sub2api 공급자에 %@ 계정이 없습니다";
 "accounts.notice.sub2api_removed" = "Copool에서 Sub2api 계정을 제거했습니다";
 "accounts.sub2api.section_title" = "Sub2api 계정";
 "accounts.sub2api.remove" = "Copool에서 제거";
