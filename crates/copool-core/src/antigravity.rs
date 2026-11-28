@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::{path::PathBuf, sync::Arc};
 
 mod api;
+pub(crate) mod cliproxyapi;
 mod login;
 mod proxy;
 #[cfg(any(target_os = "macos", test))]

@@ -393,6 +393,7 @@ impl Connection {
                 usage: None,
                 usage_error: item["error_message"].as_str().map(str::to_owned),
                 provider_id: Some(self.configuration.provider_id.clone()),
+                credential: None,
                 outdated_version: None,
             };
             if ids.is_some_and(|ids| !ids.contains(&id)) {

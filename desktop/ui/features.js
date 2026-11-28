@@ -7,7 +7,9 @@ let installedEditors = [];
 /// The third-party agents a switch can sync to, as the core located them.
 let syncAgents = [];
 const settingsController = new window.CopoolControllers.Settings(invoke);
-/// Each pool's Sub2api providers and their forms.
+/// The CLIProxyAPI providers, every pool's, and their forms.
+const cliProxyApiProviders = new window.CopoolControllers.CliProxyApiProviders(invoke);
+/// Each pool's providers and their Sub2api ones' forms.
 const providerControllers = Object.fromEntries(
   PROVIDER_POOLS.map((target) => [
     target,
@@ -71,21 +73,19 @@ const proxyControllers = Object.fromEntries(
   }),
 );
 let proxyController = proxyControllers[proxyPool];
-function providerField(form, provider, key, label, type, saved) {
+function providerField(form, provider, key, label, type, saved, keep, { optional = false, placeholder = null } = {}) {
   const row = el("label", "row provider-field");
   row.append(el("span", "", tr(label)));
   const input = el("input");
   input.type = type || "text";
-  input.required = label === "settings.sub2api.grok_api_key_variable";
+  input.required = !optional && label === "settings.sub2api.grok_api_key_variable";
   input.value = provider[key] || "";
   input.autocomplete = type === "password" ? "new-password" : "off";
   input.setAttribute("aria-label", tr(label));
   input.oninput = () => (provider[key] = input.value);
   // Only a saved provider has a password to keep, as in the SwiftUI form.
   input.placeholder = tr(
-    type === "password" && saved
-      ? "settings.sub2api.password_keep"
-      : `${label}_placeholder`,
+    type === "password" && saved ? keep : placeholder || `${label}_placeholder`,
   );
   row.append(input);
   form.append(row);
@@ -130,91 +130,157 @@ function claudeProviderMode(body, provider, rerender) {
   body.append(row);
   return select.value;
 }
+/// The provider forms shown open, as `<pool>:<id>`, `cliproxyapi:<id>` for a
+/// CLIProxyAPI provider's single form.
 const expandedProviders = new Set();
-/// Every pool's provider forms, or one pool's.
+/// A provider's form: its header, which opens and closes it, and removes
+/// it; its fields (`fill`) when open; and its TLS switch and save.
+function providerForm({ key, title, brand, saved, provider, remove, removed, fill, save, savedNotice, rerender }) {
+  const form = el("form", "provider-form");
+  const header = el("div", "row provider-header");
+  const toggle = button("", null, "provider-toggle", () => {
+    if (expandedProviders.has(key)) expandedProviders.delete(key);
+    else expandedProviders.add(key);
+    rerender();
+  });
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", String(expandedProviders.has(key)));
+  const chevron = icon("chevron-down");
+  chevron.classList.add("provider-chevron");
+  if (!expandedProviders.has(key)) chevron.classList.add("collapsed");
+  toggle.append(chevron, ...(brand ? [brand] : []), el("span", "", title));
+  const trash = button("", "trash", "icon-btn", () =>
+    action(
+      async () => {
+        await remove();
+        expandedProviders.delete(key);
+        rerender();
+      },
+      saved ? tr(removed) : undefined,
+    ),
+  );
+  trash.type = "button";
+  trash.title = tr("settings.sub2api.remove_provider");
+  trash.setAttribute("aria-label", trash.title);
+  header.append(toggle, trash);
+  form.append(header);
+  if (expandedProviders.has(key)) {
+    const body = el("div", "provider-body");
+    fill(body);
+    const row = el("label", "row");
+    row.append(el("span", "row-label", tr("settings.sub2api.allow_insecure_tls")));
+    const check = el("input", "switch");
+    check.type = "checkbox";
+    check.checked = !!provider.allowInsecureTLS;
+    check.onchange = () => (provider.allowInsecureTLS = check.checked);
+    row.append(check);
+    const actions = el("div", "provider-save");
+    const submit = button(tr("common.save"), null, "btn primary");
+    submit.type = "submit";
+    actions.append(row, submit);
+    body.append(actions);
+    form.append(body);
+  }
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    action(async () => {
+      // What a failed save left saved shows as well.
+      try {
+        await save();
+      } finally {
+        rerender();
+      }
+    }, tr(savedNotice));
+  };
+  return form;
+}
+/// Every pool's Sub2api provider forms and the CLIProxyAPI ones, or one
+/// pool's.
 function renderProviders(target = null) {
   if (target === null) {
     for (const each of PROVIDER_POOLS) renderProviders(each);
+    renderCliProxyApiProviders();
     return;
   }
   const providers = providerControllers[target];
   const root = $(`${target === "codex" ? "" : `${target}-`}provider-forms`);
   const rerender = () => renderProviders(target);
-  root.replaceChildren();
-  for (const [id, provider] of providers.providers) {
-    const saved = providers.isSaved(id);
-    const form = el("form", "provider-form");
-    const header = el("div", "row provider-header");
-    const toggle = button("", null, "provider-toggle", () => {
-      if (expandedProviders.has(id)) expandedProviders.delete(id);
-      else expandedProviders.add(id);
-      rerender();
-    });
-    toggle.type = "button";
-    toggle.setAttribute("aria-expanded", String(expandedProviders.has(id)));
-    const chevron = icon("chevron-down");
-    chevron.classList.add("provider-chevron");
-    if (!expandedProviders.has(id)) chevron.classList.add("collapsed");
-    toggle.append(
-      chevron,
-      brandIcon(target),
-      el("span", "", providers.name(provider) || "Sub2api"),
-    );
-    const remove = button("", "trash", "icon-btn", () =>
-      action(
-        async () => {
-          await providers.remove(id);
-          expandedProviders.delete(id);
-          rerender();
+  root.replaceChildren(
+    ...providers.forms().map(([id, provider]) => {
+      const saved = providers.isSaved(id);
+      return providerForm({
+        key: `${target}:${id}`,
+        title: providers.name(provider) || P.providerTitle(provider.kind),
+        brand: brandIcon(target),
+        saved,
+        provider,
+        remove: () => providers.remove(id),
+        removed: providers.savedNotice(),
+        save: () => providers.save(id),
+        savedNotice: providers.savedNotice(),
+        rerender,
+        fill(body) {
+          const mode = target === "claude" ? claudeProviderMode(body, provider, rerender) : null;
+          const credentials = el("div", "provider-credentials");
+          for (const [key, label, type, keep] of providers.fields(provider, mode)) {
+            const group = key === "username" || key === "password" ? credentials : body;
+            providerField(group, provider, key, label, type, saved, keep);
+            if (key === "settings") settingsFileButton(body.lastElementChild, provider, rerender);
+          }
+          body.append(credentials);
         },
-        saved ? tr("settings.notice.sub2api_saved") : undefined,
-      ),
-    );
-    remove.type = "button";
-    remove.title = tr("settings.sub2api.remove_provider");
-    remove.setAttribute("aria-label", remove.title);
-    header.append(toggle, remove);
-    form.append(header);
-    if (expandedProviders.has(id)) {
-      const body = el("div", "provider-body");
-      let fields = providers.form.fields;
-      if (target === "claude") {
-        const mode = claudeProviderMode(body, provider, rerender);
-        fields = [...providers.form.sourceFields[mode], ...fields];
-      }
-      const credentials = el("div", "provider-credentials");
-      for (const [key, label, type] of fields) {
-        const group = key === "username" || key === "password" ? credentials : body;
-        providerField(group, provider, key, `settings.sub2api.${label}`, type, saved);
-        if (key === "settings")
-          settingsFileButton(body.lastElementChild, provider, rerender);
-      }
-      body.append(credentials);
-      const row = el("label", "row");
-      row.append(
-        el("span", "row-label", tr("settings.sub2api.allow_insecure_tls")),
-      );
-      const check = el("input", "switch");
-      check.type = "checkbox";
-      check.checked = !!provider.allowInsecureTLS;
-      check.onchange = () => (provider.allowInsecureTLS = check.checked);
-      row.append(check);
-      const actions = el("div", "provider-save");
-      const save = button(tr("common.save"), null, "btn primary");
-      save.type = "submit";
-      actions.append(row, save);
-      body.append(actions);
-      form.append(body);
-    }
-    form.onsubmit = (event) => {
-      event.preventDefault();
-      action(async () => {
-        await providers.save(id);
-        rerender();
-      }, tr("settings.notice.sub2api_saved"));
-    };
-    root.append(form);
-  }
+      });
+    }),
+  );
+}
+/// The CLIProxyAPI providers' forms, one each for every pool: what the
+/// pools share, then each pool's switch.
+function renderCliProxyApiProviders() {
+  const root = $("cliproxyapi-provider-forms");
+  const rerender = renderCliProxyApiProviders;
+  root.replaceChildren(
+    ...[...cliProxyApiProviders.providers].map(([id, provider]) => {
+      const saved = cliProxyApiProviders.isSaved(id);
+      return providerForm({
+        key: `cliproxyapi:${id}`,
+        title: provider.name || P.providerTitle("cliproxyapi"),
+        brand: null,
+        saved,
+        provider,
+        remove: async () => {
+          await cliProxyApiProviders.remove(id);
+          if (saved) await providersChanged();
+        },
+        removed: "settings.notice.cliproxyapi_saved",
+        save: async () => {
+          await cliProxyApiProviders.save(id);
+          await providersChanged();
+        },
+        savedNotice: "settings.notice.cliproxyapi_saved",
+        rerender,
+        fill(body) {
+          for (const [key, label, type] of cliProxyApiProviders.fields())
+            providerField(body, provider, key, label, type, saved, "settings.cliproxyapi.management_key_keep");
+          body.append(el("p", "provider-hint", tr("settings.cliproxyapi.codex_hint")));
+          for (const [pool, fields] of cliProxyApiProviders.poolFields()) {
+            const heading = el("div", "provider-pool");
+            heading.append(brandIcon(pool), el("span", "", tr(`pool.${pool}`)));
+            body.append(heading);
+            for (const [key, label] of fields)
+              providerField(body, provider.pools[pool], key, label, "text", saved, null, {
+                optional: true,
+                placeholder: key === "baseURL" ? "settings.cliproxyapi.base_url_placeholder" : null,
+              });
+          }
+        },
+      });
+    }),
+  );
+}
+/// Every pool's providers read again after a CLIProxyAPI provider, which
+/// they share, is saved or removed: their import menus list it.
+async function providersChanged() {
+  await Promise.all(PROVIDER_POOLS.map((pool) => providerControllers[pool].load()));
 }
 /// Imports the accounts of one provider, restoring removed cards.
 async function syncProvider(target, key) {
@@ -227,7 +293,11 @@ async function syncProvider(target, key) {
       const count = await invoke("refresh_provider", { pool: target, id: key, sync: true });
       // The cards' providers, as the sync left them.
       await providerControllers[target].load();
-      notice(tr("accounts.notice.sub2api_imported_format", count));
+      const synced =
+        providerControllers[target].find(key)?.kind === "cliproxyapi"
+          ? "accounts.notice.cliproxyapi_imported_format"
+          : "accounts.notice.sub2api_imported_format";
+      notice(tr(synced, count));
     }));
   } finally {
     controller.importing = false;
@@ -249,11 +319,12 @@ async function initializeFeatures() {
   ]);
   // A pool's provider store that cannot be read must not keep the rest of
   // the app from rendering.
-  await Promise.all(
-    PROVIDER_POOLS.map((target) =>
+  await Promise.all([
+    ...PROVIDER_POOLS.map((target) =>
       providerControllers[target].load().catch((error) => notice(error, true)),
     ),
-  );
+    cliProxyApiProviders.load().catch((error) => notice(error, true)),
+  ]);
   renderProviders();
   const none = el("option", "", tr("common.none"));
   none.value = "";
@@ -351,9 +422,15 @@ $("provider-add").onclick = ({ currentTarget: trigger }) => {
   }
   showMenu(trigger, P.providerAddMenu(tr, brandIcon, addProvider));
 };
-/// A new provider's form opens, ready to fill in.
-function addProvider(target) {
-  expandedProviders.add(providerControllers[target].add());
+/// A new provider's form opens, ready to fill in: a Sub2api one in its
+/// pool, a CLIProxyAPI one, which every pool shares, in none.
+function addProvider(target, kind) {
+  if (kind === "cliproxyapi") {
+    expandedProviders.add(`cliproxyapi:${cliProxyApiProviders.add()}`);
+    renderCliProxyApiProviders();
+    return;
+  }
+  expandedProviders.add(`${target}:${providerControllers[target].add()}`);
   renderProviders(target);
 }
 /// Adds an account, signs one in again, or authorizes a pending workspace,

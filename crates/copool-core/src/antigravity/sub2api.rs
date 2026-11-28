@@ -16,7 +16,9 @@ use crate::{
     application::{Application, SwitchExecution},
     env_bridge::{self, Bridge, Expect},
     pool::Pool,
-    provider_registry::{embeds_record, strip_suffix, upstream, Adapter, ProviderRecord, Route},
+    provider_registry::{
+        embeds_record, strip_suffix, upstream, Adapter, Kind, ProviderRecord, Route,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -57,12 +59,17 @@ embeds_record!(Provider);
 fn root(url: &str) -> String {
     strip_suffix(url, &["/antigravity"])
 }
-/// agy's gateway at a provider, its `GOOGLE_GEMINI_BASE_URL`.
+/// agy's gateway at a provider, its `GOOGLE_GEMINI_BASE_URL`: Sub2api's
+/// `/antigravity`, which serves only these accounts; CLIProxyAPI's root,
+/// whose Gemini API routes to them by model.
 pub(super) fn gateway(p: &Provider) -> Result<String> {
     if p.base_url.is_empty() {
         return Err(CONFIGURATION_INCOMPLETE.into());
     }
-    Ok(format!("{}/antigravity", p.base_url))
+    Ok(match p.kind {
+        Kind::Sub2api => format!("{}/antigravity", p.base_url),
+        Kind::CliProxyApi => p.base_url.clone(),
+    })
 }
 /// The variable holding a provider's key.
 pub(super) fn key_variable(p: &Provider) -> &str {

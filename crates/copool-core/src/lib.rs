@@ -62,6 +62,7 @@ mod repository;
 #[path = "../../../resources/proxyd-src/src/proxy_session.rs"]
 mod proxy_session;
 
+mod cliproxyapi;
 pub mod credentials;
 pub mod sub2api;
 mod vault;

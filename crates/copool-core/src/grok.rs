@@ -19,6 +19,7 @@ use serde_json::Value;
 use std::{fs, path::PathBuf, sync::Arc};
 
 mod api;
+pub(crate) mod cliproxyapi;
 mod sub2api;
 pub(crate) use sub2api::ProviderAdapter;
 
@@ -334,7 +335,7 @@ async fn renew(network: &dyn Network, document: &mut Value, proxy: &str) -> Resu
     renewed.apply(document);
     Ok(renewed)
 }
-async fn fetch_usage(
+pub(crate) async fn fetch_usage(
     network: &dyn Network,
     token: &str,
     proxy: &str,

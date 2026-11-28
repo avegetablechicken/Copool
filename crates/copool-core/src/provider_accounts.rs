@@ -1,4 +1,5 @@
-//! An unofficial provider's accounts, whatever its kind, as cards of a pool: what an account keeps, the cards a
+//! An unofficial provider's accounts, whatever its kind (Sub2api,
+//! CLIProxyAPI), as cards of a pool: what an account keeps, the cards a
 //! provider's accounts make, how a refresh's accounts are taken, and the
 //! form every kind's provider is checked by.
 use crate::{
@@ -23,6 +24,10 @@ pub struct Account {
     pub usage_error: Option<String>,
     #[serde(default, rename = "providerID", alias = "providerId")]
     pub provider_id: Option<String>,
+    /// The CLIProxyAPI credential the account is, by its `auth_index`;
+    /// none for a Sub2api account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
     /// The provider's Sub2api version, for an Antigravity or Grok account,
     /// when it predates the pool's weekly usage (`weekly_since`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -126,8 +131,16 @@ pub(crate) fn card_provider(pool: Pool, id: &str) -> Option<&str> {
     let (provider, account) = id.strip_prefix(card_prefix(pool))?.rsplit_once('-')?;
     account.parse::<i64>().ok().map(|_| provider)
 }
-/// Where the keyring keeps a provider's secret: Sub2api's administrator
-/// password.
+/// Where the keyring keeps a provider's secret: a pool's Sub2api
+/// administrator password, or the management key of a CLIProxyAPI provider,
+/// which every pool shares.
+pub(crate) fn provider_secret(pool: Pool, kind: Kind, id: &str) -> String {
+    match kind {
+        Kind::Sub2api => password_secret(pool, id),
+        Kind::CliProxyApi => crate::cliproxyapi::shared::key_secret(id),
+    }
+}
+/// Where the keyring keeps a pool's Sub2api provider's password.
 pub(crate) fn password_secret(pool: Pool, id: &str) -> String {
     match pool {
         Pool::Codex => format!("codex-sub2api-password:{id}"),
@@ -198,6 +211,11 @@ impl Member {
         };
         self.cached.retain(|a| !missing(a));
         for account in fetched {
+            // Refreshing some cards leaves the others as they were, whatever
+            // else the provider answered.
+            if ids.is_some_and(|ids| !ids.contains(&account.id)) {
+                continue;
+            }
             if !self.imported.contains(&account.id) {
                 // Refreshing some cards adds none: one removed while the
                 // request ran stays removed.
@@ -217,6 +235,7 @@ impl Member {
 /// Checks a provider form: its name unique in the pool, its sign-in
 /// complete (a saved provider keeps its secret), and its proxy and URLs.
 pub(crate) fn validate_form(
+    kind: Kind,
     name: &str,
     duplicate: bool,
     username: &str,
@@ -228,7 +247,9 @@ pub(crate) fn validate_form(
     if duplicate {
         return Err("error.sub2api.duplicate_provider".into());
     }
-    if name.is_empty() || username.is_empty() || (password.is_empty() && !saved) {
+    // CLIProxyAPI signs in with its management key alone.
+    let signed_in = kind == Kind::CliProxyApi || !username.is_empty();
+    if name.is_empty() || !signed_in || (password.is_empty() && !saved) {
         return Err("error.sub2api.configuration_incomplete".into());
     }
     crate::utils::validate_account_proxy(proxy)?;
@@ -279,6 +300,38 @@ mod tests {
         // A refresh of every card still adds the accounts it discovers.
         member.adopt(vec![account(43, 30.), account(44, 0.)], None, false);
         assert_eq!(member.imported, [43, 44]);
+    }
+
+    // A provider answering a one-card refresh with its other cards, unread,
+    // leaves them as they were.
+    #[test]
+    fn refreshing_one_card_keeps_the_others_readings() {
+        let mut member = Member {
+            kind: Kind::CliProxyApi,
+            key: "p".into(),
+            name: "p".into(),
+            proxy_url: String::new(),
+            imported: vec![42, 43],
+            removed: vec![],
+            cached: vec![account(42, 10.), account(43, 10.)],
+        };
+        let mut unread = account(43, 0.);
+        unread.usage = None;
+        member.adopt(vec![account(42, 20.), unread], Some(&[42]), false);
+        let used: Vec<_> = member
+            .cached
+            .iter()
+            .map(|a| {
+                a.usage
+                    .as_ref()
+                    .unwrap()
+                    .five_hour
+                    .as_ref()
+                    .unwrap()
+                    .used_percent
+            })
+            .collect();
+        assert_eq!(used, [20., 10.]);
     }
 
     #[test]

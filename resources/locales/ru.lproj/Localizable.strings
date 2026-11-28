@@ -606,3 +606,19 @@
 "accounts.window.sub2api_grok_weekly_upgrade" = "Обновите Sub2api до версии 0.1.155 или новее, чтобы его увидеть.";
 
 "accounts.refresh.interval_format" = "Обновление каждые %@";
+
+"settings.cliproxyapi.name" = "Название";
+"settings.cliproxyapi.name_placeholder" = "Название этого поставщика CLIProxyAPI";
+"settings.cliproxyapi.management_base_url" = "Адрес управления";
+"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
+"settings.cliproxyapi.management_key" = "Ключ управления";
+"settings.cliproxyapi.management_key_placeholder" = "Секретный ключ remote-management CLIProxyAPI";
+"settings.cliproxyapi.management_key_keep" = "Оставьте пустым, чтобы сохранить сохранённый ключ";
+"settings.cliproxyapi.codex_hint" = "Codex переключается на поставщика моделей с этим именем в config.toml.";
+"settings.cliproxyapi.base_url_placeholder" = "Пусто: сайт управления";
+"settings.notice.cliproxyapi_saved" = "Настройки поставщика CLIProxyAPI сохранены";
+"accounts.notice.cliproxyapi_imported_format" = "Синхронизировано аккаунтов CLIProxyAPI: %@";
+"accounts.notice.cliproxyapi_removed" = "Аккаунт CLIProxyAPI удалён из Copool";
+"error.cliproxyapi.management_unavailable" = "API управления CLIProxyAPI недоступен: задайте remote-management.secret-key (и allow-remote для другого компьютера) и не запускайте его в режиме Home.";
+"error.cliproxyapi.management_key_refused" = "CLIProxyAPI отклонил ключ управления.";
+"error.cliproxyapi.duplicate_provider" = "Поставщик CLIProxyAPI с таким сайтом управления и ключом уже существует.";

@@ -8,7 +8,7 @@ type Response<'a, T> =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, String>> + Send + 'a>>;
 
 /// Tried in turn; the daily endpoint answers first, as for Antigravity.
-const CLOUD_BASES: [&str; 2] = [
+pub(crate) const CLOUD_BASES: [&str; 2] = [
     crate::proxy_service::antigravity::CLOUD_BASE,
     "https://cloudcode-pa.googleapis.com",
 ];

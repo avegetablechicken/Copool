@@ -7,7 +7,7 @@ use crate::{
     models::AccountSummary,
     pool::Pool,
     provider_accounts::{Account, Member},
-    provider_registry::Connection,
+    provider_registry::{Connection, Kind},
     repository,
     settings::Settings,
     utils::now_unix_seconds,
@@ -95,22 +95,48 @@ impl Application {
     pub async fn save_provider(&self, pool: Pool, draft: Value) -> Result<Value> {
         self.registry(pool).save(draft).await
     }
+    /// Gives every pool but `from` what every pool shares of a CLIProxyAPI
+    /// provider, as just saved, for what reads a pool's store as kept (its
+    /// switch, its local API proxy). A pool that cannot take it yet reads it
+    /// all the same through its registry, and takes it with its next edit.
+    pub(crate) async fn spread_cliproxyapi(&self, id: &str, from: Pool) {
+        let shared = match self.cliproxyapi_providers() {
+            Ok(all) => all.into_iter().find(|s| s.id == id),
+            Err(error) => {
+                log::warn!("The CLIProxyAPI providers are unreadable: {error}");
+                return;
+            }
+        };
+        let Some(shared) = shared else { return };
+        for pool in Pool::ALL.into_iter().filter(|p| *p != from) {
+            if let Err(error) = self.registry(pool).take_shared(&shared).await {
+                log::warn!("{pool:?} keeps an older CLIProxyAPI provider: {error}");
+            }
+        }
+    }
+    /// Removes a provider; a CLIProxyAPI one, which every pool shares,
+    /// from every pool.
     pub async fn remove_provider(&self, pool: Pool, id: &str) -> Result<()> {
-        self.registry(pool).remove(id).await
+        let shared = self.cliproxyapi_providers()?.iter().any(|s| s.id == id);
+        self.registry(pool).remove(id).await?;
+        if shared {
+            for other in Pool::ALL.into_iter().filter(|p| *p != pool) {
+                self.registry(other).forget(id).await?;
+            }
+        }
+        Ok(())
     }
     /// Keeps a form's password in the keyring, never in the settings; a
     /// blank one keeps the saved one, which is never read while editing.
     pub(crate) async fn store_provider_password(
         &self,
-        pool: Pool,
-        id: &str,
+        key: String,
         password: String,
     ) -> Result<()> {
         if password.is_empty() {
             return Ok(());
         }
         let secrets = self.secrets.clone();
-        let key = crate::provider_accounts::password_secret(pool, id);
         tokio::task::spawn_blocking(move || secrets.set(&key, &password))
             .await
             .map_err(|e| e.to_string())?
@@ -203,26 +229,42 @@ impl Application {
             .await
             .map(|_| ())
     }
-    /// Says hi through Sub2api's connection test of the card's account: to
-    /// the windows an Antigravity card's hi starts (`third_party` as
-    /// `say_hi_to` takes it), each tested apart.
+    /// Says hi through the card's account at its provider: Sub2api's
+    /// connection test of it, or CLIProxyAPI's inference check of it. An
+    /// Antigravity card's says it to the windows its hi starts
+    /// (`third_party` as `say_hi_to` takes it): through Sub2api's test of
+    /// each one's model, or Cloud Code through CLIProxyAPI's relay.
     pub(crate) async fn say_hi_through_provider(
         &self,
         pool: Pool,
         id: &str,
         third_party: Option<bool>,
     ) -> Result<()> {
-        match pool {
-            Pool::Codex => return Err(SAY_HI_REQUIRES_PLUS.into()),
-            Pool::Grok => return self.grok_unavailable(),
-            Pool::Claude | Pool::Antigravity => {}
+        if pool == Pool::Grok {
+            return self.grok_unavailable();
         }
-        let (member, account) = self.card(pool, id)?;
+        let card = self.card(pool, id);
+        // Sub2api's test of a Codex account starts no window.
+        if pool == Pool::Codex && card.as_ref().map_or(true, |(m, _)| m.kind == Kind::Sub2api) {
+            return Err(SAY_HI_REQUIRES_PLUS.into());
+        }
+        let (member, account) = card?;
+        if pool == Pool::Codex {
+            // As for the pool's own accounts: a hi starts only a Plus window.
+            crate::codex::greets(
+                account
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.plan_type.as_deref())
+                    .or(account.plan_type.as_deref()),
+            )?;
+        }
         match self.member_connection(pool, &member).await? {
             Connection::Sub2api(c) if pool == Pool::Antigravity => {
                 crate::antigravity::sub2api_hello(&c, &account, third_party).await
             }
             Connection::Sub2api(c) => c.test_account(account.id, crate::claude::HELLO_MODEL).await,
+            Connection::CliProxyApi(c) => c.say_hi(pool, &account, third_party).await,
         }
     }
     /// Refreshes the providers by key, every one without; returns their errors.

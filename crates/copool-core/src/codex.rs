@@ -5,6 +5,7 @@
 //! workspaces it has seen (`workspace_directory`). Its Sub2api
 //! providers are kept beside the accounts (`sub2api`).
 pub(crate) mod api;
+pub(crate) mod cliproxyapi;
 pub mod config;
 mod sub2api;
 #[cfg(test)]

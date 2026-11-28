@@ -302,6 +302,25 @@ async fn save_provider(
 async fn remove_provider(app: State<'_, App>, pool: Pool, id: String) -> Result<(), String> {
     app.remove_provider(pool, &id).await
 }
+/// The CLIProxyAPI providers every pool shares, without their keys.
+#[tauri::command]
+async fn cliproxyapi_providers(app: State<'_, App>) -> Result<serde_json::Value, String> {
+    let app = app.inner().clone();
+    tokio::task::spawn_blocking(move || app.cliproxyapi_provider_list())
+        .await
+        .map_err(|error| error.to_string())?
+}
+#[tauri::command]
+async fn save_cliproxyapi_provider(
+    app: State<'_, App>,
+    value: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    app.save_cliproxyapi_provider(value).await
+}
+#[tauri::command]
+async fn remove_cliproxyapi_provider(app: State<'_, App>, id: String) -> Result<(), String> {
+    app.remove_cliproxyapi_provider(&id).await
+}
 /// Refreshes a provider's cards; a sync adopts its accounts as they are.
 #[tauri::command]
 async fn refresh_provider(
@@ -772,6 +791,9 @@ fn main() {
             providers,
             save_provider,
             remove_provider,
+            cliproxyapi_providers,
+            save_cliproxyapi_provider,
+            remove_cliproxyapi_provider,
             refresh_provider,
             installed_editors,
             sync_agents,

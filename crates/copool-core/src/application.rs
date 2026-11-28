@@ -336,6 +336,8 @@ pub struct Application {
     /// Held to save a provider, whose password is kept apart from its
     /// record, and to read its connection: never one half saved.
     pub(crate) provider_saves: tokio::sync::RwLock<()>,
+    /// Held to edit the CLIProxyAPI providers every pool shares.
+    pub(crate) cliproxyapi_providers: std::sync::Mutex<()>,
     pub(crate) codex: crate::login_store::Locks,
     /// Reads of Codex's `auth.json` answer this late with what was there
     /// when asked.
@@ -424,6 +426,7 @@ impl Application {
             operations: Mutex::new(()),
             proxy_operations: Mutex::new(()),
             provider_saves: Default::default(),
+            cliproxyapi_providers: Default::default(),
             codex: Default::default(),
             #[cfg(test)]
             codex_live_read_delay_ms: Default::default(),

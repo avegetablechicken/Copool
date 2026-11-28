@@ -636,3 +636,19 @@
 "accounts.window.sub2api_grok_weekly_upgrade" = "Upgrade Sub2api to 0.1.155 or later to see it.";
 
 "accounts.refresh.interval_format" = "Refresh every %@";
+
+"settings.cliproxyapi.name" = "Name";
+"settings.cliproxyapi.name_placeholder" = "A name for this CLIProxyAPI provider";
+"settings.cliproxyapi.management_base_url" = "Management site";
+"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
+"settings.cliproxyapi.management_key" = "Management key";
+"settings.cliproxyapi.management_key_placeholder" = "CLIProxyAPI remote-management secret key";
+"settings.cliproxyapi.management_key_keep" = "Leave blank to keep the saved key";
+"settings.cliproxyapi.codex_hint" = "Codex switches to the model provider of this name in config.toml.";
+"settings.cliproxyapi.base_url_placeholder" = "Blank: the management site";
+"settings.notice.cliproxyapi_saved" = "CLIProxyAPI provider settings saved";
+"accounts.notice.cliproxyapi_imported_format" = "Synced %@ CLIProxyAPI accounts";
+"accounts.notice.cliproxyapi_removed" = "CLIProxyAPI account removed from Copool";
+"error.cliproxyapi.management_unavailable" = "CLIProxyAPI's management API is unavailable: set remote-management.secret-key (and allow-remote for another machine), and do not run it in Home mode.";
+"error.cliproxyapi.management_key_refused" = "CLIProxyAPI refused the management key.";
+"error.cliproxyapi.duplicate_provider" = "A CLIProxyAPI provider with this management site and key already exists.";

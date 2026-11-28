@@ -2512,8 +2512,37 @@ button.usage-reset:hover {
 #claude-provider-forms:not(:empty) + #antigravity-provider-forms > .provider-form:first-child,
 #provider-forms:not(:empty) ~ #grok-provider-forms > .provider-form:first-child,
 #claude-provider-forms:not(:empty) ~ #grok-provider-forms > .provider-form:first-child,
-#antigravity-provider-forms:not(:empty) + #grok-provider-forms > .provider-form:first-child {
+#antigravity-provider-forms:not(:empty) + #grok-provider-forms > .provider-form:first-child,
+#provider-forms:not(:empty) ~ #cliproxyapi-provider-forms > .provider-form:first-child,
+#claude-provider-forms:not(:empty) ~ #cliproxyapi-provider-forms > .provider-form:first-child,
+#antigravity-provider-forms:not(:empty) ~ #cliproxyapi-provider-forms > .provider-form:first-child,
+#grok-provider-forms:not(:empty) + #cliproxyapi-provider-forms > .provider-form:first-child {
   border-top: 0.5px solid var(--separator);
+}
+
+/* A CLIProxyAPI provider's form: what every pool shares, then each pool's switch. */
+.provider-hint,
+.provider-pool {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--secondary);
+}
+
+.provider-hint {
+  font-size: 0.92em;
+}
+
+.provider-pool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.provider-pool .provider-brand {
+  flex: none;
+  width: 12px;
+  height: 12px;
 }
 
 .provider-chevron.collapsed {

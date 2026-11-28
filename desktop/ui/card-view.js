@@ -170,13 +170,16 @@
     return lines.join("\n");
   }
 
-  /// Claude and Antigravity cards and official Codex Plus cards can say hi.
+  /// Claude and Antigravity cards and Codex Plus cards but Sub2api's can
+  /// say hi.
   function supportsSayHi(account, pool) {
     if (pool === "claude" || pool === "antigravity") return true;
     // Grok has no five-hour window to start.
     if (pool === "grok") return false;
     const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
-    return !P.isProviderCard(account) && plan === "plus";
+    // Sub2api's test starts no Codex window; a CLIProxyAPI credential's hi
+    // does, as the pool's own accounts' does.
+    return account.providerKind !== "sub2api" && plan === "plus";
   }
   /// Known usage with no future reset indicates an idle window; Antigravity's
   /// third-party (Claude) pool has its own, idle as well when reported so.
@@ -534,7 +537,8 @@
     const name = P.clean(account.email) || P.clean(account.accountId) || P.clean(account.label) || "";
     const ui = uiOf(ctx, account.id);
     // The CURRENT tag alone marks the active account, as in the SwiftUI card;
-    // a provider's group carries its SUB2API and CURRENT tags once.
+    // a provider's group carries its kind's tag (SUB2API, CLIPROXYAPI) and
+    // CURRENT once.
     const tags = [];
     if (account.planTag) tags.push({ className: "tag plan", text: account.planTag.label });
     if (account.workspaceTag && !grouped) tags.push({ className: "tag muted", text: account.workspaceTag });

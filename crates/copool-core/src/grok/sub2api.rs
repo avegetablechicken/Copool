@@ -420,6 +420,14 @@ impl Adapter for ProviderAdapter<'_> {
         if draft.base_url.is_empty() {
             return Err(CONFIGURATION_INCOMPLETE.into());
         }
+        // A CLIProxyAPI provider is every pool's: one Grok Build is not
+        // switched to yet names no variable, and its switch asks for one.
+        if draft.kind == crate::provider_registry::Kind::CliProxyApi
+            && draft.api_key_variable.trim().is_empty()
+        {
+            draft.api_key_variable.clear();
+            return Ok(());
+        }
         draft.api_key_variable = key_variable(draft)?.to_owned();
         Ok(())
     }

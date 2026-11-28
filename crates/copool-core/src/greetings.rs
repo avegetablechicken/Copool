@@ -1,5 +1,5 @@
 //! Persistent, per-account greetings. Timers belong to the service, not the webview.
-use crate::{persistence::write_json, AccountSummary, Application, Pool};
+use crate::{persistence::write_json, provider_registry::Kind, AccountSummary, Application, Pool};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
@@ -38,8 +38,8 @@ fn normalize_times(times: &mut Vec<String>) -> Result<()> {
     times.dedup();
     Ok(())
 }
-/// A card that may say hi: any Claude or Antigravity card; an official
-/// Codex Plus card; never a deleted one.
+/// A card that may say hi: any Claude or Antigravity card; a Codex Plus
+/// card, not a Sub2api provider's; never a deleted one.
 fn eligible(account: &AccountSummary, pool: Pool) -> bool {
     !account.awaiting_first_request
         && account.display_status != "deleted"
@@ -47,8 +47,10 @@ fn eligible(account: &AccountSummary, pool: Pool) -> bool {
             Pool::Claude | Pool::Antigravity => true,
             // Grok has no five-hour window to start.
             Pool::Grok => false,
+            // Sub2api's test starts no Codex window; a CLIProxyAPI
+            // credential's hi does, as the pool's own accounts' does.
             Pool::Codex => {
-                !crate::provider_accounts::is_card(pool, &account.id)
+                account.provider_kind.as_deref() != Some(Kind::Sub2api.name())
                     && account
                         .usage
                         .as_ref()

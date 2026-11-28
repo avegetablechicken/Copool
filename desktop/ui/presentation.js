@@ -672,8 +672,9 @@
     const space = editing && wanted > end ? Math.ceil(wanted - end) : 0;
     return { scrollTop: Math.max(0, Math.min(wanted, end + space)), space };
   }
-  /// Whether a card shows an unofficial provider's account, as the core
-  /// marks it: its provider owns its sign-in and proxy.
+  /// Whether a card shows an unofficial provider's account (Sub2api or
+  /// CLIProxyAPI), as the core marks it: its provider owns its sign-in and
+  /// proxy.
   function isProviderCard(account) {
     return !!account?.providerKind;
   }
@@ -865,18 +866,33 @@
       items.push({ label: tr("accounts.action.import_sub2api"), children: providers });
     return items;
   }
-  /// Adding an unofficial provider: Sub2API, then the pool whose form opens.
+  /// The kinds of unofficial provider, as the add menu names them.
+  const PROVIDER_KINDS = [
+    ["sub2api", "Sub2API"],
+    ["cliproxyapi", "CLIProxyAPI"],
+  ];
+  /// Adding an unofficial provider: its kind, then for Sub2api the pool
+  /// whose form opens.
   function providerAddMenu(tr, icon, add) {
-    return [
-      {
-        label: "Sub2API",
-        children: ACCOUNT_POOLS.map((pool) => ({
-          label: tr(`pool.${pool}`),
-          icon: icon(pool),
-          run: () => add(pool),
-        })),
-      },
-    ];
+    return PROVIDER_KINDS.map(([kind, label]) =>
+      // A CLIProxyAPI server lists every pool's credentials: its provider is
+      // every pool's.
+      kind === "cliproxyapi"
+        ? { label, run: () => add(null, kind) }
+        : {
+            label,
+            children: ACCOUNT_POOLS.map((pool) => ({
+              label: tr(`pool.${pool}`),
+              icon: icon(pool),
+              run: () => add(pool, kind),
+            })),
+          },
+    );
+  }
+  /// The title of a provider without a name, by its kind: Sub2api's for
+  /// one saved before kinds existed.
+  function providerTitle(kind) {
+    return kind === "cliproxyapi" ? "CLIProxyAPI" : "Sub2api";
   }
   return {
     ACCOUNT_POOLS,
@@ -893,6 +909,7 @@
     providerAddMenu,
     heldScroll,
     isProviderCard,
+    providerTitle,
     providerKey,
     proxyOwner,
     formatLocalized,

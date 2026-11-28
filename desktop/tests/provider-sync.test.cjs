@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { Providers } = require("../ui/controllers.js");
+const { Providers, CliProxyApiProviders } = require("../ui/controllers.js");
 const P = require("../ui/presentation.js");
 const Menus = require("../ui/menus.js");
 test("Import shows provider sync only for pools with saved providers", () => {
@@ -36,15 +36,106 @@ test("Import shows provider sync only for pools with saved providers", () => {
   assert.deepEqual(calls, [["claude", "c2"], ["codex", "x1"]]);
 });
 
-test("Add unofficial provider offers the pools as children of Sub2API", () => {
+test("Add unofficial provider offers the pools of Sub2api, and CLIProxyAPI for every pool", () => {
   const added = [];
-  const items = P.providerAddMenu((key) => key, (pool) => pool, (pool) => added.push(pool));
-  assert.equal(items.length, 1);
-  assert.equal(items[0].label, "Sub2API");
-  assert.deepEqual(Array.from(items[0].children, (child) => child.label), P.ACCOUNT_POOLS.map((pool) => `pool.${pool}`));
-  assert.deepEqual(Array.from(items[0].children, (child) => child.icon), P.ACCOUNT_POOLS);
-  for (const child of items[0].children) child.run();
-  assert.deepEqual(added, P.ACCOUNT_POOLS);
+  const items = P.providerAddMenu((key) => key, (pool) => pool, (pool, kind) => added.push([kind, pool]));
+  assert.deepEqual(Array.from(items, (item) => item.label), ["Sub2API", "CLIProxyAPI"]);
+  const [sub2api, cpa] = items;
+  assert.deepEqual(Array.from(sub2api.children, (child) => child.label), P.ACCOUNT_POOLS.map((pool) => `pool.${pool}`));
+  assert.deepEqual(Array.from(sub2api.children, (child) => child.icon), P.ACCOUNT_POOLS);
+  for (const child of sub2api.children) child.run();
+  assert.equal(cpa.children, undefined);
+  cpa.run();
+  assert.deepEqual(added, [...P.ACCOUNT_POOLS.map((pool) => ["sub2api", pool]), ["cliproxyapi", null]]);
+});
+
+test("A pool's forms are its Sub2api providers', signed in by an administrator", () => {
+  globalThis.crypto ??= require("node:crypto").webcrypto;
+  for (const pool of P.ACCOUNT_POOLS) {
+    const providers = new Providers(null, pool);
+    const id = providers.add();
+    const sub2api = providers.providers.get(id);
+    // A Sub2api form is as it was before kinds existed.
+    assert.equal("kind" in sub2api, false, pool);
+    const mode = pool === "claude" ? "address" : null;
+    const fields = providers.fields(sub2api, mode);
+    assert.ok(fields.some(([key]) => key === "username"), pool);
+    assert.ok(fields.every(([, label]) => label.startsWith("settings.sub2api.")), pool);
+    assert.ok(fields.every(([, , , keep]) => keep === "settings.sub2api.password_keep"), pool);
+    assert.equal(providers.savedNotice(), "settings.notice.sub2api_saved");
+    // A CLIProxyAPI provider's cards show here, but its form is every pool's.
+    providers.accept([{ id: "cpa", kind: "cliproxyapi", name: "Relay" }]);
+    assert.deepEqual(providers.forms().map(([key]) => key), [id], pool);
+    assert.deepEqual(providers.syncChoices(() => {}).map((c) => c.label), ["Relay"]);
+  }
+});
+
+test("A CLIProxyAPI form is every pool's: what they share, each pool's switch, and its key kept", async () => {
+  globalThis.crypto ??= require("node:crypto").webcrypto;
+  const calls = [];
+  let saved = null;
+  const invoke = async (name, args) => {
+    calls.push([name, structuredClone(args)]);
+    if (name === "cliproxyapi_providers") return saved ? [saved] : [];
+    if (name === "save_cliproxyapi_provider") {
+      saved = { ...args.value, id: args.value.id || "cpa-1" };
+      delete saved.password;
+      return saved;
+    }
+  };
+  const providers = new CliProxyApiProviders(invoke);
+  await providers.load();
+  assert.deepEqual(providers.fields().map(([key]) => key), ["name", "adminBaseURL", "password"]);
+  assert.equal(providers.fields()[2][1], "settings.cliproxyapi.management_key");
+  // Codex switches to the provider of its name in config.toml.
+  assert.deepEqual(providers.poolFields().map(([pool]) => pool), ["claude", "antigravity", "grok"]);
+  const id = providers.add();
+  const form = providers.providers.get(id);
+  assert.equal(form.kind, "cliproxyapi");
+  Object.assign(form, { name: "Relay", adminBaseURL: "http://a:8317", password: "key" });
+  form.pools.grok.apiKeyVariable = "CPA_KEY";
+  await providers.save(id);
+  const [, { value }] = calls.find(([name]) => name === "save_cliproxyapi_provider");
+  // A new one is named by the core.
+  assert.equal(value.id, "");
+  assert.equal(value.password, "key");
+  assert.deepEqual(value.pools.grok, { baseURL: "", apiKeyVariable: "CPA_KEY" });
+  assert.deepEqual([...providers.providers.keys()], ["cpa-1"]);
+  // Saved, its key is blank in the form, which keeps it.
+  assert.equal(providers.providers.get("cpa-1").password, "");
+  assert.equal(providers.providers.get("cpa-1").pools.grok.apiKeyVariable, "CPA_KEY");
+  assert.equal(providers.isSaved("cpa-1"), true);
+  assert.equal(providers.notice, "settings.notice.cliproxyapi_saved");
+  await providers.remove("cpa-1");
+  assert.deepEqual(calls.at(-1), ["remove_cliproxyapi_provider", { id: "cpa-1" }]);
+  assert.equal(providers.providers.size, 0);
+});
+
+test("A failed CLIProxyAPI save shows what it left saved", async () => {
+  globalThis.crypto ??= require("node:crypto").webcrypto;
+  let listed = [];
+  const providers = new CliProxyApiProviders(async (name) => {
+    if (name === "cliproxyapi_providers") return listed;
+    listed = [{ id: "half", kind: "cliproxyapi", name: "Relay", pools: {} }];
+    throw new Error("disk full");
+  });
+  const id = providers.add();
+  await assert.rejects(providers.save(id), /disk full/);
+  assert.equal(providers.isSaved("half"), true);
+  assert.ok(providers.providers.has("half"));
+  assert.equal(providers.notice, "disk full");
+});
+
+test("A provider card without its provider's name is titled by its kind", () => {
+  const providers = new Providers(null, "claude");
+  const card = (kind) => ({ id: "claude-sub2api-p-1", providerKind: kind, refresh: { key: "sub2api:p" } });
+  providers.persisted = [];
+  assert.equal(providers.cardTitle(card("sub2api")), "p");
+  const unnamed = { id: "x", providerKind: "cliproxyapi" };
+  assert.equal(providers.cardTitle(unnamed), "CLIProxyAPI");
+  assert.equal(providers.cardTitle({ id: "x", providerKind: "sub2api" }), "Sub2api");
+  assert.equal(P.isProviderCard(unnamed), true);
+  assert.equal(P.isProviderCard({ id: "x" }), false);
 });
 
 test("Menu hover suppresses stale focus without moving focus; keyboard restores it", () => {

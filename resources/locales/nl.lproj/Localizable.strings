@@ -606,3 +606,19 @@
 "accounts.window.sub2api_grok_weekly_upgrade" = "Werk Sub2api bij naar 0.1.155 of later om het te zien.";
 
 "accounts.refresh.interval_format" = "Elke %@ vernieuwen";
+
+"settings.cliproxyapi.name" = "Naam";
+"settings.cliproxyapi.name_placeholder" = "Een naam voor deze CLIProxyAPI-provider";
+"settings.cliproxyapi.management_base_url" = "Beheeradres";
+"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
+"settings.cliproxyapi.management_key" = "Beheersleutel";
+"settings.cliproxyapi.management_key_placeholder" = "Geheime remote-management-sleutel van CLIProxyAPI";
+"settings.cliproxyapi.management_key_keep" = "Laat leeg om de opgeslagen sleutel te behouden";
+"settings.cliproxyapi.codex_hint" = "Codex schakelt over naar de modelprovider met deze naam in config.toml.";
+"settings.cliproxyapi.base_url_placeholder" = "Leeg: de beheersite";
+"settings.notice.cliproxyapi_saved" = "CLIProxyAPI-providerinstellingen opgeslagen";
+"accounts.notice.cliproxyapi_imported_format" = "%@ CLIProxyAPI-accounts gesynchroniseerd";
+"accounts.notice.cliproxyapi_removed" = "CLIProxyAPI-account uit Copool verwijderd";
+"error.cliproxyapi.management_unavailable" = "De beheer-API van CLIProxyAPI is niet beschikbaar: stel remote-management.secret-key in (en allow-remote voor een andere computer) en draai het niet in Home-modus.";
+"error.cliproxyapi.management_key_refused" = "CLIProxyAPI heeft de beheersleutel geweigerd.";
+"error.cliproxyapi.duplicate_provider" = "Er bestaat al een CLIProxyAPI-provider met deze beheersite en sleutel.";

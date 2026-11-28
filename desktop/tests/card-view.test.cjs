@@ -646,6 +646,14 @@ test("Antigravity cards say hi, its Sub2api cards too; Grok never does", () => {
   assert.equal(V.supportsSayHi({ id: "a" }, "antigravity"), true);
   assert.equal(V.supportsSayHi({ id: "antigravity-sub2api-p-1", sourceTag: "SUB2API", providerKind: "sub2api" }, "antigravity"), true);
   assert.equal(V.supportsSayHi({ id: "claude-sub2api-p-1", sourceTag: "SUB2API", providerKind: "sub2api" }, "claude"), true);
+  // A CLIProxyAPI credential's hi starts its windows as the pool's own do.
+  const cpa = { id: "sub2api-p-1", sourceTag: "CLIPROXYAPI", providerKind: "cliproxyapi" };
+  assert.equal(V.supportsSayHi({ ...cpa, planType: "plus" }, "codex"), true);
+  assert.equal(V.supportsSayHi({ ...cpa, planType: "pro" }, "codex"), false);
+  assert.equal(V.supportsSayHi({ ...cpa, planType: "plus", providerKind: "sub2api" }, "codex"), false);
+  assert.equal(V.supportsSayHi(cpa, "claude"), true);
+  assert.equal(V.supportsSayHi(cpa, "antigravity"), true);
+  assert.equal(V.supportsSayHi(cpa, "grok"), false);
   assert.equal(V.supportsSayHi({ id: "g" }, "grok"), false);
 });
 

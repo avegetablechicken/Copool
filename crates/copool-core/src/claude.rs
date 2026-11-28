@@ -31,6 +31,7 @@ mod api;
 mod provider_config;
 use api::Http;
 pub(crate) use api::Network;
+pub(crate) mod cliproxyapi;
 mod proxy;
 mod refresh_lock;
 mod settings_source;

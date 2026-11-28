@@ -498,12 +498,16 @@ function accountProxy(account) {
     proxy ||= (preferences?.accountProxyUrl || "").trim();
   return proxy;
 }
-/// Removes an account, or all of a Sub2api provider's cards at once.
-async function removeCards(cards, sub2api) {
-  await action(
-    () => accountsController.removeAccounts(cards.map((a) => a.id)),
-    tr(sub2api ? "accounts.notice.sub2api_removed" : "accounts.notice.account_deleted"),
-  );
+/// Removes an account, or all of an unofficial provider's cards at once.
+async function removeCards(cards, provider) {
+  const providerRemoved = {
+    cliproxyapi: "accounts.notice.cliproxyapi_removed",
+    sub2api: "accounts.notice.sub2api_removed",
+  };
+  const removed = provider
+    ? providerRemoved[cards[0]?.providerKind] || providerRemoved.sub2api
+    : "accounts.notice.account_deleted";
+  await action(() => accountsController.removeAccounts(cards.map((a) => a.id)), tr(removed));
 }
 /// Asks before removing, as from a card's menu.
 async function confirmRemoval(cards, name, sub2api) {

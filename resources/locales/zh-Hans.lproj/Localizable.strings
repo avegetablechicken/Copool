@@ -636,3 +636,19 @@
 "accounts.window.sub2api_grok_weekly_upgrade" = "将 Sub2api 升级到 0.1.155 或更高版本后即可显示。";
 
 "accounts.refresh.interval_format" = "每%@刷新";
+
+"settings.cliproxyapi.name" = "名称";
+"settings.cliproxyapi.name_placeholder" = "为该 CLIProxyAPI 提供方命名";
+"settings.cliproxyapi.management_base_url" = "管理地址";
+"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
+"settings.cliproxyapi.management_key" = "管理密钥";
+"settings.cliproxyapi.management_key_placeholder" = "CLIProxyAPI 的 remote-management 密钥";
+"settings.cliproxyapi.management_key_keep" = "留空以保留已保存的密钥";
+"settings.cliproxyapi.codex_hint" = "Codex 会切换到 config.toml 中同名的模型提供方。";
+"settings.cliproxyapi.base_url_placeholder" = "留空则使用管理站点";
+"settings.notice.cliproxyapi_saved" = "CLIProxyAPI 提供方设置已保存";
+"accounts.notice.cliproxyapi_imported_format" = "已同步 %@ 个 CLIProxyAPI 账号";
+"accounts.notice.cliproxyapi_removed" = "已从 Copool 移除 CLIProxyAPI 账号";
+"error.cliproxyapi.management_unavailable" = "CLIProxyAPI 的管理 API 不可用：请设置 remote-management.secret-key（从其他机器访问还需开启 allow-remote），且不要以 Home 模式运行。";
+"error.cliproxyapi.management_key_refused" = "CLIProxyAPI 拒绝了该管理密钥。";
+"error.cliproxyapi.duplicate_provider" = "已存在管理站点和密钥都相同的 CLIProxyAPI 提供方。";

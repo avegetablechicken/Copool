@@ -156,7 +156,10 @@
       }),
     },
   };
-  /// One pool's Sub2api providers: those saved, and the forms editing them.
+  /// One pool's unofficial providers (Sub2api, CLIProxyAPI): those saved,
+  /// whose cards the pool shows, and the forms editing its Sub2api ones. A
+  /// CLIProxyAPI provider is every pool's, edited in one form
+  /// (`CliProxyApiProviders`).
   class Providers {
     constructor(invoke, pool = "codex", onUpdate = () => {}) {
       this.invoke = invoke;
@@ -186,7 +189,8 @@
     /// as one synced before the provider list was read names it.
     cardTitle(account) {
       const key = P.providerKey(account);
-      return (key !== null && this.name(this.find(key))) || key || "Sub2api";
+      const provider = key !== null ? this.find(key) : null;
+      return this.name(provider) || key || P.providerTitle(account?.providerKind);
     }
     /// The import menu's Sub2api choices: the saved providers, each syncing
     /// its cards with `sync(key)`.
@@ -229,11 +233,35 @@
       this.accept(await this.invoke("providers", { pool: this.pool }));
       return this.persisted;
     }
-    /// A new, unsaved form; returns its id.
+    /// The forms the pool's settings show: its Sub2api providers'.
+    forms() {
+      return [...this.providers].filter(([, provider]) => provider.kind !== "cliproxyapi");
+    }
+    /// A new, unsaved form of a Sub2api provider, saved as before kinds
+    /// existed, without one; returns its id.
     add() {
       const id = crypto.randomUUID();
       this.providers.set(id, { id, ...this.form.blank() });
       return id;
+    }
+    /// The fields of a Sub2api provider's form, as `[key, label, type,
+    /// keep]`: its pool's (a Claude provider's as its `mode` configures it),
+    /// and its administrator's sign-in. `keep` is the placeholder of a saved
+    /// secret.
+    fields(provider, mode) {
+      const own = this.form.sourceFields
+        ? [...this.form.sourceFields[mode], ...this.form.fields]
+        : this.form.fields;
+      return own.map(([key, label, type]) => [
+        key,
+        `settings.sub2api.${label}`,
+        type,
+        "settings.sub2api.password_keep",
+      ]);
+    }
+    /// The notice of a saved or removed provider.
+    savedNotice() {
+      return "settings.notice.sub2api_saved";
     }
     /// Replaces a form, in its place, by its saved provider.
     replace(id, saved) {
@@ -255,7 +283,7 @@
         const index = this.persisted.findIndex((p) => p.id === saved.id);
         if (index >= 0) this.persisted[index] = saved;
         else this.persisted.push(saved);
-        this.notice = "settings.notice.sub2api_saved";
+        this.notice = this.savedNotice(saved);
         this.onUpdate();
         return saved;
       } catch (error) {
@@ -269,11 +297,140 @@
       if (this.saving) return;
       this.saving = true;
       try {
+        const removed = this.providers.get(id);
         if (this.isSaved(id))
           await this.invoke("remove_provider", { pool: this.pool, id });
         this.providers.delete(id);
         this.persisted = this.persisted.filter((p) => p.id !== id);
-        this.notice = "settings.notice.sub2api_saved";
+        this.notice = this.savedNotice(removed);
+        this.onUpdate();
+      } catch (error) {
+        this.notice = messageOf(error);
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    }
+  }
+  /// The switch's fields each pool keeps of a CLIProxyAPI provider, as
+  /// `[key, label]` (cliproxyapi/shared.rs): Codex's is the provider of its
+  /// name in `config.toml`.
+  const CLIPROXYAPI_POOL_FIELDS = {
+    claude: [
+      ["baseURL", "settings.sub2api.claude_base_url"],
+      ["apiKeyVariable", "settings.sub2api.claude_api_key_variable"],
+    ],
+    antigravity: [
+      ["baseURL", "settings.sub2api.antigravity_base_url"],
+      ["apiKeyVariable", "settings.sub2api.antigravity_api_key_variable"],
+    ],
+    grok: [
+      ["baseURL", "settings.sub2api.grok_base_url"],
+      ["apiKeyVariable", "settings.sub2api.grok_api_key_variable"],
+    ],
+  };
+  /// The CLIProxyAPI providers, which every pool shares: those saved and
+  /// the forms editing them, each with what every pool shares of it and
+  /// each pool's switch (`pools`), any of which may be left blank.
+  class CliProxyApiProviders {
+    constructor(invoke, onUpdate = () => {}) {
+      this.invoke = invoke;
+      this.onUpdate = onUpdate;
+      this.providers = new Map();
+      this.persisted = [];
+      this.notice = null;
+      this.saving = false;
+    }
+    /// The fields of a form, as `[key, label, type]`.
+    fields() {
+      return [
+        ["name", "settings.cliproxyapi.name"],
+        ["adminBaseURL", "settings.cliproxyapi.management_base_url"],
+        ["password", "settings.cliproxyapi.management_key", "password"],
+      ];
+    }
+    /// The pools whose switch a form edits, with their fields.
+    poolFields() {
+      return Object.entries(CLIPROXYAPI_POOL_FIELDS);
+    }
+    blank(id) {
+      const pools = Object.fromEntries(
+        Object.entries(CLIPROXYAPI_POOL_FIELDS).map(([pool, fields]) => [
+          pool,
+          Object.fromEntries(fields.map(([key]) => [key, ""])),
+        ]),
+      );
+      return {
+        id,
+        kind: "cliproxyapi",
+        name: "",
+        adminBaseURL: "",
+        password: "",
+        allowInsecureTLS: false,
+        pools,
+      };
+    }
+    /// A form's draft of a saved provider, its key blank, which keeps it.
+    draft(saved) {
+      const draft = { ...this.blank(saved.id), ...structuredClone(saved), password: "" };
+      for (const [pool, fields] of Object.entries(CLIPROXYAPI_POOL_FIELDS))
+        for (const [key] of fields) draft.pools[pool] = { ...draft.pools[pool], [key]: saved.pools?.[pool]?.[key] || "" };
+      return draft;
+    }
+    isSaved(id) {
+      return this.persisted.some((p) => p.id === id);
+    }
+    /// Takes the saved providers; a form being edited keeps its edits.
+    accept(persisted) {
+      this.persisted = persisted;
+      for (const saved of persisted)
+        if (!this.providers.has(saved.id)) this.providers.set(saved.id, this.draft(saved));
+    }
+    async load() {
+      this.accept(await this.invoke("cliproxyapi_providers"));
+      return this.persisted;
+    }
+    /// A new, unsaved form; returns its id.
+    add() {
+      const id = crypto.randomUUID();
+      this.providers.set(id, this.blank(id));
+      return id;
+    }
+    async save(id) {
+      if (this.saving) return;
+      this.saving = true;
+      try {
+        const draft = structuredClone(this.providers.get(id));
+        // A new one is named by the core.
+        if (!this.isSaved(id)) draft.id = "";
+        const saved = await this.invoke("save_cliproxyapi_provider", { value: draft });
+        const entries = [...this.providers].map(([key, value]) =>
+          key === id ? [saved.id, this.draft(saved)] : [key, value],
+        );
+        this.providers = new Map(entries);
+        const index = this.persisted.findIndex((p) => p.id === saved.id);
+        if (index >= 0) this.persisted[index] = saved;
+        else this.persisted.push(saved);
+        this.notice = "settings.notice.cliproxyapi_saved";
+        this.onUpdate();
+        return saved;
+      } catch (error) {
+        this.notice = messageOf(error);
+        // What a failed save left saved shows, to be edited or removed.
+        await this.load().catch(() => {});
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    }
+    async remove(id) {
+      if (this.saving) return;
+      this.saving = true;
+      try {
+        if (this.isSaved(id)) await this.invoke("remove_cliproxyapi_provider", { id });
+        this.providers.delete(id);
+        this.persisted = this.persisted.filter((p) => p.id !== id);
+        this.notice = "settings.notice.cliproxyapi_saved";
         this.onUpdate();
       } catch (error) {
         this.notice = messageOf(error);
@@ -1430,5 +1587,5 @@
       }
     }
   }
-  return { Settings, Providers, Accounts, Proxy, PendingSave, poolInvoke };
+  return { Settings, Providers, CliProxyApiProviders, Accounts, Proxy, PendingSave, poolInvoke };
 });

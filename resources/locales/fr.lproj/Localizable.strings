@@ -606,3 +606,19 @@
 "accounts.window.sub2api_grok_weekly_upgrade" = "Mettez Sub2api à jour vers la version 0.1.155 ou ultérieure pour l’afficher.";
 
 "accounts.refresh.interval_format" = "Actualiser toutes les %@";
+
+"settings.cliproxyapi.name" = "Nom";
+"settings.cliproxyapi.name_placeholder" = "Un nom pour ce fournisseur CLIProxyAPI";
+"settings.cliproxyapi.management_base_url" = "Site d’administration";
+"settings.cliproxyapi.management_base_url_placeholder" = "http://127.0.0.1:8317";
+"settings.cliproxyapi.management_key" = "Clé d’administration";
+"settings.cliproxyapi.management_key_placeholder" = "Clé secrète remote-management de CLIProxyAPI";
+"settings.cliproxyapi.management_key_keep" = "Laisser vide pour conserver la clé enregistrée";
+"settings.cliproxyapi.codex_hint" = "Codex bascule vers le fournisseur de modèles de ce nom dans config.toml.";
+"settings.cliproxyapi.base_url_placeholder" = "Vide : le site de gestion";
+"settings.notice.cliproxyapi_saved" = "Réglages du fournisseur CLIProxyAPI enregistrés";
+"accounts.notice.cliproxyapi_imported_format" = "%@ comptes CLIProxyAPI synchronisés";
+"accounts.notice.cliproxyapi_removed" = "Compte CLIProxyAPI retiré de Copool";
+"error.cliproxyapi.management_unavailable" = "L’API d’administration de CLIProxyAPI est indisponible : définissez remote-management.secret-key (et allow-remote pour une autre machine) et ne l’exécutez pas en mode Home.";
+"error.cliproxyapi.management_key_refused" = "CLIProxyAPI a refusé la clé d’administration.";
+"error.cliproxyapi.duplicate_provider" = "Un fournisseur CLIProxyAPI avec ce site de gestion et cette clé existe déjà.";
