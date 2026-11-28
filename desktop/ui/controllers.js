@@ -372,7 +372,11 @@
       this.pendingGeneration = 0;
       this.loadGeneration = 0;
       this.loginGeneration = 0;
+      // The sign-in under way: its id once begun, the request beginning it
+      // until then, and the cancel of the one before while it is sent.
       this.loginId = null;
+      this.loginBeginning = null;
+      this.loginCancel = null;
       this.adding = false;
       this.authorizing = null;
       this.importing = false;
@@ -862,11 +866,18 @@
       const before = this.accounts;
       const generation = ++this.loginGeneration;
       try {
-        const id = await this.invoke("begin_login", { workspace });
-        if (generation !== this.loginGeneration) {
-          await this.invoke("cancel_login");
-          return false;
+        // A sign-in cancelled just before ends first, as the app has one at
+        // a time.
+        if (this.loginCancel) {
+          await this.loginCancel;
+          if (generation !== this.loginGeneration) return false;
         }
+        const beginning = this.invoke("begin_login", { workspace });
+        this.loginBeginning = beginning;
+        const id = await beginning;
+        // Cancelled meanwhile: cancelLogin ends it by its id.
+        if (generation !== this.loginGeneration) return false;
+        this.loginBeginning = null;
         this.loginId = id;
         started();
         await this.invoke("finish_login", { id });
@@ -896,19 +907,40 @@
       } finally {
         if (generation === this.loginGeneration) {
           this.loginId = null;
+          this.loginBeginning = null;
           this.adding = false;
           this.authorizing = null;
         }
         this.onUpdate();
       }
     }
+    /// Cancels the sign-in under way by its id, once it has one, so that a
+    /// sign-in begun after it is never the one cancelled.
     cancelLogin() {
       this.loginGeneration++;
+      const id = this.loginId;
+      const beginning = this.loginBeginning;
       this.loginId = null;
+      this.loginBeginning = null;
       this.adding = false;
       this.authorizing = null;
       this.onUpdate();
-      return this.invoke("cancel_login");
+      const cancel =
+        id !== null
+          ? this.invoke("cancel_login", { id })
+          : beginning
+            ? beginning.then(
+                (id) => this.invoke("cancel_login", { id }),
+                () => {},
+              )
+            : Promise.resolve();
+      const ended = cancel
+        .catch(() => {})
+        .then(() => {
+          if (this.loginCancel === ended) this.loginCancel = null;
+        });
+      this.loginCancel = ended;
+      return cancel;
     }
   }
   /// Each pool's API proxy: its own port and key, public tunnel and remote

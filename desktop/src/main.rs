@@ -376,10 +376,15 @@ async fn finish_login(
     }
     result
 }
+/// Cancels the sign-in of `id` only, so that a cancel arriving after a
+/// later sign-in began leaves that one alone.
 #[tauri::command]
-async fn cancel_login(state: State<'_, LoginState>) -> Result<(), String> {
-    if let Some(login) = state.0.lock().await.take() {
-        login.cancel();
+async fn cancel_login(state: State<'_, LoginState>, id: String) -> Result<(), String> {
+    let mut current = state.0.lock().await;
+    if current.as_ref().is_some_and(|login| login.id == id) {
+        if let Some(login) = current.take() {
+            login.cancel();
+        }
     }
     Ok(())
 }

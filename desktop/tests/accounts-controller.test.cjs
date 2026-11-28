@@ -399,7 +399,10 @@ async function cancellationCase(workspace) {
   assert.equal(model.adding, false);
   assert.equal(model.accounts.length, 1);
   assert.equal(db.mutations, 0);
-  assert.equal(db.calls.filter((c) => c[0] === "cancel_login").length, 1);
+  assert.deepEqual(
+    db.calls.filter((c) => c[0] === "cancel_login").map((c) => c[1]),
+    [{ id: "test-login" }],
+  );
 }
 legacy(
   "AccountsCoordinatorTests",
@@ -411,6 +414,63 @@ legacy(
   "testAccountsPageModelCancelPendingWorkspaceAuthorizationStopsPendingLoginTask",
   () => cancellationCase("account-b"),
 );
+test("a sign-in cancelled as it begins and retried at once cancels only the first", async () => {
+  // As the app's LoginState: one sign-in at a time, its commands taken in
+  // turn, and a cancel ending only the sign-in it names.
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const gates = {};
+  const cancelled = [];
+  let n = 0;
+  let live = null;
+  let lock = Promise.resolve();
+  const locked = (task) => {
+    const result = lock.then(task);
+    lock = result.catch(() => {});
+    return result;
+  };
+  const { model, db } = fixture([account("a")], [], {
+    begin_login: () => {
+      const id = `login-${++n}`;
+      return locked(async () => {
+        if (live) throw new Error("Login already in progress");
+        await new Promise((resolve) => (gates[id] = resolve));
+        live = id;
+        return id;
+      });
+    },
+    cancel_login: ({ id }) =>
+      locked(() => {
+        if (live === id) {
+          cancelled.push(id);
+          live = null;
+        }
+      }),
+    finish_login: ({ id }) =>
+      locked(() => {
+        if (live !== id) throw new Error("Login not found");
+        live = null;
+        return 1;
+      }),
+  });
+  const first = model.login();
+  await tick();
+  const cancel = model.cancelLogin();
+  const second = model.login();
+  gates["login-1"]();
+  await tick();
+  await tick();
+  gates["login-2"]();
+  const [firstResult, , secondResult] = await Promise.allSettled([first, cancel, second]);
+  assert.deepEqual(firstResult, { status: "fulfilled", value: false });
+  assert.equal(secondResult.status, "fulfilled", String(secondResult.reason));
+  assert.notEqual(secondResult.value, false);
+  assert.deepEqual(cancelled, ["login-1"]);
+  assert.deepEqual(
+    db.calls.filter(([command]) => command === "cancel_login").map(([, args]) => args),
+    [{ id: "login-1" }],
+  );
+  assert.equal(model.adding, false);
+});
 legacy(
   "AccountsCoordinatorTests",
   "testAccountsPageModelImportAuthDocumentAddsNewAccountWithoutChangingCurrentSelection",
