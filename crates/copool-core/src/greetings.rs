@@ -39,9 +39,10 @@ fn normalize_times(times: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 /// A card that may say hi: any Claude card; an Antigravity account's, not
-/// a Sub2api provider's; an official Codex Plus card.
+/// a Sub2api provider's; an official Codex Plus card; never a deleted one.
 fn eligible(account: &AccountSummary, pool: Pool) -> bool {
     !account.awaiting_first_request
+        && account.display_status != "deleted"
         && match pool {
             Pool::Claude => true,
             Pool::Antigravity => !crate::sub2api::is_card(pool, &account.id),

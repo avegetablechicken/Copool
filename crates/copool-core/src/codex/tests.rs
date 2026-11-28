@@ -593,3 +593,213 @@ async fn refreshing_the_whole_pool_leaves_out_a_deleted_account() {
     fixture.app.refresh_now(Pool::Codex, None).await.unwrap();
     assert_eq!(fixture.renewals(), 0);
 }
+#[tokio::test]
+async fn an_unsaved_renewal_gives_way_to_a_newer_login_saved_since() {
+    use crate::login_store::suite::Fixture as _;
+    use std::sync::Arc;
+    struct Network {
+        started: Arc<tokio::sync::Notify>,
+        answer: Arc<tokio::sync::Notify>,
+        rotated: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl AccountNetwork for Network {
+        fn usage<'a>(&'a self, _: &'a Value, _: &'a str) -> Response<'a, UsageSnapshot> {
+            Box::pin(std::future::pending())
+        }
+        fn refresh<'a>(&'a self, auth: &'a Value, _: &'a str) -> Response<'a, Value> {
+            Box::pin(async move {
+                self.started.notify_one();
+                self.answer.notified().await;
+                let mut next = auth.clone();
+                next["tokens"]["access_token"] =
+                    token("fresh-alice", Some(now_unix_seconds() + 3600)).into();
+                next["tokens"]["refresh_token"] = "rotated-refresh-alice".into();
+                next["last_refresh"] = timestamp(now_unix_seconds()).into();
+                self.rotated
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(next)
+            })
+        }
+        fn workspaces<'a>(&'a self, _: &'a str, _: &'a str) -> Response<'a, Vec<Metadata>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+    }
+    let mut fixture = Fixture::open(false).await;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &Fixture::login("alice", "expired-alice", now_unix_seconds() - 1).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = fixture.id_of("alice");
+    fixture
+        .app
+        .release_new_accounts(Pool::Codex, Some(&id))
+        .await
+        .unwrap();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let answer = Arc::new(tokio::sync::Notify::new());
+    let rotated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    fixture.app.network = Arc::new(Network {
+        started: started.clone(),
+        answer: answer.clone(),
+        rotated: rotated.clone(),
+    });
+    let cancelled = Arc::new(tokio::sync::Notify::new());
+    tokio::join!(
+        async {
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                fixture.app.say_hi(Pool::Codex, &id)
+            )
+            .await
+            .is_err());
+            cancelled.notify_one();
+        },
+        async {
+            started.notified().await;
+            let _store = fixture.app.codex.store.lock().await;
+            answer.notify_one();
+            cancelled.notified().await;
+        }
+    );
+    // The issuer rotated the token before the refresh was cancelled.
+    assert!(rotated.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        fixture.stored(&id)["tokens"]["refresh_token"],
+        "rotated-refresh-alice"
+    );
+    // The next save, whatever it changes, writes it to the file.
+    let newer = Fixture::login("alice", "newer-alice", now_unix_seconds() + 7200);
+    fixture
+        .app
+        .codex_logins()
+        .change(|store| {
+            store.accounts[0].document = newer;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let file: Value = serde_json::from_slice(
+        &std::fs::read(fixture.app.paths.data_dir.join("codex-accounts.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        file["accounts"][0]["document"]["tokens"]["refresh_token"],
+        "refresh-alice"
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_account_has_no_scheduled_greeting() {
+    use crate::login_store::suite::Fixture as _;
+    use axum::{extract::Request, routing::any, Router};
+    use std::sync::Arc;
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let said = Arc::new(tokio::sync::Notify::new());
+    let (recorder, signal) = (seen.clone(), said.clone());
+    let router = Router::new().fallback(any(move |request: Request| {
+        let (recorder, signal) = (recorder.clone(), signal.clone());
+        async move {
+            let path = request.uri().path().to_owned();
+            recorder.lock().unwrap().push(path.clone());
+            if path.ends_with("/models") {
+                json!({"models": [{"slug": "gpt-5.6-luna", "supported_in_api": true}]}).to_string()
+            } else {
+                signal.notify_one();
+                "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n".to_owned()
+            }
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let fixture = Fixture::open(false).await;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &Fixture::login("alice", "access-alice", now_unix_seconds() + 3600).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = fixture.id_of("alice");
+    fixture
+        .app
+        .release_new_accounts(Pool::Codex, Some(&id))
+        .await
+        .unwrap();
+    fixture
+        .app
+        .save_account_proxy(Pool::Codex, &id, "direct://")
+        .await
+        .unwrap();
+    std::fs::create_dir_all(fixture.app.codex_config_path().parent().unwrap()).unwrap();
+    std::fs::write(
+        fixture.app.codex_config_path(),
+        format!("chatgpt_base_url = \"{base}\"\n"),
+    )
+    .unwrap();
+    fixture
+        .app
+        .set_greeting_schedule(
+            Pool::Codex,
+            &id,
+            false,
+            vec![chrono::Local::now().format("%H:%M").to_string()],
+        )
+        .await
+        .unwrap();
+    fixture
+        .app
+        .codex_logins()
+        .change(|store| {
+            store.accounts[0].standing = Some(Standing::Deactivated);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    fixture.app.delete_account(Pool::Codex, &id).await.unwrap();
+    assert_eq!(
+        fixture.app.codex_load().unwrap().accounts[0].standing,
+        Some(Standing::Deleted)
+    );
+    let app = fixture.app.into_shared();
+    let task = tokio::spawn(app.background_greetings());
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), said.notified()).await;
+    task.abort();
+    server.abort();
+    assert!(result.is_err(), "{:?}", seen.lock().unwrap());
+}
+
+#[tokio::test]
+async fn a_deleted_account_never_says_hi() {
+    use crate::login_store::suite::Fixture as _;
+    let fixture = Fixture::open(false).await;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &Fixture::login("alice", "expired-alice", now_unix_seconds() - 1).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = fixture.id_of("alice");
+    fixture
+        .app
+        .codex_logins()
+        .change(|store| {
+            store.accounts[0].standing = Some(Standing::Deactivated);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    fixture.app.delete_account(Pool::Codex, &id).await.unwrap();
+    assert_eq!(
+        fixture.app.say_hi(Pool::Codex, &id).await,
+        Err("Account not found".into())
+    );
+    assert_eq!(fixture.renewals(), 0);
+}

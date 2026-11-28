@@ -72,8 +72,8 @@ pub(crate) trait PoolOps: Send + Sync {
     /// its Sub2api providers' cards, sorted for display. `accounts` adds
     /// their tags and refresh.
     fn cards(&self) -> Response<'_, Vec<AccountSummary>>;
-    /// The cards whose usage a background round compares and a hi to a
-    /// third-party pool checks; `cards` unless following the tool's login
+    /// The cards whose usage a background round compares and a hi checks;
+    /// `cards` unless following the tool's login
     /// would ask for the Keychain.
     fn usage_cards(&self) -> Response<'_, Vec<AccountSummary>> {
         self.cards()
@@ -418,6 +418,16 @@ impl Application {
     pub async fn say_hi_to(&self, pool: Pool, id: &str, third_party: Option<bool>) -> Result<()> {
         if third_party == Some(true) && !self.has_third_party(pool, id).await? {
             return Err("This card has no third-party pool to say hi to".into());
+        }
+        // A deleted account's login is never used again.
+        let deleted = self
+            .ops(pool)
+            .usage_cards()
+            .await?
+            .iter()
+            .any(|a| a.id == id && a.display_status == "deleted");
+        if deleted {
+            return Err("Account not found".into());
         }
         let _greeting = self.begin_greeting(pool, id)?;
         if sub2api::is_card(pool, id) {
