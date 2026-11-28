@@ -916,3 +916,60 @@ test("Refreshing a provider's only card refreshes the entire provider", async ()
     ["refresh_usage", { id: null }],
   ]);
 });
+test("a sign-in in another pool waits for one cancelled as it begins", async () => {
+  // The app's one LoginState, shared by every pool.
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const gates = {};
+  const calls = [];
+  let n = 0;
+  let live = null;
+  let lock = Promise.resolve();
+  const locked = (task) => {
+    const result = lock.then(task);
+    lock = result.catch(() => {});
+    return result;
+  };
+  const invoke = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "begin_login") {
+      const id = `login-${++n}`;
+      return locked(async () => {
+        if (live) throw new Error("Login already in progress");
+        await new Promise((resolve) => (gates[id] = resolve));
+        live = id;
+        return id;
+      });
+    }
+    if (command === "cancel_login")
+      return locked(() => {
+        if (live === args.id) live = null;
+      });
+    if (command === "finish_login")
+      return locked(() => {
+        if (live !== args.id) throw new Error("Login not found");
+        live = null;
+        return 1;
+      });
+    return [];
+  };
+  const signIns = { cancel: null };
+  const codex = new Accounts(invoke, [], () => {}, () => {}, { pool: "codex", signIns });
+  const claude = new Accounts(invoke, [], () => {}, () => {}, { pool: "claude", signIns });
+  const first = codex.login();
+  await tick();
+  const cancel = codex.cancelLogin();
+  const second = claude.login();
+  gates["login-1"]();
+  await tick();
+  await tick();
+  gates["login-2"]?.();
+  await tick();
+  gates["login-2"]?.();
+  const [firstResult, , secondResult] = await Promise.allSettled([first, cancel, second]);
+  assert.deepEqual(firstResult, { status: "fulfilled", value: false });
+  assert.equal(secondResult.status, "fulfilled", String(secondResult.reason));
+  assert.deepEqual(
+    calls.map(([command]) => command).filter((c) => c.endsWith("_login")),
+    ["begin_login", "cancel_login", "begin_login", "finish_login"],
+  );
+});
