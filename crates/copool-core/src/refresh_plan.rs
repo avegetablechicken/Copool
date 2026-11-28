@@ -28,6 +28,9 @@ pub(crate) struct Card<'a> {
     pub(crate) refreshed_at: i64,
     /// Imported and not yet asked for upstream: left to a manual refresh.
     pub(crate) waiting: bool,
+    /// Deleted while deactivated, kept hidden: never asked for again, for a
+    /// refresh would spend its login.
+    pub(crate) deleted: bool,
     /// Until when a rate limit pauses its requests (Unix seconds).
     pub(crate) paused_until: Option<i64>,
 }
@@ -45,6 +48,7 @@ impl<'a> Card<'a> {
             current: account.is_current,
             refreshed_at: account.updated_at,
             waiting: account.awaiting_first_request,
+            deleted: account.display_status == "deleted",
             paused_until: pauses.get(&account.id).copied(),
         }
     }
@@ -52,6 +56,7 @@ impl<'a> Card<'a> {
     /// was refreshed within `interval` seconds before it if not.
     fn due(&self, at: i64, interval: i64) -> bool {
         !self.waiting
+            && !self.deleted
             && at - self.refreshed_at >= interval
             && self.paused_until.is_none_or(|until| until <= at)
     }
@@ -147,7 +152,7 @@ pub(crate) fn next_refresh_at(
         let next = schedule.next_refresh_at(card.current, 0);
         return Some(speedup.map_or(next, |s| next.min(s.at)));
     }
-    if card.waiting {
+    if card.waiting || card.deleted {
         return None;
     }
     let next = schedule.next_refresh_at(card.current, card.not_before(schedule.interval));
@@ -199,6 +204,7 @@ mod tests {
             current: false,
             refreshed_at: AT - 500,
             waiting: false,
+            deleted: false,
             paused_until: None,
         }
     }
@@ -232,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn a_round_leaves_out_accounts_asked_lately_paused_or_waiting() {
+    fn a_round_leaves_out_accounts_asked_lately_paused_waiting_or_deleted() {
         let lately = Card {
             refreshed_at: AT - 99,
             ..card("lately")
@@ -245,13 +251,24 @@ mod tests {
             waiting: true,
             ..card("waiting")
         };
+        let deleted = Card {
+            deleted: true,
+            ..card("deleted")
+        };
         let due = Card {
             refreshed_at: AT - 100,
             paused_until: Some(AT),
             ..card("due")
         };
-        let ask = round(&[lately, paused, waiting, due], None, true, AT, 100);
+        let ask = round(
+            &[lately, paused, waiting, deleted, due],
+            None,
+            true,
+            AT,
+            100,
+        );
         assert_eq!(ask.ids, ["due"]);
+        assert_eq!(next_refresh_at(&deleted, &SCHEDULE, None), None);
     }
 
     #[test]

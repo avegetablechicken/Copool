@@ -371,3 +371,39 @@ async fn a_renewal_is_kept_though_its_refresh_is_cancelled() {
         "rotated-refresh-alice"
     );
 }
+#[tokio::test]
+async fn a_deleted_account_is_never_refreshed_in_the_background() {
+    use crate::login_store::suite::Fixture as _;
+    let fixture = Fixture::open(false).await;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &Fixture::login("alice", "expired-alice", now_unix_seconds() - 1).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = fixture.id_of("alice");
+    fixture
+        .app
+        .release_new_accounts(Pool::Codex, Some(&id))
+        .await
+        .unwrap();
+    fixture
+        .app
+        .codex_logins()
+        .change(|store| {
+            store.accounts[0].standing = Some(Standing::Deactivated);
+            store.accounts[0].updated_at = 0;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    fixture.app.delete_account(Pool::Codex, &id).await.unwrap();
+    assert_eq!(
+        fixture.app.codex_load().unwrap().accounts[0].standing,
+        Some(Standing::Deleted)
+    );
+    fixture.app.refresh_recurring(Pool::Codex, 0).await.unwrap();
+    assert_eq!(fixture.renewals(), 0);
+}
