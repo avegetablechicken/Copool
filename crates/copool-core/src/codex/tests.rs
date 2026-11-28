@@ -470,3 +470,93 @@ async fn a_deleted_account_is_never_refreshed_in_the_background() {
     fixture.app.refresh_recurring(Pool::Codex, 0).await.unwrap();
     assert_eq!(fixture.renewals(), 0);
 }
+
+#[tokio::test]
+async fn a_renewal_cancelled_waiting_for_the_store_is_saved_next() {
+    use crate::login_store::suite::Fixture as _;
+    use std::sync::Arc;
+    struct Network {
+        started: Arc<tokio::sync::Notify>,
+        answer: Arc<tokio::sync::Notify>,
+        rotated: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl AccountNetwork for Network {
+        fn usage<'a>(&'a self, _: &'a Value, _: &'a str) -> Response<'a, UsageSnapshot> {
+            Box::pin(std::future::pending())
+        }
+        fn refresh<'a>(&'a self, auth: &'a Value, _: &'a str) -> Response<'a, Value> {
+            Box::pin(async move {
+                self.started.notify_one();
+                self.answer.notified().await;
+                let mut next = auth.clone();
+                next["tokens"]["access_token"] =
+                    token("fresh-alice", Some(now_unix_seconds() + 3600)).into();
+                next["tokens"]["refresh_token"] = "rotated-refresh-alice".into();
+                next["last_refresh"] = timestamp(now_unix_seconds()).into();
+                self.rotated
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(next)
+            })
+        }
+        fn workspaces<'a>(&'a self, _: &'a str, _: &'a str) -> Response<'a, Vec<Metadata>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+    }
+    let mut fixture = Fixture::open(false).await;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &Fixture::login("alice", "expired-alice", now_unix_seconds() - 1).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = fixture.id_of("alice");
+    fixture
+        .app
+        .release_new_accounts(Pool::Codex, Some(&id))
+        .await
+        .unwrap();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let answer = Arc::new(tokio::sync::Notify::new());
+    let rotated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    fixture.app.network = Arc::new(Network {
+        started: started.clone(),
+        answer: answer.clone(),
+        rotated: rotated.clone(),
+    });
+    let cancelled = Arc::new(tokio::sync::Notify::new());
+    tokio::join!(
+        async {
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                fixture.app.say_hi(Pool::Codex, &id)
+            )
+            .await
+            .is_err());
+            cancelled.notify_one();
+        },
+        async {
+            started.notified().await;
+            let _store = fixture.app.codex.store.lock().await;
+            answer.notify_one();
+            cancelled.notified().await;
+        }
+    );
+    // The issuer rotated the token before the refresh was cancelled.
+    assert!(rotated.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        fixture.stored(&id)["tokens"]["refresh_token"],
+        "rotated-refresh-alice"
+    );
+    // The next save, whatever it changes, writes it to the file.
+    fixture.app.codex_logins().change(|_| Ok(())).await.unwrap();
+    let file: Value = serde_json::from_slice(
+        &std::fs::read(fixture.app.paths.data_dir.join("codex-accounts.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        file["accounts"][0]["document"]["tokens"]["refresh_token"],
+        "rotated-refresh-alice"
+    );
+}

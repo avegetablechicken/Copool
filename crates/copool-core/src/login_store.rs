@@ -56,6 +56,21 @@ pub(crate) struct Locks {
     /// Counts switches made: a Live login read before one is not followed
     /// after it.
     switches: AtomicU64,
+    /// Renewals made and not yet saved ([`Logins::keep_renewal`]).
+    renewals: std::sync::Mutex<Vec<Unsaved>>,
+}
+
+/// A renewal not yet in the store's file: every load of the store takes it,
+/// and every save writes it, while the account holds the login renewed
+/// (`before`), the one its refresh began with (`began`), or one the renewal
+/// outlasts. Kept so that a refresh cancelled once its issuer has rotated
+/// the refresh token, while it waits for the store's lock, still leaves the
+/// renewal to the next save.
+struct Unsaved {
+    id: String,
+    before: Value,
+    began: Value,
+    renewed: Value,
 }
 
 /// An account of the pool: what every pool keeps of it, and what its own
@@ -341,12 +356,56 @@ impl<P: LoginPool> Logins<P> {
             Err(e) => return Err(e.to_string()),
         };
         self.0.opened(&mut store)?;
+        self.take_renewals(&mut store);
         Ok(store)
     }
     pub(crate) fn save(&self, store: &P::Store) -> Result<()> {
-        write_json(&self.path(), &self.0.sealed(store)?)?;
+        let unsaved = !self.0.locks().renewals.lock().unwrap().is_empty();
+        if unsaved {
+            // A store loaded before a renewal was made is saved with it.
+            let mut store: P::Store = serde_json::to_value(store)
+                .and_then(serde_json::from_value)
+                .map_err(|e| e.to_string())?;
+            self.take_renewals(&mut store);
+            write_json(&self.path(), &self.0.sealed(&store)?)?;
+            // Those the store now holds, or that no longer replace its
+            // login, are done.
+            let accounts = P::accounts(&store);
+            self.0
+                .locks()
+                .renewals
+                .lock()
+                .unwrap()
+                .retain(|unsaved| Self::replaces(unsaved, accounts));
+        } else {
+            write_json(&self.path(), &self.0.sealed(store)?)?;
+        }
         self.0.app().publish();
         Ok(())
+    }
+    /// Whether a renewal not yet saved would change the account's login.
+    fn replaces(unsaved: &Unsaved, accounts: &[Account<P::Own>]) -> bool {
+        accounts.iter().any(|a| {
+            a.id == unsaved.id
+                && a.document != unsaved.renewed
+                && (a.document == unsaved.before
+                    || a.document == unsaved.began
+                    || P::newer(&unsaved.renewed, &a.document))
+        })
+    }
+    /// Puts the renewals not yet saved in the store.
+    fn take_renewals(&self, store: &mut P::Store) {
+        let renewals = self.0.locks().renewals.lock().unwrap();
+        for unsaved in renewals.iter() {
+            if Self::replaces(unsaved, P::accounts(store)) {
+                if let Some(account) = P::accounts_mut(store)
+                    .iter_mut()
+                    .find(|a| a.id == unsaved.id)
+                {
+                    account.document = unsaved.renewed.clone();
+                }
+            }
+        }
     }
 
     /// The account's card.
@@ -780,9 +839,9 @@ impl<P: LoginPool> Logins<P> {
         }
         let before = document.clone();
         let renewed = self.0.renew(document, proxy).await?;
-        // Saved before anything else is awaited: an issuer that rotates
+        // Kept before anything else is awaited: an issuer that rotates
         // refresh tokens has spent the one stored, and a refresh cancelled
-        // later (a greeting's deadline) would drop the only copy.
+        // later would drop the only copy.
         let kept = self.keep_renewal(account, &before, document).await;
         self.write_back(&renewed, &before, document).await;
         drop(lock);
@@ -791,29 +850,25 @@ impl<P: LoginPool> Logins<P> {
     }
     /// Puts a renewal in the account, if it is still kept, when the card
     /// still holds the login renewed (`before`) or the one the refresh began
-    /// with, or one the renewal outlasts.
+    /// with, or one the renewal outlasts: at once among the renewals not yet
+    /// saved, with nothing awaited, then in the store's file. Cancelled while
+    /// it waits for the store's lock, the next save writes it.
     async fn keep_renewal(
         &self,
         account: &Account<P::Own>,
         before: &Value,
         renewed: &Value,
     ) -> Result<()> {
+        self.0.locks().renewals.lock().unwrap().push(Unsaved {
+            id: account.id.clone(),
+            before: before.clone(),
+            began: account.document.clone(),
+            renewed: renewed.clone(),
+        });
         let _lock = self.0.locks().store.lock().await;
-        let mut store = self.load()?;
-        let Some(stored) = P::accounts_mut(&mut store)
-            .iter_mut()
-            .find(|a| a.id == account.id)
-        else {
-            return Ok(());
-        };
-        if stored.document == *before
-            || stored.document == account.document
-            || P::newer(renewed, &stored.document)
-        {
-            stored.document = renewed.clone();
-            self.save(&store)?;
-        }
-        Ok(())
+        // The load takes it, and the save writes it.
+        let store = self.load()?;
+        self.save(&store)
     }
     /// Puts a renewal in the Live login, in its own form, when it still
     /// holds the login renewed (`before`, with the same refresh token) and

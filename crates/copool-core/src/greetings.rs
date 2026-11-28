@@ -235,9 +235,18 @@ impl Application {
                             let app = self.clone();
                             let id = account.id.clone();
                             tasks.spawn(async move {
-                                let result = tokio::time::timeout(std::time::Duration::from_secs(120), async {
-                                    app.say_hi(pool, &id).await
-                                }).await.unwrap_or_else(|_| Err("Scheduled greeting timed out".into()));
+                                // The deadline stops waiting for the greeting, never the
+                                // greeting itself: one cancelled after its token was renewed
+                                // could lose the renewal.
+                                let greeting = tokio::spawn({
+                                    let (app, id) = (app.clone(), id.clone());
+                                    async move { app.say_hi(pool, &id).await }
+                                });
+                                let result = match tokio::time::timeout(std::time::Duration::from_secs(120), greeting).await {
+                                    Ok(Ok(result)) => result,
+                                    Ok(Err(error)) => Err(error.to_string()),
+                                    Err(_) => Err("Scheduled greeting timed out".into()),
+                                };
                                 {
                                     let _lock = app.operations.lock().await;
                                     if let Ok(mut all) = app.load_greetings() {
