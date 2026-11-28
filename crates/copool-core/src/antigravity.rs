@@ -21,7 +21,7 @@ mod proxy;
 #[cfg(any(target_os = "macos", test))]
 mod security;
 mod sub2api;
-pub(crate) use sub2api::ProviderAdapter;
+pub(crate) use sub2api::{sub2api_hello, ProviderAdapter};
 
 pub(crate) use api::{sign_in_url, sub2api_usage, ultra_by_id, Network};
 
@@ -45,7 +45,6 @@ type Result<T> = std::result::Result<T, String>;
 pub(crate) const LOGIN_NOT_FOUND: &str = "error.antigravity.login_not_found";
 pub(crate) const CREDENTIALS_INVALID: &str = "error.antigravity.credentials_invalid";
 pub(crate) const SIGN_IN_EXPIRED: &str = "error.antigravity.sign_in_expired";
-const NOT_AVAILABLE: &str = "This is not available for Antigravity accounts";
 /// A card of a login no refresh has named yet.
 const UNNAMED: &str = "Antigravity";
 
@@ -780,10 +779,8 @@ impl Application {
         }
         used.outcome.map(|_| ())
     }
-    /// Says hi with an account through its proxy, without switching to it:
-    /// one short message to each pool whose five-hour window is idle (to
-    /// Gemini's when none is), which starts it; or, with `third_party`, to
-    /// that pool alone (Gemini's, or the third party's), idle or not.
+    /// Says hi with an account through its proxy, without switching to it,
+    /// as `cloud_hello` does.
     async fn antigravity_hello(&self, id: &str, third_party_only: Option<bool>) -> Result<Hello> {
         let account = self
             .antigravity_load()?
@@ -798,86 +795,116 @@ impl Application {
             return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
         };
         let proxy = self.account_proxy(&account.proxy_url)?;
-        let network = self.antigravity_network();
-        let agent = api::agent();
-        let call = |path: &'static str, body: Value| {
-            let (network, token, agent, proxy) =
-                (network.clone(), token.clone(), agent.clone(), proxy.clone());
-            async move { network.cloud(path, &token, body, &agent, &proxy).await }
-        };
-        let answer = |what: &str, (status, body): api::Reply| match status {
-            200..=299 => Ok(Some(body)),
-            _ if crate::antigravity_cloud::unauthenticated(status, &body) => Ok(None),
-            _ => Err(status_error(what, status, &body)),
-        };
-        let project = match account.own.project.clone() {
-            Some(project) => project,
-            None => {
-                let Some(body) = answer(
-                    "Antigravity project request",
-                    call(api::LOAD_CODE_ASSIST_PATH, api::empty()).await?,
-                )?
-                else {
-                    return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
-                };
-                api::project(&body).ok_or("Antigravity reported no project")?
+        cloud_hello(
+            &*self.antigravity_network(),
+            &token,
+            &proxy,
+            account.own.project.clone(),
+            account.usage.as_ref(),
+            third_party_only,
+        )
+        .await
+    }
+}
+
+/// The models of a hi (`hello_models`): one for each pool whose five-hour
+/// window is idle, Gemini's when none is; or with `only`, that pool's alone
+/// (Gemini's, or with `Some(true)` the third party's), idle or not. Every
+/// Antigravity card's hi asks these, whoever sends it.
+pub(crate) fn hello_targets(
+    (gemini, third_party): (Option<String>, Option<String>),
+    usage: Option<&crate::models::UsageSnapshot>,
+    only: Option<bool>,
+    now: i64,
+) -> Result<Vec<String>> {
+    // Idle: no reset to come, as the windows read; all without usage yet.
+    let idle = |window: Option<&crate::models::UsageWindow>| {
+        usage.is_none() || window.is_some_and(|w| w.reset_at.is_none_or(|r| r <= now))
+    };
+    let targets: Vec<String> = match only {
+        Some(true) => third_party.into_iter().collect(),
+        Some(false) => gemini.into_iter().collect(),
+        None => {
+            let mut targets: Vec<String> = [
+                (
+                    gemini.clone(),
+                    idle(usage.and_then(|u| u.five_hour.as_ref())),
+                ),
+                (
+                    third_party,
+                    idle(usage.and_then(|u| u.third_party_five_hour.as_ref())),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(model, idle)| model.filter(|_| idle))
+            .collect();
+            if targets.is_empty() {
+                targets.extend(gemini);
             }
-        };
-        let Some(models) = answer(
-            "Antigravity models request",
-            call(api::FETCH_MODELS_PATH, api::empty()).await?,
-        )?
-        else {
-            return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
-        };
-        let (gemini, third_party) = api::hello_models(&models);
-        // Idle: no reset to come, as the windows read; all without usage yet.
-        let now = now_unix_seconds();
-        let idle = |window: Option<&crate::models::UsageWindow>| {
-            account.usage.is_none() || window.is_some_and(|w| w.reset_at.is_none_or(|r| r <= now))
-        };
-        let usage = account.usage.as_ref();
-        let targets: Vec<String> = match third_party_only {
-            Some(true) => third_party.into_iter().collect(),
-            Some(false) => gemini.into_iter().collect(),
-            None => {
-                let mut targets: Vec<String> = [
-                    (
-                        gemini.clone(),
-                        idle(usage.and_then(|u| u.five_hour.as_ref())),
-                    ),
-                    (
-                        third_party,
-                        idle(usage.and_then(|u| u.third_party_five_hour.as_ref())),
-                    ),
-                ]
-                .into_iter()
-                .filter_map(|(model, idle)| model.filter(|_| idle))
-                .collect();
-                if targets.is_empty() {
-                    targets.extend(gemini);
-                }
-                targets
-            }
-        };
-        if targets.is_empty() {
-            return Err("Antigravity lists no model to say hi to".into());
+            targets
         }
-        for model in targets {
-            if answer(
-                "Antigravity message request",
-                call(api::GENERATE_PATH, api::hello(&project, &model)).await?,
+    };
+    if targets.is_empty() {
+        return Err("Antigravity lists no model to say hi to".into());
+    }
+    Ok(targets)
+}
+
+/// Says hi with a Cloud Code token, one short message to each of
+/// `hello_targets`' models, which starts its window: the account's project
+/// (`project` when known, else `loadCodeAssist`'s) and models
+/// (`fetchAvailableModels`) asked first. The pool's own accounts and a
+/// CLIProxyAPI credential's relay say it alike.
+pub(crate) async fn cloud_hello(
+    network: &dyn Network,
+    token: &str,
+    proxy: &str,
+    project: Option<String>,
+    usage: Option<&crate::models::UsageSnapshot>,
+    only: Option<bool>,
+) -> Result<Hello> {
+    let agent = api::agent();
+    let call = |path: &'static str, body: Value| network.cloud(path, token, body, &agent, proxy);
+    let answer = |what: &str, (status, body): api::Reply| match status {
+        200..=299 => Ok(Some(body)),
+        _ if crate::antigravity_cloud::unauthenticated(status, &body) => Ok(None),
+        _ => Err(status_error(what, status, &body)),
+    };
+    let project = match project {
+        Some(project) => project,
+        None => {
+            let Some(body) = answer(
+                "Antigravity project request",
+                call(api::LOAD_CODE_ASSIST_PATH, api::empty()).await?,
             )?
-            .is_none()
-            {
+            else {
                 return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
+            };
+            api::project(&body).ok_or("Antigravity reported no project")?
+        }
+    };
+    let Some(models) = answer(
+        "Antigravity models request",
+        call(api::FETCH_MODELS_PATH, api::empty()).await?,
+    )?
+    else {
+        return Ok(Hello::Expired(SIGN_IN_EXPIRED.into()));
+    };
+    let targets = hello_targets(api::hello_models(&models), usage, only, now_unix_seconds())?;
+    // Each window's is sent though another's fails, the first failure the
+    // hi's; a refused token stops it, to be renewed.
+    let mut failure = None;
+    for model in targets {
+        let reply = call(api::GENERATE_PATH, api::hello(&project, &model)).await;
+        match reply.and_then(|reply| answer("Antigravity message request", reply)) {
+            Ok(Some(_)) => {}
+            Ok(None) => return Ok(Hello::Expired(SIGN_IN_EXPIRED.into())),
+            Err(error) => {
+                failure.get_or_insert(error);
             }
         }
-        Ok(Hello::Said)
     }
-    pub(crate) fn antigravity_unavailable<T>(&self) -> Result<T> {
-        Err(NOT_AVAILABLE.into())
-    }
+    failure.map_or(Ok(Hello::Said), Err)
 }
 
 #[cfg(test)]

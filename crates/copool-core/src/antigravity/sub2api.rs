@@ -386,6 +386,35 @@ impl Application {
     }
 }
 
+/// Says hi with a Sub2api account through Sub2api's connection test, which
+/// sends the model it names to Cloud Code with the account's token and
+/// project: one test for each of `hello_targets`' models, chosen among those
+/// its usage, read now, reports quota for, and its windows idle as that
+/// usage reads them; an account Sub2api cannot use says why. Each is tried
+/// though another fails; the first failure is the hi's.
+pub(crate) async fn sub2api_hello(
+    connection: &crate::sub2api::Connection,
+    account: &crate::provider_accounts::Account,
+    only: Option<bool>,
+) -> Result<()> {
+    let reported = connection.account_usage(account.id).await?;
+    let now = crate::utils::now_unix_seconds();
+    let usage = super::api::sub2api_usage(&reported, now)?;
+    let targets = super::hello_targets(
+        super::api::sub2api_hello_models(&reported),
+        Some(&usage),
+        only,
+        now,
+    )?;
+    let mut failure = None;
+    for model in targets {
+        if let Err(error) = connection.test_account(account.id, &model).await {
+            failure.get_or_insert(error);
+        }
+    }
+    failure.map_or(Ok(()), Err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

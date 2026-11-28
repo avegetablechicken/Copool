@@ -227,7 +227,7 @@ pub(super) fn project(value: &Value) -> Option<String> {
 /// leaves Gemini's five-hour window idle. For the third-party pool, which its
 /// models share, GPT-OSS, the cheapest, else Claude Sonnet. Only models that
 /// hold quota (a reset) count.
-pub(super) fn hello_models(value: &Value) -> (Option<String>, Option<String>) {
+pub(crate) fn hello_models(value: &Value) -> (Option<String>, Option<String>) {
     let Some(models) = value.get("models").and_then(Value::as_object) else {
         return (None, None);
     };
@@ -248,6 +248,45 @@ pub(super) fn hello_models(value: &Value) -> (Option<String>, Option<String>) {
         .flatten()
         .chain(value.get("defaultAgentModelId"))
         .filter_map(Value::as_str)
+        .collect();
+    chosen_hello_models(&quota, &agent)
+}
+/// `hello_models` of an account Sub2api keeps, from the models its usage
+/// reports quota for (`antigravity_quota`, read from the same
+/// `fetchAvailableModels`), sorted as Sub2api lists no agent models: those of
+/// Gemini named by an effort take their place, which the command model is
+/// not.
+pub(crate) fn sub2api_hello_models(usage: &Value) -> (Option<String>, Option<String>) {
+    let mut quota: Vec<&str> = usage
+        .get("antigravity_quota")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(_, q)| {
+            q.get("reset_time")
+                .and_then(Value::as_str)
+                .is_some_and(|r| !r.is_empty())
+        })
+        .map(|(model, _)| model.as_str())
+        .collect();
+    quota.sort_unstable();
+    let agent: Vec<&str> = quota
+        .iter()
+        .copied()
+        .filter(|id| {
+            ["-low", "-medium", "-high"]
+                .iter()
+                .any(|effort| id.ends_with(effort))
+        })
+        .collect();
+    chosen_hello_models(&quota, &agent)
+}
+/// The hi's models among those holding quota (`quota`) and Antigravity's
+/// agent models (`agent`), as `hello_models` chooses them.
+fn chosen_hello_models(quota: &[&str], agent: &[&str]) -> (Option<String>, Option<String>) {
+    let agent: Vec<&str> = agent
+        .iter()
+        .copied()
         .filter(|id| id.starts_with("gemini") && quota.contains(id))
         .collect();
     let gemini = ["-low", "-medium", ""]
@@ -405,6 +444,31 @@ mod tests {
             project(&json!({"cloudaicompanionProject": "p"})).as_deref(),
             Some("p")
         );
+    }
+
+    // Sub2api lists no agent models: Gemini's hi takes one named by an
+    // effort, never the command model, whose window stays idle.
+    #[test]
+    fn a_sub2api_accounts_hi_models_are_among_its_quota() {
+        let usage = json!({"antigravity_quota": {
+            "gemini-3-flash": {"utilization": 0, "reset_time": "2099-01-01T00:00:00Z"},
+            "gemini-3.1-pro-high": {"utilization": 0, "reset_time": "2099-01-01T00:00:00Z"},
+            "gemini-3.6-flash-medium": {"utilization": 0, "reset_time": "2099-01-01T00:00:00Z"},
+            "gpt-oss-120b-medium": {"utilization": 0, "reset_time": ""},
+            "claude-sonnet-4-6": {"utilization": 0, "reset_time": "2099-01-01T00:00:00Z"}
+        }});
+        assert_eq!(
+            sub2api_hello_models(&usage),
+            (
+                Some("gemini-3.6-flash-medium".to_owned()),
+                Some("claude-sonnet-4-6".to_owned())
+            )
+        );
+        let command = json!({"antigravity_quota": {
+            "gemini-3-flash": {"utilization": 0, "reset_time": "2099-01-01T00:00:00Z"}
+        }});
+        assert_eq!(sub2api_hello_models(&command), (None, None));
+        assert_eq!(sub2api_hello_models(&json!({})), (None, None));
     }
 
     #[test]

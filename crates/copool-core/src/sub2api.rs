@@ -232,24 +232,13 @@ impl Connection {
     /// Sub2api's connection test of an account: a "hi" to `model` through
     /// the account, answered as server-sent events.
     pub async fn test_account(&self, id: i64, model: &str) -> Result<(), String> {
-        let client = self.client()?;
-        let mut token = self.admin_token(&client).await?;
-        let mut retried = false;
-        let response = loop {
-            let response = client
-                .post(format!("{}/admin/accounts/{id}/test", self.admin_base))
-                .bearer_auth(&token)
-                .json(&json!({"model_id": model}))
-                .send()
-                .await
-                .map_err(|e| usage::format_reqwest_error(&e))?;
-            if response.status() != reqwest::StatusCode::UNAUTHORIZED || retried {
-                break response;
-            }
-            self.forget_token(&token);
-            token = self.admin_token(&client).await?;
-            retried = true;
-        };
+        let response = self
+            .admin(|client| {
+                client
+                    .post(format!("{}/admin/accounts/{id}/test", self.admin_base))
+                    .json(&json!({"model_id": model}))
+            })
+            .await?;
         if !response.status().is_success() {
             return payload(response).await.map(|_| ());
         }
@@ -274,6 +263,39 @@ impl Connection {
             }
         }
         Err("Sub2api account test did not complete".into())
+    }
+    /// The account's usage as Sub2api reports it, unread.
+    pub async fn account_usage(&self, id: i64) -> Result<Value, String> {
+        payload(
+            self.admin(|client| {
+                client.get(format!("{}/admin/accounts/{id}/usage", self.admin_base))
+            })
+            .await?,
+        )
+        .await
+    }
+    /// An administrator's request, sent again with a new login once should
+    /// the server refuse the cached token.
+    async fn admin(
+        &self,
+        request: impl Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, String> {
+        let client = self.client()?;
+        let mut token = self.admin_token(&client).await?;
+        let mut retried = false;
+        loop {
+            let response = request(&client)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|e| usage::format_reqwest_error(&e))?;
+            if response.status() != reqwest::StatusCode::UNAUTHORIZED || retried {
+                return Ok(response);
+            }
+            self.forget_token(&token);
+            token = self.admin_token(&client).await?;
+            retried = true;
+        }
     }
     /// The account as the provider last cached it.
     fn cached_account(&self, id: i64) -> Option<Account> {

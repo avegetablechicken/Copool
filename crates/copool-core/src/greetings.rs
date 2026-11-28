@@ -38,14 +38,13 @@ fn normalize_times(times: &mut Vec<String>) -> Result<()> {
     times.dedup();
     Ok(())
 }
-/// A card that may say hi: any Claude card; an Antigravity account's, not
-/// a Sub2api provider's; an official Codex Plus card; never a deleted one.
+/// A card that may say hi: any Claude or Antigravity card; an official
+/// Codex Plus card; never a deleted one.
 fn eligible(account: &AccountSummary, pool: Pool) -> bool {
     !account.awaiting_first_request
         && account.display_status != "deleted"
         && match pool {
-            Pool::Claude => true,
-            Pool::Antigravity => !crate::provider_accounts::is_card(pool, &account.id),
+            Pool::Claude | Pool::Antigravity => true,
             // Grok has no five-hour window to start.
             Pool::Grok => false,
             Pool::Codex => {

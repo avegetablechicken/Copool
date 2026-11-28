@@ -642,9 +642,9 @@ test("Credits and resets carry their expiry dates; resets other than full ones a
   assert.notEqual(footer({}, "claude").resets, null);
 });
 
-test("Antigravity accounts say hi, its Sub2api cards do not; Grok never does", () => {
+test("Antigravity cards say hi, its Sub2api cards too; Grok never does", () => {
   assert.equal(V.supportsSayHi({ id: "a" }, "antigravity"), true);
-  assert.equal(V.supportsSayHi({ id: "antigravity-sub2api-p-1", sourceTag: "SUB2API", providerKind: "sub2api" }, "antigravity"), false);
+  assert.equal(V.supportsSayHi({ id: "antigravity-sub2api-p-1", sourceTag: "SUB2API", providerKind: "sub2api" }, "antigravity"), true);
   assert.equal(V.supportsSayHi({ id: "claude-sub2api-p-1", sourceTag: "SUB2API", providerKind: "sub2api" }, "claude"), true);
   assert.equal(V.supportsSayHi({ id: "g" }, "grok"), false);
 });

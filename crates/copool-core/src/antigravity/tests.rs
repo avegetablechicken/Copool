@@ -75,6 +75,8 @@ struct Fake {
     revoked: Mutex<Vec<String>>,
     /// A 403 reply for a specific Cloud Code method.
     denied: Mutex<Option<(&'static str, Value)>>,
+    /// A model whose messages Cloud Code cannot answer now (503).
+    unanswered: Mutex<Option<&'static str>>,
     /// Remaining fraction of the Gemini five-hour pool.
     remaining: Mutex<f64>,
     /// The summary reports only the third-party pool, the Gemini models
@@ -134,6 +136,11 @@ impl Network for Fake {
         {
             let error = error.clone();
             return Box::pin(async move { Ok((403, error)) });
+        }
+        if path == api::GENERATE_PATH && body["model"].as_str() == *self.unanswered.lock().unwrap()
+        {
+            let error = json!({"error": {"status": "UNAVAILABLE"}});
+            return Box::pin(async move { Ok((503, error)) });
         }
         if path == api::GENERATE_PATH && !token.starts_with("expired") {
             self.messages.lock().unwrap().push((
@@ -1063,6 +1070,40 @@ async fn a_browser_sign_in_joins_the_pool_without_switching() {
         .is_err());
 }
 
+// Whoever sends it, a card's hi asks the models of its idle windows, else
+// Gemini's; its model switch asks one pool's, idle or not.
+#[test]
+fn a_hi_asks_the_models_of_its_idle_windows() {
+    let models = || (Some("gemini".to_owned()), Some("claude".to_owned()));
+    let window = |reset_at| {
+        let mut window = crate::antigravity_cloud::window(0.5, None, 18_000, 100);
+        window.reset_at = reset_at;
+        window
+    };
+    let usage = |gemini, third| {
+        let mut usage = crate::antigravity_cloud::snapshot(100);
+        usage.five_hour = Some(window(gemini));
+        usage.third_party_five_hour = Some(window(third));
+        usage
+    };
+    let targets = |usage: Option<&crate::models::UsageSnapshot>, only| {
+        hello_targets(models(), usage, only, 100).unwrap()
+    };
+    assert_eq!(targets(None, None), ["gemini", "claude"]);
+    assert_eq!(targets(Some(&usage(None, Some(200))), None), ["gemini"]);
+    assert_eq!(targets(Some(&usage(Some(200), Some(50))), None), ["claude"]);
+    assert_eq!(
+        targets(Some(&usage(Some(200), Some(200))), None),
+        ["gemini"]
+    );
+    assert_eq!(
+        targets(Some(&usage(Some(200), Some(200))), Some(true)),
+        ["claude"]
+    );
+    assert_eq!(targets(Some(&usage(None, None)), Some(false)), ["gemini"]);
+    assert!(hello_targets((None, Some("claude".into())), None, Some(false), 100).is_err());
+}
+
 #[tokio::test]
 async fn a_hi_starts_each_idle_five_hour_window() {
     let h = harness(true).await;
@@ -1105,6 +1146,17 @@ async fn a_hi_starts_each_idle_five_hour_window() {
         .map(|m| m.1.clone())
         .collect();
     assert_eq!(models, ["gemini-3.8-flash-low", "gpt-oss-120b-medium"]);
+    // One pool's model unable to answer, the other's hi is sent still, and
+    // the hi says why it failed.
+    h.fake.messages.lock().unwrap().clear();
+    *h.fake.unanswered.lock().unwrap() = Some("gemini-3.8-flash-low");
+    let error = h.app.say_hi(Pool::Antigravity, &id).await.unwrap_err();
+    assert!(error.contains("HTTP 503"), "{error}");
+    assert_eq!(
+        *h.fake.messages.lock().unwrap(),
+        [("project-1".to_owned(), "gpt-oss-120b-medium".to_owned())]
+    );
+    *h.fake.unanswered.lock().unwrap() = None;
     // Both running: Gemini's, as asked.
     h.fake.messages.lock().unwrap().clear();
     set_usage(Some(later_reset), Some(later_reset));
@@ -1314,19 +1366,41 @@ async fn sub2api_server(
     requests: Arc<Mutex<Vec<String>>>,
     version: Arc<Mutex<Option<&'static str>>>,
 ) -> String {
+    sub2api_server_reporting(requests, version, Arc::default()).await
+}
+/// `sub2api_server`, its accounts' usage `usage` once set.
+async fn sub2api_server_reporting(
+    requests: Arc<Mutex<Vec<String>>>,
+    version: Arc<Mutex<Option<&'static str>>>,
+    usage: Arc<Mutex<Option<Value>>>,
+) -> String {
     use axum::{extract::Request, response::IntoResponse, routing::any, Json, Router};
     let router = Router::new().fallback(any(move |request: Request| {
         let requests = requests.clone();
         let version = *version.lock().unwrap();
+        let usage = usage.lock().unwrap().clone();
         async move {
             let uri = request.uri().path_and_query().unwrap().to_string();
-            requests.lock().unwrap().push(uri.clone());
             if !uri.starts_with("/api/v1/auth/login") {
                 assert_eq!(
                     request.headers().get("authorization").unwrap(),
                     "Bearer admin"
                 );
             }
+            // A connection test, recorded with its model, as Sub2api answers it.
+            if uri.ends_with("/test") {
+                let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                requests
+                    .lock()
+                    .unwrap()
+                    .push(format!("{uri} {}", body["model_id"].as_str().unwrap()));
+                return "data: {\"type\":\"test_start\"}\n\ndata: {\"type\":\"test_complete\",\"success\":true}\n\n"
+                    .into_response();
+            }
+            requests.lock().unwrap().push(uri.clone());
             let data = if uri.starts_with("/api/v1/auth/login") {
                 json!({"access_token": "admin"})
             } else if uri == "/api/v1/admin/system/version" {
@@ -1343,6 +1417,8 @@ async fn sub2api_server(
                      "extra": {"email": " "}, "credentials": {"email": "pro@gmail.com", "plan_type": "g1-pro-tier"}},
                     {"id": 8, "name": "cli@gmail.com", "platform": "gemini", "type": "oauth", "status": "active"}
                 ], "pages": 1})
+            } else if let Some(usage) = usage {
+                usage
             } else {
                 json!({"antigravity_quota_groups": [
                     {"key": "gemini", "windows": [
@@ -1350,7 +1426,12 @@ async fn sub2api_server(
                         {"window": "weekly", "utilization": 10, "resets_at": "2099-01-05T00:00:00Z"}]},
                     {"key": "3p", "windows": [
                         {"window": "5h", "utilization": 50, "resets_at": "2099-01-01T00:00:00Z"}]}
-                ]})
+                ], "antigravity_quota": {
+                    "gemini-3-flash": {"utilization": 0, "reset_time": "2099-01-01T00:00:00Z"},
+                    "gemini-3.1-pro-high": {"utilization": 25, "reset_time": "2099-01-01T00:00:00Z"},
+                    "gemini-3.1-pro-low": {"utilization": 25, "reset_time": "2099-01-01T00:00:00Z"},
+                    "claude-sonnet-4-6": {"utilization": 50, "reset_time": "2099-01-01T00:00:00Z"}
+                }})
             };
             Json(json!({"code": 0, "data": data})).into_response()
         }
@@ -1485,7 +1566,13 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
             .insert(name.to_owned(), value.to_owned());
     };
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let base = sub2api_server(requests.clone(), Arc::new(Mutex::new(Some("0.2.24")))).await;
+    let reported = Arc::new(Mutex::new(None::<Value>));
+    let base = sub2api_server_reporting(
+        requests.clone(),
+        Arc::new(Mutex::new(Some("0.2.24"))),
+        reported.clone(),
+    )
+    .await;
     // The address agy's gateway names works as well as the root.
     let saved = h
         .app
@@ -1712,11 +1799,59 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
     // a provider's card is current only once applied.
     fs::write(&settings, "{\"modelProvider\":\"gemini\"}").unwrap();
     assert!(cards(&h.app).await.iter().all(|a| !a.is_current));
-    // A provider's cards say no hi.
+    // A provider's card says hi as an account's does, each model through
+    // Sub2api's connection test: Gemini's while both windows run, the third
+    // party's when its model switch asks.
+    let tests = |requests: &Mutex<Vec<String>>| {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|uri| uri.contains("/test "))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    h.app.say_hi(Pool::Antigravity, &card.id).await.unwrap();
+    h.app
+        .say_hi_to(Pool::Antigravity, &card.id, Some(true))
+        .await
+        .unwrap();
+    assert_eq!(
+        tests(&requests),
+        [
+            "/api/v1/admin/accounts/7/test gemini-3.1-pro-low",
+            "/api/v1/admin/accounts/7/test claude-sonnet-4-6",
+        ]
+    );
+    // The hi reads the account's usage anew: its third-party window idle
+    // there since the card's last reading, its hi goes there alone.
+    *reported.lock().unwrap() = Some(json!({
+        "antigravity_quota_groups": [
+            {"key": "gemini", "windows": [
+                {"window": "5h", "utilization": 25, "resets_at": "2099-01-01T00:00:00Z"}]},
+            {"key": "3p", "windows": [{"window": "5h", "utilization": 0, "resets_at": null}]}
+        ],
+        "antigravity_quota": {
+            "gemini-3.1-pro-low": {"utilization": 25, "reset_time": "2099-01-01T00:00:00Z"},
+            "claude-sonnet-4-6": {"utilization": 0, "reset_time": "2099-01-01T05:00:00Z"}
+        }
+    }));
+    requests.lock().unwrap().clear();
+    h.app.say_hi(Pool::Antigravity, &card.id).await.unwrap();
+    assert_eq!(
+        tests(&requests),
+        ["/api/v1/admin/accounts/7/test claude-sonnet-4-6"]
+    );
+    // An account Sub2api cannot use says why, and is not tested.
+    *reported.lock().unwrap() =
+        Some(json!({"is_forbidden": true, "forbidden_reason": "Google refuses it"}));
+    requests.lock().unwrap().clear();
     assert_eq!(
         h.app.say_hi(Pool::Antigravity, &card.id).await.unwrap_err(),
-        NOT_AVAILABLE
+        "Google refuses it"
     );
+    assert!(tests(&requests).is_empty());
+    *reported.lock().unwrap() = None;
 
     // A provider edited during its switch leaves agy as it was.
     *moved.lock().unwrap() = Some("https://moved.invalid".into());

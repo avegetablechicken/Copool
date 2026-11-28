@@ -170,14 +170,11 @@
     return lines.join("\n");
   }
 
-  /// Claude subscriptions, official Codex Plus cards and Antigravity
-  /// accounts can say hi.
+  /// Claude and Antigravity cards and official Codex Plus cards can say hi.
   function supportsSayHi(account, pool) {
-    if (pool === "claude") return true;
+    if (pool === "claude" || pool === "antigravity") return true;
     // Grok has no five-hour window to start.
     if (pool === "grok") return false;
-    // An Antigravity provider's cards say no hi, as Codex's.
-    if (pool === "antigravity") return !P.isProviderCard(account);
     const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
     return !P.isProviderCard(account) && plan === "plus";
   }

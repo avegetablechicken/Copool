@@ -435,7 +435,7 @@ impl Application {
         self.refuse_deleted(pool, id).await?;
         let _greeting = self.begin_greeting(pool, id)?;
         if provider_accounts::is_card(pool, id) {
-            return self.say_hi_through_provider(pool, id).await;
+            return self.say_hi_through_provider(pool, id, third_party).await;
         }
         let mut renewed = false;
         loop {

@@ -203,19 +203,26 @@ impl Application {
             .await
             .map(|_| ())
     }
-    /// Says hi through Sub2api's connection test of the card's account.
-    pub(crate) async fn say_hi_through_provider(&self, pool: Pool, id: &str) -> Result<()> {
-        let model = match pool {
+    /// Says hi through Sub2api's connection test of the card's account: to
+    /// the windows an Antigravity card's hi starts (`third_party` as
+    /// `say_hi_to` takes it), each tested apart.
+    pub(crate) async fn say_hi_through_provider(
+        &self,
+        pool: Pool,
+        id: &str,
+        third_party: Option<bool>,
+    ) -> Result<()> {
+        match pool {
             Pool::Codex => return Err(SAY_HI_REQUIRES_PLUS.into()),
-            Pool::Claude => crate::claude::HELLO_MODEL,
-            // Sub2api's test would start only the third-party window; an
-            // Antigravity card's hi starts the Gemini one too.
-            Pool::Antigravity => return self.antigravity_unavailable(),
             Pool::Grok => return self.grok_unavailable(),
-        };
+            Pool::Claude | Pool::Antigravity => {}
+        }
         let (member, account) = self.card(pool, id)?;
         match self.member_connection(pool, &member).await? {
-            Connection::Sub2api(c) => c.test_account(account.id, model).await,
+            Connection::Sub2api(c) if pool == Pool::Antigravity => {
+                crate::antigravity::sub2api_hello(&c, &account, third_party).await
+            }
+            Connection::Sub2api(c) => c.test_account(account.id, crate::claude::HELLO_MODEL).await,
         }
     }
     /// Refreshes the providers by key, every one without; returns their errors.
