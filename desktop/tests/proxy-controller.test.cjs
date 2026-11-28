@@ -595,6 +595,7 @@ test("a configuration asked for before a tunnel save ended leaves the tunnel as 
   const saving = model.updateTunnel();
   // Asked for while it is under way.
   const during = model.configurationRead();
+  await new Promise((resolve) => setImmediate(resolve));
   answer();
   await saving;
   for (const read of [before, during]) {
@@ -635,31 +636,60 @@ test("a stale configuration keeps the tunnel's token saved in the Keychain", asy
   assert.equal(model.canStartTunnel, true);
 });
 
-test("tunnel saves under way together leave the tunnel to the last", async () => {
+test("tunnel saves go one at a time, so the app writes the last edit last", async () => {
   const config = (host) => ({
     cloudflared: { enabled: true, tunnelMode: "named", namedHostname: host },
   });
   const status = { running: true, port: 8787 };
   const tunnel = { installed: true, running: false };
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  // The app writes each save as it is answered, in whatever order.
   const requests = [];
+  let stored = config("old.example.com").cloudflared;
   const model = new Proxy(
-    (command, args) => new Promise((resolve) => requests.push({ args, resolve })),
+    (command, args) =>
+      new Promise((resolve, reject) =>
+        requests.push({
+          args,
+          commit() {
+            stored = structuredClone(args.value);
+            resolve();
+          },
+          fail: () => reject(new Error("save failed")),
+        }),
+      ),
   );
-  model.applyLocal(status, config("old.example.com"), tunnel);
-  // A hostname changed, then changed back, both saves under way.
-  const first = model.updateTunnel({ namedHostname: "intermediate.example.com" });
-  const undo = model.updateTunnel({ namedHostname: "old.example.com" });
-  model.applyLocal(status, config("intermediate.example.com"), tunnel, model.configurationRead());
-  assert.equal(model.tunnelConfiguration.namedHostname, "old.example.com");
-  // The later save ends first; the earlier one is not held after it.
-  requests[1].resolve();
-  await undo;
-  requests[0].resolve();
+  model.applyLocal(status, { cloudflared: stored }, tunnel);
+  const first = model.updateTunnel({ namedHostname: "first.example.com" });
+  const latest = model.updateTunnel({ namedHostname: "latest.example.com" });
+  // A configuration asked for meanwhile leaves the draft.
+  model.applyLocal(status, config("first.example.com"), tunnel, model.configurationRead());
+  assert.equal(model.tunnelConfiguration.namedHostname, "latest.example.com");
+  await tick();
+  // The second is sent only once the first is written.
+  assert.equal(requests.length, 1);
+  requests[0].commit();
   await first;
-  assert.equal(model.lastSyncedConfiguration.cloudflared.namedHostname, "old.example.com");
-  model.applyLocal(status, config("old.example.com"), tunnel, model.configurationRead());
-  const next = model.updateTunnel({ useHTTP2: true });
-  requests[2].resolve();
-  await next;
-  assert.equal(requests[2].args.value.namedHostname, "old.example.com");
+  await tick();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].args.value.namedHostname, "latest.example.com");
+  requests[1].commit();
+  await latest;
+  assert.equal(stored.namedHostname, "latest.example.com");
+  assert.equal(model.lastSyncedConfiguration.cloudflared.namedHostname, "latest.example.com");
+  model.applyLocal(status, { cloudflared: stored }, tunnel, model.configurationRead());
+  assert.equal(model.tunnelConfiguration.namedHostname, "latest.example.com");
+  // A save that fails does not hold back the next.
+  const failing = model.updateTunnel({ useHTTP2: true });
+  const after = model.updateTunnel({ namedHostname: "after.example.com" });
+  await tick();
+  assert.equal(requests.length, 3);
+  requests[2].fail();
+  await assert.rejects(failing, /save failed/);
+  await tick();
+  assert.equal(requests.length, 4);
+  requests[3].commit();
+  await after;
+  assert.equal(stored.namedHostname, "after.example.com");
+  assert.equal(model.configurationRead(), model.tunnelSaves);
 });

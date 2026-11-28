@@ -983,8 +983,8 @@
       // The tunnel's saves begun, and those under way (configurationRead).
       this.tunnelSaves = 0;
       this.tunnelSaving = 0;
-      // The latest of them to have been held (updateTunnel).
-      this.tunnelHeld = 0;
+      // The save sent last, which the next waits for (updateTunnel).
+      this.tunnelQueue = Promise.resolve();
       this.schedule = options.schedule || setTimeout;
       this.clearSchedule = options.clearSchedule || clearTimeout;
       this.successDelay = options.successDelay ?? 3000;
@@ -1184,19 +1184,22 @@
       );
     }
     /// Saves the tunnel's draft, with `patch` applied; what it saved is then
-    /// what the app holds, which later snapshots are compared with.
+    /// what the app holds, which later snapshots are compared with. One save
+    /// at a time, after those before it, each of the draft as it is when its
+    /// turn comes: the app writes the last edit last.
     async updateTunnel(patch = {}) {
       Object.assign(this.tunnelConfiguration, patch);
-      const value = structuredClone(this.tunnelConfiguration);
-      const save = ++this.tunnelSaves;
+      this.tunnelSaves++;
       this.tunnelSaving++;
-      try {
+      const save = async () => {
+        const value = structuredClone(this.tunnelConfiguration);
         await this.invoke("save_tunnel_configuration", { value });
-        // A save ending after a later one is not what the app holds.
-        if (save > this.tunnelHeld) {
-          this.tunnelHeld = save;
-          this.holdTunnel(value);
-        }
+        this.holdTunnel(value);
+      };
+      const saved = this.tunnelQueue.then(save, save);
+      this.tunnelQueue = saved.catch(() => {});
+      try {
+        await saved;
       } finally {
         this.tunnelSaving--;
       }
