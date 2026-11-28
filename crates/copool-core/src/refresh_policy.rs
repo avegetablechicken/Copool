@@ -277,7 +277,7 @@ pub(crate) fn track_speed_up(
 /// The key of the card an account shows on: its id, or `sub2api:<provider>`
 /// for a Sub2api provider's, which refresh together.
 pub(crate) fn card_key(pool: Pool, id: &str) -> String {
-    match crate::sub2api::card_provider(pool, id) {
+    match crate::provider_accounts::card_provider(pool, id) {
         Some(provider) => format!("sub2api:{provider}"),
         None => id.to_owned(),
     }

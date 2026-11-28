@@ -636,7 +636,7 @@ impl Application {
         access: KeychainAccess,
     ) -> Result<SwitchExecution> {
         let _op = self.antigravity.logins.operations.lock().await;
-        if crate::sub2api::is_card(Pool::Antigravity, id) {
+        if crate::provider_accounts::is_card(Pool::Antigravity, id) {
             return self.antigravity_switch_sub2api(id).await;
         }
         // An item that cannot be read would not take the write either.

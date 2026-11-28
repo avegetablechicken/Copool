@@ -1381,7 +1381,7 @@ async fn a_card_of_a_sub2api_without_weekly_usage_names_its_version() {
     let outdated = |accounts: Vec<AccountSummary>| {
         accounts
             .into_iter()
-            .find(|a| crate::sub2api::is_card(Pool::Antigravity, &a.id))
+            .find(|a| crate::provider_accounts::is_card(Pool::Antigravity, &a.id))
             .unwrap()
             .outdated_sub2api_version
     };
@@ -1541,7 +1541,7 @@ async fn a_sub2api_card_puts_agy_on_the_gemini_api_and_an_account_takes_it_back(
         .unwrap();
     let accounts = cards(&h.app).await;
     assert_eq!(accounts.len(), 2);
-    let is_card = |a: &&AccountSummary| crate::sub2api::is_card(Pool::Antigravity, &a.id);
+    let is_card = |a: &&AccountSummary| crate::provider_accounts::is_card(Pool::Antigravity, &a.id);
     let card = accounts.iter().find(is_card).unwrap().clone();
     let alice = accounts.iter().find(|a| !is_card(a)).unwrap().clone();
     assert_eq!(card.source_tag.as_deref(), Some("SUB2API"));

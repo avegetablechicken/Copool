@@ -210,7 +210,10 @@ impl Codex {
         saved["id"].as_str().unwrap().to_owned()
     }
     fn connection(&self, id: &str) -> Result<sub2api::Connection, String> {
-        self.app.registry(Pool::Codex).connection(id)
+        self.app
+            .registry(Pool::Codex)
+            .connection(id)
+            .map(crate::provider_registry::Connection::sub2api)
     }
 }
 async fn check_sub2api(explicit: Option<&str>) {
@@ -423,7 +426,7 @@ async fn testConfiguredProviderDoesNotRequireExplicitConfirmation() {
 }
 #[test]
 fn testSub2APICardWithoutEmailShowsItsAccountName() {
-    let account: sub2api::Account = serde_json::from_value(json!({
+    let account: crate::provider_accounts::Account = serde_json::from_value(json!({
         "id": 10, "name": " team-pool ", "accountType": "oauth", "status": "active",
         "usageError": "upstream timeout", "providerID": "my"
     }))

@@ -995,7 +995,7 @@ async fn grok_provider(h: &Harness, base: &str) -> String {
 fn sub2api_cards(accounts: Vec<AccountSummary>) -> Vec<AccountSummary> {
     accounts
         .into_iter()
-        .filter(|a| crate::sub2api::is_card(Pool::Grok, &a.id))
+        .filter(|a| crate::provider_accounts::is_card(Pool::Grok, &a.id))
         .collect()
 }
 
@@ -1386,6 +1386,7 @@ async fn coport_subscription_endpoints_survive_switches_to_both_sub2api_key_mode
                 .registry(Pool::Grok)
                 .connection(&id)
                 .unwrap()
+                .sub2api()
                 .admin_base,
             "https://relay.example:6060/api/v1"
         );

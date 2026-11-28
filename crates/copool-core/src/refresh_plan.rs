@@ -12,8 +12,8 @@
 
 use crate::{
     models::{AccountSummary, CardRefreshSummary, Pool},
+    provider_accounts,
     refresh_policy::{self, RefreshPreferences, Schedule},
-    sub2api,
 };
 use std::collections::BTreeMap;
 
@@ -44,7 +44,7 @@ impl<'a> Card<'a> {
     ) -> Self {
         Self {
             id: &account.id,
-            provider: sub2api::card_provider(pool, &account.id),
+            provider: provider_accounts::card_provider(pool, &account.id),
             current: account.is_current,
             refreshed_at: account.updated_at,
             waiting: account.awaiting_first_request,

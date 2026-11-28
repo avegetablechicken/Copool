@@ -217,7 +217,7 @@ legacy(
     assert.equal(
       P.needsReauthentication(
         account("a", "list", {
-          sourceTag: "SUB2API",
+          sourceTag: "SUB2API", providerKind: "sub2api",
           usageError: "error.accounts.sign_in_expired",
         }),
       ),

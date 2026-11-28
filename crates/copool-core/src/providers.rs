@@ -6,9 +6,10 @@ use crate::{
     application::{Application, SAY_HI_REQUIRES_PLUS},
     models::AccountSummary,
     pool::Pool,
+    provider_accounts::{Account, Member},
+    provider_registry::Connection,
     repository,
     settings::Settings,
-    sub2api::{self, Account, Member},
     utils::now_unix_seconds,
 };
 use serde_json::Value;
@@ -109,7 +110,7 @@ impl Application {
             return Ok(());
         }
         let secrets = self.secrets.clone();
-        let key = sub2api::password_secret(pool, id);
+        let key = crate::provider_accounts::password_secret(pool, id);
         tokio::task::spawn_blocking(move || secrets.set(&key, &password))
             .await
             .map_err(|e| e.to_string())?
@@ -125,7 +126,7 @@ impl Application {
     }
     /// The provider's connection as last saved: a save under way, which
     /// keeps its password after its record, is waited for.
-    async fn member_connection(&self, pool: Pool, member: &Member) -> Result<sub2api::Connection> {
+    async fn member_connection(&self, pool: Pool, member: &Member) -> Result<Connection> {
         let _saved = self.provider_saves.read().await;
         self.registry(pool).connection(&member.key)
     }
@@ -213,10 +214,9 @@ impl Application {
             Pool::Grok => return self.grok_unavailable(),
         };
         let (member, account) = self.card(pool, id)?;
-        self.member_connection(pool, &member)
-            .await?
-            .test_account(account.id, model)
-            .await
+        match self.member_connection(pool, &member).await? {
+            Connection::Sub2api(c) => c.test_account(account.id, model).await,
+        }
     }
     /// Refreshes the providers by key, every one without; returns their errors.
     pub(crate) async fn refresh_providers(
@@ -456,7 +456,7 @@ mod tests {
         // The password under the id's new name; the old one stays.
         assert_eq!(
             earlier
-                .secret(&sub2api::password_secret(Pool::Codex, ID))
+                .secret(&crate::provider_accounts::password_secret(Pool::Codex, ID))
                 .as_deref(),
             Some("secret")
         );
@@ -496,6 +496,7 @@ mod tests {
             app.registry(Pool::Codex)
                 .connection(ID)
                 .unwrap()
+                .sub2api()
                 .configuration
                 .password,
             "secret"
@@ -524,7 +525,10 @@ mod tests {
                 while !earlier.secrets.2.load(SeqCst) {
                     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 }
-                app.member_connection(Pool::Codex, &member).await.unwrap()
+                app.member_connection(Pool::Codex, &member)
+                    .await
+                    .unwrap()
+                    .sub2api()
             }
         );
         saved.unwrap();
@@ -558,7 +562,7 @@ mod tests {
         assert_eq!(earlier.file("settings.json"), settings);
         assert_eq!(
             earlier
-                .secret(&sub2api::password_secret(Pool::Codex, ID))
+                .secret(&crate::provider_accounts::password_secret(Pool::Codex, ID))
                 .as_deref(),
             Some("new")
         );
@@ -586,7 +590,7 @@ mod tests {
         );
         assert_eq!(
             earlier
-                .secret(&sub2api::password_secret(Pool::Codex, ID))
+                .secret(&crate::provider_accounts::password_secret(Pool::Codex, ID))
                 .as_deref(),
             Some("new")
         );

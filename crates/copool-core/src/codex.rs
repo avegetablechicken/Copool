@@ -36,6 +36,15 @@ type Result<T> = std::result::Result<T, String>;
 pub(crate) const FILE: &str = "codex-accounts.json";
 pub(crate) const SIGN_IN_EXPIRED: &str = "error.accounts.sign_in_expired";
 pub(crate) const SAY_HI_REQUIRES_PLUS: &str = "Say hi requires a ChatGPT Plus account";
+/// Whether an account of this plan can say hi: only a Plus account's hi
+/// starts its window, whoever's the account is.
+pub(crate) fn greets(plan: Option<&str>) -> Result<()> {
+    if plan.unwrap_or_default().trim().eq_ignore_ascii_case("plus") {
+        Ok(())
+    } else {
+        Err(SAY_HI_REQUIRES_PLUS.into())
+    }
+}
 
 /// What the pool adds to its accounts.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -524,7 +533,7 @@ impl Application {
         access: KeychainAccess,
     ) -> Result<SwitchExecution> {
         let _op = self.codex.operations.lock().await;
-        if crate::sub2api::is_card(Pool::Codex, id) {
+        if crate::provider_accounts::is_card(Pool::Codex, id) {
             let (provider, account) = self.card(Pool::Codex, id)?;
             if !account.status.eq_ignore_ascii_case("active") {
                 return Err("Account is deactivated".into());
@@ -587,16 +596,14 @@ impl Application {
             .into_iter()
             .find(|a| a.id == id)
             .ok_or("Account not found")?;
-        let plan = account
-            .usage
-            .as_ref()
-            .and_then(|u| u.plan_type.as_deref())
-            .filter(|p| !p.trim().is_empty())
-            .or(account.plan.as_deref())
-            .unwrap_or_default();
-        if !plan.trim().eq_ignore_ascii_case("plus") {
-            return Err(SAY_HI_REQUIRES_PLUS.into());
-        }
+        greets(
+            account
+                .usage
+                .as_ref()
+                .and_then(|u| u.plan_type.as_deref())
+                .filter(|p| !p.trim().is_empty())
+                .or(account.plan.as_deref()),
+        )?;
         let live = self
             .codex_read_live()
             .ok()

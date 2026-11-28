@@ -1746,7 +1746,7 @@ impl Application {
         access: KeychainAccess,
     ) -> Result<SwitchExecution> {
         let _op = self.claude.logins.operations.lock().await;
-        if crate::sub2api::is_card(Pool::Claude, id) {
+        if crate::provider_accounts::is_card(Pool::Claude, id) {
             return self.claude_switch_sub2api(id).await;
         }
         if access == KeychainAccess::Interactive {

@@ -13,9 +13,8 @@ pub(crate) type Response<'a, T> = std::pin::Pin<
 use crate::{
     application::{eligible, Application, SmartSwitchOutcome, SwitchExecution},
     models::{AccountSummary, Renewal, StoredAccount},
-    plan_tags, refresh_plan,
+    plan_tags, provider_accounts, refresh_plan,
     refresh_policy::{self, Schedule},
-    sub2api,
     utils::now_unix_seconds,
     vault::KeychainAccess,
 };
@@ -235,7 +234,7 @@ impl Application {
     }
     /// Removes a card; a Sub2api card leaves its provider until a sync.
     pub async fn delete_account(&self, pool: Pool, id: &str) -> Result<()> {
-        if sub2api::is_card(pool, id) {
+        if provider_accounts::is_card(pool, id) {
             return self.delete_card(pool, id).await;
         }
         self.ops(pool).delete(id).await
@@ -245,7 +244,7 @@ impl Application {
     pub async fn save_account_proxy(&self, pool: Pool, id: &str, value: &str) -> Result<()> {
         crate::utils::validate_account_proxy(value)?;
         let value = value.trim().to_owned();
-        if sub2api::is_card(pool, id) {
+        if provider_accounts::is_card(pool, id) {
             return self.set_card_proxy(pool, id, value).await;
         }
         self.edit_account(pool, id, |account| account.set_proxy(value))
@@ -367,7 +366,7 @@ impl Application {
     /// Refreshes one card: an account's usage, its login renewed as its
     /// renewal allows, or a Sub2api card through its provider.
     pub async fn refresh_usage(&self, pool: Pool, id: &str) -> Result<()> {
-        if sub2api::is_card(pool, id) {
+        if provider_accounts::is_card(pool, id) {
             return self.refresh_card(pool, id).await;
         }
         self.refresh_login(pool, id, None).await
@@ -388,7 +387,7 @@ impl Application {
     /// failed: its token expired or its usage refused; it then refreshes once
     /// renewed, and a usage error shows on the card.
     pub async fn renew_now(&self, pool: Pool, id: &str) -> Result<()> {
-        if sub2api::is_card(pool, id) {
+        if provider_accounts::is_card(pool, id) {
             return Err("Token renewal is not available for this account".into());
         }
         let failed = self.ops(pool).login_failed(id).await?;
@@ -435,7 +434,7 @@ impl Application {
         }
         self.refuse_deleted(pool, id).await?;
         let _greeting = self.begin_greeting(pool, id)?;
-        if sub2api::is_card(pool, id) {
+        if provider_accounts::is_card(pool, id) {
             return self.say_hi_through_provider(pool, id).await;
         }
         let mut renewed = false;
@@ -506,7 +505,7 @@ impl Application {
         let ids = ids.unwrap_or(&every);
         let refreshes = accounts
             .iter()
-            .filter(|a| !sub2api::is_card(pool, &a.id) && ids.contains(&a.id))
+            .filter(|a| !provider_accounts::is_card(pool, &a.id) && ids.contains(&a.id))
             .map(|account| async move {
                 self.refresh_usage(pool, &account.id)
                     .await

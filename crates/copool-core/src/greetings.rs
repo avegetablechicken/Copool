@@ -45,11 +45,11 @@ fn eligible(account: &AccountSummary, pool: Pool) -> bool {
         && account.display_status != "deleted"
         && match pool {
             Pool::Claude => true,
-            Pool::Antigravity => !crate::sub2api::is_card(pool, &account.id),
+            Pool::Antigravity => !crate::provider_accounts::is_card(pool, &account.id),
             // Grok has no five-hour window to start.
             Pool::Grok => false,
             Pool::Codex => {
-                !crate::sub2api::is_card(pool, &account.id)
+                !crate::provider_accounts::is_card(pool, &account.id)
                     && account
                         .usage
                         .as_ref()

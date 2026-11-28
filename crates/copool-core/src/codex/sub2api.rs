@@ -69,7 +69,7 @@ impl Application {
             }
         }
         let copied = legacy.iter().try_for_each(|p| {
-            let key = sub2api::password_secret(Pool::Codex, &p.id);
+            let key = crate::provider_accounts::password_secret(Pool::Codex, &p.id);
             if self.secrets.get(&key)?.is_none() {
                 if let Some(password) = self.secrets.get(&p.id)? {
                     self.secrets.set(&key, &password)?;

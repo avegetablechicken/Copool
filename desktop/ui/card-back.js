@@ -34,7 +34,7 @@
     /// The shared account proxy a blank proxy uses, when one is set; a
     /// Sub2api provider's never does.
     function sharedProxy(owner) {
-      return owner.sourceTag === "SUB2API" ? "" : (host.preferences?.accountProxyUrl || "").trim();
+      return P.isProviderCard(owner) ? "" : (host.preferences?.accountProxyUrl || "").trim();
     }
     /// The help under a proxy: what a blank one uses.
     function proxyHelp(owner) {
@@ -444,7 +444,7 @@
           return;
         }
         host.controller.close(state);
-        host.removeCards(cards, provider || cards[0].sourceTag === "SUB2API");
+        host.removeCards(cards, provider || P.isProviderCard(cards[0]));
       };
       row.append(remove);
       return row;

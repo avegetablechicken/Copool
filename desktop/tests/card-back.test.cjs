@@ -12,7 +12,7 @@ const dom = require("./fake-dom.cjs");
 /// One of the Sub2api provider "team"'s cards.
 const member = (n, extra = {}) => ({
   id: `sub2api-team-${n}`,
-  sourceTag: "SUB2API",
+  sourceTag: "SUB2API", providerKind: "sub2api",
   proxyUrl: "",
   refresh: { key: "sub2api:team" },
   ...extra,
@@ -210,7 +210,7 @@ test("a blank card proxy is described and shown as the shared account proxy when
   assert.equal(back.proxyHelp({}), "accounts.proxy.shared_help");
   assert.equal(back.proxyPlaceholder({}), "socks5://127.0.0.1:7891");
   // A Sub2api provider's cards never take the shared proxy.
-  const provider = { sourceTag: "SUB2API" };
+  const provider = { sourceTag: "SUB2API", providerKind: "sub2api" };
   assert.equal(back.proxyHelp(provider), "accounts.proxy.system_help");
   assert.equal(back.proxyPlaceholder(provider), "http://127.0.0.1:7890");
   scope.preferences.accountProxyUrl = "direct://";
@@ -514,8 +514,8 @@ test("a card's menu runs its card's actions, a provider's for its group", () => 
   // A provider's group: its provider's refresh, switch through an active
   // card and removal.
   const group = { key: "team", accounts: [
-    { id: "sub2api-team-1", sourceTag: "SUB2API", available: false },
-    { id: "sub2api-team-2", sourceTag: "SUB2API" },
+    { id: "sub2api-team-1", sourceTag: "SUB2API", providerKind: "sub2api", available: false },
+    { id: "sub2api-team-2", sourceTag: "SUB2API", providerKind: "sub2api" },
   ] };
   assert.deepEqual(JSON.parse(JSON.stringify(run({ group }))), [
     ["accounts.card.edit", ["editCard", "sub2api:team"]],
@@ -614,7 +614,7 @@ test("a Sub2api provider's cards share their speed-up and have no slow-down", as
   });
   // The key is the core's, the card's or its provider's cards' (refresh_plan.rs).
   const { refreshKey } = V;
-  const member = { id: "claude-sub2api-p-3", sourceTag: "SUB2API", refresh: { key: "sub2api:p" } };
+  const member = { id: "claude-sub2api-p-3", sourceTag: "SUB2API", providerKind: "sub2api", refresh: { key: "sub2api:p" } };
   assert.equal(refreshKey({ group: { key: "p", accounts: [member] } }), "sub2api:p");
   assert.equal(refreshKey({ account: member }), "sub2api:p");
   assert.equal(refreshKey({ account: { id: "acct", refresh: { key: "acct" } } }), "acct");

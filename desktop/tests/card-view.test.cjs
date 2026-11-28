@@ -309,7 +309,7 @@ test("A card's plan tag is the core's label and color, its workspace tag hidden 
   // A team the core leaves unnamed is not shown.
   assert.deepEqual(tags({ ...team, planTag: { label: "PRO", accent: "pink" }, workspaceTag: undefined }), [["tag plan", "PRO"]]);
   // A provider's group carries its SUB2API and CURRENT tags once.
-  const member = { ...team, sourceTag: "SUB2API", workspaceTag: "SUB2API", isCurrent: true };
+  const member = { ...team, sourceTag: "SUB2API", providerKind: "sub2api", workspaceTag: "SUB2API", isCurrent: true };
   assert.deepEqual(tags(member), [["tag plan", "BUSINESS"], ["tag muted", "SUB2API"], ["tag good", "accounts.card.current"]]);
   assert.deepEqual(tags(member, true), [["tag plan", "BUSINESS"]]);
   // Awaiting its first request, the card explains why.
@@ -320,8 +320,8 @@ test("A card's plan tag is the core's label and color, its workspace tag hidden 
     title: "accounts.card.awaiting_first_request.help",
   });
   // A provider's account without tags or switch has no tag row.
-  assert.equal(V.cardView({ id: "a", sourceTag: "SUB2API" }, context(), true).headed, false);
-  assert.equal(V.cardView({ id: "a", sourceTag: "SUB2API" }, context()).headed, true);
+  assert.equal(V.cardView({ id: "a", sourceTag: "SUB2API", providerKind: "sub2api" }, context(), true).headed, false);
+  assert.equal(V.cardView({ id: "a", sourceTag: "SUB2API", providerKind: "sub2api" }, context()).headed, true);
 });
 
 test("Sign in again replaces refresh and switch, pinning the workspace only for a workspace tag", () => {
@@ -349,7 +349,7 @@ test("Sign in again replaces refresh and switch, pinning the workspace only for 
   const compact = action(V.cardView(expired, context({ collapsed: true, adding: true })), "reauthenticate").button;
   assert.deepEqual([compact.label, compact.compact, compact.disabled], ["", true, true]);
   // A Sub2api card's expired key is not a sign-in.
-  assert.equal(action(V.cardView({ ...expired, sourceTag: "SUB2API" }, context()), "reauthenticate"), undefined);
+  assert.equal(action(V.cardView({ ...expired, sourceTag: "SUB2API", providerKind: "sub2api" }, context()), "reauthenticate"), undefined);
 });
 
 test("The usage warning shows unless the card refreshes, is collapsed or is a provider's", () => {
@@ -447,7 +447,7 @@ test("A card's menu edits it, then refreshes, greets, renews, switches and remov
     "common.refresh_usage", "accounts.say_hi.now", "—", "common.remove",
   ]);
   // A provider's group: its provider's refresh, switch and removal.
-  const member = { id: "sub2api-team-1", sourceTag: "SUB2API", isCurrent: false };
+  const member = { id: "sub2api-team-1", sourceTag: "SUB2API", providerKind: "sub2api", isCurrent: false };
   const group = { key: "team", accounts: [member] };
   assert.deepEqual(menu(view({ group })), [
     "accounts.card.edit", "—", "common.refresh_usage", "accounts.card.switch_to_this", "—", "common.remove",
@@ -475,7 +475,7 @@ test("A card's menu edits it, then refreshes, greets, renews, switches and remov
 });
 
 test("A provider's group shares its cards' warnings, refresh and switch", () => {
-  const card = (id, extra = {}) => ({ id, sourceTag: "SUB2API", ...extra });
+  const card = (id, extra = {}) => ({ id, sourceTag: "SUB2API", providerKind: "sub2api", ...extra });
   const group = {
     key: "team",
     accounts: [
@@ -515,7 +515,7 @@ test("A provider's group shares its cards' warnings, refresh and switch", () => 
 });
 
 test("A collapsed provider's first row carries the provider's dot and controls", () => {
-  const card = (id, extra = {}) => ({ id, sourceTag: "SUB2API", ...extra });
+  const card = (id, extra = {}) => ({ id, sourceTag: "SUB2API", providerKind: "sub2api", ...extra });
   const group = { key: "team", accounts: [card("sub2api-team-1"), card("sub2api-team-2", { isCurrent: true })] };
   const view = V.providerView(group, "Team", context({ collapsed: true }));
   const [first, second] = view.members;
@@ -566,7 +566,7 @@ test("Details contain the proxy, relative token expiry and this card's refresh i
 
 test("Providers and their members show the interval for whether the provider is in use", () => {
   const c = context({ pool: "claude", accountProxy: "socks5://127.0.0.1:7890" });
-  const account = { id: "member", sourceTag: "SUB2API", refresh: { key: "sub2api:provider", seconds: 180 } };
+  const account = { id: "member", sourceTag: "SUB2API", providerKind: "sub2api", refresh: { key: "sub2api:provider", seconds: 180 } };
   const group = { key: "provider", accounts: [account] };
   // A provider's proxy never falls back to the shared account proxy.
   assert.equal(V.details({ group }, c), "direct\naccounts.refresh.interval_format 3 minutes");
@@ -644,8 +644,8 @@ test("Credits and resets carry their expiry dates; resets other than full ones a
 
 test("Antigravity accounts say hi, its Sub2api cards do not; Grok never does", () => {
   assert.equal(V.supportsSayHi({ id: "a" }, "antigravity"), true);
-  assert.equal(V.supportsSayHi({ id: "antigravity-sub2api-p-1", sourceTag: "SUB2API" }, "antigravity"), false);
-  assert.equal(V.supportsSayHi({ id: "claude-sub2api-p-1", sourceTag: "SUB2API" }, "claude"), true);
+  assert.equal(V.supportsSayHi({ id: "antigravity-sub2api-p-1", sourceTag: "SUB2API", providerKind: "sub2api" }, "antigravity"), false);
+  assert.equal(V.supportsSayHi({ id: "claude-sub2api-p-1", sourceTag: "SUB2API", providerKind: "sub2api" }, "claude"), true);
   assert.equal(V.supportsSayHi({ id: "g" }, "grok"), false);
 });
 
@@ -687,7 +687,7 @@ test("Codex greetings are limited to idle official Plus cards", () => {
   const card = { id: "a", planType: "plus", usage: {} };
   assert.equal(can(card), true);
   assert.equal(can({ ...card, usage: null }), false);
-  assert.equal(can({ ...card, sourceTag: "SUB2API" }), false);
+  assert.equal(can({ ...card, sourceTag: "SUB2API", providerKind: "sub2api" }), false);
   for (const planType of ["pro", "free", "team", ""]) assert.equal(can({ ...card, planType }), false);
   assert.equal(can({ ...card, usage: { planType: "pro" } }), false);
   assert.equal(can({ ...card, usage: { fiveHour: { resetAt: NOW + 100 } } }), false);
@@ -695,7 +695,7 @@ test("Codex greetings are limited to idle official Plus cards", () => {
 });
 
 test("A card turns over only to what it can edit", () => {
-  const member = { id: "m", sourceTag: "SUB2API" };
+  const member = { id: "m", sourceTag: "SUB2API", providerKind: "sub2api" };
   assert.equal(V.hasBack(null, "codex"), false);
   assert.equal(V.hasBack({ group: { key: "p", accounts: [member] } }, "codex"), true);
   assert.equal(V.hasBack({ account: member }, "codex"), true);
@@ -708,6 +708,6 @@ test("A card's view is plain data, with no functions to call", () => {
   // structuredClone refuses functions.
   const view = V.cardView(a, context({ ui: () => ({ hi: "sent" }) }));
   assert.deepEqual(structuredClone(view), view);
-  const group = V.providerView({ key: "p", accounts: [{ id: "sub2api-p-1", sourceTag: "SUB2API" }] }, "P", context());
+  const group = V.providerView({ key: "p", accounts: [{ id: "sub2api-p-1", sourceTag: "SUB2API", providerKind: "sub2api" }] }, "P", context());
   assert.deepEqual(structuredClone(group), group);
 });

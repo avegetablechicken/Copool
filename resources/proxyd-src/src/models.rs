@@ -114,6 +114,10 @@ pub struct AccountSummary {
     /// have none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outdated_sub2api_version: Option<String>,
+    /// The kind of unofficial provider whose account the card shows
+    /// ("sub2api" or "cliproxyapi"); none for the pool's own accounts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_kind: Option<String>,
     /// The card's plan and workspace tags, as `Application::accounts` lists
     /// it (`plan_tags`); none before.
     #[serde(flatten)]
@@ -669,6 +673,7 @@ impl StoredAccount {
             renewal: None,
             next_refresh_at: None,
             outdated_sub2api_version: None,
+            provider_kind: None,
             tags: PlanTags::default(),
             refresh: None,
             is_current: current_account_id

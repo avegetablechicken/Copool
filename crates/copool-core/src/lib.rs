@@ -66,6 +66,7 @@ pub mod credentials;
 pub mod sub2api;
 mod vault;
 
+mod provider_accounts;
 mod provider_registry;
 mod providers;
 

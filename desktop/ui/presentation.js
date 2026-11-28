@@ -672,12 +672,17 @@
     const space = editing && wanted > end ? Math.ceil(wanted - end) : 0;
     return { scrollTop: Math.max(0, Math.min(wanted, end + space)), space };
   }
+  /// Whether a card shows an unofficial provider's account, as the core
+  /// marks it: its provider owns its sign-in and proxy.
+  function isProviderCard(account) {
+    return !!account?.providerKind;
+  }
   function needsReauthentication(
     account,
     translated = "Sign-in expired. Please sign in again.",
   ) {
     return (
-      account.sourceTag !== "SUB2API" &&
+      !isProviderCard(account) &&
       [
         "error.accounts.sign_in_expired",
         "error.antigravity.sign_in_expired",
@@ -887,6 +892,7 @@
     importMenu,
     providerAddMenu,
     heldScroll,
+    isProviderCard,
     providerKey,
     proxyOwner,
     formatLocalized,

@@ -336,7 +336,9 @@ mod tests {
         serde_json::from_value(listed).unwrap()
     }
     fn connection(app: &Application, key: &str) -> Result<crate::sub2api::Connection> {
-        app.registry(Pool::Claude).connection(key)
+        app.registry(Pool::Claude)
+            .connection(key)
+            .map(crate::provider_registry::Connection::sub2api)
     }
     use serde_json::{json, Value};
     use std::{collections::HashMap, fs, path::PathBuf, sync::Mutex};
@@ -573,7 +575,7 @@ mod tests {
             location,
             base,
             path,
-            crate::sub2api::card_id(Pool::Claude, &saved.id, 7),
+            crate::provider_accounts::card_id(Pool::Claude, &saved.id, 7),
             alice,
             secrets,
             requests,
@@ -673,7 +675,7 @@ mod tests {
         .await
         .unwrap();
         sync_all(&app).await;
-        let card = crate::sub2api::card_id(Pool::Claude, &saved.id, 7);
+        let card = crate::provider_accounts::card_id(Pool::Claude, &saved.id, 7);
         let shown = |app: &Application| {
             let summary = app.provider_cards(Pool::Claude, None).unwrap().remove(0);
             assert_eq!(summary.email.as_deref(), Some("upstream@example.com"));
@@ -816,7 +818,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (app, _, _, _, _, _, _, requests) = pool_recording(dir.path()).await;
         for account in app.accounts(Pool::Claude).await.unwrap() {
-            if crate::sub2api::is_card(Pool::Claude, &account.id) {
+            if crate::provider_accounts::is_card(Pool::Claude, &account.id) {
                 app.delete_account(Pool::Claude, &account.id).await.unwrap();
             }
         }
@@ -1106,7 +1108,7 @@ mod tests {
             ("address", "")
         );
         sync_all(&app).await;
-        let card = crate::sub2api::card_id(Pool::Claude, &saved.id, 7);
+        let card = crate::provider_accounts::card_id(Pool::Claude, &saved.id, 7);
         app.set_claude_network(std::sync::Arc::new(Fake::default()));
         sign_in(&location, "alice", 4_000_000_000_000);
         app.claude_import_current().await.unwrap();
@@ -1245,7 +1247,7 @@ mod tests {
         write(&moved, "sk-moved");
         app.switch_account(
             Pool::Claude,
-            &crate::sub2api::card_id(Pool::Claude, &saved.id, 7),
+            &crate::provider_accounts::card_id(Pool::Claude, &saved.id, 7),
         )
         .await
         .unwrap();
@@ -1266,7 +1268,7 @@ mod tests {
         assert_eq!(saved.settings_path, picked.to_str().unwrap());
         app.switch_account(
             Pool::Claude,
-            &crate::sub2api::card_id(Pool::Claude, &saved.id, 7),
+            &crate::provider_accounts::card_id(Pool::Claude, &saved.id, 7),
         )
         .await
         .unwrap();
@@ -1297,7 +1299,10 @@ mod tests {
         app.refresh_recurring(Pool::Claude, 1).await.unwrap();
         assert_eq!(
             secrets.reads(),
-            [crate::sub2api::password_secret(Pool::Claude, &provider)]
+            [crate::provider_accounts::password_secret(
+                Pool::Claude,
+                &provider
+            )]
         );
         // The round reaches the provider with the login of the earlier sync.
         assert_eq!((logins(&requests), listings(&requests)), (0, 1));
@@ -1337,8 +1342,8 @@ mod tests {
         let mut reads = secrets.reads();
         reads.sort();
         let mut expected = vec![
-            crate::sub2api::password_secret(Pool::Claude, &first),
-            crate::sub2api::password_secret(Pool::Claude, &other.id),
+            crate::provider_accounts::password_secret(Pool::Claude, &first),
+            crate::provider_accounts::password_secret(Pool::Claude, &other.id),
         ];
         expected.sort();
         assert_eq!(reads, expected);
@@ -1359,8 +1364,8 @@ mod tests {
         let mut reads = secrets.reads();
         reads.sort();
         let mut expected = vec![
-            crate::sub2api::password_secret(Pool::Claude, &first),
-            crate::sub2api::password_secret(Pool::Claude, &other.id),
+            crate::provider_accounts::password_secret(Pool::Claude, &first),
+            crate::provider_accounts::password_secret(Pool::Claude, &other.id),
         ];
         expected.sort();
         assert_eq!(reads, expected);

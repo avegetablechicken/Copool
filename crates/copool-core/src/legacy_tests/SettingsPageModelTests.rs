@@ -2,8 +2,8 @@ use super::{http_fixture::serve, MemorySecrets};
 use crate::Pool;
 use crate::{
     credentials::SecretStore,
+    provider_accounts::password_secret,
     provider_registry::{Adapter, ProviderRecord},
-    sub2api::password_secret,
     utils::now_unix_seconds,
     Application, Paths,
 };
@@ -405,7 +405,8 @@ async fn testCacheRefreshCannotOverwriteNewAccountProxy() {
     let (_dir, app, _) = fixture();
     let p = imported("p", &[(42, 10.)]);
     put(&app, |providers| providers.push(p.clone())).await;
-    let stale: crate::sub2api::Account = serde_json::from_value(cached(42, "p", 20.)).unwrap();
+    let stale: crate::provider_accounts::Account =
+        serde_json::from_value(cached(42, "p", 20.)).unwrap();
     app.save_account_proxy(Pool::Codex, &card(&p, 42), "socks5://127.0.0.1:1080")
         .await
         .unwrap();

@@ -153,7 +153,7 @@
       // The proxy edited: the account's own, or its provider's for a group.
       const owner = target.group ? target.group.accounts[0] : account;
       // A blank proxy uses the shared account proxy; a Sub2api provider's never does.
-      const shared = owner.sourceTag === "SUB2API" ? "" : ctx.accountProxy || "";
+      const shared = P.isProviderCard(owner) ? "" : ctx.accountProxy || "";
       const proxy = owner.proxyUrl?.trim() || shared;
       lines.push(!proxy || proxy === "direct://" ? "direct" : `${tr("accounts.proxy.title")}: ${proxy}`);
     }
@@ -177,9 +177,9 @@
     // Grok has no five-hour window to start.
     if (pool === "grok") return false;
     // An Antigravity provider's cards say no hi, as Codex's.
-    if (pool === "antigravity") return account.sourceTag !== "SUB2API";
+    if (pool === "antigravity") return !P.isProviderCard(account);
     const plan = (account.usage?.planType?.trim() || account.planType || "").trim().toLowerCase();
-    return account.sourceTag !== "SUB2API" && plan === "plus";
+    return !P.isProviderCard(account) && plan === "plus";
   }
   /// Known usage with no future reset indicates an idle window; Antigravity's
   /// third-party (Claude) pool has its own, idle as well when reported so.
@@ -448,7 +448,7 @@
     if (account.renewal)
       actions.push({ kind: "renew", button: null, menu: { label: tr("accounts.renewal.now"), disabled: busy } });
     actions.push(switchAction(account, account.isCurrent, account.available, reauthenticate, ctx, [account]));
-    actions.push(separator(), removeAction(account.email || account.label, account.sourceTag === "SUB2API", ctx));
+    actions.push(separator(), removeAction(account.email || account.label, P.isProviderCard(account), ctx));
     return actions;
   }
   /// The switch to `target`: a button on a card not in use, and in the menu
@@ -456,7 +456,7 @@
   /// or gateway update.
   function switchAction(target, current, available, hidden, ctx, cards) {
     const { tr } = ctx;
-    const reapply = ctx.pool === "grok" && cards[0]?.sourceTag === "SUB2API";
+    const reapply = ctx.pool === "grok" && P.isProviderCard(cards[0]);
     return {
       kind: "switch",
       id: target.id,

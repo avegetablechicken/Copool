@@ -379,9 +379,19 @@ pub(crate) async fn fetch_usage(api: &str, oauth: &Value, proxy: &str) -> Result
         response = request_usage(api, &token, USER_AGENT, proxy).await?;
     }
     let (status, body, _, clock_offset) = response;
+    usage_reply(status, &body, plan(oauth), clock_offset)
+}
+/// The usage an answer to the usage request reports, whoever sent it: its
+/// windows, offset by the clock of the response's `Date`, or its error.
+pub(crate) fn usage_reply(
+    status: u16,
+    body: &Value,
+    plan: Option<String>,
+    clock_offset: Option<i64>,
+) -> Result<UsageSnapshot> {
     match status {
         200..=299 => {
-            let mut usage = usage_snapshot(&body, plan(oauth), now_unix_seconds())?;
+            let mut usage = usage_snapshot(body, plan, now_unix_seconds())?;
             for window in [
                 &mut usage.five_hour,
                 &mut usage.one_week,

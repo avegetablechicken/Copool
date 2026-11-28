@@ -12,7 +12,8 @@ use crate::{
     application::Application,
     codex::config::Definition,
     pool::Pool,
-    sub2api::{self, Account, Member},
+    provider_accounts::{Account, Member},
+    sub2api,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
@@ -21,12 +22,44 @@ use std::{future::Future, pin::Pin};
 type Result<T> = std::result::Result<T, String>;
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// What every pool keeps of a Sub2api provider; a pool's own provider
+/// What an unofficial provider is: the server whose accounts its cards show
+/// and whose gateway its pool's tool is switched to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Kind {
+    /// Sub2api: an administrator signs in to its admin API, which reads each
+    /// account's usage.
+    #[default]
+    #[serde(rename = "sub2api")]
+    Sub2api,
+}
+impl Kind {
+    /// Kept unsaved: a provider saved before kinds existed is Sub2api's.
+    fn is_sub2api(&self) -> bool {
+        *self == Kind::Sub2api
+    }
+    /// The kind as the cards and settings name it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Kind::Sub2api => "sub2api",
+        }
+    }
+    /// The workspace tag of its cards.
+    pub(crate) fn tag(self) -> &'static str {
+        match self {
+            Kind::Sub2api => "SUB2API",
+        }
+    }
+}
+
+/// What every pool keeps of an unofficial provider; a pool's own provider
 /// embeds it (`#[serde(flatten)]`) beside what only that pool needs.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProviderRecord {
     pub id: String,
+    /// What the provider is; a provider saved without one is Sub2api's.
+    #[serde(skip_serializing_if = "Kind::is_sub2api")]
+    pub kind: Kind,
     pub name: String,
     /// The Sub2api address, as the pool's form normalizes it.
     #[serde(rename = "baseURL")]
@@ -66,6 +99,7 @@ impl ProviderRecord {
     /// The provider's cards, named by its id.
     fn member(&self) -> Member {
         Member {
+            kind: self.kind,
             key: self.id.clone(),
             name: self.name.clone(),
             proxy_url: self.proxy_url.clone(),
@@ -137,8 +171,8 @@ pub(crate) trait ProviderRegistry: Send + Sync {
         key: &'a str,
         edit: &'a mut (dyn FnMut(&mut Member) + Send),
     ) -> BoxFuture<'a, Result<bool>>;
-    /// Where Copool reaches the provider's Sub2api, with its password.
-    fn connection(&self, key: &str) -> Result<sub2api::Connection>;
+    /// Where Copool reaches the provider's server, with its secret.
+    fn connection(&self, key: &str) -> Result<Connection>;
 }
 
 /// Not found among a pool's providers.
@@ -192,7 +226,7 @@ impl<A: Adapter> Registry<'_, A> {
             .edit_providers(|providers| {
                 let r = draft.as_ref();
                 let existing = providers.iter().position(|p| p.as_ref().id == r.id);
-                sub2api::validate_form(
+                crate::provider_accounts::validate_form(
                     &r.name,
                     providers.iter().any(|p| {
                         p.as_ref().id != r.id && p.as_ref().name.eq_ignore_ascii_case(&r.name)
@@ -294,7 +328,7 @@ impl<A: Adapter> ProviderRegistry for Registry<'_, A> {
             // Off the async threads: the credential store may wait for the
             // user to allow it.
             let secrets = self.app.secrets.clone();
-            let key = sub2api::password_secret(A::POOL, id);
+            let key = crate::provider_accounts::password_secret(A::POOL, id);
             tokio::task::spawn_blocking(move || secrets.remove(&key))
                 .await
                 .map_err(|e| e.to_string())?
@@ -330,22 +364,22 @@ impl<A: Adapter> ProviderRegistry for Registry<'_, A> {
             Ok(true)
         }))
     }
-    fn connection(&self, key: &str) -> Result<sub2api::Connection> {
+    fn connection(&self, key: &str) -> Result<Connection> {
         let p = self.find(key)?;
         let route = self.adapter.route(&p)?;
         let r = p.as_ref();
         let password = self
             .app
             .secrets
-            .get(&sub2api::password_secret(A::POOL, &r.id))?
+            .get(&crate::provider_accounts::password_secret(A::POOL, &r.id))?
             .ok_or("error.sub2api.configuration_incomplete")?;
-        // Sub2api itself, not a proxy in front of the tool's requests.
+        // The server itself, not a proxy in front of the tool's requests.
         let admin = if r.admin_base_url.is_empty() {
             &route.sub2api
         } else {
             &r.admin_base_url
         };
-        Ok(sub2api::Connection {
+        Ok(Connection::Sub2api(sub2api::Connection {
             admin_base: sub2api::admin_base(admin)?,
             definition: Definition {
                 id: r.name.clone(),
@@ -370,7 +404,33 @@ impl<A: Adapter> ProviderRegistry for Registry<'_, A> {
                     .map_err(|e| e.to_string())?,
                 ..Default::default()
             },
-        })
+        }))
+    }
+}
+
+/// Where Copool reaches a provider's server, by its kind.
+pub(crate) enum Connection {
+    Sub2api(sub2api::Connection),
+}
+impl Connection {
+    /// The pool's accounts at the server, those by `ids` (every one
+    /// without) with their usage.
+    pub(crate) async fn fetch_accounts(
+        &self,
+        pool: Pool,
+        ids: Option<&[i64]>,
+        now: i64,
+    ) -> Result<Vec<Account>> {
+        match self {
+            Connection::Sub2api(c) => c.fetch_accounts(pool, ids, now).await,
+        }
+    }
+    /// The Sub2api connection, for a test of a Sub2api provider.
+    #[cfg(test)]
+    pub(crate) fn sub2api(self) -> sub2api::Connection {
+        match self {
+            Connection::Sub2api(c) => c,
+        }
     }
 }
 
@@ -589,7 +649,7 @@ mod tests {
                     .0
                     .lock()
                     .unwrap()
-                    .get(&sub2api::password_secret(case.pool, &id)),
+                    .get(&crate::provider_accounts::password_secret(case.pool, &id)),
                 Some(&"secret".to_owned())
             );
         }
@@ -641,7 +701,7 @@ mod tests {
                     .0
                     .lock()
                     .unwrap()
-                    .get(&sub2api::password_secret(case.pool, &id)),
+                    .get(&crate::provider_accounts::password_secret(case.pool, &id)),
                 Some(&"secret".to_owned()),
                 "{:?}",
                 case.pool
@@ -705,7 +765,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_owned();
-            let c = registry.connection(&id).unwrap();
+            let c = registry.connection(&id).unwrap().sub2api();
             assert_eq!(c.admin_base, "https://relay.example.com/api/v1");
             assert_eq!(c.definition.base_url.as_deref(), Some(case.gateway));
             assert_eq!(c.definition.id, "Relay");
@@ -724,7 +784,7 @@ mod tests {
                 .await
                 .unwrap();
             gateway_at(dir.path(), PROXIED);
-            let c = registry.connection(&id).unwrap();
+            let c = registry.connection(&id).unwrap().sub2api();
             assert_eq!(
                 c.admin_base, "https://relay.example.com/api/v1",
                 "{:?}",
@@ -741,7 +801,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(
-                registry.connection(&id).unwrap().admin_base,
+                registry.connection(&id).unwrap().sub2api().admin_base,
                 "https://admin.example.com/api/v1"
             );
             assert_eq!(
@@ -798,7 +858,7 @@ mod tests {
         )
         .unwrap();
         let id = registry.members().unwrap()[0].key.clone();
-        let c = registry.connection(&id).unwrap();
+        let c = registry.connection(&id).unwrap().sub2api();
         assert_eq!(c.admin_base, "https://later.example.com/api/v1");
         assert_eq!(c.definition.id, "Later");
         // Kept in the Codex account store, keyed by id.

@@ -499,7 +499,7 @@ impl Application {
         access: KeychainAccess,
     ) -> Result<SwitchExecution> {
         let _op = self.grok.logins.operations.lock().await;
-        if crate::sub2api::is_card(Pool::Grok, id) {
+        if crate::provider_accounts::is_card(Pool::Grok, id) {
             return self.grok_switch_sub2api(id).await;
         }
         // An auth.json holding no xAI sign-in is written over, its other

@@ -494,7 +494,7 @@ function providerTitle(account) {
 /// system settings, "direct://" for none.
 function accountProxy(account) {
   let proxy = (account.proxyUrl || "").trim();
-  if (account.sourceTag !== "SUB2API")
+  if (!P.isProviderCard(account))
     proxy ||= (preferences?.accountProxyUrl || "").trim();
   return proxy;
 }

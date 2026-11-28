@@ -439,6 +439,7 @@ impl<P: LoginPool> Logins<P> {
             next_refresh_at: None,
             refresh: None,
             outdated_sub2api_version: None,
+            provider_kind: None,
             tags: Default::default(),
         };
         P::summarize(account, &mut summary);

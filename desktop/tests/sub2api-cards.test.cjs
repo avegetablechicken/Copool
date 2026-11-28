@@ -18,7 +18,7 @@ test("Sub2api cards group by the provider the core names, even before the provid
   ];
   // A card's refresh key names its provider (refresh_plan.rs); the app
   // never reads the card's id for it.
-  const card = (provider) => ({ id: "any", sourceTag: "SUB2API", refresh: { key: `sub2api:${provider}`, seconds: 300 } });
+  const card = (provider) => ({ id: "any", sourceTag: "SUB2API", providerKind: "sub2api", refresh: { key: `sub2api:${provider}`, seconds: 300 } });
   assert.equal(P.providerKey(card("srv")), "srv");
   assert.equal(providerControllers.claude.cardTitle(card("srv")), "myServer");
   assert.equal(P.providerKey({ id: "claude-sub2api-srv-2", refresh: { key: "claude-sub2api-srv-2" } }), null);

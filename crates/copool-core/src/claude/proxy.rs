@@ -248,7 +248,7 @@ impl Application {
                         p.cached_accounts
                             .iter()
                             .find(|a| a.status.eq_ignore_ascii_case("active"))
-                            .map(|a| crate::sub2api::card_id(Pool::Claude, &p.id, a.id))
+                            .map(|a| crate::provider_accounts::card_id(Pool::Claude, &p.id, a.id))
                     })
                 else {
                     return Ok(());
