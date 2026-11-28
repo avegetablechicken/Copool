@@ -130,10 +130,12 @@ pub fn capture(w: &WebviewWindow, monitor: &Monitor, x: f64, y: f64, width: f64)
     } else {
         let (pw, ph) = screen.pixels();
         let source = Source::current(pw as i32, ph as i32);
+        // A monitor of the same size renders the same wallpaper, kept, but
+        // the backdrop lies on this one.
+        cache.area = screen;
         if cache.wallpaper.as_ref() == Some(&source) {
             None
         } else {
-            cache.area = screen;
             let png = source.as_ref().and_then(wallpaper).and_then(frost);
             cache.wallpaper = Some(source);
             Some(png.unwrap_or_default())
