@@ -1,10 +1,11 @@
 //! The account pools, Codex, Claude Code, Antigravity and Grok, behind one set of
 //! operations.
-//! Each pool keeps only what is its own: where its logins are stored and
-//! which login its tool uses, how a login is renewed, and how usage is asked
-//! for. Everything done with the cards (editing one, choosing the best,
-//! switching automatically, renewing at once, saying hi, refreshing by hand
-//! and in background rounds) is implemented here once, for both pools.
+//! Each pool keeps only what is its own, supplied through `PoolOps`: where
+//! its logins are stored and which login its tool uses, how a login is
+//! renewed, and how usage is asked for. Everything done with the cards
+//! (editing one, choosing the best, switching automatically, renewing at
+//! once, saying hi, refreshing by hand and in background rounds) is
+//! implemented here once, for every pool.
 /// A pool's request to its service or tool, answered later.
 pub(crate) type Response<'a, T> = std::pin::Pin<
     Box<dyn std::future::Future<Output = std::result::Result<T, String>> + Send + 'a>,
@@ -59,6 +60,69 @@ impl PoolAccount for StoredAccount {
     }
 }
 
+/// A pool's edit of its stored accounts, which reports whether it changed
+/// them.
+pub(crate) type Edit<'a> = Box<dyn FnOnce(&mut [&mut dyn PoolAccount]) -> Result<bool> + Send + 'a>;
+
+/// What a pool supplies to the operations here, the same for every pool:
+/// each pool's `LoginPool` adapter implements it in `<pool>.rs`, and
+/// `Application::ops` alone picks it by `Pool`.
+pub(crate) trait PoolOps: Send + Sync {
+    /// The pool's cards, following the login its tool uses: its accounts and
+    /// its Sub2api providers' cards, sorted for display. `accounts` adds
+    /// their tags and refresh.
+    fn cards(&self) -> Response<'_, Vec<AccountSummary>>;
+    /// The cards whose usage a background round compares; `cards` unless
+    /// reading those would ask for the Keychain.
+    fn usage_cards(&self) -> Response<'_, Vec<AccountSummary>> {
+        self.cards()
+    }
+    /// The Sub2api provider the pool's tool uses, if any.
+    fn provider_in_use(&self) -> Option<String>;
+    /// Until when a rate limit pauses each account's requests, by id; none
+    /// unless the pool's service pauses them.
+    fn refresh_pauses(&self) -> std::collections::BTreeMap<String, i64> {
+        Default::default()
+    }
+    /// Asks for the Keychain access a user action may ask for and
+    /// background work does not; nothing for a pool that needs none.
+    fn authorize(&self) -> Response<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Asks for the access its background rounds need, once, before the
+    /// first; nothing for a pool that needs none.
+    fn authorize_at_startup(&self) -> Response<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Imports the login the pool's tool uses; returns how many accounts.
+    fn import_current(&self) -> Response<'_, usize>;
+    /// Imports exported logins, the whole document checked before any is
+    /// stored; returns how many.
+    fn import_json<'a>(&'a self, content: &'a str) -> Response<'a, usize>;
+    /// Stores a browser sign-in's login, of the workspace it was asked for
+    /// if any, without switching to it.
+    fn import_sign_in<'a>(
+        &'a self,
+        document: Value,
+        workspace: Option<&'a str>,
+    ) -> Response<'a, usize>;
+    /// Removes an account.
+    fn delete<'a>(&'a self, id: &'a str) -> Response<'a, ()>;
+    /// Edits the stored accounts, saved when `edit` reports a change.
+    fn edit<'a>(&'a self, edit: Edit<'a>) -> Response<'a, ()>;
+    /// Gives the pool's tool this card's login, or its Sub2api provider.
+    fn switch<'a>(&'a self, id: &'a str, access: KeychainAccess) -> Response<'a, SwitchExecution>;
+    /// Whether the account failed: its usage refused, or its token expired.
+    fn login_failed<'a>(&'a self, id: &'a str) -> Response<'a, bool>;
+    /// Refreshes an account's usage, its login renewed as its renewal
+    /// allows; with `renew_now`, only renews it, whatever the choice, and
+    /// reports whether it did.
+    fn refresh<'a>(&'a self, id: &'a str, renew_now: Option<&'a mut bool>) -> Response<'a, ()>;
+    /// One hi with an account, without switching to it; `third_party` as
+    /// `say_hi_to` takes it.
+    fn hello<'a>(&'a self, id: &'a str, third_party: Option<bool>) -> Response<'a, Hello>;
+}
+
 /// One pool's background refresh rounds.
 #[derive(Default)]
 pub(crate) struct Rounds {
@@ -76,6 +140,15 @@ pub(crate) struct Rounds {
 }
 
 impl Application {
+    /// The pool's own parts, which the operations here reach it through.
+    pub(crate) fn ops(&self, pool: Pool) -> Box<dyn PoolOps + '_> {
+        match pool {
+            Pool::Codex => crate::codex::ops(self),
+            Pool::Claude => crate::claude::ops(self),
+            Pool::Antigravity => crate::antigravity::ops(self),
+            Pool::Grok => crate::grok::ops(self),
+        }
+    }
     fn rounds(&self, pool: Pool) -> &Rounds {
         &self.rounds[pool as usize]
     }
@@ -83,12 +156,7 @@ impl Application {
     /// plan and workspace tags and how the background refresh treats it:
     /// when it next asks for the card (`refresh_plan`).
     pub async fn accounts(&self, pool: Pool) -> Result<Vec<AccountSummary>> {
-        let mut accounts = match pool {
-            Pool::Codex => self.codex_accounts().await,
-            Pool::Claude => self.claude_accounts().await,
-            Pool::Antigravity => self.antigravity_accounts().await,
-            Pool::Grok => self.grok_accounts().await,
-        }?;
+        let mut accounts = self.ops(pool).cards().await?;
         let now = now_unix_seconds();
         let refresh = self.preferences().map(|p| p.refresh).unwrap_or_default();
         let schedule = self.schedule(pool);
@@ -108,42 +176,18 @@ impl Application {
         }
         Ok(accounts)
     }
-    /// The Sub2api provider the pool's tool uses, if any.
-    fn provider_in_use(&self, pool: Pool) -> Option<String> {
-        match pool {
-            Pool::Codex => self.codex_provider_in_use().ok().flatten(),
-            Pool::Claude => self.claude_provider_in_use(),
-            Pool::Antigravity => self.antigravity_provider_in_use(),
-            Pool::Grok => self.grok_provider_in_use(),
-        }
-    }
-    /// Until when a rate limit pauses each account's requests, by id: only
-    /// Claude's accounts pause for now.
+    /// Until when a rate limit pauses each account's requests, by id.
     fn refresh_pauses(&self, pool: Pool) -> std::collections::BTreeMap<String, i64> {
-        match pool {
-            Pool::Claude => self.claude_pauses(),
-            _ => Default::default(),
-        }
+        self.ops(pool).refresh_pauses()
     }
     /// Lets a user action ask for the Keychain access background work does
     /// not, as after a build changed Copool's signature.
     pub async fn authorize(&self, pool: Pool) -> Result<()> {
-        match pool {
-            Pool::Codex => self.authorize_keychain().await,
-            Pool::Claude => self.claude_authorize().await,
-            // Antigravity's login is asked for only to import or switch;
-            // Grok's is a file.
-            Pool::Antigravity | Pool::Grok => Ok(()),
-        }
+        self.ops(pool).authorize().await
     }
     /// Imports the login the pool's tool uses; returns how many accounts.
     pub async fn import_current(&self, pool: Pool) -> Result<usize> {
-        match pool {
-            Pool::Codex => self.codex_import_current().await,
-            Pool::Claude => self.claude_import_current().await.map(|_| 1),
-            Pool::Antigravity => self.antigravity_import_current().await,
-            Pool::Grok => self.grok_import_current().await,
-        }
+        self.ops(pool).import_current().await
     }
     /// Imports exported logins, the whole document validated before any is
     /// stored; returns how many.
@@ -151,12 +195,7 @@ impl Application {
         if content.len() as u64 > IMPORT_LIMIT {
             return Err("Import exceeds 16 MiB".into());
         }
-        match pool {
-            Pool::Codex => self.codex_import_json(content).await,
-            Pool::Claude => self.claude_import_json(content).await,
-            Pool::Antigravity => self.antigravity_import_json(content).await,
-            Pool::Grok => self.grok_import_json(content).await,
-        }
+        self.ops(pool).import_json(content).await
     }
     /// Imports an exported login file.
     pub async fn import_file(&self, pool: Pool, path: &std::path::Path) -> Result<usize> {
@@ -191,24 +230,14 @@ impl Application {
         document: Value,
         workspace: Option<&str>,
     ) -> Result<usize> {
-        match pool {
-            Pool::Codex => self.codex_import_login(document, workspace).await,
-            Pool::Claude => self.claude_import_login(document).await.map(|_| 1),
-            Pool::Antigravity => self.antigravity_import_login(document).await,
-            Pool::Grok => self.grok_import_login(document).await,
-        }
+        self.ops(pool).import_sign_in(document, workspace).await
     }
     /// Removes a card; a Sub2api card leaves its provider until a sync.
     pub async fn delete_account(&self, pool: Pool, id: &str) -> Result<()> {
         if sub2api::is_card(pool, id) {
             return self.delete_card(pool, id).await;
         }
-        match pool {
-            Pool::Codex => self.codex_delete_account(id).await,
-            Pool::Claude => self.claude_delete_account(id).await,
-            Pool::Antigravity => self.antigravity_delete_account(id).await,
-            Pool::Grok => self.grok_delete_account(id).await,
-        }
+        self.ops(pool).delete(id).await
     }
     /// A card's proxy: blank for the shared account proxy, "direct://" for
     /// none. A Sub2api card's is its provider's.
@@ -263,12 +292,7 @@ impl Application {
         pool: Pool,
         edit: impl FnOnce(&mut [&mut dyn PoolAccount]) -> Result<bool> + Send,
     ) -> Result<()> {
-        match pool {
-            Pool::Codex => self.codex_edit_accounts(edit).await,
-            Pool::Claude => self.claude_edit_accounts(edit).await,
-            Pool::Antigravity => self.antigravity_edit_accounts(edit).await,
-            Pool::Grok => self.grok_edit_accounts(edit).await,
-        }
+        self.ops(pool).edit(Box::new(edit)).await
     }
     /// Gives the pool's tool this card's login, or its provider.
     pub async fn switch_account(&self, pool: Pool, id: &str) -> Result<SwitchExecution> {
@@ -281,12 +305,7 @@ impl Application {
         id: &str,
         access: KeychainAccess,
     ) -> Result<SwitchExecution> {
-        match pool {
-            Pool::Codex => self.codex_switch_account(id, access).await,
-            Pool::Claude => self.claude_switch_account(id, access).await,
-            Pool::Antigravity => self.antigravity_switch_account(id, access).await,
-            Pool::Grok => self.grok_switch_account(id, access).await,
-        }
+        self.ops(pool).switch(id, access).await
     }
     /// As Swift's AccountsPageModel.smartSwitch: the account with the most
     /// remaining quota, and no switch when that is already the current one.
@@ -361,12 +380,7 @@ impl Application {
         id: &str,
         renew_now: Option<&mut bool>,
     ) -> Result<()> {
-        match pool {
-            Pool::Codex => self.codex_refresh(id, renew_now).await,
-            Pool::Claude => self.claude_refresh(id, renew_now).await,
-            Pool::Antigravity => self.antigravity_refresh(id, renew_now).await,
-            Pool::Grok => self.grok_refresh(id, renew_now).await,
-        }
+        self.ops(pool).refresh(id, renew_now).await
     }
     /// Renews an account's tokens at once, whatever its renewal choice, which
     /// stays as it was. Usage is not asked for, unless the account had
@@ -376,12 +390,7 @@ impl Application {
         if sub2api::is_card(pool, id) {
             return Err("Token renewal is not available for this account".into());
         }
-        let failed = match pool {
-            Pool::Codex => self.codex_login_failed(id).await?,
-            Pool::Claude => self.claude_login_failed(id).await?,
-            Pool::Antigravity => self.antigravity_login_failed(id).await?,
-            Pool::Grok => self.grok_login_failed(id).await?,
-        };
+        let failed = self.ops(pool).login_failed(id).await?;
         self.release_new_accounts(pool, Some(id)).await?;
         let mut renewed = false;
         let result = self.refresh_login(pool, id, Some(&mut renewed)).await;
@@ -414,12 +423,7 @@ impl Application {
         }
         let mut renewed = false;
         loop {
-            let hello = match pool {
-                Pool::Codex => self.codex_hello(id).await?,
-                Pool::Claude => self.claude_hello(id).await?,
-                Pool::Antigravity => self.antigravity_hello(id, third_party).await?,
-                Pool::Grok => return self.grok_unavailable(),
-            };
+            let hello = self.ops(pool).hello(id, third_party).await?;
             match hello {
                 Hello::Said => return Ok(()),
                 Hello::Expired(_) if !renewed => {
@@ -497,7 +501,7 @@ impl Application {
             .collect();
         let full = refresh_policy::is_full_round(tick, self.pool_refresh(pool).full_every);
         let interval = self.round_interval(pool).as_secs() as i64;
-        let in_use = self.provider_in_use(pool);
+        let in_use = self.ops(pool).provider_in_use();
         let ask = refresh_plan::round(
             &cards,
             in_use.as_deref(),
@@ -724,9 +728,8 @@ impl Application {
         };
         set_schedule(now_unix_seconds(), tick, interval, refresh.full_every);
         let before = self.card_usage(pool).await;
-        // Access to the Claude pool is asked for once, before its first round.
-        if pool == Pool::Claude && tick == 0 {
-            let _ = self.claude_authorize_at_startup().await;
+        if tick == 0 {
+            let _ = self.ops(pool).authorize_at_startup().await;
         }
         let _ = self.refresh_recurring(pool, tick).await;
         // A refresh set while the round ran applies from the next round:
@@ -745,14 +748,9 @@ impl Application {
         self.publish();
         interval
     }
-    /// Each account's usage, to tell whether a refresh changed it. Claude's
-    /// cards are read without the login Claude Code uses, which is in the
-    /// Keychain.
+    /// Each account's usage, to tell whether a refresh changed it.
     async fn card_usage(&self, pool: Pool) -> std::collections::BTreeMap<String, Value> {
-        let cards = match pool {
-            Pool::Claude => self.claude_usage_cards(),
-            _ => self.accounts(pool).await,
-        };
+        let cards = self.ops(pool).usage_cards().await;
         refresh_policy::usage_values(&cards.unwrap_or_default())
     }
     /// The keys of the cards whose usage changed since `before`.

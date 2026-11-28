@@ -3987,7 +3987,7 @@ async fn the_earlier_store_moves_to_the_pools_file_once() {
     assert!(file["accounts"][0].get("alternates").is_none());
     assert_eq!(fs::read(data.join(EARLIER_STORE_FILE)).unwrap(), before);
     // Once: a pool emptied since is not filled again.
-    app.claude_delete_account("a").await.unwrap();
+    app.ops(Pool::Claude).delete("a").await.unwrap();
     drop(app);
     let (app, _, _) = waiting_app(&dir);
     assert!(app.claude_load().unwrap().accounts.is_empty());

@@ -9,7 +9,7 @@ use crate::{
     login_store::{Account, Asked, LoginPool, Logins, Nothing},
     models::{AccountSummary, UsageSnapshot},
     persistence::write_json,
-    pool::{Pool, PoolAccount},
+    pool::{Edit, Hello, Pool, PoolOps, Response},
     pool_login::{self, grok::CREDENTIALS_INVALID, Identity},
     utils::now_unix_seconds,
     vault::KeychainAccess,
@@ -222,6 +222,47 @@ impl LoginPool for GrokLogins<'_> {
     }
 }
 
+/// The pool's own parts, which `pool.rs` reaches it through.
+pub(crate) fn ops(app: &Application) -> Box<dyn PoolOps + '_> {
+    Box::new(GrokLogins(app))
+}
+impl PoolOps for GrokLogins<'_> {
+    fn cards(&self) -> Response<'_, Vec<AccountSummary>> {
+        Box::pin(self.0.grok_accounts())
+    }
+    fn provider_in_use(&self) -> Option<String> {
+        self.0.grok_provider_in_use()
+    }
+    fn import_current(&self) -> Response<'_, usize> {
+        Box::pin(self.0.grok_import_current())
+    }
+    fn import_json<'a>(&'a self, content: &'a str) -> Response<'a, usize> {
+        Box::pin(self.0.grok_import_json(content))
+    }
+    fn import_sign_in<'a>(&'a self, document: Value, _: Option<&'a str>) -> Response<'a, usize> {
+        Box::pin(self.0.grok_import_login(document))
+    }
+    fn delete<'a>(&'a self, id: &'a str) -> Response<'a, ()> {
+        Box::pin(async move { self.0.grok_logins().delete(id, |_, _| {}).await })
+    }
+    fn edit<'a>(&'a self, edit: Edit<'a>) -> Response<'a, ()> {
+        Box::pin(async move { self.0.grok_logins().edit(edit).await })
+    }
+    fn switch<'a>(&'a self, id: &'a str, access: KeychainAccess) -> Response<'a, SwitchExecution> {
+        Box::pin(self.0.grok_switch_account(id, access))
+    }
+    fn login_failed<'a>(&'a self, id: &'a str) -> Response<'a, bool> {
+        Box::pin(async move { self.0.grok_logins().login_failed(id) })
+    }
+    fn refresh<'a>(&'a self, id: &'a str, renew_now: Option<&'a mut bool>) -> Response<'a, ()> {
+        Box::pin(self.0.grok_refresh(id, renew_now))
+    }
+    fn hello<'a>(&'a self, _: &'a str, _: Option<bool>) -> Response<'a, Hello> {
+        // Grok Build has no hi.
+        Box::pin(async move { self.0.grok_unavailable() })
+    }
+}
+
 /// The sign-ins of an import: Grok Build's `auth.json`, a sign-in, a list
 /// of either, or `{"accounts": [...]}`, each perhaps a card with its
 /// `document`. None when any is not a sign-in.
@@ -379,7 +420,7 @@ impl Application {
         )
     }
     /// The pool, following the login Grok Build uses.
-    pub(crate) async fn grok_accounts(&self) -> Result<Vec<AccountSummary>> {
+    async fn grok_accounts(&self) -> Result<Vec<AccountSummary>> {
         let store = self.grok_logins().followed().await?;
         let route = sub2api::current_route(&self.grok_config_path(), &store);
         let provider = self.grok_provider(&store);
@@ -407,12 +448,12 @@ impl Application {
         }
     }
     /// The provider Grok Build uses now, if any.
-    pub(crate) fn grok_provider_in_use(&self) -> Option<String> {
+    fn grok_provider_in_use(&self) -> Option<String> {
         let store = self.grok_load().ok()?;
         self.grok_provider(&store).map(str::to_owned)
     }
     /// Imports the login Grok Build uses.
-    pub(crate) async fn grok_import_current(&self) -> Result<usize> {
+    async fn grok_import_current(&self) -> Result<usize> {
         let fresh = self
             .grok_logins()
             .import_live(KeychainAccess::Interactive, LOGIN_NOT_FOUND)
@@ -423,14 +464,14 @@ impl Application {
         Ok(1)
     }
     /// Stores a browser sign-in's login without switching to it.
-    pub(crate) async fn grok_import_login(&self, document: Value) -> Result<usize> {
+    async fn grok_import_login(&self, document: Value) -> Result<usize> {
         let document = pool_login::grok::sign_in_of(&document).ok_or(CREDENTIALS_INVALID)?;
         self.grok_import(vec![document], crate::login_store::Origin::SignIn)
             .await
     }
     /// Imports exported logins without switching to them; the whole
     /// document is checked before any is stored.
-    pub(crate) async fn grok_import_json(&self, content: &str) -> Result<usize> {
+    async fn grok_import_json(&self, content: &str) -> Result<usize> {
         self.grok_import(
             parse_import(content).ok_or(CREDENTIALS_INVALID)?,
             crate::login_store::Origin::Export,
@@ -448,20 +489,11 @@ impl Application {
         }
         Ok(count)
     }
-    pub(crate) async fn grok_delete_account(&self, id: &str) -> Result<()> {
-        self.grok_logins().delete(id, |_, _| {}).await
-    }
-    pub(crate) async fn grok_edit_accounts(
-        &self,
-        edit: impl FnOnce(&mut [&mut dyn PoolAccount]) -> Result<bool>,
-    ) -> Result<()> {
-        self.grok_logins().edit(edit).await
-    }
     /// Gives Grok Build this account's sign-in, off the gateway a provider
     /// put its models on, or a Sub2api card's provider. A sign-in there
     /// that the pool does not hold is kept in `grok-before-switch.json`
     /// first; a failed step is rolled back.
-    pub(crate) async fn grok_switch_account(
+    async fn grok_switch_account(
         &self,
         id: &str,
         access: KeychainAccess,
@@ -494,14 +526,10 @@ impl Application {
         let credential = pool_login::grok::credential(&target.document, &Identity::default());
         self.after_switch(Pool::Grok, Some(credential)).await
     }
-    /// Whether the account failed: its usage refused, or its token expired.
-    pub(crate) async fn grok_login_failed(&self, id: &str) -> Result<bool> {
-        self.grok_logins().login_failed(id)
-    }
     /// Refreshes an account's usage, renewing its access token as its
     /// renewal allows; with `renew_now`, only renews it, whatever the choice,
     /// and reports that it did. The plan is asked along.
-    pub(crate) async fn grok_refresh(&self, id: &str, renew_now: Option<&mut bool>) -> Result<()> {
+    async fn grok_refresh(&self, id: &str, renew_now: Option<&mut bool>) -> Result<()> {
         let forced = renew_now.is_some();
         let _activity = (!forced).then(|| self.begin_refresh(id));
         let logins = self.grok_logins();

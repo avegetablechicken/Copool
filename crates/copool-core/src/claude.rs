@@ -10,7 +10,7 @@ use crate::{
     },
     models::{AccountSummary, CreditSnapshot, Renewal, UsageSnapshot},
     persistence::write_json,
-    pool::{Hello, Pool, PoolAccount},
+    pool::{Edit, Hello, Pool, PoolOps, Response},
     pool_login::{
         self,
         claude::{
@@ -770,6 +770,60 @@ impl LoginPool for ClaudeLogins<'_> {
         json!({"credentials": login.document, "oauthAccount": login.account})
     }
 }
+
+/// The pool's own parts, which `pool.rs` reaches it through.
+pub(crate) fn ops(app: &Application) -> Box<dyn PoolOps + '_> {
+    Box::new(ClaudeLogins(app))
+}
+impl PoolOps for ClaudeLogins<'_> {
+    fn cards(&self) -> Response<'_, Vec<AccountSummary>> {
+        Box::pin(self.0.claude_accounts())
+    }
+    fn usage_cards(&self) -> Response<'_, Vec<AccountSummary>> {
+        // Without the login Claude Code uses, which is in the Keychain.
+        Box::pin(async move { self.0.claude_usage_cards() })
+    }
+    fn provider_in_use(&self) -> Option<String> {
+        self.0.claude_provider_in_use()
+    }
+    fn refresh_pauses(&self) -> std::collections::BTreeMap<String, i64> {
+        self.0.claude_pauses()
+    }
+    fn authorize(&self) -> Response<'_, ()> {
+        Box::pin(self.0.claude_authorize())
+    }
+    fn authorize_at_startup(&self) -> Response<'_, ()> {
+        Box::pin(self.0.claude_authorize_at_startup())
+    }
+    fn import_current(&self) -> Response<'_, usize> {
+        Box::pin(async move { self.0.claude_import_current().await.map(|_| 1) })
+    }
+    fn import_json<'a>(&'a self, content: &'a str) -> Response<'a, usize> {
+        Box::pin(self.0.claude_import_json(content))
+    }
+    fn import_sign_in<'a>(&'a self, document: Value, _: Option<&'a str>) -> Response<'a, usize> {
+        Box::pin(async move { self.0.claude_import_login(document).await.map(|_| 1) })
+    }
+    fn delete<'a>(&'a self, id: &'a str) -> Response<'a, ()> {
+        Box::pin(async move { self.0.claude_logins().delete(id, |_, _| {}).await })
+    }
+    fn edit<'a>(&'a self, edit: Edit<'a>) -> Response<'a, ()> {
+        // Their tokens stay where they are kept.
+        Box::pin(async move { self.0.claude_logins().edit(edit).await })
+    }
+    fn switch<'a>(&'a self, id: &'a str, access: KeychainAccess) -> Response<'a, SwitchExecution> {
+        Box::pin(self.0.claude_switch_account(id, access))
+    }
+    fn login_failed<'a>(&'a self, id: &'a str) -> Response<'a, bool> {
+        Box::pin(self.0.claude_login_failed(id))
+    }
+    fn refresh<'a>(&'a self, id: &'a str, renew_now: Option<&'a mut bool>) -> Response<'a, ()> {
+        Box::pin(self.0.claude_refresh(id, renew_now))
+    }
+    fn hello<'a>(&'a self, id: &'a str, _: Option<bool>) -> Response<'a, Hello> {
+        Box::pin(self.0.claude_hello(id))
+    }
+}
 /// Claude Code's refresh lock, while held.
 struct ClaudeCodeLock(refresh_lock::RefreshLock);
 impl RenewalLock for ClaudeCodeLock {
@@ -1313,12 +1367,12 @@ impl Application {
             .filter(|_| self.card_refresh(Pool::Claude, &account.id).backoff)
     }
     /// The provider Claude Code uses now, if any.
-    pub(crate) fn claude_provider_in_use(&self) -> Option<String> {
+    fn claude_provider_in_use(&self) -> Option<String> {
         let store = self.claude_load().ok()?;
         claude_provider(&store, &self.claude_location()).map(str::to_owned)
     }
     /// Each account's rate limit pause, by id, for the refresh plan.
-    pub(crate) fn claude_pauses(&self) -> std::collections::BTreeMap<String, i64> {
+    fn claude_pauses(&self) -> std::collections::BTreeMap<String, i64> {
         self.claude_load()
             .map(|store| {
                 store
@@ -1331,7 +1385,7 @@ impl Application {
     }
     /// Lets a user action ask for the vault's Keychain item when background
     /// work could not read it, as after a build changed Copool's signature.
-    pub(crate) async fn claude_authorize(&self) -> Result<()> {
+    async fn claude_authorize(&self) -> Result<()> {
         self.claude_unlock().await?;
         // The item holds the providers' passwords as well; read once already
         // when the pool's tokens are there.
@@ -1459,7 +1513,7 @@ impl Application {
     }
     /// Request access once at startup, before recurring refreshes. A refusal
     /// leaves the saved pool intact; importing or switching can request again.
-    pub(crate) async fn claude_authorize_at_startup(&self) -> Result<()> {
+    async fn claude_authorize_at_startup(&self) -> Result<()> {
         if self.claude_load()?.accounts.is_empty() {
             return Ok(());
         }
@@ -1478,7 +1532,7 @@ impl Application {
         Ok(())
     }
     /// The pool's cards as stored, without reading Claude Code's login.
-    pub(crate) fn claude_usage_cards(&self) -> Result<Vec<AccountSummary>> {
+    fn claude_usage_cards(&self) -> Result<Vec<AccountSummary>> {
         let store = self.claude_load()?;
         Ok(store
             .accounts
@@ -1489,7 +1543,7 @@ impl Application {
     }
     /// The Claude pool, following the login Claude Code uses. Its account
     /// is current while the official settings are Claude Code's.
-    pub(crate) async fn claude_accounts(&self) -> Result<Vec<AccountSummary>> {
+    async fn claude_accounts(&self) -> Result<Vec<AccountSummary>> {
         let store = self.claude_logins().followed().await?;
         let location = self.claude_location();
         let official = settings_are_official(&location);
@@ -1561,7 +1615,7 @@ impl Application {
         })
     }
     /// Imports the login Claude Code uses; returns the account label.
-    pub(crate) async fn claude_import_current(&self) -> Result<String> {
+    async fn claude_import_current(&self) -> Result<String> {
         let _op = self.claude.logins.operations.lock().await;
         let _ = self.claude_unlock().await;
         let live = read_live_with_access(&self.claude_location(), KeychainAccess::Interactive)
@@ -1576,7 +1630,7 @@ impl Application {
     }
     /// Imports exported Claude Code credentials without selecting them: one
     /// export, or a list of them, all checked before any is kept.
-    pub(crate) async fn claude_import_json(&self, content: &str) -> Result<usize> {
+    async fn claude_import_json(&self, content: &str) -> Result<usize> {
         let invalid = "error.claude.credentials_json_invalid";
         let document: Value =
             serde_json::from_str(content.trim_start_matches('\u{feff}')).map_err(|_| invalid)?;
@@ -1650,7 +1704,7 @@ impl Application {
         self.claude_upsert(oauth, account, origin).await
     }
     /// Stores a browser sign-in without changing Claude Code's login.
-    pub(crate) async fn claude_import_login(&self, tokens: Value) -> Result<String> {
+    async fn claude_import_login(&self, tokens: Value) -> Result<String> {
         let mut oauth = json!({});
         apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
         let token = text(&oauth["accessToken"]).unwrap_or_default();
@@ -1685,20 +1739,10 @@ impl Application {
         }
         Ok(label)
     }
-    pub(crate) async fn claude_delete_account(&self, id: &str) -> Result<()> {
-        self.claude_logins().delete(id, |_, _| {}).await
-    }
-    /// Edits the stored accounts; their tokens stay where they are kept.
-    pub(crate) async fn claude_edit_accounts(
-        &self,
-        edit: impl FnOnce(&mut [&mut dyn PoolAccount]) -> Result<bool>,
-    ) -> Result<()> {
-        self.claude_logins().edit(edit).await
-    }
     /// Gives Claude Code this account's login and identity, or a Sub2api
     /// card's provider. A previous login outside the pool is kept in
     /// `claude-before-switch.json`; a failed step is rolled back.
-    pub(crate) async fn claude_switch_account(
+    async fn claude_switch_account(
         &self,
         id: &str,
         access: KeychainAccess,
@@ -1965,11 +2009,7 @@ impl Application {
     /// shared account proxy. With `renew_now`, only the tokens are renewed, even when unexpired or
     /// renewal is off; usage is not asked for, nor shown as refreshing, and
     /// whether the renewal was kept is reported.
-    pub(crate) async fn claude_refresh(
-        &self,
-        id: &str,
-        renew_now: Option<&mut bool>,
-    ) -> Result<()> {
+    async fn claude_refresh(&self, id: &str, renew_now: Option<&mut bool>) -> Result<()> {
         self.claude_refresh_login(id, renew_now, None).await
     }
     /// As `claude_refresh`; with `rejected`, the access token
@@ -2257,7 +2297,7 @@ impl Application {
     }
     /// Whether the stored account failed: its usage refused, or its token
     /// expired.
-    pub(crate) async fn claude_login_failed(&self, id: &str) -> Result<bool> {
+    async fn claude_login_failed(&self, id: &str) -> Result<bool> {
         let _lock = self.claude.logins.store.lock().await;
         let store = self.claude_load()?;
         let account = store
@@ -2269,7 +2309,7 @@ impl Application {
         Ok(account.usage_error.is_some() || (expiry != 0 && expiry <= now_unix_seconds() * 1000))
     }
     /// One hi with an account, through its proxy, without switching to it.
-    pub(crate) async fn claude_hello(&self, id: &str) -> Result<Hello> {
+    async fn claude_hello(&self, id: &str) -> Result<Hello> {
         let account = {
             let _lock = self.claude.logins.store.lock().await;
             self.claude_load()?

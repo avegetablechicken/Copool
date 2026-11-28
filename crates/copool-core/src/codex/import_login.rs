@@ -9,7 +9,7 @@ use serde_json::Value;
 impl Application {
     /// Stores a browser sign-in's login without switching to it, with the
     /// workspaces its consent named.
-    pub(crate) async fn codex_import_login(
+    pub(super) async fn codex_import_login(
         &self,
         document: Value,
         workspace: Option<&str>,

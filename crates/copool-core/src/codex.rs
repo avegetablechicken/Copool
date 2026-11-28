@@ -20,7 +20,7 @@ use crate::{
     login_store::{Account, Asked, LoginPool, Logins, Standing},
     models::{AccountSummary, Renewal, StoredAccount, UsageSnapshot, RENEWAL_OFF},
     persistence::write_json,
-    pool::{Pool, PoolAccount},
+    pool::{Edit, Hello, Pool, PoolOps, Response},
     pool_login::{codex, Identity},
     provider_registry::ProviderRecord,
     utils::now_unix_seconds,
@@ -341,6 +341,53 @@ impl LoginPool for CodexLogins<'_> {
     }
 }
 
+/// The pool's own parts, which `pool.rs` reaches it through.
+pub(crate) fn ops(app: &Application) -> Box<dyn PoolOps + '_> {
+    Box::new(CodexLogins(app))
+}
+impl PoolOps for CodexLogins<'_> {
+    fn cards(&self) -> Response<'_, Vec<AccountSummary>> {
+        Box::pin(self.0.codex_accounts())
+    }
+    fn provider_in_use(&self) -> Option<String> {
+        self.0.codex_provider_in_use().ok().flatten()
+    }
+    fn authorize(&self) -> Response<'_, ()> {
+        Box::pin(self.0.authorize_keychain())
+    }
+    fn import_current(&self) -> Response<'_, usize> {
+        Box::pin(self.0.codex_import_current())
+    }
+    fn import_json<'a>(&'a self, content: &'a str) -> Response<'a, usize> {
+        Box::pin(self.0.codex_import_json(content))
+    }
+    fn import_sign_in<'a>(
+        &'a self,
+        document: Value,
+        workspace: Option<&'a str>,
+    ) -> Response<'a, usize> {
+        Box::pin(self.0.codex_import_login(document, workspace))
+    }
+    fn delete<'a>(&'a self, id: &'a str) -> Response<'a, ()> {
+        Box::pin(self.0.codex_delete_account(id))
+    }
+    fn edit<'a>(&'a self, edit: Edit<'a>) -> Response<'a, ()> {
+        Box::pin(async move { self.0.codex_logins().edit(edit).await })
+    }
+    fn switch<'a>(&'a self, id: &'a str, access: KeychainAccess) -> Response<'a, SwitchExecution> {
+        Box::pin(self.0.codex_switch_account(id, access))
+    }
+    fn login_failed<'a>(&'a self, id: &'a str) -> Response<'a, bool> {
+        Box::pin(async move { self.0.codex_logins().login_failed(id) })
+    }
+    fn refresh<'a>(&'a self, id: &'a str, renew_now: Option<&'a mut bool>) -> Response<'a, ()> {
+        Box::pin(self.0.codex_refresh(id, renew_now))
+    }
+    fn hello<'a>(&'a self, id: &'a str, _: Option<bool>) -> Response<'a, Hello> {
+        Box::pin(self.0.codex_hello(id))
+    }
+}
+
 impl Application {
     pub(crate) fn codex_logins(&self) -> Logins<CodexLogins<'_>> {
         Logins(CodexLogins(self))
@@ -360,7 +407,7 @@ impl Application {
     }
     /// The pool, following the login Codex uses in `auth.json`; none is
     /// current while Codex is on a provider, whose cards then are.
-    pub(crate) async fn codex_accounts(&self) -> Result<Vec<AccountSummary>> {
+    async fn codex_accounts(&self) -> Result<Vec<AccountSummary>> {
         let store = self.codex_logins().followed().await?;
         let official = config::resolve_path(&self.codex_config_path()).is_official();
         let mut summaries: Vec<_> = store
@@ -379,7 +426,7 @@ impl Application {
         Ok(summaries)
     }
     /// Imports the login Codex uses.
-    pub(crate) async fn codex_import_current(&self) -> Result<usize> {
+    async fn codex_import_current(&self) -> Result<usize> {
         let fresh = self
             .codex_logins()
             .import_live(
@@ -396,7 +443,7 @@ impl Application {
     /// Imports `auth.json` documents, a list of them, or an account store's
     /// `{"accounts": [...]}`, each perhaps a card with its `authJson`; the
     /// whole batch is checked first. Those not waiting are refreshed.
-    pub(crate) async fn codex_import_json(&self, content: &str) -> Result<usize> {
+    async fn codex_import_json(&self, content: &str) -> Result<usize> {
         let value: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
         let entries: Vec<Value> = if let Some(accounts) = value.get("accounts") {
             accounts
@@ -450,15 +497,9 @@ impl Application {
         }
         Ok(count)
     }
-    pub(crate) async fn codex_edit_accounts(
-        &self,
-        edit: impl FnOnce(&mut [&mut dyn PoolAccount]) -> Result<bool>,
-    ) -> Result<()> {
-        self.codex_logins().edit(edit).await
-    }
     /// Removes an account; a deactivated workspace's stays listed as deleted,
     /// and so in the workspace directory.
-    pub(crate) async fn codex_delete_account(&self, id: &str) -> Result<()> {
+    async fn codex_delete_account(&self, id: &str) -> Result<()> {
         self.codex_logins()
             .delete(id, |store, index| {
                 let account = &store.accounts[index];
@@ -477,7 +518,7 @@ impl Application {
     /// Gives Codex this account's login, on its official provider, or a
     /// Sub2api card's provider. A login there that the pool does not hold
     /// is kept in `auth-before-switch.json` first.
-    pub(crate) async fn codex_switch_account(
+    async fn codex_switch_account(
         &self,
         id: &str,
         access: KeychainAccess,
@@ -535,13 +576,9 @@ impl Application {
             )
             .await
     }
-    /// Whether the account failed: its usage refused, or its token expired.
-    pub(crate) async fn codex_login_failed(&self, id: &str) -> Result<bool> {
-        self.codex_logins().login_failed(id)
-    }
     /// Says hi with a ChatGPT Plus account, with the login Codex renewed if
     /// it is newer.
-    pub(crate) async fn codex_hello(&self, id: &str) -> Result<crate::pool::Hello> {
+    async fn codex_hello(&self, id: &str) -> Result<Hello> {
         let account = self
             .codex_load()?
             .accounts
@@ -576,15 +613,15 @@ impl Application {
         };
         // An explicit greeting never preflights or skips based on usage.
         match result {
-            Ok(()) => Ok(crate::pool::Hello::Said),
-            Err(error) if api::expired_error(&error) => Ok(crate::pool::Hello::Expired(error)),
+            Ok(()) => Ok(Hello::Said),
+            Err(error) if api::expired_error(&error) => Ok(Hello::Expired(error)),
             Err(error) => Err(error),
         }
     }
     /// Refreshes an account's usage, renewing its token as its renewal
     /// allows; with `renew_now`, only renews it, whatever the choice, and
     /// reports that it did.
-    pub(crate) async fn codex_refresh(&self, id: &str, renew_now: Option<&mut bool>) -> Result<()> {
+    async fn codex_refresh(&self, id: &str, renew_now: Option<&mut bool>) -> Result<()> {
         self.codex_refresh_login(id, true, renew_now, None).await
     }
     /// As `codex_refresh`, but a refresh not forced skips usage fetched

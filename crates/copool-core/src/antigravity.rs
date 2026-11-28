@@ -7,7 +7,7 @@ use crate::{
     application::{Application, SwitchExecution},
     login_store::{Account, Asked, LoginPool, Logins, EXPIRY_MARGIN},
     models::{AccountSummary, Renewal, RENEWAL_OFF},
-    pool::{Hello, Pool, PoolAccount},
+    pool::{Edit, Hello, Pool, PoolOps, Response},
     utils::now_unix_seconds,
     vault::KeychainAccess,
 };
@@ -242,6 +242,46 @@ impl LoginPool for AntigravityLogins<'_> {
     }
     fn apply(renewed: &Renewed, document: &mut Value) {
         renewed.apply(document);
+    }
+}
+
+/// The pool's own parts, which `pool.rs` reaches it through.
+pub(crate) fn ops(app: &Application) -> Box<dyn PoolOps + '_> {
+    Box::new(AntigravityLogins(app))
+}
+impl PoolOps for AntigravityLogins<'_> {
+    fn cards(&self) -> Response<'_, Vec<AccountSummary>> {
+        Box::pin(self.0.antigravity_accounts())
+    }
+    fn provider_in_use(&self) -> Option<String> {
+        self.0.antigravity_provider_in_use()
+    }
+    fn import_current(&self) -> Response<'_, usize> {
+        Box::pin(self.0.antigravity_import_current())
+    }
+    fn import_json<'a>(&'a self, content: &'a str) -> Response<'a, usize> {
+        Box::pin(self.0.antigravity_import_json(content))
+    }
+    fn import_sign_in<'a>(&'a self, document: Value, _: Option<&'a str>) -> Response<'a, usize> {
+        Box::pin(self.0.antigravity_import_login(document))
+    }
+    fn delete<'a>(&'a self, id: &'a str) -> Response<'a, ()> {
+        Box::pin(async move { self.0.antigravity_logins().delete(id, |_, _| {}).await })
+    }
+    fn edit<'a>(&'a self, edit: Edit<'a>) -> Response<'a, ()> {
+        Box::pin(async move { self.0.antigravity_logins().edit(edit).await })
+    }
+    fn switch<'a>(&'a self, id: &'a str, access: KeychainAccess) -> Response<'a, SwitchExecution> {
+        Box::pin(self.0.antigravity_switch_account(id, access))
+    }
+    fn login_failed<'a>(&'a self, id: &'a str) -> Response<'a, bool> {
+        Box::pin(async move { self.0.antigravity_logins().login_failed(id) })
+    }
+    fn refresh<'a>(&'a self, id: &'a str, renew_now: Option<&'a mut bool>) -> Response<'a, ()> {
+        Box::pin(self.0.antigravity_refresh(id, renew_now))
+    }
+    fn hello<'a>(&'a self, id: &'a str, third_party: Option<bool>) -> Response<'a, Hello> {
+        Box::pin(self.0.antigravity_hello(id, third_party))
     }
 }
 
@@ -501,7 +541,7 @@ impl Application {
         }
     }
     /// The pool, following the login Antigravity uses.
-    pub(crate) async fn antigravity_accounts(&self) -> Result<Vec<AccountSummary>> {
+    async fn antigravity_accounts(&self) -> Result<Vec<AccountSummary>> {
         let store = self.antigravity_logins().followed().await?;
         let api = sub2api::api_key_mode(&self.antigravity_settings_path());
         let provider = self.antigravity_provider(&store);
@@ -524,12 +564,12 @@ impl Application {
         store.settings_provider.as_deref().filter(|_| api)
     }
     /// The provider agy uses now, if any.
-    pub(crate) fn antigravity_provider_in_use(&self) -> Option<String> {
+    fn antigravity_provider_in_use(&self) -> Option<String> {
         let store = self.antigravity_load().ok()?;
         self.antigravity_provider(&store).map(str::to_owned)
     }
     /// Imports the login Antigravity uses.
-    pub(crate) async fn antigravity_import_current(&self) -> Result<usize> {
+    async fn antigravity_import_current(&self) -> Result<usize> {
         let fresh = self
             .antigravity_logins()
             .import_live(KeychainAccess::Interactive, LOGIN_NOT_FOUND)
@@ -540,7 +580,7 @@ impl Application {
         Ok(1)
     }
     /// Stores a browser sign-in's login without switching to it.
-    pub(crate) async fn antigravity_import_login(&self, document: Value) -> Result<usize> {
+    async fn antigravity_import_login(&self, document: Value) -> Result<usize> {
         pool_login::antigravity::refresh_token(&document).ok_or(CREDENTIALS_INVALID)?;
         self.antigravity_import(
             vec![Document {
@@ -553,7 +593,7 @@ impl Application {
     }
     /// Imports exported logins without switching to them; the whole
     /// document is checked before any is stored.
-    pub(crate) async fn antigravity_import_json(&self, content: &str) -> Result<usize> {
+    async fn antigravity_import_json(&self, content: &str) -> Result<usize> {
         self.antigravity_import(
             parse_import(content).ok_or(CREDENTIALS_INVALID)?,
             crate::login_store::Origin::Export,
@@ -571,20 +611,11 @@ impl Application {
         }
         Ok(count)
     }
-    pub(crate) async fn antigravity_delete_account(&self, id: &str) -> Result<()> {
-        self.antigravity_logins().delete(id, |_, _| {}).await
-    }
-    pub(crate) async fn antigravity_edit_accounts(
-        &self,
-        edit: impl FnOnce(&mut [&mut dyn PoolAccount]) -> Result<bool>,
-    ) -> Result<()> {
-        self.antigravity_logins().edit(edit).await
-    }
     /// Gives Antigravity this account's login, off the Gemini API a
     /// provider put it on, or a Sub2api card's provider. A login there that
     /// the pool does not hold is kept in `antigravity-before-switch.json`
     /// first; a failed step is rolled back.
-    pub(crate) async fn antigravity_switch_account(
+    async fn antigravity_switch_account(
         &self,
         id: &str,
         access: KeychainAccess,
@@ -621,19 +652,11 @@ impl Application {
         let credential = pool_login::antigravity::credential(&target.document, &identity);
         self.after_switch(Pool::Antigravity, Some(credential)).await
     }
-    /// Whether the account failed: its usage refused, or its token expired.
-    pub(crate) async fn antigravity_login_failed(&self, id: &str) -> Result<bool> {
-        self.antigravity_logins().login_failed(id)
-    }
     /// Refreshes an account's usage, renewing its access token as its
     /// renewal allows; with `renew_now`, only renews it, whatever the choice,
     /// and reports that it did. The plan is asked along, and the account's
     /// name until it is known.
-    pub(crate) async fn antigravity_refresh(
-        &self,
-        id: &str,
-        renew_now: Option<&mut bool>,
-    ) -> Result<()> {
+    async fn antigravity_refresh(&self, id: &str, renew_now: Option<&mut bool>) -> Result<()> {
         self.antigravity_refresh_login(id, renew_now, None).await
     }
     async fn antigravity_refresh_after_rejection(&self, id: &str, rejected: &str) -> Result<()> {
@@ -744,11 +767,7 @@ impl Application {
     /// one short message to each pool whose five-hour window is idle (to
     /// Gemini's when none is), which starts it; or, with `third_party`, to
     /// that pool alone (Gemini's, or the third party's), idle or not.
-    pub(crate) async fn antigravity_hello(
-        &self,
-        id: &str,
-        third_party_only: Option<bool>,
-    ) -> Result<Hello> {
+    async fn antigravity_hello(&self, id: &str, third_party_only: Option<bool>) -> Result<Hello> {
         let account = self
             .antigravity_load()?
             .accounts
