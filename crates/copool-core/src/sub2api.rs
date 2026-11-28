@@ -226,6 +226,8 @@ pub(crate) struct Member {
     /// The proxy of every request for the provider and its accounts.
     pub(crate) proxy_url: String,
     pub(crate) imported: Vec<i64>,
+    /// Accounts whose cards the user removed, until a sync.
+    pub(crate) removed: Vec<i64>,
     pub(crate) cached: Vec<Account>,
 }
 impl Member {
@@ -246,7 +248,8 @@ impl Member {
             .collect()
     }
     /// Takes a refresh's accounts: a sync's are the provider's accounts from
-    /// then on. A refresh of every card adds those it discovers; an account
+    /// then on. A refresh of every card adds those it discovers, but none
+    /// whose card the user removed, which only a sync restores; an account
     /// it asked about (`ids`, every one without) and no longer lists loses
     /// its card. Keep the imported ids so a provider with no active accounts
     /// still refreshes and can show them again when reactivated.
@@ -258,6 +261,7 @@ impl Member {
     ) -> usize {
         if sync {
             self.imported = fetched.iter().map(|a| a.id).collect();
+            self.removed.clear();
             self.cached = fetched;
             return self.cached.len();
         }
@@ -273,7 +277,7 @@ impl Member {
             if !self.imported.contains(&account.id) {
                 // Refreshing some cards adds none: one removed while the
                 // request ran stays removed.
-                if ids.is_some() {
+                if ids.is_some() || self.removed.contains(&account.id) {
                     continue;
                 }
                 self.imported.push(account.id);
@@ -909,6 +913,7 @@ mod tests {
             name: "p".into(),
             proxy_url: String::new(),
             imported: vec![43],
+            removed: vec![],
             cached: vec![account(43, 10.)],
         };
         member.adopt(vec![account(42, 20.)], Some(&[42]), false);
@@ -920,12 +925,32 @@ mod tests {
     }
 
     #[test]
+    fn only_a_sync_restores_a_card_the_user_removed() {
+        // Of two imported accounts, the user removed 42's card; 43 remains.
+        let mut member = Member {
+            key: "p".into(),
+            name: "p".into(),
+            proxy_url: String::new(),
+            imported: vec![43],
+            removed: vec![42],
+            cached: vec![account(43, 10.)],
+        };
+        member.adopt(vec![account(42, 20.), account(43, 30.)], None, false);
+        assert_eq!(member.imported, [43]);
+        assert_eq!(member.cached.iter().map(|a| a.id).collect::<Vec<_>>(), [43]);
+        member.adopt(vec![account(42, 20.), account(43, 30.)], None, true);
+        assert_eq!(member.imported, [42, 43]);
+        assert!(member.removed.is_empty());
+    }
+
+    #[test]
     fn inactive_and_missing_accounts_lose_their_cards_in_every_pool() {
         let mut member = Member {
             key: "p".into(),
             name: "p".into(),
             proxy_url: String::new(),
             imported: vec![42, 43],
+            removed: vec![],
             cached: vec![account(42, 10.), account(43, 10.)],
         };
         // Old cached inactive cards are hidden even before a refresh succeeds.

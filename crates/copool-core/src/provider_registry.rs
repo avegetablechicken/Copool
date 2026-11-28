@@ -46,6 +46,10 @@ pub struct ProviderRecord {
     pub allow_insecure_tls: bool,
     #[serde(rename = "importedAccountIDs")]
     pub imported_account_ids: Vec<i64>,
+    /// Accounts whose cards the user removed: a refresh discovering them
+    /// adds none of them again, only a sync does.
+    #[serde(rename = "removedAccountIDs", skip_serializing_if = "Vec::is_empty")]
+    pub removed_account_ids: Vec<i64>,
     pub cached_accounts: Vec<Account>,
 }
 impl AsRef<ProviderRecord> for ProviderRecord {
@@ -66,6 +70,7 @@ impl ProviderRecord {
             name: self.name.clone(),
             proxy_url: self.proxy_url.clone(),
             imported: self.imported_account_ids.clone(),
+            removed: self.removed_account_ids.clone(),
             cached: self.cached_accounts.clone(),
         }
     }
@@ -202,6 +207,7 @@ impl<A: Adapter> Registry<'_, A> {
                 let s = stored.as_mut();
                 if let Some(old) = existing.map(|i| providers[i].as_ref()) {
                     s.imported_account_ids = old.imported_account_ids.clone();
+                    s.removed_account_ids = old.removed_account_ids.clone();
                     s.cached_accounts = old.cached_accounts.clone();
                     // The provider's card sets its proxy, not its settings.
                     s.proxy_url = old.proxy_url.clone();
@@ -240,6 +246,7 @@ impl<A: Adapter> Registry<'_, A> {
                         Some(mut previous) => {
                             let (now, was) = (providers[i].as_ref(), previous.as_mut());
                             was.imported_account_ids = now.imported_account_ids.clone();
+                            was.removed_account_ids = now.removed_account_ids.clone();
                             was.cached_accounts = now.cached_accounts.clone();
                             was.proxy_url = now.proxy_url.clone();
                             providers[i] = previous;
@@ -317,6 +324,7 @@ impl<A: Adapter> ProviderRegistry for Registry<'_, A> {
             let mut member = r.member();
             edit(&mut member);
             r.imported_account_ids = member.imported;
+            r.removed_account_ids = member.removed;
             r.cached_accounts = member.cached;
             r.proxy_url = member.proxy_url;
             Ok(true)

@@ -182,6 +182,9 @@ impl Application {
         self.edit_member(pool, &member.key, |m| {
             m.imported.retain(|v| *v != account.id);
             m.cached.retain(|a| a.id != account.id);
+            if !m.removed.contains(&account.id) {
+                m.removed.push(account.id);
+            }
         })
         .await?
         .ok_or_else(|| "Account not found".into())
