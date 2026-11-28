@@ -2745,33 +2745,26 @@ async fn refresh_proxy_candidate_auth(
         // The pool renews the login where it keeps it.
         Some(renew) => renew(candidate.id.clone(), candidate.access_token.clone()).await?,
         None => {
-            // One renewal at a time: Claude's refresh token is spent by its
-            // first use, so concurrent refusals must not each renew.
-            let _renewal = if matches!(storage.pool, Pool::Antigravity | Pool::Claude) {
-                Some(storage.remote_renewal.lock().await)
-            } else {
-                None
-            };
-            let current = if matches!(storage.pool, Pool::Antigravity | Pool::Claude) {
-                // Another rejected request or a desktop sync may have supplied a new login.
-                let current = load_proxy_candidates(storage)
-                    .await?
-                    .into_iter()
-                    .find(|c| c.id == candidate.id)
-                    .ok_or(match storage.pool {
-                        Pool::Antigravity => "Antigravity account removed",
-                        _ => "Claude account removed",
-                    })?;
-                if current.auth_json != candidate.auth_json {
-                    return Ok(current);
-                }
-                if !current.renews {
-                    return Err(crate::models::RENEWAL_OFF.into());
-                }
-                current
-            } else {
-                candidate.clone()
-            };
+            // One renewal at a time: a refresh token is spent by its first
+            // use, so concurrent refusals must not each renew.
+            let _renewal = storage.remote_renewal.lock().await;
+            // Another rejected request or a desktop sync may have supplied a new login.
+            let current = load_proxy_candidates(storage)
+                .await?
+                .into_iter()
+                .find(|c| c.id == candidate.id)
+                .ok_or(match storage.pool {
+                    Pool::Antigravity => "Antigravity account removed",
+                    Pool::Claude => "Claude account removed",
+                    Pool::Codex => "Codex account removed",
+                    Pool::Grok => "Grok accounts have no API proxy",
+                })?;
+            if current.auth_json != candidate.auth_json {
+                return Ok(current);
+            }
+            if !current.renews {
+                return Err(crate::models::RENEWAL_OFF.into());
+            }
             let refreshed = match storage.pool {
                 Pool::Antigravity => {
                     antigravity::renew_remote(
@@ -5305,6 +5298,40 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         assert_eq!(
             candidates,
             [("never", false), ("always", true), ("always", true)]
+        );
+    }
+
+    /// A request refused with a login another request has since renewed
+    /// retries with the stored login instead of spending its refresh token.
+    #[tokio::test]
+    async fn a_stale_codex_refusal_reuses_the_login_renewed_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        let row = |access: &str| {
+            serde_json::from_value::<super::StoredAccount>(json!({
+                "id": "a", "label": "A", "accountId": "a", "addedAt": 1, "updatedAt": 1,
+                "authJson": {"tokens": {
+                    "account_id": "a", "access_token": access,
+                    "refresh_token": "fixture-only", "id_token": ""
+                }}
+            }))
+            .unwrap()
+        };
+        let stale =
+            super::account_to_proxy_candidate(crate::models::Pool::Codex, row("expired")).unwrap();
+        let path = account_store_path_from_data_dir(dir.path());
+        let mut store = load_store_from_path(&path).unwrap();
+        store.accounts.push(row("fresh-already-rotated"));
+        save_store_to_path(&path, &store).unwrap();
+        // An empty ID token makes a renewal fail before any request is made.
+        let renewed = refresh_proxy_candidate_auth(&storage, &stale).await;
+        assert_eq!(
+            renewed.map(|candidate| candidate.access_token),
+            Ok("fresh-already-rotated".to_owned())
         );
     }
 
