@@ -796,13 +796,13 @@ impl PoolOps for ClaudeLogins<'_> {
         Box::pin(self.0.claude_authorize_at_startup())
     }
     fn import_current(&self) -> Response<'_, usize> {
-        Box::pin(async move { self.0.claude_import_current().await.map(|_| 1) })
+        Box::pin(self.0.claude_import_current())
     }
     fn import_json<'a>(&'a self, content: &'a str) -> Response<'a, usize> {
         Box::pin(self.0.claude_import_json(content))
     }
     fn import_sign_in<'a>(&'a self, document: Value, _: Option<&'a str>) -> Response<'a, usize> {
-        Box::pin(async move { self.0.claude_import_login(document).await.map(|_| 1) })
+        Box::pin(self.0.claude_import_login(document))
     }
     fn delete<'a>(&'a self, id: &'a str) -> Response<'a, ()> {
         Box::pin(async move { self.0.claude_logins().delete(id, |_, _| {}).await })
@@ -1567,15 +1567,14 @@ impl Application {
         Ok(summaries)
     }
     /// Adds or updates an account, which waits for a manual refresh unless
-    /// new accounts may be asked at once. Returns its id, label and whether
-    /// it waits.
+    /// new accounts may be asked at once. Returns its id and whether it
+    /// waits.
     async fn claude_upsert(
         &self,
         oauth: Value,
         account: Value,
         origin: Origin,
-    ) -> Result<(String, String, bool)> {
-        let label = label_of(&account);
+    ) -> Result<(String, bool)> {
         // A login without its account is matched by its tokens until a
         // refresh identifies it.
         let login = Live {
@@ -1584,8 +1583,7 @@ impl Application {
             held: Held::File,
             inferred: false,
         };
-        let (id, waiting) = self.claude_logins().upsert(login, origin).await?;
-        Ok((id, label, waiting))
+        self.claude_logins().upsert(login, origin).await
     }
     /// The pool's account for this login, by its identity or else its
     /// tokens; none for a new account.
@@ -1614,19 +1612,19 @@ impl Application {
             None => self.preferences()?.request_new_accounts,
         })
     }
-    /// Imports the login Claude Code uses; returns the account label.
-    async fn claude_import_current(&self) -> Result<String> {
+    /// Imports the login Claude Code uses; returns how many accounts.
+    async fn claude_import_current(&self) -> Result<usize> {
         let _op = self.claude.logins.operations.lock().await;
         let _ = self.claude_unlock().await;
         let live = read_live_with_access(&self.claude_location(), KeychainAccess::Interactive)
             .await?
             .ok_or("error.claude.login_not_found")?;
-        let (id, label, waiting) = self.claude_import_live(live, Origin::Live).await?;
+        let (id, waiting) = self.claude_import_live(live, Origin::Live).await?;
         drop(_op);
         if !waiting {
             let _ = self.claude_refresh(&id, None).await;
         }
-        Ok(label)
+        Ok(1)
     }
     /// Imports exported Claude Code credentials without selecting them: one
     /// export, or a list of them, all checked before any is kept.
@@ -1661,7 +1659,7 @@ impl Application {
         }
         let mut fresh = Vec::new();
         for live in logins {
-            let (id, _, waiting) = self.claude_import_live(live, Origin::Export).await?;
+            let (id, waiting) = self.claude_import_live(live, Origin::Export).await?;
             if !waiting {
                 fresh.push(id);
             }
@@ -1672,11 +1670,7 @@ impl Application {
         }
         Ok(exports.len())
     }
-    async fn claude_import_live(
-        &self,
-        live: Live,
-        origin: Origin,
-    ) -> Result<(String, String, bool)> {
+    async fn claude_import_live(&self, live: Live, origin: Origin) -> Result<(String, bool)> {
         let oauth = live.oauth().ok_or("error.claude.login_not_found")?.clone();
         let account = match live.account.clone() {
             Some(account) => account,
@@ -1704,7 +1698,7 @@ impl Application {
         self.claude_upsert(oauth, account, origin).await
     }
     /// Stores a browser sign-in without changing Claude Code's login.
-    async fn claude_import_login(&self, tokens: Value) -> Result<String> {
+    async fn claude_import_login(&self, tokens: Value) -> Result<usize> {
         let mut oauth = json!({});
         apply_tokens(&mut oauth, &tokens, now_unix_seconds() * 1000)?;
         let token = text(&oauth["accessToken"]).unwrap_or_default();
@@ -1732,12 +1726,12 @@ impl Application {
         }
         let _op = self.claude.logins.operations.lock().await;
         let _ = self.claude_unlock().await;
-        let (id, label, waiting) = self.claude_upsert(oauth, account, Origin::SignIn).await?;
+        let (id, waiting) = self.claude_upsert(oauth, account, Origin::SignIn).await?;
         drop(_op);
         if !waiting {
             let _ = self.claude_refresh(&id, None).await;
         }
-        Ok(label)
+        Ok(1)
     }
     /// Gives Claude Code this account's login and identity, or a Sub2api
     /// card's provider. A previous login outside the pool is kept in

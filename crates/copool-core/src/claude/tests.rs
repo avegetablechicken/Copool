@@ -2651,8 +2651,9 @@ async fn imports_switches_and_follows_the_claude_code_login() {
     )
     .unwrap();
     sign_in(&location, "alice", LATER);
+    assert_eq!(app.claude_import_current().await.unwrap(), 1);
     assert_eq!(
-        app.claude_import_current().await.unwrap(),
+        app.accounts(Pool::Claude).await.unwrap()[0].label,
         "alice@example.com"
     );
     sign_in(&location, "bob", LATER);
@@ -3607,14 +3608,15 @@ async fn a_browser_sign_in_is_stored_without_changing_claude_code() {
     let dir = tempfile::tempdir().unwrap();
     let (app, location, _) = app(&dir).await;
     sign_in(&location, "alice", LATER);
-    let label = app
+    let count = app
             .claude_import_login(json!({"access_token":"new-access","refresh_token":"new-refresh","expires_in":28800,"scope":"user:inference user:profile"}))
             .await
             .unwrap();
-    assert_eq!(label, "new@example.com");
+    assert_eq!(count, 1);
     assert_eq!(live_access(&location), "alice-access");
     let accounts = app.accounts(Pool::Claude).await.unwrap();
     assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].label, "new@example.com");
     assert!(!accounts[0].is_current);
     assert_eq!(accounts[0].plan_type.as_deref(), Some("max 5x"));
     // The only stored account is not Claude Code's, so Smart Switch takes it.
@@ -3875,7 +3877,7 @@ async fn browser_profile_uses_the_existing_account_proxy_with_rotated_tokens() {
         .await
         .unwrap();
     let (oauth, account) = login("new", LATER);
-    let (id, _, _) = app
+    let (id, _) = app
         .claude_upsert(oauth, account, Origin::Export)
         .await
         .unwrap();
@@ -4270,7 +4272,11 @@ async fn an_unnamed_login_is_imported_and_probed_on_its_first_refresh() {
     let dir = tempfile::tempdir().unwrap();
     let (app, location, fake) = waiting_app(&dir);
     sign_in_unnamed(&location, "probe");
-    assert_eq!(app.claude_import_current().await.unwrap(), "Claude Code");
+    assert_eq!(app.claude_import_current().await.unwrap(), 1);
+    assert_eq!(
+        app.accounts(Pool::Claude).await.unwrap()[0].label,
+        "Claude Code"
+    );
     app.claude_import_current().await.unwrap();
     let accounts = app.accounts(Pool::Claude).await.unwrap();
     assert_eq!(accounts.len(), 1);
