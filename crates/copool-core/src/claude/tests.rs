@@ -1418,11 +1418,20 @@ async fn fallback_updates_windows_and_keeps_resets_until_confirmed_again() {
     let stored = || app.claude_load().unwrap().accounts[0].clone();
     let id = stored().id;
     let first = stored().usage.unwrap();
+    // First 429 on the CLI agent falls back to the legacy agent and pauses
+    // the CLI agent for this account so the next poll does not hit 429 again.
+    fake.usage.lock().unwrap().extend([
+        (429, Value::Null),
+        (
+            200,
+            json!({"five_hour":{"utilization":41},"cedar_ember":{"eligible":false,"ineligible_reason":"surface"}}),
+        ),
+        (
+            200,
+            json!({"five_hour":{"utilization":42},"cedar_ember":{"eligible":false,"ineligible_reason":"surface"}}),
+        ),
+    ]);
     for used in [41, 42] {
-        fake.usage.lock().unwrap().extend([
-                (429, Value::Null),
-                (200, json!({"five_hour":{"utilization":used},"cedar_ember":{"eligible":false,"ineligible_reason":"surface"}}))
-            ]);
         app.refresh_usage(Pool::Claude, &id).await.unwrap();
         let usage = stored().usage.unwrap();
         assert_eq!(usage.five_hour.unwrap().used_percent, f64::from(used));
@@ -1431,6 +1440,13 @@ async fn fallback_updates_windows_and_keeps_resets_until_confirmed_again() {
         assert_eq!(usage.reset_expiries, first.reset_expiries);
         assert_eq!(usage.resets_last_confirmed_at, Some(first.fetched_at));
     }
+    // Once the CLI agent's pause expires, the next refresh probes it again
+    // and confirms the updated reset inventory.
+    app.claude
+        .usage_agent_retry_at
+        .lock()
+        .unwrap()
+        .insert(id.clone(), now_unix_seconds() - 1);
     fake.usage
         .lock()
         .unwrap()
@@ -1441,7 +1457,190 @@ async fn fallback_updates_windows_and_keeps_resets_until_confirmed_again() {
     assert!(usage.reset_grants.is_empty());
     assert_eq!(usage.resets_last_confirmed_at, None);
     let (cli, code) = (USAGE_USER_AGENT, USER_AGENT);
-    assert_eq!(agents(&fake), [cli, cli, code, cli, code, cli]);
+    assert_eq!(agents(&fake), [cli, cli, code, code, cli]);
+
+    // Turning the card's backoff off stops pausing the CLI agent.
+    let mut preferences = app.preferences().unwrap();
+    preferences.refresh.cards.claude.insert(
+        id.clone(),
+        crate::refresh_policy::CardRefresh {
+            adaptive: None,
+            backoff: Some(false),
+        },
+    );
+    app.save_preferences(preferences).await.unwrap();
+    let start = agents(&fake).len();
+    fake.usage.lock().unwrap().extend([
+        (429, Value::Null),
+        (200, json!({"five_hour":{"utilization":43}})),
+        (200, json!({"five_hour":{"utilization":43}})),
+    ]);
+    app.refresh_usage(Pool::Claude, &id).await.unwrap();
+    app.refresh_usage(Pool::Claude, &id).await.unwrap();
+    assert_eq!(agents(&fake)[start..], [cli, code, cli]);
+}
+
+#[tokio::test]
+async fn clock_jitter_and_fallback_metadata_do_not_speed_up_an_idle_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, location, fake) = app(&dir).await;
+    sign_in(&location, "alice", LATER);
+    let grants = json!([{"resets_left":1,"ends_at":"2099-01-01T00:00:00Z","gives_back_weekly":false,"clears":["five_hour","seven_day"]}]);
+    *fake.usage_clock_offset.lock().unwrap() = Some(0);
+    fake.usage.lock().unwrap().push((
+        200,
+        json!({
+            "five_hour": {"utilization": 0.0, "resets_at": null},
+            "seven_day": {"utilization": 100.0, "resets_at": "2099-01-01T00:00:00Z"},
+            "cedar_ember": {"eligible": true, "grants": grants}
+        }),
+    ));
+    app.claude_import_current().await.unwrap();
+    let id = app.claude_load().unwrap().accounts[0].id.clone();
+
+    // Clock offset flips 0 -> -1, resets_at jitters by 1 second, and a 429
+    // fallback sets resetsLastConfirmedAt: none of these is a usage change.
+    *fake.usage_clock_offset.lock().unwrap() = Some(-1);
+    fake.usage.lock().unwrap().extend([
+        (429, Value::Null),
+        (
+            200,
+            json!({
+                "five_hour": {"utilization": 0.0, "resets_at": null},
+                "seven_day": {"utilization": 100.0, "resets_at": "2098-12-31T23:59:59Z"},
+                "cedar_ember": {"eligible": false, "ineligible_reason": "surface"}
+            }),
+        ),
+    ]);
+    age(&app, REFRESH_SECONDS);
+    app.background_round(1, Pool::Claude).await;
+    assert_eq!(app.fast_wait(Pool::Claude), None);
+    assert!(app.speedup(Pool::Claude, &id).is_none());
+}
+
+#[tokio::test]
+async fn an_idle_noncurrent_card_returns_to_six_minute_rounds_despite_clock_jitter() {
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let (app, location, fake) = app(&dir).await;
+    let usage = |used, reset| {
+        (
+            200,
+            json!({"five_hour": {"utilization": used, "resets_at": reset}}),
+        )
+    };
+    sign_in(&location, "alice", LATER);
+    fake.usage
+        .lock()
+        .unwrap()
+        .push(usage(20, "2099-01-01T00:00:00Z"));
+    app.claude_import_current().await.unwrap();
+    let id = app.claude_load().unwrap().accounts[0].id.clone();
+    sign_in(&location, "bob", LATER);
+    fake.usage
+        .lock()
+        .unwrap()
+        .push(usage(25, "2099-01-01T00:00:00Z"));
+    app.claude_import_current().await.unwrap();
+    let mut preferences = app.preferences().unwrap();
+    preferences.refresh.claude.seconds = 120;
+    preferences.refresh.claude.full_every = 3;
+    app.save_preferences(preferences).await.unwrap();
+
+    // A genuine increase starts 30-second polling for the noncurrent card.
+    fake.usage.lock().unwrap().extend([
+        usage(25, "2099-01-01T00:00:00Z"),
+        usage(25, "2099-01-01T00:00:00Z"),
+    ]);
+    age(&app, 360);
+    app.background_round(3, Pool::Claude).await;
+    assert_eq!(app.fast_wait(Pool::Claude), Some(Duration::from_secs(30)));
+    let requests = usages(&fake).len();
+    // Two unchanged readings exit fast mode even though clock data jitters.
+    for (round, offset, reset) in [
+        (0, -1, "2098-12-31T23:59:59Z"),
+        (1, 0, "2099-01-01T00:00:00Z"),
+    ] {
+        *fake.usage_clock_offset.lock().unwrap() = Some(offset);
+        fake.usage.lock().unwrap().push(usage(25, reset));
+        age(&app, 30);
+        app.fast_round(Pool::Claude).await;
+        assert_eq!(usages(&fake).len(), requests + round + 1);
+        assert_eq!(usages(&fake).last().unwrap(), "alice-access");
+        assert_eq!(
+            app.fast_wait(Pool::Claude),
+            (round == 0).then_some(Duration::from_secs(30))
+        );
+    }
+    let card = app
+        .accounts(Pool::Claude)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == id)
+        .unwrap();
+    assert!(!card.is_current);
+    assert_eq!(card.refresh.unwrap().seconds, 360);
+    let schedule = app.schedule(Pool::Claude).unwrap();
+    assert_eq!(card.next_refresh_at, Some(schedule.at + 240));
+    assert!(app.speedup(Pool::Claude, &id).is_none());
+
+    // An extra fast tick sends nothing. Intermediate rounds ask only Bob.
+    let requests = usages(&fake).len();
+    age(&app, 120);
+    app.fast_round(Pool::Claude).await;
+    assert_eq!(usages(&fake).len(), requests);
+    for tick in [4, 5] {
+        fake.usage
+            .lock()
+            .unwrap()
+            .push(usage(25, "2099-01-01T00:00:00Z"));
+        age(&app, 120);
+        app.background_round(tick, Pool::Claude).await;
+        assert_eq!(app.fast_wait(Pool::Claude), None);
+    }
+    assert_eq!(usages(&fake).len(), requests + 2);
+    // The next full round asks Alice again without restarting fast polling.
+    age(&app, 120);
+    fake.usage.lock().unwrap().extend([
+        usage(25, "2098-12-31T23:59:59Z"),
+        usage(25, "2098-12-31T23:59:59Z"),
+    ]);
+    app.background_round(6, Pool::Claude).await;
+    assert_eq!(usages(&fake).len(), requests + 4);
+    assert_eq!(app.fast_wait(Pool::Claude), None);
+}
+
+#[tokio::test]
+async fn primary_agent_cooldown_honors_retry_after_and_fallback_can_pause_all_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, location, fake) = app(&dir).await;
+    sign_in(&location, "alice", LATER);
+    app.claude_import_current().await.unwrap();
+    let id = app.claude_load().unwrap().accounts[0].id.clone();
+    *fake.usage_retry_after.lock().unwrap() = Some(5400);
+    fake.usage.lock().unwrap().push((429, Value::Null));
+    let before = now_unix_seconds();
+    app.refresh_usage(Pool::Claude, &id).await.unwrap();
+    let until = app.claude.usage_agent_retry_at.lock().unwrap()[&id];
+    assert!((before + 5400..=now_unix_seconds() + 5400).contains(&until));
+    assert!(app.claude_load().unwrap().accounts[0]
+        .own
+        .usage_retry_at
+        .is_none());
+
+    // A later 429 from the fallback still invokes the account-wide backoff.
+    *fake.usage_retry_after.lock().unwrap() = None;
+    let start = agents(&fake).len();
+    fake.usage.lock().unwrap().push((429, Value::Null));
+    let error = app.refresh_usage(Pool::Claude, &id).await.unwrap_err();
+    assert!(error.ends_with("retry paused for 5 minutes"));
+    assert_eq!(agents(&fake)[start..], [USER_AGENT]);
+    assert_eq!(
+        app.refresh_usage(Pool::Claude, &id).await.unwrap_err(),
+        error
+    );
+    assert_eq!(agents(&fake).len(), start + 1);
 }
 
 #[tokio::test]

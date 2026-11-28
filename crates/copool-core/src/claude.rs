@@ -398,6 +398,9 @@ pub(crate) struct State {
     named: std::sync::Mutex<std::collections::BTreeMap<String, Value>>,
     /// The access token whose profile could not be asked last, and when.
     unconfirmed: std::sync::Mutex<Option<(String, i64)>>,
+    /// Until when each account's primary CLI usage agent pauses after HTTP 429
+    /// while the fallback agent still succeeds, by account id.
+    usage_agent_retry_at: std::sync::Mutex<std::collections::BTreeMap<String, i64>>,
     /// Reads of Claude Code's login answer this late (tests).
     #[cfg(test)]
     live_read_delay_ms: std::sync::atomic::AtomicU64,
@@ -419,6 +422,7 @@ impl Default for State {
             logins: Default::default(),
             named: Default::default(),
             unconfirmed: Default::default(),
+            usage_agent_retry_at: Default::default(),
             #[cfg(test)]
             live_read_delay_ms: Default::default(),
             #[cfg(not(test))]
@@ -2181,8 +2185,9 @@ impl Application {
             learn(&mut learned, subscription, tier);
             profiled = Some(named);
         }
-        let (status, body, after, clock_offset) =
-            self.claude_usage(network, api, &token, proxy).await?;
+        let (status, body, after, clock_offset) = self
+            .claude_usage(network, &account.id, api, &token, proxy)
+            .await?;
         *limited.lock().unwrap() = (status == 429, after.filter(|_| status == 429));
         match status {
             200..=299 => {}
@@ -2239,18 +2244,49 @@ impl Application {
             plan: learned,
         }))
     }
-    /// A 429 retries with the alternate agent for this request only.
+    /// Asks Claude for usage with the primary CLI agent; a 429 falls back to
+    /// the alternate agent and, with backoff on, pauses the primary agent for
+    /// this account so following polls do not keep hitting 429 on it.
     async fn claude_usage(
         &self,
         network: &dyn Network,
+        account_id: &str,
         api: &str,
         token: &str,
         proxy: &str,
     ) -> Result<UsageResponse> {
+        let backoff = self.card_refresh(Pool::Claude, account_id).backoff;
+        let now = now_unix_seconds();
+        let primary_paused = backoff
+            && self
+                .claude
+                .usage_agent_retry_at
+                .lock()
+                .unwrap()
+                .get(account_id)
+                .is_some_and(|&until| until > now);
+        if primary_paused {
+            return network.usage(api, token, USER_AGENT, proxy).await;
+        }
         let response = network.usage(api, token, USAGE_USER_AGENT, proxy).await?;
         if response.0 == 429 {
-            network.usage(api, token, USER_AGENT, proxy).await
+            let fallback = network.usage(api, token, USER_AGENT, proxy).await?;
+            let mut paused = self.claude.usage_agent_retry_at.lock().unwrap();
+            if backoff && (200..=299).contains(&fallback.0) {
+                let pause = rate_limit_pause(1, response.2);
+                paused.insert(account_id.to_owned(), now_unix_seconds() + pause);
+            } else {
+                paused.remove(account_id);
+            }
+            Ok(fallback)
         } else {
+            if (200..=299).contains(&response.0) {
+                self.claude
+                    .usage_agent_retry_at
+                    .lock()
+                    .unwrap()
+                    .remove(account_id);
+            }
             Ok(response)
         }
     }

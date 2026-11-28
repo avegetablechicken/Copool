@@ -7,6 +7,17 @@ use std::{collections::BTreeMap, time::Duration};
 const FASTEST_ADAPTIVE_SECONDS: u64 = 30;
 /// Refreshes in a row without a change that end a card's speed-up.
 pub(crate) const FAST_REFRESH_UNCHANGED_ROUNDS: u8 = 2;
+/// Small reset timestamp shifts (sub-second rounding or server clock jitter)
+/// that do not count as a usage change when all other window fields match.
+const RESET_AT_JITTER_SECONDS: u64 = 5;
+const WINDOW_KEYS: [&str; 6] = [
+    "fiveHour",
+    "oneWeek",
+    "oneMonth",
+    "fableOneWeek",
+    "thirdPartyFiveHour",
+    "thirdPartyOneWeek",
+];
 /// The longest round interval, and the most rounds to a full one.
 pub(crate) const MAX_ROUND_SECONDS: u64 = 3600;
 pub(crate) const MAX_FULL_EVERY: u64 = 12;
@@ -271,16 +282,29 @@ pub(crate) fn card_key(pool: Pool, id: &str) -> String {
         None => id.to_owned(),
     }
 }
-/// Each card's usage, without when it was fetched.
+/// Each card's usage, without fetch/clock metadata that varies across polls
+/// even when usage has not changed.
 pub(crate) fn usage_values(accounts: &[AccountSummary]) -> BTreeMap<String, Value> {
     accounts
         .iter()
         .filter_map(|a| {
             let mut usage = serde_json::to_value(a.usage.as_ref()?).ok()?;
-            usage.as_object_mut()?.remove("fetchedAt");
+            strip_usage_metadata(&mut usage);
             Some((a.id.clone(), usage))
         })
         .collect()
+}
+fn strip_usage_metadata(usage: &mut Value) {
+    let Some(object) = usage.as_object_mut() else {
+        return;
+    };
+    object.remove("fetchedAt");
+    object.remove("resetsLastConfirmedAt");
+    for key in WINDOW_KEYS {
+        if let Some(window) = object.get_mut(key).and_then(Value::as_object_mut) {
+            window.remove("clockOffsetSeconds");
+        }
+    }
 }
 /// The cards whose usage changed: their values differ, or they have usage
 /// for the first time. A card losing its usage is no change.
@@ -295,19 +319,56 @@ pub(crate) fn changed_cards<'a>(
 }
 fn usage_changed(previous: Option<&Value>, usage: &Value) -> bool {
     match previous {
-        Some(previous) => previous != usage,
-        None => [
-            "fiveHour",
-            "oneWeek",
-            "oneMonth",
-            "fableOneWeek",
-            "thirdPartyFiveHour",
-            "thirdPartyOneWeek",
-            "credits",
-        ]
-        .iter()
-        .any(|key| !usage[*key].is_null()),
+        Some(previous) => !same_usage(previous, usage),
+        None => WINDOW_KEYS
+            .iter()
+            .chain(std::iter::once(&"credits"))
+            .any(|key| !usage[*key].is_null()),
     }
+}
+fn same_usage(previous: &Value, current: &Value) -> bool {
+    let (Some(a), Some(b)) = (previous.as_object(), current.as_object()) else {
+        return previous == current;
+    };
+    let ignored = |key: &str| matches!(key, "fetchedAt" | "resetsLastConfirmedAt");
+    let keys: std::collections::BTreeSet<&str> = a
+        .keys()
+        .chain(b.keys())
+        .map(String::as_str)
+        .filter(|key| !ignored(key))
+        .collect();
+    keys.into_iter().all(|key| {
+        let av = a.get(key).unwrap_or(&Value::Null);
+        let bv = b.get(key).unwrap_or(&Value::Null);
+        if WINDOW_KEYS.contains(&key) {
+            same_window(av, bv)
+        } else {
+            av == bv
+        }
+    })
+}
+fn same_window(previous: &Value, current: &Value) -> bool {
+    let (Some(a), Some(b)) = (previous.as_object(), current.as_object()) else {
+        return previous == current;
+    };
+    let keys: std::collections::BTreeSet<&str> = a
+        .keys()
+        .chain(b.keys())
+        .map(String::as_str)
+        .filter(|key| *key != "clockOffsetSeconds")
+        .collect();
+    keys.into_iter().all(|key| {
+        let av = a.get(key).unwrap_or(&Value::Null);
+        let bv = b.get(key).unwrap_or(&Value::Null);
+        if key == "resetAt" {
+            match (av.as_i64(), bv.as_i64()) {
+                (Some(x), Some(y)) => x.abs_diff(y) <= RESET_AT_JITTER_SECONDS,
+                _ => av == bv,
+            }
+        } else {
+            av == bv
+        }
+    })
 }
 
 pub(crate) fn snapshot_is_fresh(synced_at: Option<i64>, now: i64, window: i64) -> bool {
@@ -371,6 +432,64 @@ mod tests {
         );
         after.remove("c");
         assert!(changed_cards(&before, &after).eq(["b"]));
+    }
+
+    #[test]
+    fn clock_offset_reset_jitter_and_confirmation_time_are_not_usage_changes() {
+        let base = serde_json::json!({
+            "fetchedAt": 1000,
+            "remainingResetCount": 1,
+            "fiveHour": {
+                "clockOffsetSeconds": 0,
+                "usedPercent": 0.0,
+                "windowSeconds": 18000,
+                "resetAt": null
+            },
+            "oneWeek": {
+                "clockOffsetSeconds": 0,
+                "usedPercent": 100.0,
+                "windowSeconds": 604800,
+                "resetAt": 1_795_899_600
+            }
+        });
+        let noisy = serde_json::json!({
+            "fetchedAt": 1030,
+            "resetsLastConfirmedAt": 1000,
+            "remainingResetCount": 1,
+            "fiveHour": {
+                "clockOffsetSeconds": -1,
+                "usedPercent": 0.0,
+                "windowSeconds": 18000,
+                "resetAt": null
+            },
+            "oneWeek": {
+                "clockOffsetSeconds": -1,
+                "usedPercent": 100.0,
+                "windowSeconds": 604800,
+                "resetAt": 1_795_899_599
+            }
+        });
+        let before = BTreeMap::from([("a".to_owned(), base.clone())]);
+        let after = BTreeMap::from([("a".to_owned(), noisy)]);
+        assert_eq!(changed_cards(&before, &after).count(), 0);
+
+        // Starting an idle 5h window (resetAt None -> Some) is a real change.
+        let mut started = base.clone();
+        started["fiveHour"]["resetAt"] = serde_json::json!(1_795_900_000);
+        let after = BTreeMap::from([("a".to_owned(), started)]);
+        assert!(changed_cards(&before, &after).eq(["a"]));
+
+        // A reset jump beyond the jitter tolerance is a real change even with the same percent.
+        let mut rolled = base.clone();
+        rolled["oneWeek"]["resetAt"] = serde_json::json!(1_795_899_600 + 6);
+        let after = BTreeMap::from([("a".to_owned(), rolled)]);
+        assert!(changed_cards(&before, &after).eq(["a"]));
+
+        // Spending a banked reset is a real change.
+        let mut spent = base;
+        spent["remainingResetCount"] = serde_json::json!(0);
+        let after = BTreeMap::from([("a".to_owned(), spent)]);
+        assert!(changed_cards(&before, &after).eq(["a"]));
     }
 
     #[test]
