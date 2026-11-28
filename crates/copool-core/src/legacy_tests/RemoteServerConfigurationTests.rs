@@ -183,7 +183,7 @@ fn executable(path: &std::path::Path, body: &str) {
 }
 #[cfg(unix)]
 #[test]
-fn testSyncStopsADaemonBeforeTheLockWhileItReplacesTheAccounts() {
+fn testSyncStopsADaemonBeforeTheLockWhatEverItsUnitIsDoing() {
     let d = tempfile::tempdir().unwrap();
     let (dir, stage, bin) = (
         d.path().join("srv"),
@@ -193,15 +193,27 @@ fn testSyncStopsADaemonBeforeTheLockWhileItReplacesTheAccounts() {
     for path in [&dir, &stage, &bin] {
         std::fs::create_dir_all(path).unwrap();
     }
-    // A daemon before the lock refuses the question; its unit runs.
+    // A daemon before the lock refuses the question.
     executable(&dir.join("codex-tools-proxyd"), "exit 2");
-    let log = d.path().join("systemctl.log");
+    // The unit as systemd has it: its state, and whether it will not stop.
+    let (state, stuck, log) = (
+        d.path().join("state"),
+        d.path().join("stuck"),
+        d.path().join("log"),
+    );
     executable(
         &bin.join("systemctl"),
         &format!(
-            "echo \"$* $(cat '{}' 2>/dev/null)\" >> '{}'",
-            dir.join("accounts.json").display(),
-            log.display()
+            r#"case "$1" in
+show) echo LoadState=loaded ;;
+is-active) cat '{state}' ;;
+stop) echo "stop $(cat '{accounts}' 2>/dev/null)" >> '{log}'; [ -f '{stuck}' ] || echo inactive > '{state}' ;;
+start|restart) echo "$1 $(cat '{accounts}' 2>/dev/null)" >> '{log}'; echo active > '{state}' ;;
+esac"#,
+            state = state.display(),
+            stuck = stuck.display(),
+            log = log.display(),
+            accounts = dir.join("accounts.json").display(),
         ),
     );
     let run = |command: &str| {
@@ -212,23 +224,75 @@ fn testSyncStopsADaemonBeforeTheLockWhileItReplacesTheAccounts() {
             .unwrap()
     };
     let (dir_s, stage_s) = (dir.to_str().unwrap(), stage.to_str().unwrap());
-    std::fs::write(stage.join("accounts.json"), "uploaded").unwrap();
+    let upload = |content: &str| {
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("accounts.json"), content).unwrap();
+    };
+    let take_log = || {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_file(&log);
+        text
+    };
+    // A unit restarting automatically is stopped, then started again.
+    std::fs::write(&state, "activating\n").unwrap();
+    upload("uploaded");
     assert!(run(&sync_command(dir_s, "unit", stage_s, false, ""))
         .status
         .success());
-    assert_eq!(
-        std::fs::read_to_string(&log).unwrap(),
-        "is-active --quiet unit \nstop unit \nstart unit uploaded\n"
-    );
-    // Refused, it starts the daemon again too.
-    std::fs::remove_file(&log).unwrap();
-    std::fs::create_dir_all(&stage).unwrap();
-    std::fs::write(stage.join("accounts.json"), "again").unwrap();
+    assert_eq!(take_log(), "stop \nstart uploaded\n");
+    // Refused as changed, it is started again too.
+    upload("again");
     let refused = run(&sync_command(dir_s, "unit", stage_s, false, "stale"));
     assert_eq!(refused.status.code(), Some(75));
+    assert_eq!(take_log(), "stop uploaded\nstart uploaded\n");
+    // A unit stopped already stays so.
+    std::fs::write(&state, "inactive\n").unwrap();
+    let (checksum, _) = parse_snapshot(&String::from_utf8_lossy(
+        &run(&format!(
+            "cksum < '{}'",
+            dir.join("accounts.json").display()
+        ))
+        .stdout,
+    ));
+    assert!(run(&sync_command(dir_s, "unit", stage_s, false, &checksum))
+        .status
+        .success());
+    assert_eq!(take_log(), "stop uploaded\n");
+    // A unit that will not stop refuses the sync, the accounts untouched.
+    std::fs::write(&state, "activating\n").unwrap();
+    std::fs::write(&stuck, "").unwrap();
+    upload("unheld");
+    let (checksum, _) = parse_snapshot(&String::from_utf8_lossy(
+        &run(&format!(
+            "cksum < '{}'",
+            dir.join("accounts.json").display()
+        ))
+        .stdout,
+    ));
+    let unheld = run(&sync_command(dir_s, "unit", stage_s, false, &checksum));
+    assert!(!unheld.status.success());
+    assert!(String::from_utf8_lossy(&unheld.stderr).contains(DAEMON_NOT_HELD));
     assert_eq!(
-        std::fs::read_to_string(&log).unwrap(),
-        "is-active --quiet unit uploaded\nstop unit uploaded\nstart unit uploaded\n"
+        std::fs::read_to_string(dir.join("accounts.json")).unwrap(),
+        "again"
+    );
+    take_log();
+    // So does the daemon run by no unit.
+    std::fs::remove_file(&stuck).unwrap();
+    std::fs::write(&state, "inactive\n").unwrap();
+    std::fs::remove_file(dir.join("codex-tools-proxyd")).unwrap();
+    std::fs::copy("/bin/sleep", dir.join("codex-tools-proxyd")).unwrap();
+    let mut daemon = std::process::Command::new(dir.join("codex-tools-proxyd"))
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let outside = run(&sync_command(dir_s, "unit", stage_s, false, &checksum));
+    daemon.kill().unwrap();
+    daemon.wait().unwrap();
+    assert!(String::from_utf8_lossy(&outside.stderr).contains(DAEMON_NOT_HELD));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("accounts.json")).unwrap(),
+        "again"
     );
 }
 #[cfg(unix)]

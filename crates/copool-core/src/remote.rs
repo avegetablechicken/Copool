@@ -151,23 +151,48 @@ pub(crate) fn parse_snapshot(output: &str) -> (String, Option<Value>) {
         None => (output.trim().to_owned(), None),
     }
 }
+/// Marks a sync refused because nothing could keep the remote daemon from
+/// changing its accounts meanwhile.
+pub(crate) const DAEMON_NOT_HELD: &str = "copool-remote-daemon-not-held";
 /// Keeps the daemon from changing its accounts from the check that they are
 /// still the snapshot to their replacement ([`RELEASE`]), then refuses to go
 /// on when they are not: the daemon rotated a token since, and the upload
-/// must be merged again. Held by the daemon's lock on them
-/// (`accounts.json.lock`, on descriptor 9) when `flock` is there and the
-/// daemon on disk takes that lock, as it says when asked `--locks-store`
-/// (one before the lock refuses the argument); else, and always when `stop`
-/// (for a command that restarts the daemon anyway), by stopping its unit,
-/// which is started again however the command ends unless it says
-/// otherwise. A daemon no unit runs cannot be held.
+/// must be merged again.
+///
+/// Held by the daemon's lock on them (`accounts.json.lock`, on descriptor
+/// 9) when `flock` is there and the daemon on disk takes that lock, as it
+/// says when asked `--locks-store` (one before the lock refuses the
+/// argument). Else, and always when `stop` (for a command that restarts the
+/// daemon anyway), by stopping its unit, whatever it is doing: `systemctl
+/// stop` also cancels a start or an automatic restart under way. The unit
+/// must then be inactive, and no process may run the daemon's binary (one
+/// no unit runs, or left by its unit), or the command is refused with
+/// [`DAEMON_NOT_HELD`]. A unit stopped that was not inactive is started
+/// again however the command ends, unless it says otherwise.
 fn hold_accounts(dir: &str, unit: &str, checksum: &str, stop: bool) -> String {
     format!(
-        "DIR={d}; UNIT={u}; mkdir -p \"$DIR\" || exit 1; if [ {stop} = 0 ] && command -v flock >/dev/null 2>&1 && \"$DIR/codex-tools-proxyd\" --locks-store >/dev/null 2>&1; then exec 9>>\"$DIR/accounts.json.lock\" || exit 1; flock 9 || exit 1; elif systemctl is-active --quiet \"$UNIT\" 2>/dev/null; then trap 'systemctl start \"$UNIT\"' EXIT; systemctl stop \"$UNIT\" || exit 1; fi; F=\"$DIR/accounts.json\"; CURRENT=\"\"; [ -f \"$F\" ] && CURRENT=$(cksum < \"$F\"); if [ \"$CURRENT\" != {c} ]; then echo {ACCOUNTS_CHANGED} >&2; exit 75; fi; ",
+        concat!(
+            "DIR={d}; UNIT={u}; mkdir -p \"$DIR\" || exit 1; ",
+            "if [ {stop} = 0 ] && command -v flock >/dev/null 2>&1 && \"$DIR/codex-tools-proxyd\" --locks-store >/dev/null 2>&1; then ",
+            "exec 9>>\"$DIR/accounts.json.lock\" || exit 1; flock 9 || exit 1; ",
+            "else ",
+            "if [ \"$(systemctl show -p LoadState \"$UNIT\" 2>/dev/null)\" = LoadState=loaded ]; then ",
+            "case \"$(systemctl is-active \"$UNIT\" 2>/dev/null)\" in inactive|failed|'') ;; *) trap 'systemctl start \"$UNIT\"' EXIT ;; esac; ",
+            "systemctl stop \"$UNIT\" || exit 1; ",
+            "case \"$(systemctl is-active \"$UNIT\" 2>/dev/null)\" in inactive|failed) ;; *) echo {held} >&2; exit 1 ;; esac; ",
+            "fi; ",
+            "BIN=\"$(cd \"$DIR\" && pwd -P)/codex-tools-proxyd\"; ",
+            "for P in /proc/[0-9]*; do case \"$(readlink \"$P/exe\" 2>/dev/null)\" in \"$BIN\"|\"$BIN (deleted)\") echo {held} >&2; exit 1 ;; esac; done; ",
+            "fi; ",
+            "F=\"$DIR/accounts.json\"; CURRENT=\"\"; [ -f \"$F\" ] && CURRENT=$(cksum < \"$F\"); ",
+            "if [ \"$CURRENT\" != {c} ]; then echo {changed} >&2; exit 75; fi; ",
+        ),
         d = quote(dir),
         u = quote(unit),
         stop = u8::from(stop),
         c = quote(checksum),
+        held = DAEMON_NOT_HELD,
+        changed = ACCOUNTS_CHANGED,
     )
 }
 /// Lets the daemon change its accounts again ([`hold_accounts`]): its lock

@@ -410,6 +410,9 @@ impl Application {
                         match ssh(&server, &remote::with_root(&command), None, 90).await {
                             Err(error)
                                 if error.contains(remote::ACCOUNTS_CHANGED) && attempt < 3 => {}
+                            Err(error) if error.contains(remote::DAEMON_NOT_HELD) => {
+                                return Err("The remote daemon could not be paused while its accounts were replaced: a process outside its systemd unit runs it, or the unit would not stop. Stop it and sync again.".into());
+                            }
                             result => {
                                 result?;
                                 break;
