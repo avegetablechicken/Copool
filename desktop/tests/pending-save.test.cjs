@@ -60,6 +60,8 @@ test("a port is a preference of its own pool's proxy, and only a port", () => {
     assert.equal(P.portPatch("codex", value), null, value);
   }
   assert.deepEqual(P.portPatch("codex", "65535"), { proxyPort: 65535 });
+  // Grok has no proxy, so no port.
+  assert.equal(P.portPatch("grok", "8790"), null);
 });
 
 test("a hostname typed is saved as its pool's, even when another pool is shown by then", async () => {

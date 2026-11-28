@@ -751,11 +751,12 @@
     claude: { port: "claudeProxyPort", autoStart: "claudeAutoStartProxy" },
   };
   /// The preference a port typed on `pool`'s proxy page saves, named for
-  /// that pool when typed; null for no port.
+  /// that pool when typed; null for no port, or a pool without a proxy.
   function portPatch(pool, value) {
+    const preferences = PROXY_PREFERENCES[pool];
     const port = Number(value);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-    return { [PROXY_PREFERENCES[pool].port]: port };
+    if (!preferences || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    return { [preferences.port]: port };
   }
   /// The pools a pool chosen on either page shows: the accounts and proxy
   /// pages share one, but for Grok, which has no proxy. Null for no pool.

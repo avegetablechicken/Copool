@@ -4,11 +4,8 @@ use std::fs;
 
 fn api_key(definition: &config::Definition, paths: &Paths) -> Option<String> {
     if let Some(name) = &definition.env_key {
-        if let Ok(value) = std::env::var(name) {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Some(value.to_owned());
-            }
+        if let Some(value) = process_key(name) {
+            return Some(value);
         }
         // Codex loads CODEX_HOME/.env into its environment; a key kept there
         // is as available to Codex as an exported one.
@@ -36,12 +33,14 @@ pub(crate) const OWN_EXPORTS_ONLY: &str = "COPOOL_OWN_EXPORTS_ONLY";
 /// An environment variable as this process has it, else as the user's shell
 /// exports it, asked at most every 30 seconds per variable.
 pub(crate) fn environment_key(name: &str, shell: Shell) -> Option<String> {
-    if let Ok(value) = std::env::var(name) {
-        if !value.trim().is_empty() {
-            return Some(value);
-        }
-    }
-    shell_key(name, shell)
+    process_key(name).or_else(|| shell_key(name, shell))
+}
+/// An environment variable as this process has it, trimmed as a shell's
+/// answer is; none when blank.
+fn process_key(name: &str) -> Option<String> {
+    let value = std::env::var(name).ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 /// Environment variables as one shell the user opens now exports them,
 /// which is what the tools started from it get: asked again, not this
@@ -63,10 +62,7 @@ fn new_shell_keys_filtered(names: &[&str], shell: Shell, own_only: bool) -> Vec<
     }
     #[cfg(not(unix))]
     let _ = (shell, own_only);
-    names
-        .iter()
-        .map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()))
-        .collect()
+    names.iter().map(|name| process_key(name)).collect()
 }
 /// Whether `name` is an environment variable's name a shell can expand.
 pub(crate) fn is_variable(name: &str) -> bool {
