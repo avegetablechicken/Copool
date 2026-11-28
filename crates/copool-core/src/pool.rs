@@ -408,6 +408,20 @@ impl Application {
     /// five-hour window starts now; the usage reported shows it only later.
     /// A login refused as expired is renewed by a refresh, as its renewal
     /// allows, and says hi once more. A Sub2api card says hi through Sub2api.
+    /// Refuses a deleted account, whose login is never used again; from the
+    /// cards as stored, without reading the Keychain.
+    async fn refuse_deleted(&self, pool: Pool, id: &str) -> Result<()> {
+        let deleted = self
+            .ops(pool)
+            .usage_cards()
+            .await?
+            .iter()
+            .any(|a| a.id == id && a.display_status == "deleted");
+        if deleted {
+            return Err("Account not found".into());
+        }
+        Ok(())
+    }
     pub async fn say_hi(&self, pool: Pool, id: &str) -> Result<()> {
         self.say_hi_to(pool, id, None).await
     }
@@ -419,22 +433,16 @@ impl Application {
         if third_party == Some(true) && !self.has_third_party(pool, id).await? {
             return Err("This card has no third-party pool to say hi to".into());
         }
-        // A deleted account's login is never used again.
-        let deleted = self
-            .ops(pool)
-            .usage_cards()
-            .await?
-            .iter()
-            .any(|a| a.id == id && a.display_status == "deleted");
-        if deleted {
-            return Err("Account not found".into());
-        }
+        self.refuse_deleted(pool, id).await?;
         let _greeting = self.begin_greeting(pool, id)?;
         if sub2api::is_card(pool, id) {
             return self.say_hi_through_provider(pool, id).await;
         }
         let mut renewed = false;
         loop {
+            // Checked before each hi: the account may be deleted while its
+            // login is renewed.
+            self.refuse_deleted(pool, id).await?;
             let hello = self.ops(pool).hello(id, third_party).await?;
             match hello {
                 Hello::Said => return Ok(()),

@@ -803,3 +803,104 @@ async fn a_deleted_account_never_says_hi() {
     );
     assert_eq!(fixture.renewals(), 0);
 }
+
+#[tokio::test]
+async fn an_account_deleted_while_its_hi_renews_says_no_hi() {
+    use crate::login_store::suite::Fixture as _;
+    use axum::{extract::Request, routing::any, Router};
+    use std::sync::Arc;
+    struct Paused {
+        fake: Fake,
+        started: Arc<tokio::sync::Notify>,
+        answer: Arc<tokio::sync::Notify>,
+    }
+    impl AccountNetwork for Paused {
+        fn usage<'a>(&'a self, auth: &'a Value, proxy: &'a str) -> Response<'a, UsageSnapshot> {
+            self.fake.usage(auth, proxy)
+        }
+        fn refresh<'a>(&'a self, auth: &'a Value, proxy: &'a str) -> Response<'a, Value> {
+            Box::pin(async move {
+                self.started.notify_one();
+                self.answer.notified().await;
+                self.fake.refresh(auth, proxy).await
+            })
+        }
+        fn workspaces<'a>(&'a self, _: &'a str, _: &'a str) -> Response<'a, Vec<Metadata>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+    }
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorder = seen.clone();
+    let router = Router::new().fallback(any(move |request: Request| {
+        let recorder = recorder.clone();
+        async move {
+            let path = request.uri().path().to_owned();
+            recorder.lock().unwrap().push(path.clone());
+            if path.ends_with("/models") {
+                json!({"models": [{"slug": "gpt-5.6-luna", "supported_in_api": true}]}).to_string()
+            } else {
+                "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n".to_owned()
+            }
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut fixture = Fixture::open(false).await;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &Fixture::login("alice", "expired-alice", now_unix_seconds() - 1).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = fixture.id_of("alice");
+    fixture
+        .app
+        .release_new_accounts(Pool::Codex, Some(&id))
+        .await
+        .unwrap();
+    fixture
+        .app
+        .save_account_proxy(Pool::Codex, &id, "direct://")
+        .await
+        .unwrap();
+    std::fs::create_dir_all(fixture.app.codex_config_path().parent().unwrap()).unwrap();
+    std::fs::write(
+        fixture.app.codex_config_path(),
+        format!("chatgpt_base_url = \"{base}\"\n"),
+    )
+    .unwrap();
+    fixture
+        .app
+        .codex_logins()
+        .change(|store| {
+            store.accounts[0].standing = Some(Standing::Deactivated);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let answer = Arc::new(tokio::sync::Notify::new());
+    fixture.app.network = Arc::new(Paused {
+        fake: Fake::default(),
+        started: started.clone(),
+        answer: answer.clone(),
+    });
+    let (greeting, ()) = tokio::join!(fixture.app.say_hi(Pool::Codex, &id), async {
+        started.notified().await;
+        fixture.app.delete_account(Pool::Codex, &id).await.unwrap();
+        assert_eq!(
+            fixture.app.codex_load().unwrap().accounts[0].standing,
+            Some(Standing::Deleted)
+        );
+        answer.notify_one();
+    });
+    server.abort();
+    assert!(
+        greeting.is_err() && seen.lock().unwrap().is_empty(),
+        "{greeting:?} {:?}",
+        seen.lock().unwrap()
+    );
+}
