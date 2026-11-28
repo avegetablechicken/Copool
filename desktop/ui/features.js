@@ -1,5 +1,8 @@
 "use strict";
 let configurationCache = null;
+/// Each pool proxy's configurationRead() as configurationCache was asked
+/// for, by pool.
+let configurationReads = {};
 let installedEditors = [];
 /// The third-party agents a switch can sync to, as the core located them.
 let syncAgents = [];
@@ -1107,6 +1110,9 @@ function scheduleTunnelSave() {
 }
 
 async function refreshFeatureState() {
+  const reads = Object.fromEntries(
+    PROXY_POOLS.map((target) => [target, proxyControllers[target].configurationRead()]),
+  );
   const [settings, provider, activity, ...tunnels] = await Promise.all([
     invoke("configuration"),
     invoke("current_provider"),
@@ -1128,9 +1134,11 @@ async function refreshFeatureState() {
       controller.proxyStatus,
       controller.localConfiguration(settings),
       tunnels[index],
+      reads[target],
     );
   });
   configurationCache = settings;
+  configurationReads = reads;
   settingsController.accept(provider.id);
 }
 window.__TAURI__.event

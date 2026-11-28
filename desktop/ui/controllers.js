@@ -331,6 +331,10 @@
   /// cards read it through `cardState`. It also holds the card turned over
   /// to edit it and its draft. `options.pool` names the pool;
   /// `options.clock` ({ now, sleep }) is the time it waits by.
+  /// The app's sign-ins: one at a time, whichever pool's, so a pool's
+  /// sign-in waits for any pool's cancelled one to end (Accounts.login).
+  /// `cancel` is the cancel being sent.
+  const SIGN_INS = { cancel: null };
   class Accounts {
     constructor(
       invoke,
@@ -373,10 +377,10 @@
       this.loadGeneration = 0;
       this.loginGeneration = 0;
       // The sign-in under way: its id once begun, the request beginning it
-      // until then, and the cancel of the one before while it is sent.
+      // until then; and the app's sign-ins, every pool's (SIGN_INS).
       this.loginId = null;
       this.loginBeginning = null;
-      this.loginCancel = null;
+      this.signIns = options.signIns ?? SIGN_INS;
       this.adding = false;
       this.authorizing = null;
       this.importing = false;
@@ -866,10 +870,10 @@
       const before = this.accounts;
       const generation = ++this.loginGeneration;
       try {
-        // A sign-in cancelled just before ends first, as the app has one at
-        // a time.
-        if (this.loginCancel) {
-          await this.loginCancel;
+        // A sign-in cancelled just before, in any pool, ends first, as the
+        // app has one at a time.
+        while (this.signIns.cancel) {
+          await this.signIns.cancel;
           if (generation !== this.loginGeneration) return false;
         }
         const beginning = this.invoke("begin_login", { workspace });
@@ -937,9 +941,9 @@
       const ended = cancel
         .catch(() => {})
         .then(() => {
-          if (this.loginCancel === ended) this.loginCancel = null;
+          if (this.signIns.cancel === ended) this.signIns.cancel = null;
         });
-      this.loginCancel = ended;
+      this.signIns.cancel = ended;
       return cancel;
     }
   }
@@ -975,6 +979,9 @@
       this.notice = null;
       this.lastAppliedSnapshot = null;
       this.lastSyncedConfiguration = null;
+      // Counts the tunnel's saves begun and ended: odd while one is under
+      // way (configurationRead).
+      this.tunnelSaves = 0;
       this.schedule = options.schedule || setTimeout;
       this.clearSchedule = options.clearSchedule || clearTimeout;
       this.successDelay = options.successDelay ?? 3000;
@@ -994,8 +1001,16 @@
     ownServers(servers = []) {
       return servers.filter((server) => (server.pool || "codex") === this.pool);
     }
-    applyLocal(proxy, configuration, tunnel) {
-      const cf = configuration.cloudflared || {};
+    /// Taken as the app's configuration is asked for, and given back with
+    /// it to applyLocal: a configuration asked for before a save of the
+    /// tunnel ended, or while one was under way, may hold the tunnel as it
+    /// was, and leaves the tunnel as it is.
+    configurationRead() {
+      return this.tunnelSaves % 2 ? -1 : this.tunnelSaves;
+    }
+    applyLocal(proxy, configuration, tunnel, read = this.configurationRead()) {
+      const stale = read !== this.tunnelSaves;
+      const cf = stale ? {} : configuration.cloudflared || {};
       // A field the configuration leaves out keeps what the app held, not
       // the draft, which may hold an edit not yet saved.
       const held =
@@ -1022,9 +1037,11 @@
         remoteStatuses: this.remoteStatuses,
         remoteLogs: this.remoteLogs,
         remoteDiscoveries: this.remoteDiscoveries,
-      });
+      }, { stale });
     }
-    applySnapshot(snapshot) {
+    /// Takes a snapshot of the proxy; one `stale` leaves the tunnel's
+    /// configuration as it is (configurationRead).
+    applySnapshot(snapshot, { stale = false } = {}) {
       const normalized = structuredClone(snapshot);
       normalized.remoteLogs = Object.fromEntries(
         Object.entries(snapshot.remoteLogs || {}).map(([id, log]) => [
@@ -1056,9 +1073,10 @@
       // The draft keeps what was edited since the app last held it, until it
       // is saved: a snapshot read before then would undo the edit.
       const held = this.lastSyncedConfiguration?.cloudflared;
-      for (const [key, value] of Object.entries(synced))
-        if (!held || this.tunnelConfiguration[key] === held[key])
-          this.tunnelConfiguration[key] = value;
+      if (!stale)
+        for (const [key, value] of Object.entries(synced))
+          if (!held || this.tunnelConfiguration[key] === held[key])
+            this.tunnelConfiguration[key] = value;
       this.tunnelConfiguration.hasAPIToken = !!named.hasAPIToken;
       for (const [local, remote] of [
         ["apiToken", "apiToken"],
@@ -1073,7 +1091,7 @@
       this.remoteLogs = normalized.remoteLogs;
       this.lastSyncedConfiguration = {
         preferredPortText: this.preferredPortText,
-        cloudflared: synced,
+        cloudflared: stale && held ? held : synced,
       };
       this.lastAppliedSnapshot = normalized;
       this.onUpdate();
@@ -1120,13 +1138,14 @@
     /// The local proxy and tunnel only, as Swift's refreshStatus and tab entry;
     /// remote servers are asked over SSH once, by loadRemoteStatuses().
     async refresh() {
+      const read = this.configurationRead();
       const [proxy, configuration, tunnel] = await Promise.all([
         this.invoke("proxy_status"),
         this.invoke("configuration"),
         this.invoke("tunnel_action", { action: "status", value: null }),
       ]);
       this.remoteServers = this.ownServers(configuration.remoteServers);
-      this.applyLocal(proxy, this.localConfiguration(configuration), tunnel);
+      this.applyLocal(proxy, this.localConfiguration(configuration), tunnel, read);
       return proxy;
     }
     /// The Refresh button: the local status, under the proxy's loading state.
@@ -1164,8 +1183,13 @@
     async updateTunnel(patch = {}) {
       Object.assign(this.tunnelConfiguration, patch);
       const value = structuredClone(this.tunnelConfiguration);
-      await this.invoke("save_tunnel_configuration", { value });
-      this.holdTunnel(value);
+      this.tunnelSaves++;
+      try {
+        await this.invoke("save_tunnel_configuration", { value });
+        this.holdTunnel(value);
+      } finally {
+        this.tunnelSaves++;
+      }
       this.onUpdate();
     }
     /// Takes the tunnel configuration the app holds, as at launch, into the

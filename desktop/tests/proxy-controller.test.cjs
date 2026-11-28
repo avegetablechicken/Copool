@@ -574,3 +574,44 @@ test("a hostname typed is saved as typed, though a snapshot read before it arriv
   assert.equal(model.tunnelConfiguration.useHTTP2, true);
   assert.equal(model.lastSyncedConfiguration.cloudflared.useHTTP2, false);
 });
+
+test("a configuration asked for before a tunnel save ended leaves the tunnel as saved", async () => {
+  const writes = [];
+  let answer;
+  const model = new Proxy(async (command, args) => {
+    if (command !== "save_tunnel_configuration") return;
+    writes.push(args.value);
+    if (writes.length === 1) await new Promise((resolve) => (answer = resolve));
+  });
+  const old = {
+    preferredPortText: "8787",
+    cloudflared: { enabled: true, tunnelMode: "named", namedHostname: "old.example.com" },
+  };
+  const tunnel = { installed: true, running: false };
+  model.applyLocal({ running: true, port: 8787 }, old, tunnel);
+  model.tunnelConfiguration.namedHostname = "new.example.com";
+  // Asked for before the save, answered after it.
+  const before = model.configurationRead();
+  const saving = model.updateTunnel();
+  // Asked for while it is under way.
+  const during = model.configurationRead();
+  answer();
+  await saving;
+  for (const read of [before, during]) {
+    model.applyLocal({ running: true, port: 8787 }, structuredClone(old), tunnel, read);
+    assert.equal(model.tunnelConfiguration.namedHostname, "new.example.com");
+    assert.equal(model.lastSyncedConfiguration.cloudflared.namedHostname, "new.example.com");
+  }
+  // Another change saves the hostname saved, not the old one.
+  await model.updateTunnel({ useHTTP2: true });
+  assert.deepEqual(
+    writes.map((value) => [value.namedHostname, value.useHTTP2]),
+    [["new.example.com", false], ["new.example.com", true]],
+  );
+  // One asked for after the save is taken.
+  const after = model.configurationRead();
+  const moved = structuredClone(old);
+  moved.cloudflared.namedHostname = "elsewhere.example.com";
+  model.applyLocal({ running: true, port: 8787 }, moved, tunnel, after);
+  assert.equal(model.tunnelConfiguration.namedHostname, "elsewhere.example.com");
+});

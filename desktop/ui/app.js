@@ -1094,10 +1094,12 @@ async function refreshView() {
     await renderPendingWorkspaces();
   }
   // The proxy page switched pools meanwhile renders through its own refresh.
+  // The cache, as it was asked for: a tunnel saved since leaves it out.
   proxies.applyLocal(
     proxy,
     proxies.localConfiguration(configurationCache),
     proxies.tunnelStatus,
+    configurationReads[proxies.pool] ?? -1,
   );
   syncButtons();
 }
