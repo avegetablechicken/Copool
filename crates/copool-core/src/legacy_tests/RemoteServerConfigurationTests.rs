@@ -174,6 +174,63 @@ fn testSyncRefusesAccountsTheDaemonWroteSinceTheSnapshot() {
         .success());
     assert_eq!(std::fs::read_to_string(&remote).unwrap(), "first");
 }
+/// An executable shell script at `path` running `body`.
+#[cfg(unix)]
+fn executable(path: &std::path::Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn testSyncStopsADaemonBeforeTheLockWhileItReplacesTheAccounts() {
+    let d = tempfile::tempdir().unwrap();
+    let (dir, stage, bin) = (
+        d.path().join("srv"),
+        d.path().join("stage"),
+        d.path().join("bin"),
+    );
+    for path in [&dir, &stage, &bin] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    // A daemon before the lock refuses the question; its unit runs.
+    executable(&dir.join("codex-tools-proxyd"), "exit 2");
+    let log = d.path().join("systemctl.log");
+    executable(
+        &bin.join("systemctl"),
+        &format!(
+            "echo \"$* $(cat '{}' 2>/dev/null)\" >> '{}'",
+            dir.join("accounts.json").display(),
+            log.display()
+        ),
+    );
+    let run = |command: &str| {
+        std::process::Command::new("sh")
+            .args(["-c", command])
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .output()
+            .unwrap()
+    };
+    let (dir_s, stage_s) = (dir.to_str().unwrap(), stage.to_str().unwrap());
+    std::fs::write(stage.join("accounts.json"), "uploaded").unwrap();
+    assert!(run(&sync_command(dir_s, "unit", stage_s, false, ""))
+        .status
+        .success());
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "is-active --quiet unit \nstop unit \nstart unit uploaded\n"
+    );
+    // Refused, it starts the daemon again too.
+    std::fs::remove_file(&log).unwrap();
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join("accounts.json"), "again").unwrap();
+    let refused = run(&sync_command(dir_s, "unit", stage_s, false, "stale"));
+    assert_eq!(refused.status.code(), Some(75));
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "is-active --quiet unit uploaded\nstop unit uploaded\nstart unit uploaded\n"
+    );
+}
 #[cfg(unix)]
 #[test]
 fn testSyncWaitsForTheDaemonsLockToCheckTheAccounts() {
@@ -196,6 +253,11 @@ fn testSyncWaitsForTheDaemonsLockToCheckTheAccounts() {
         .unwrap();
     let checksum = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     std::fs::write(stage.join("accounts.json"), "uploaded").unwrap();
+    // A daemon that takes the lock says so.
+    executable(
+        &dir.join("codex-tools-proxyd"),
+        "[ \"$1\" = --locks-store ] && echo accounts.json.lock",
+    );
     // The daemon is changing its accounts as the sync starts.
     let lock = std::fs::OpenOptions::new()
         .create(true)

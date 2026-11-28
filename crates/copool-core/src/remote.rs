@@ -151,25 +151,31 @@ pub(crate) fn parse_snapshot(output: &str) -> (String, Option<Value>) {
         None => (output.trim().to_owned(), None),
     }
 }
-/// Takes the daemon's lock on its accounts (`accounts.json.lock`, which it
-/// holds while it changes them), then refuses to go on when the remote
-/// accounts are no longer the snapshot: the daemon rotated a token since,
-/// and the upload must be merged again. The lock is held, on descriptor 9,
-/// until the accounts are replaced ([`RELEASE`]), so the daemon cannot
-/// rotate one between the check and the replacement. Without `flock`, as on
-/// a system without util-linux, only the check is made.
-fn unchanged_since(dir: &str, checksum: &str) -> String {
+/// Keeps the daemon from changing its accounts from the check that they are
+/// still the snapshot to their replacement ([`RELEASE`]), then refuses to go
+/// on when they are not: the daemon rotated a token since, and the upload
+/// must be merged again. Held by the daemon's lock on them
+/// (`accounts.json.lock`, on descriptor 9) when `flock` is there and the
+/// daemon on disk takes that lock, as it says when asked `--locks-store`
+/// (one before the lock refuses the argument); else, and always when `stop`
+/// (for a command that restarts the daemon anyway), by stopping its unit,
+/// which is started again however the command ends unless it says
+/// otherwise. A daemon no unit runs cannot be held.
+fn hold_accounts(dir: &str, unit: &str, checksum: &str, stop: bool) -> String {
     format!(
-        "mkdir -p {d} || exit 1; exec 9>>{lock} || exit 1; if command -v flock >/dev/null 2>&1; then flock 9 || exit 1; fi; F={f}; CURRENT=\"\"; [ -f \"$F\" ] && CURRENT=$(cksum < \"$F\"); if [ \"$CURRENT\" != {} ]; then echo {ACCOUNTS_CHANGED} >&2; exit 75; fi; ",
-        quote(checksum),
+        "DIR={d}; UNIT={u}; mkdir -p \"$DIR\" || exit 1; if [ {stop} = 0 ] && command -v flock >/dev/null 2>&1 && \"$DIR/codex-tools-proxyd\" --locks-store >/dev/null 2>&1; then exec 9>>\"$DIR/accounts.json.lock\" || exit 1; flock 9 || exit 1; elif systemctl is-active --quiet \"$UNIT\" 2>/dev/null; then trap 'systemctl start \"$UNIT\"' EXIT; systemctl stop \"$UNIT\" || exit 1; fi; F=\"$DIR/accounts.json\"; CURRENT=\"\"; [ -f \"$F\" ] && CURRENT=$(cksum < \"$F\"); if [ \"$CURRENT\" != {c} ]; then echo {ACCOUNTS_CHANGED} >&2; exit 75; fi; ",
         d = quote(dir),
-        lock = quote(&format!("{dir}/accounts.json.lock")),
-        f = quote(&format!("{dir}/accounts.json")),
+        u = quote(unit),
+        stop = u8::from(stop),
+        c = quote(checksum),
     )
 }
-/// Lets the daemon change its accounts again ([`unchanged_since`]): before
-/// a restart, which waits for the daemon to stop.
+/// Lets the daemon change its accounts again ([`hold_accounts`]): its lock
+/// released, before a restart, which waits for the daemon to stop.
 const RELEASE: &str = "exec 9>&-; ";
+/// Leaves the unit stopped by [`hold_accounts`] to the command, which
+/// starts or restarts it.
+const STARTED_HERE: &str = "trap - EXIT; ";
 pub(crate) fn install_command(
     server: &RemoteServerConfig,
     unit: &str,
@@ -185,9 +191,8 @@ pub(crate) fn install_command(
     );
     command.push_str(&format!("for UNIT_PATH in {UNIT_DIRS}; do "));
     command.push_str(r#"[ -f "$UNIT_PATH" ] || continue; UNIT_NAME=$(basename "$UNIT_PATH"); [ "$UNIT_NAME" = "$TARGET_UNIT" ] && continue; WORK_DIR=$(sed -n 's/^WorkingDirectory=//p' "$UNIT_PATH" | head -n 1); PORT=$(sed -n 's/^ExecStart=.* --port \([0-9][0-9]*\).*$/\1/p' "$UNIT_PATH" | head -n 1); if [ "$WORK_DIR" = "$TARGET_DIR" ] || [ "$PORT" = "$TARGET_PORT" ]; then systemctl stop "$UNIT_NAME" >/dev/null 2>&1 || true; systemctl disable "$UNIT_NAME" >/dev/null 2>&1 || true; rm -f "/etc/systemd/system/$UNIT_NAME" "/lib/systemd/system/$UNIT_NAME" "/usr/lib/systemd/system/$UNIT_NAME"; fi; done; "#);
-    // Checked once no other unit's daemon is to be stopped: one waiting for
-    // the lock would hold up its stop.
-    command.push_str(&unchanged_since(&server.remote_dir, checksum));
+    // The daemon is stopped while its files are replaced, and restarted.
+    command.push_str(&hold_accounts(&server.remote_dir, unit, checksum, true));
     for (name, mode, dest) in [
         (
             "codex-tools-proxyd",
@@ -211,6 +216,7 @@ pub(crate) fn install_command(
         ));
     }
     command.push_str(RELEASE);
+    command.push_str(STARTED_HERE);
     command.push_str(&format!("rm -rf {}; systemctl daemon-reload; systemctl enable {} >/dev/null 2>&1 || true; if systemctl is-active --quiet {}; then systemctl restart {}; else systemctl start {}; fi",quote(stage),quote(unit),quote(unit),quote(unit),quote(unit)));
     command
 }
@@ -221,10 +227,18 @@ pub(crate) fn sync_command(
     restart: bool,
     checksum: &str,
 ) -> String {
-    let mut command = unchanged_since(dir, checksum);
+    let mut command = hold_accounts(dir, unit, checksum, restart);
     // A step that fails stops the sync, which reports it.
-    command+=&format!("DIR={}; UNIT={}; chmod 600 {staged} && mv {staged} \"$DIR/accounts.json\" || exit 1; {RELEASE}rm -rf {}; ",quote(dir),quote(unit),quote(stage),staged=quote(&format!("{stage}/accounts.json")));
-    command.push_str(if restart{r#"if [ -f "/etc/systemd/system/$UNIT" ] || [ -f "/lib/systemd/system/$UNIT" ] || [ -f "/usr/lib/systemd/system/$UNIT" ]; then systemctl restart "$UNIT"; fi;"#}else{"true"});
+    command += &format!(
+        "chmod 600 {staged} && mv {staged} \"$DIR/accounts.json\" || exit 1; {RELEASE}rm -rf {}; ",
+        quote(stage),
+        staged = quote(&format!("{stage}/accounts.json"))
+    );
+    command.push_str(if restart {
+        r#"trap - EXIT; if [ -f "/etc/systemd/system/$UNIT" ] || [ -f "/lib/systemd/system/$UNIT" ] || [ -f "/usr/lib/systemd/system/$UNIT" ]; then systemctl restart "$UNIT"; fi;"#
+    } else {
+        "true"
+    });
     command
 }
 pub(crate) fn uninstall_command(dir: &str, unit: &str, remove_dir: bool) -> String {

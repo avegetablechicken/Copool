@@ -2344,46 +2344,34 @@ fn is_valid_codex_version(value: &str) -> bool {
         })
 }
 
-/// The store's lock while its accounts are read, changed and written back:
-/// in this process, and, where the accounts are `accounts.json`, on
-/// `accounts.json.lock`, which Copool's sync of a remote node also takes
-/// while it checks that the accounts are as it last read them and replaces
-/// them (`remote::sync_command`). A renewal saved here is then never replaced
-/// by an upload merged before it.
+/// The store's lock while its accounts are read, changed and written back,
+/// or read, which may write them in their current form: in this process,
+/// and, where the accounts are `accounts.json`, on `accounts.json.lock`
+/// ([`crate::store::lock_accounts_file`]), which Copool's sync of a remote
+/// node also takes while it checks that the accounts are as it last read
+/// them and replaces them. A renewal saved here is then never replaced by an
+/// upload merged before it. Without the file lock nothing is read or
+/// written.
 pub(crate) struct StoreLock {
     _file: Option<std::fs::File>,
     _guard: tokio::sync::OwnedMutexGuard<()>,
 }
 
-async fn lock_store(storage: &ProxyStorageContext) -> StoreLock {
+async fn lock_store(storage: &ProxyStorageContext) -> Result<StoreLock, String> {
     let guard = storage.store_lock.clone().lock_owned().await;
     let file = if storage.read_store {
-        let path = storage.data_dir.join("accounts.json.lock");
-        let locked = tokio::task::spawn_blocking(move || {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)?;
-            file.lock()?;
-            Ok::<_, std::io::Error>(file)
-        })
-        .await
-        .map_err(std::io::Error::other)
-        .and_then(|locked| locked);
-        match locked {
-            Ok(file) => Some(file),
-            Err(error) => {
-                log::warn!("The account store was changed without its file lock: {error}");
-                None
-            }
-        }
+        let dir = storage.data_dir.clone();
+        let file = tokio::task::spawn_blocking(move || crate::store::lock_accounts_file(&dir))
+            .await
+            .map_err(|e| e.to_string())??;
+        Some(file)
     } else {
         None
     };
-    StoreLock {
+    Ok(StoreLock {
         _file: file,
         _guard: guard,
-    }
+    })
 }
 
 async fn load_proxy_candidates(
@@ -2391,7 +2379,7 @@ async fn load_proxy_candidates(
 ) -> Result<Vec<ProxyCandidate>, String> {
     // The store's lock is held to read the accounts and the selection, not
     // while providers' keys are looked up, which can take seconds.
-    let guard = storage.store_lock.lock().await;
+    let guard = lock_store(storage).await?;
     let store = if storage.read_store {
         load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?
     } else {
@@ -2742,7 +2730,13 @@ async fn persist_candidate_usage_result(
     account_id: &str,
     result: Result<UsageSnapshot, String>,
 ) {
-    let _guard = lock_store(storage).await;
+    let _guard = match lock_store(storage).await {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::warn!("Failed to lock accounts to save remote account usage: {error}");
+            return;
+        }
+    };
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = match load_store_from_path(&store_path) {
         Ok(store) => store,
@@ -2932,7 +2926,7 @@ async fn persist_refreshed_candidate_auth(
     from: &Value,
     refreshed_auth_json: &Value,
 ) -> Result<Value, String> {
-    let _guard = lock_store(storage).await;
+    let _guard = lock_store(storage).await?;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = load_store_from_path(&store_path)?;
 
@@ -3240,7 +3234,7 @@ async fn read_persisted_api_proxy_key(
         return Ok(None);
     }
 
-    let _guard = lock_store(storage).await;
+    let _guard = lock_store(storage).await?;
     let store = load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?;
     let legacy_value = store
         .settings
@@ -3265,7 +3259,7 @@ async fn ensure_persisted_api_proxy_key(storage: &ProxyStorageContext) -> Result
         return Ok(new_key);
     }
 
-    let _guard = lock_store(storage).await;
+    let _guard = lock_store(storage).await?;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = load_store_from_path(&store_path)?;
 
@@ -3295,7 +3289,7 @@ async fn regenerate_persisted_api_proxy_key(
         return Ok(new_key);
     }
 
-    let _guard = lock_store(storage).await;
+    let _guard = lock_store(storage).await?;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = load_store_from_path(&store_path)?;
     store.settings.api_proxy_api_key = Some(new_key.clone());
@@ -5522,10 +5516,42 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
                 .open(dir.path().join("accounts.json.lock"))
                 .unwrap()
         };
-        let guard = super::lock_store(&storage).await;
+        let guard = super::lock_store(&storage).await.unwrap();
         assert!(other().try_lock().is_err());
         drop(guard);
         assert!(other().try_lock().is_ok());
+    }
+
+    /// Reading the accounts may write them in their current form: it waits
+    /// for the file lock too.
+    #[tokio::test]
+    async fn reading_the_accounts_waits_for_their_file_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = account_store_path_from_data_dir(dir.path());
+        // A proxy written inline moves to the settings when read.
+        let original = json!({"version": 1, "accounts": [{
+            "id": "a", "label": "A", "accountId": "a", "addedAt": 1, "updatedAt": 1,
+            "proxyURL": "direct://",
+            "authJson": {"tokens": {"account_id": "a", "access_token": "fake", "id_token": ""}}
+        }]})
+        .to_string();
+        std::fs::write(&path, &original).unwrap();
+        let lock = crate::store::lock_accounts_file(dir.path()).unwrap();
+        let storage = new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        let read = tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            super::load_proxy_candidates(&storage),
+        )
+        .await;
+        assert!(read.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        drop(lock);
+        assert!(super::load_proxy_candidates(&storage).await.is_ok());
+        assert_ne!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     /// A request refused with a login another request has since renewed

@@ -141,6 +141,11 @@ fn parse_cli_args(args: Vec<String>) -> Result<CliAction, String> {
             "--help" | "-h" => {
                 return Ok(CliAction::PrintHelp(usage_text(&program)));
             }
+            // Copool's sync asks whether the daemon locks its accounts while
+            // it changes them; one before the lock refuses the argument.
+            "--locks-store" => {
+                return Ok(CliAction::PrintHelp(crate::store::ACCOUNTS_LOCK.into()));
+            }
             unknown => {
                 return Err(format!("Unknown argument: {unknown}\n\n{}", usage_text(&program)));
             }
@@ -190,4 +195,18 @@ fn usage_text(program: &str) -> String {
     format!(
         "Usage:\n  {program} serve [--data-dir PATH] [--host HOST] [--port PORT] [--pool codex|claude|antigravity] [--no-sync-current-auth]\n\nDefaults:\n  --data-dir ~/.codex-tools-proxyd\n  --host 0.0.0.0\n  --port 8787\n  --pool codex"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_daemon_says_it_locks_its_accounts() {
+        let args = ["codex-tools-proxyd", "--locks-store"].map(String::from).to_vec();
+        assert!(matches!(
+            parse_cli_args(args),
+            Ok(CliAction::PrintHelp(name)) if name == "accounts.json.lock"
+        ));
+    }
 }

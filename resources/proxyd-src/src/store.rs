@@ -23,7 +23,28 @@ pub(crate) fn save_store_to_path(path: &Path, store: &AccountsStore) -> Result<(
     crate::repository::save_accounts(path, store)
 }
 
+/// Takes the lock on the accounts in `dir` (`accounts.json.lock`), held
+/// until the file returned is dropped: by the daemon while it changes them,
+/// by Copool's sync of a remote node from checking that they are as it read
+/// them to replacing them (`remote::sync_command`).
+pub(crate) fn lock_accounts_file(dir: &Path) -> Result<std::fs::File, String> {
+    fs::create_dir_all(dir).map_err(|e| format!("Unable to create {}: {e}", dir.display()))?;
+    let path = dir.join(ACCOUNTS_LOCK);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("Unable to open {}: {e}", path.display()))?;
+    file.lock()
+        .map_err(|e| format!("Unable to lock {}: {e}", path.display()))?;
+    Ok(file)
+}
+/// The file [`lock_accounts_file`] locks; the daemon names it when asked
+/// with `--locks-store`, which a daemon before the lock refuses.
+pub(crate) const ACCOUNTS_LOCK: &str = "accounts.json.lock";
+
 pub(crate) fn sync_current_auth_account_on_startup_in_path(path: &Path) -> Result<(), String> {
+    let _lock = lock_accounts_file(path.parent().unwrap_or(Path::new(".")))?;
     let auth_json = match read_current_codex_auth_optional()? {
         Some(value) => value,
         None => return Ok(()),
