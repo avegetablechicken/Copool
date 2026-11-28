@@ -32,6 +32,8 @@ pub(crate) fn lock_accounts_file(dir: &Path) -> Result<std::fs::File, String> {
     let path = dir.join(ACCOUNTS_LOCK);
     let file = std::fs::OpenOptions::new()
         .create(true)
+        // Windows cannot lock a handle opened only for append.
+        .read(true)
         .append(true)
         .open(&path)
         .map_err(|e| format!("Unable to open {}: {e}", path.display()))?;

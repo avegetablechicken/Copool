@@ -386,10 +386,15 @@ async fn switches_run_their_effects_in_the_order_they_were_made() {
 #[tokio::test]
 async fn a_renewal_is_kept_though_its_refresh_is_cancelled() {
     use crate::login_store::suite::Fixture as _;
-    struct RotationThenSlowUsage;
+    struct RotationThenSlowUsage {
+        usage_started: tokio::sync::Notify,
+    }
     impl AccountNetwork for RotationThenSlowUsage {
         fn usage<'a>(&'a self, _: &'a Value, _: &'a str) -> Response<'a, UsageSnapshot> {
-            Box::pin(std::future::pending())
+            Box::pin(async move {
+                self.usage_started.notify_one();
+                std::future::pending().await
+            })
         }
         fn refresh<'a>(&'a self, auth: &'a Value, _: &'a str) -> Response<'a, Value> {
             Box::pin(async move {
@@ -420,14 +425,22 @@ async fn a_renewal_is_kept_though_its_refresh_is_cancelled() {
         .release_new_accounts(Pool::Codex, Some(&id))
         .await
         .unwrap();
-    fixture.app.network = std::sync::Arc::new(RotationThenSlowUsage);
-    // As a greeting's deadline cancels it while its usage request waits.
-    assert!(tokio::time::timeout(
-        std::time::Duration::from_millis(30),
-        fixture.app.say_hi(Pool::Codex, &id)
-    )
+    let network = std::sync::Arc::new(RotationThenSlowUsage {
+        usage_started: tokio::sync::Notify::new(),
+    });
+    fixture.app.network = network.clone();
+    // Cancel only once renewal has reached the pending usage request, as
+    // a greeting's deadline would. Scheduler speed must not choose the stage.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::select! {
+            result = fixture.app.say_hi(Pool::Codex, &id) => {
+                panic!("greeting completed before cancellation: {result:?}");
+            }
+            _ = network.usage_started.notified() => {}
+        }
+    })
     .await
-    .is_err());
+    .expect("renewal did not reach the usage request");
     assert_eq!(
         fixture.stored(&id)["tokens"]["refresh_token"],
         "rotated-refresh-alice"
@@ -478,7 +491,7 @@ async fn a_renewal_cancelled_waiting_for_the_store_is_saved_next() {
     struct Network {
         started: Arc<tokio::sync::Notify>,
         answer: Arc<tokio::sync::Notify>,
-        rotated: Arc<std::sync::atomic::AtomicBool>,
+        rotated: Arc<tokio::sync::Notify>,
     }
     impl AccountNetwork for Network {
         fn usage<'a>(&'a self, _: &'a Value, _: &'a str) -> Response<'a, UsageSnapshot> {
@@ -493,8 +506,7 @@ async fn a_renewal_cancelled_waiting_for_the_store_is_saved_next() {
                     token("fresh-alice", Some(now_unix_seconds() + 3600)).into();
                 next["tokens"]["refresh_token"] = "rotated-refresh-alice".into();
                 next["last_refresh"] = timestamp(now_unix_seconds()).into();
-                self.rotated
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                self.rotated.notify_one();
                 Ok(next)
             })
         }
@@ -519,32 +531,36 @@ async fn a_renewal_cancelled_waiting_for_the_store_is_saved_next() {
         .unwrap();
     let started = Arc::new(tokio::sync::Notify::new());
     let answer = Arc::new(tokio::sync::Notify::new());
-    let rotated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let rotated = Arc::new(tokio::sync::Notify::new());
     fixture.app.network = Arc::new(Network {
         started: started.clone(),
         answer: answer.clone(),
         rotated: rotated.clone(),
     });
     let cancelled = Arc::new(tokio::sync::Notify::new());
-    tokio::join!(
-        async {
-            assert!(tokio::time::timeout(
-                std::time::Duration::from_millis(50),
-                fixture.app.say_hi(Pool::Codex, &id)
-            )
-            .await
-            .is_err());
-            cancelled.notify_one();
-        },
-        async {
-            started.notified().await;
-            let _store = fixture.app.codex.store.lock().await;
-            answer.notify_one();
-            cancelled.notified().await;
-        }
-    );
-    // The issuer rotated the token before the refresh was cancelled.
-    assert!(rotated.load(std::sync::atomic::Ordering::SeqCst));
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(
+            async {
+                tokio::select! {
+                    result = fixture.app.say_hi(Pool::Codex, &id) => {
+                        panic!("greeting completed before cancellation: {result:?}");
+                    }
+                    // The refresh returns in the same poll that signals rotation,
+                    // then waits for the store lock before we cancel it.
+                    _ = rotated.notified() => {}
+                }
+                cancelled.notify_one();
+            },
+            async {
+                started.notified().await;
+                let _store = fixture.app.codex.store.lock().await;
+                answer.notify_one();
+                cancelled.notified().await;
+            }
+        );
+    })
+    .await
+    .expect("renewal did not reach cancellation while waiting for the store");
     assert_eq!(
         fixture.stored(&id)["tokens"]["refresh_token"],
         "rotated-refresh-alice"
@@ -600,7 +616,7 @@ async fn an_unsaved_renewal_gives_way_to_a_newer_login_saved_since() {
     struct Network {
         started: Arc<tokio::sync::Notify>,
         answer: Arc<tokio::sync::Notify>,
-        rotated: Arc<std::sync::atomic::AtomicBool>,
+        rotated: Arc<tokio::sync::Notify>,
     }
     impl AccountNetwork for Network {
         fn usage<'a>(&'a self, _: &'a Value, _: &'a str) -> Response<'a, UsageSnapshot> {
@@ -615,8 +631,7 @@ async fn an_unsaved_renewal_gives_way_to_a_newer_login_saved_since() {
                     token("fresh-alice", Some(now_unix_seconds() + 3600)).into();
                 next["tokens"]["refresh_token"] = "rotated-refresh-alice".into();
                 next["last_refresh"] = timestamp(now_unix_seconds()).into();
-                self.rotated
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                self.rotated.notify_one();
                 Ok(next)
             })
         }
@@ -641,32 +656,36 @@ async fn an_unsaved_renewal_gives_way_to_a_newer_login_saved_since() {
         .unwrap();
     let started = Arc::new(tokio::sync::Notify::new());
     let answer = Arc::new(tokio::sync::Notify::new());
-    let rotated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let rotated = Arc::new(tokio::sync::Notify::new());
     fixture.app.network = Arc::new(Network {
         started: started.clone(),
         answer: answer.clone(),
         rotated: rotated.clone(),
     });
     let cancelled = Arc::new(tokio::sync::Notify::new());
-    tokio::join!(
-        async {
-            assert!(tokio::time::timeout(
-                std::time::Duration::from_millis(50),
-                fixture.app.say_hi(Pool::Codex, &id)
-            )
-            .await
-            .is_err());
-            cancelled.notify_one();
-        },
-        async {
-            started.notified().await;
-            let _store = fixture.app.codex.store.lock().await;
-            answer.notify_one();
-            cancelled.notified().await;
-        }
-    );
-    // The issuer rotated the token before the refresh was cancelled.
-    assert!(rotated.load(std::sync::atomic::Ordering::SeqCst));
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(
+            async {
+                tokio::select! {
+                    result = fixture.app.say_hi(Pool::Codex, &id) => {
+                        panic!("greeting completed before cancellation: {result:?}");
+                    }
+                    // The refresh returns in the same poll that signals rotation,
+                    // then waits for the store lock before we cancel it.
+                    _ = rotated.notified() => {}
+                }
+                cancelled.notify_one();
+            },
+            async {
+                started.notified().await;
+                let _store = fixture.app.codex.store.lock().await;
+                answer.notify_one();
+                cancelled.notified().await;
+            }
+        );
+    })
+    .await
+    .expect("renewal did not reach cancellation while waiting for the store");
     assert_eq!(
         fixture.stored(&id)["tokens"]["refresh_token"],
         "rotated-refresh-alice"

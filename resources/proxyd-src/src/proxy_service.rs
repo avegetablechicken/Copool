@@ -5512,12 +5512,16 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
         let other = || {
             std::fs::OpenOptions::new()
                 .create(true)
+                .read(true)
                 .append(true)
                 .open(dir.path().join("accounts.json.lock"))
                 .unwrap()
         };
         let guard = super::lock_store(&storage).await.unwrap();
-        assert!(other().try_lock().is_err());
+        assert!(matches!(
+            other().try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
         drop(guard);
         assert!(other().try_lock().is_ok());
     }
