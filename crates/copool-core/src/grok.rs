@@ -461,7 +461,11 @@ impl Application {
     /// put its models on, or a Sub2api card's provider. A sign-in there
     /// that the pool does not hold is kept in `grok-before-switch.json`
     /// first; a failed step is rolled back.
-    pub(crate) async fn grok_switch_account(&self, id: &str) -> Result<SwitchExecution> {
+    pub(crate) async fn grok_switch_account(
+        &self,
+        id: &str,
+        access: KeychainAccess,
+    ) -> Result<SwitchExecution> {
         let _op = self.grok.logins.operations.lock().await;
         if crate::sub2api::is_card(Pool::Grok, id) {
             return self.grok_switch_sub2api(id).await;
@@ -476,7 +480,7 @@ impl Application {
             .switch(
                 id,
                 live,
-                KeychainAccess::Interactive,
+                access,
                 "grok-before-switch.json",
                 |store| sub2api::leave_gateway(&config, store),
                 |left| sub2api::restore_left(&config, left),

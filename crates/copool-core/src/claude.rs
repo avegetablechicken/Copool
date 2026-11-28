@@ -1570,7 +1570,7 @@ impl Application {
         let (id, label, waiting) = self.claude_import_live(live, Origin::Live).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage_scoped(&id, None).await;
+            let _ = self.claude_refresh(&id, None).await;
         }
         Ok(label)
     }
@@ -1614,7 +1614,7 @@ impl Application {
         }
         drop(_op);
         for id in fresh {
-            let _ = self.claude_refresh_usage_scoped(&id, None).await;
+            let _ = self.claude_refresh(&id, None).await;
         }
         Ok(exports.len())
     }
@@ -1681,7 +1681,7 @@ impl Application {
         let (id, label, waiting) = self.claude_upsert(oauth, account, Origin::SignIn).await?;
         drop(_op);
         if !waiting {
-            let _ = self.claude_refresh_usage_scoped(&id, None).await;
+            let _ = self.claude_refresh(&id, None).await;
         }
         Ok(label)
     }
@@ -1965,14 +1965,14 @@ impl Application {
     /// shared account proxy. With `renew_now`, only the tokens are renewed, even when unexpired or
     /// renewal is off; usage is not asked for, nor shown as refreshing, and
     /// whether the renewal was kept is reported.
-    pub(crate) async fn claude_refresh_usage_scoped(
+    pub(crate) async fn claude_refresh(
         &self,
         id: &str,
         renew_now: Option<&mut bool>,
     ) -> Result<()> {
         self.claude_refresh_login(id, renew_now, None).await
     }
-    /// As `claude_refresh_usage_scoped`; with `rejected`, the access token
+    /// As `claude_refresh`; with `rejected`, the access token
     /// an upstream refused, renews only while the account still holds it
     /// and its renewal allows, so concurrent refusals renew it once.
     async fn claude_refresh_login(

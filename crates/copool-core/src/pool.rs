@@ -192,14 +192,7 @@ impl Application {
         workspace: Option<&str>,
     ) -> Result<usize> {
         match pool {
-            Pool::Codex => {
-                let consent = document
-                    .get("consentWorkspaces")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                self.import_authorized(document, workspace, &consent).await
-            }
+            Pool::Codex => self.codex_import_login(document, workspace).await,
             Pool::Claude => self.claude_import_login(document).await.map(|_| 1),
             Pool::Antigravity => self.antigravity_import_login(document).await,
             Pool::Grok => self.grok_import_login(document).await,
@@ -289,10 +282,10 @@ impl Application {
         access: KeychainAccess,
     ) -> Result<SwitchExecution> {
         match pool {
-            Pool::Codex => self.codex_switch_account(id).await,
+            Pool::Codex => self.codex_switch_account(id, access).await,
             Pool::Claude => self.claude_switch_account(id, access).await,
             Pool::Antigravity => self.antigravity_switch_account(id, access).await,
-            Pool::Grok => self.grok_switch_account(id).await,
+            Pool::Grok => self.grok_switch_account(id, access).await,
         }
     }
     /// As Swift's AccountsPageModel.smartSwitch: the account with the most
@@ -369,8 +362,8 @@ impl Application {
         renew_now: Option<&mut bool>,
     ) -> Result<()> {
         match pool {
-            Pool::Codex => self.codex_refresh_account(id, true, renew_now).await,
-            Pool::Claude => self.claude_refresh_usage_scoped(id, renew_now).await,
+            Pool::Codex => self.codex_refresh(id, renew_now).await,
+            Pool::Claude => self.claude_refresh(id, renew_now).await,
             Pool::Antigravity => self.antigravity_refresh(id, renew_now).await,
             Pool::Grok => self.grok_refresh(id, renew_now).await,
         }

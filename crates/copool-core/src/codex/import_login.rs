@@ -7,6 +7,20 @@ use crate::{
 };
 use serde_json::Value;
 impl Application {
+    /// Stores a browser sign-in's login without switching to it, with the
+    /// workspaces its consent named.
+    pub(crate) async fn codex_import_login(
+        &self,
+        document: Value,
+        workspace: Option<&str>,
+    ) -> Result<usize, String> {
+        let consent = document
+            .get("consentWorkspaces")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        self.import_authorized(document, workspace, &consent).await
+    }
     /// Complete a single authenticated import without selecting it as current.
     pub async fn import_authorized(
         &self,
@@ -35,7 +49,7 @@ impl Application {
             .find(|a| same(a))
             .ok_or("The login was not imported")?;
         if contact {
-            if let Err(error) = self.codex_refresh_account(&account.id, true, None).await {
+            if let Err(error) = self.codex_refresh(&account.id, None).await {
                 if api::deactivated(&error) {
                     // A deactivated workspace joins only as seen.
                     if existing.is_none() {

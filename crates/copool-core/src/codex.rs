@@ -388,7 +388,7 @@ impl Application {
             )
             .await?;
         if let Some(id) = fresh {
-            let _ = self.codex_refresh_account(&id, true, None).await;
+            let _ = self.codex_refresh(&id, None).await;
         }
         self.reconcile_workspace_names(true).await?;
         Ok(1)
@@ -446,7 +446,7 @@ impl Application {
             })
             .await?;
         for id in fresh {
-            let _ = self.codex_refresh_account(&id, true, None).await;
+            let _ = self.codex_refresh(&id, None).await;
         }
         Ok(count)
     }
@@ -477,7 +477,11 @@ impl Application {
     /// Gives Codex this account's login, on its official provider, or a
     /// Sub2api card's provider. A login there that the pool does not hold
     /// is kept in `auth-before-switch.json` first.
-    pub(crate) async fn codex_switch_account(&self, id: &str) -> Result<SwitchExecution> {
+    pub(crate) async fn codex_switch_account(
+        &self,
+        id: &str,
+        access: KeychainAccess,
+    ) -> Result<SwitchExecution> {
         let _op = self.codex.operations.lock().await;
         if crate::sub2api::is_card(Pool::Codex, id) {
             let (provider, account) = self.card(Pool::Codex, id)?;
@@ -492,7 +496,7 @@ impl Application {
             execution.provider = Some(provider.name);
             return Ok(execution);
         }
-        let target = self.codex_switch_login(id).await?;
+        let target = self.codex_switch_login(id, access).await?;
         drop(_op);
         let login = codex::normalized_auth_for_write(target.document)?;
         let credential = codex::credential(&login, &Identity::default());
@@ -500,7 +504,7 @@ impl Application {
     }
     /// Writes the account's login to `auth.json`, putting Codex back on its
     /// official provider; undone should the write fail.
-    async fn codex_switch_login(&self, id: &str) -> Result<Stored> {
+    async fn codex_switch_login(&self, id: &str, access: KeychainAccess) -> Result<Stored> {
         // An auth.json Codex cannot use is written over.
         let live = self
             .codex_read_live()
@@ -512,7 +516,7 @@ impl Application {
             .switch(
                 id,
                 live,
-                KeychainAccess::Interactive,
+                access,
                 "auth-before-switch.json",
                 |_| {
                     let selected = config::resolve_path(&config);
@@ -579,8 +583,13 @@ impl Application {
     }
     /// Refreshes an account's usage, renewing its token as its renewal
     /// allows; with `renew_now`, only renews it, whatever the choice, and
-    /// reports that it did. A refresh not forced skips usage fetched within
-    /// the last 25 seconds.
+    /// reports that it did.
+    pub(crate) async fn codex_refresh(&self, id: &str, renew_now: Option<&mut bool>) -> Result<()> {
+        self.codex_refresh_login(id, true, renew_now, None).await
+    }
+    /// As `codex_refresh`, but a refresh not forced skips usage fetched
+    /// within the last 25 seconds, as Swift's refreshAccounts did.
+    #[cfg(test)]
     pub(crate) async fn codex_refresh_account(
         &self,
         id: &str,

@@ -153,7 +153,9 @@ impl Application {
             self.publish();
             None
         } else {
-            let target = self.codex_switch_login(id).await?;
+            let target = self
+                .codex_switch_login(id, crate::vault::KeychainAccess::Interactive)
+                .await?;
             let login = codex::normalized_auth_for_write(target.document)?;
             Some(codex::credential(&login, &Identity::default()))
         };
