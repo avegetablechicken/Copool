@@ -780,9 +780,40 @@ impl<P: LoginPool> Logins<P> {
         }
         let before = document.clone();
         let renewed = self.0.renew(document, proxy).await?;
+        // Saved before anything else is awaited: an issuer that rotates
+        // refresh tokens has spent the one stored, and a refresh cancelled
+        // later (a greeting's deadline) would drop the only copy.
+        let kept = self.keep_renewal(account, &before, document).await;
         self.write_back(&renewed, &before, document).await;
         drop(lock);
+        kept?;
         Ok(Renewing::Renewed)
+    }
+    /// Puts a renewal in the account, if it is still kept, when the card
+    /// still holds the login renewed (`before`) or the one the refresh began
+    /// with, or one the renewal outlasts.
+    async fn keep_renewal(
+        &self,
+        account: &Account<P::Own>,
+        before: &Value,
+        renewed: &Value,
+    ) -> Result<()> {
+        let _lock = self.0.locks().store.lock().await;
+        let mut store = self.load()?;
+        let Some(stored) = P::accounts_mut(&mut store)
+            .iter_mut()
+            .find(|a| a.id == account.id)
+        else {
+            return Ok(());
+        };
+        if stored.document == *before
+            || stored.document == account.document
+            || P::newer(renewed, &stored.document)
+        {
+            stored.document = renewed.clone();
+            self.save(&store)?;
+        }
+        Ok(())
     }
     /// Puts a renewal in the Live login, in its own form, when it still
     /// holds the login renewed (`before`, with the same refresh token) and

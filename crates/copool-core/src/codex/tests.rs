@@ -321,3 +321,53 @@ async fn a_deactivated_workspace_stays_listed_until_deleted_then_hidden() {
     f.app.delete_account(Pool::Codex, &id).await.unwrap();
     assert!(f.app.codex_load().unwrap().accounts.is_empty());
 }
+#[tokio::test]
+async fn a_renewal_is_kept_though_its_refresh_is_cancelled() {
+    use crate::login_store::suite::Fixture as _;
+    struct RotationThenSlowUsage;
+    impl AccountNetwork for RotationThenSlowUsage {
+        fn usage<'a>(&'a self, _: &'a Value, _: &'a str) -> Response<'a, UsageSnapshot> {
+            Box::pin(std::future::pending())
+        }
+        fn refresh<'a>(&'a self, auth: &'a Value, _: &'a str) -> Response<'a, Value> {
+            Box::pin(async move {
+                let mut next = auth.clone();
+                next["tokens"]["access_token"] =
+                    token("fresh-alice", Some(now_unix_seconds() + 3600)).into();
+                next["tokens"]["refresh_token"] = "rotated-refresh-alice".into();
+                next["last_refresh"] = timestamp(now_unix_seconds()).into();
+                Ok(next)
+            })
+        }
+        fn workspaces<'a>(&'a self, _: &'a str, _: &'a str) -> Response<'a, Vec<Metadata>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+    }
+    let mut fixture = Fixture::open(false).await;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &Fixture::login("alice", "expired-alice", now_unix_seconds() - 1).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = fixture.id_of("alice");
+    fixture
+        .app
+        .release_new_accounts(Pool::Codex, Some(&id))
+        .await
+        .unwrap();
+    fixture.app.network = std::sync::Arc::new(RotationThenSlowUsage);
+    // As a greeting's deadline cancels it while its usage request waits.
+    assert!(tokio::time::timeout(
+        std::time::Duration::from_millis(30),
+        fixture.app.say_hi(Pool::Codex, &id)
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        fixture.stored(&id)["tokens"]["refresh_token"],
+        "rotated-refresh-alice"
+    );
+}
