@@ -929,20 +929,21 @@
       this.adding = false;
       this.authorizing = null;
       this.onUpdate();
+      // Nothing begun to cancel, as while waiting for another pool's cancel:
+      // that one is still the app's to wait for.
+      if (id === null && !beginning) return Promise.resolve();
       const cancel =
         id !== null
           ? this.invoke("cancel_login", { id })
-          : beginning
-            ? beginning.then(
-                (id) => this.invoke("cancel_login", { id }),
-                () => {},
-              )
-            : Promise.resolve();
-      const ended = cancel
-        .catch(() => {})
-        .then(() => {
-          if (this.signIns.cancel === ended) this.signIns.cancel = null;
-        });
+          : beginning.then(
+              (id) => this.invoke("cancel_login", { id }),
+              () => {},
+            );
+      // Ended once every cancel sent before it has.
+      const before = this.signIns.cancel;
+      const ended = Promise.all([before, cancel.catch(() => {})]).then(() => {
+        if (this.signIns.cancel === ended) this.signIns.cancel = null;
+      });
       this.signIns.cancel = ended;
       return cancel;
     }

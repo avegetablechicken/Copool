@@ -973,3 +973,59 @@ test("a sign-in in another pool waits for one cancelled as it begins", async () 
     ["begin_login", "cancel_login", "begin_login", "finish_login"],
   );
 });
+test("cancelling a sign-in that waits for another pool's cancel keeps the app waiting for it", async () => {
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const gates = {};
+  let n = 0;
+  let live = null;
+  let lock = Promise.resolve();
+  const locked = (task) => {
+    const result = lock.then(task);
+    lock = result.catch(() => {});
+    return result;
+  };
+  const invoke = async (command, args) => {
+    if (command === "begin_login") {
+      const id = `login-${++n}`;
+      return locked(async () => {
+        if (live) throw new Error("Login already in progress");
+        await new Promise((resolve) => (gates[id] = resolve));
+        live = id;
+        return id;
+      });
+    }
+    if (command === "cancel_login")
+      return locked(() => {
+        if (live === args.id) live = null;
+      });
+    if (command === "finish_login")
+      return locked(() => {
+        if (live !== args.id) throw new Error("Login not found");
+        live = null;
+        return 1;
+      });
+    return [];
+  };
+  const signIns = { cancel: null };
+  const codex = new Accounts(invoke, [], () => {}, () => {}, { pool: "codex", signIns });
+  const claude = new Accounts(invoke, [], () => {}, () => {}, { pool: "claude", signIns });
+  const first = codex.login();
+  await tick();
+  const cancelFirst = codex.cancelLogin();
+  // Claude's sign-in waits for Codex's cancel, and is cancelled meanwhile.
+  const second = claude.login();
+  await claude.cancelLogin();
+  const third = claude.login();
+  await tick();
+  // Nothing begins while Codex's sign-in is being cancelled.
+  assert.equal(n, 1);
+  gates["login-1"]();
+  for (let i = 0; i < 6; i++) {
+    await tick();
+    gates["login-2"]?.();
+  }
+  const results = await Promise.allSettled([first, cancelFirst, second, third]);
+  assert.deepEqual(results[2], { status: "fulfilled", value: false });
+  assert.equal(results[3].status, "fulfilled", String(results[3].reason));
+  assert.notEqual(results[3].value, false);
+});
