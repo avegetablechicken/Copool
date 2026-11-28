@@ -1,11 +1,6 @@
 use crate::{
-    models::*,
-    platform::SyncAgent,
-    pool::Pool,
-    pool_login::{codex, OAuthCredential},
-    proxy_service,
-    state::AppState,
-    utils::now_unix_seconds,
+    models::*, platform::SyncAgent, pool::Pool, pool_login::OAuthCredential, proxy_service,
+    state::AppState, utils::now_unix_seconds,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -750,10 +745,6 @@ fn validate_preferences(p: &Preferences) -> Result<()> {
 }
 fn validate_proxy(value: &str) -> Result<()> {
     crate::utils::validate_account_proxy(value).map(|_| ())
-}
-
-fn identity(document: &Value) -> Result<(String, String)> {
-    codex::account_identity(document)
 }
 
 /// Whether automatic switching may choose this card: available, fresh and

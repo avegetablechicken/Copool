@@ -39,6 +39,16 @@ fn sync_opencode_writes_openai_oauth_and_replaces_api_key() {
     assert_eq!(saved["openai"]["accountId"], "acct-42");
     assert!(saved["openai"].get("key").is_none());
     assert_eq!(saved["xai"]["access"], "xai-access");
+    // A later login without an account id leaves no earlier one's.
+    let unnamed = OAuthCredential {
+        account_id: None,
+        org_id: None,
+        ..credential
+    };
+    sync_opencode(&unnamed, std::slice::from_ref(&path)).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["openai"]["access"], "openai-access");
+    assert!(saved["openai"].get("accountId").is_none());
 }
 
 #[test]

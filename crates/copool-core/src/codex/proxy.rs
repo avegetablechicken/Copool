@@ -102,30 +102,36 @@ impl Application {
             candidates.extend(crate::proxy_integration::candidates(&paths)?);
             Ok(candidates)
         }));
-        if let Some(app) = self.shared() {
-            let pool = Arc::downgrade(&app);
-            storage.renew_candidate = Some(Arc::new(move |id, rejected| {
-                let pool = pool.clone();
-                Box::pin(async move {
-                    pool.upgrade()
-                        .ok_or("Copool is closing")?
-                        .codex_renew_login(&id, &rejected)
-                        .await
-                })
+        let Some(app) = self.shared() else {
+            // Not shared, no pool renews its logins; the engine's own
+            // renewal would write `accounts.json`, which nothing reads.
+            storage.renew_candidate = Some(Arc::new(|_, _| {
+                Box::pin(async { Err("No pool renews this login".to_owned()) })
             }));
-            // A failover the proxy made switches Codex to the account that
-            // answered.
-            let pool = Arc::downgrade(&app);
-            storage.on_selected = Some(Arc::new(move |id, auth| {
-                let pool = pool.clone();
-                Box::pin(async move {
-                    let Some(app) = pool.upgrade() else {
-                        return Ok(());
-                    };
-                    app.codex_follow_proxy(&id, &auth).await.map(|_| ())
-                })
-            }));
-        }
+            return storage;
+        };
+        let pool = Arc::downgrade(&app);
+        storage.renew_candidate = Some(Arc::new(move |id, rejected| {
+            let pool = pool.clone();
+            Box::pin(async move {
+                pool.upgrade()
+                    .ok_or("Copool is closing")?
+                    .codex_renew_login(&id, &rejected)
+                    .await
+            })
+        }));
+        // A failover the proxy made switches Codex to the account that
+        // answered.
+        let pool = Arc::downgrade(&app);
+        storage.on_selected = Some(Arc::new(move |id, auth| {
+            let pool = pool.clone();
+            Box::pin(async move {
+                let Some(app) = pool.upgrade() else {
+                    return Ok(());
+                };
+                app.codex_follow_proxy(&id, &auth).await.map(|_| ())
+            })
+        }));
         storage
     }
     /// The account the proxy chose, which it reached with `auth`: unless the

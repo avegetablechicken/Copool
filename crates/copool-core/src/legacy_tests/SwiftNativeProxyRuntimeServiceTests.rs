@@ -83,6 +83,15 @@ async fn testLoadCandidatesIncludesImportedSub2APIProviderUsingLoginShellFallbac
     assert_eq!(c.auth_json["copoolProvider"]["apiKey"], "provider-api-key");
     assert_eq!(c.auth_json["copoolProvider"]["preferred"], true);
     assert_eq!(c.auth_json["copoolProvider"]["allowInsecureTLS"], true);
+    // A proxy that only hosts the API prefers no route of Codex's, as it
+    // marks no login current.
+    let mut settings = app.configuration().unwrap();
+    settings.local_proxy_host_api_only = true;
+    app.persist_configuration(&settings).unwrap();
+    let hosted =
+        proxy_integration::candidates_with_keys(&app.paths, |_| Some("provider-api-key".into()))
+            .unwrap();
+    assert_eq!(hosted[0].auth_json["copoolProvider"]["preferred"], false);
     assert_eq!(c.proxy_url, "socks5://127.0.0.1:1080");
     assert_eq!(
         c.auth_json["copoolProvider"]["baseUrl"],

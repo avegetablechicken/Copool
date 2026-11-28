@@ -5,8 +5,9 @@ use std::fs;
 fn api_key(definition: &config::Definition, paths: &Paths) -> Option<String> {
     if let Some(name) = &definition.env_key {
         if let Ok(value) = std::env::var(name) {
-            if !value.trim().is_empty() {
-                return Some(value);
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_owned());
             }
         }
         // Codex loads CODEX_HOME/.env into its environment; a key kept there
@@ -230,6 +231,11 @@ pub(crate) fn candidates_with_keys(
     let config = paths.codex_auth.with_file_name("config.toml");
     let defs = config::definitions(&config);
     let current = config::resolve_path(&config);
+    // The provider Codex uses is preferred, as its login is, unless the
+    // proxy only hosts the API.
+    let host_api_only = crate::repository::load_settings(&paths.data_dir.join("settings.json"))?
+        .local_proxy_host_api_only;
+    let preferred = |name: &str| !host_api_only && current.id.eq_ignore_ascii_case(name);
     let mut result = vec![];
     // Each provider by the `config.toml` provider it is named after.
     for provider in providers {
@@ -271,7 +277,7 @@ pub(crate) fn candidates_with_keys(
             continue;
         };
         let route = format!("sub2api-provider:{}", provider.name.to_lowercase());
-        let auth = json!({"tokens":{"access_token":key,"account_id":route,"id_token":""},"copoolProvider":{"id":provider.name,"baseUrl":base,"apiKey":key,"allowInsecureTLS":provider.allow_insecure_tls,"preferred":current.id.eq_ignore_ascii_case(&provider.name)}});
+        let auth = json!({"tokens":{"access_token":key,"account_id":route,"id_token":""},"copoolProvider":{"id":provider.name,"baseUrl":base,"apiKey":key,"allowInsecureTLS":provider.allow_insecure_tls,"preferred":preferred(&provider.name)}});
         let stored:StoredAccount=serde_json::from_value(json!({"id":route,"label":provider.name,"accountId":route,"authJson":auth,"proxyUrl":provider.proxy_url.trim(),"addedAt":representative.id,"updatedAt":0,"usage":representative.usage})).map_err(|e|e.to_string())?;
         result.push(stored);
     }

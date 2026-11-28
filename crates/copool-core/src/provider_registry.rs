@@ -275,15 +275,22 @@ impl<A: Adapter> ProviderRegistry for Registry<'_, A> {
     }
     fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            // Not while it is being saved, whose password would be kept
+            // after its record is gone.
+            let _saving = self.app.provider_saves.write().await;
             self.adapter
                 .edit_providers(|providers| {
                     providers.retain(|p| p.as_ref().id != id);
                     Ok(())
                 })
                 .await?;
-            self.app
-                .secrets
-                .remove(&sub2api::password_secret(A::POOL, id))
+            // Off the async threads: the credential store may wait for the
+            // user to allow it.
+            let secrets = self.app.secrets.clone();
+            let key = sub2api::password_secret(A::POOL, id);
+            tokio::task::spawn_blocking(move || secrets.remove(&key))
+                .await
+                .map_err(|e| e.to_string())?
         })
     }
     fn members(&self) -> Result<Vec<Member>> {

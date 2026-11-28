@@ -318,10 +318,13 @@ fn sync_oauth_json_one(
     entry.insert("access".into(), credential.access.clone().into());
     entry.insert("refresh".into(), credential.refresh.clone().into());
     entry.insert("expires".into(), credential.expires_ms.into());
+    // A login without an account id keeps no earlier login's, as the
+    // database's rows do.
     if include_account_id {
-        if let Some(id) = &credential.account_id {
-            entry.insert("accountId".into(), id.clone().into());
-        }
+        match &credential.account_id {
+            Some(id) => entry.insert("accountId".into(), id.clone().into()),
+            None => entry.remove("accountId"),
+        };
     }
     root_obj.insert(provider_key.into(), Value::Object(entry));
     write_json(path, &root)
@@ -675,7 +678,7 @@ fn pi_paths_from(
         .unwrap_or_default()
 }
 
-pub fn pi_paths() -> Vec<PathBuf> {
+fn pi_paths() -> Vec<PathBuf> {
     pi_paths_from(
         dirs::home_dir().as_deref(),
         non_empty_env("PI_AUTH_PATH").as_deref(),
@@ -772,7 +775,7 @@ fn omp_paths_from(
     vec![agent_dir.join("agent.db")]
 }
 
-pub fn omp_paths() -> Vec<PathBuf> {
+fn omp_paths() -> Vec<PathBuf> {
     let omp_profile = std::env::var("OMP_PROFILE").ok();
     let pi_profile = std::env::var("PI_PROFILE").ok();
     omp_paths_from(
@@ -1390,7 +1393,7 @@ async fn opencode_target() -> OpencodeTarget {
     .unwrap_or(OpencodeTarget::Json(fallback))
 }
 
-pub fn opencode_paths() -> Vec<PathBuf> {
+fn opencode_paths() -> Vec<PathBuf> {
     if let Some(p) = std::env::var_os("OPENCODE_AUTH_PATH").filter(|p| !p.is_empty()) {
         return vec![p.into()];
     }
