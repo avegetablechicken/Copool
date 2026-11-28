@@ -194,11 +194,11 @@ fn prepaid_credits(config: &Value) -> Option<CreditSnapshot> {
     })
 }
 /// The usage limit of `/billing?format=credits`: the share of the current
-/// period's allowance used, and when the period ends. None for a reply
-/// without the share.
+/// period's allowance used, and when the period ends. An unused period
+/// omits its zero share; require valid period bounds before defaulting it,
+/// so an empty or malformed reply still has no known usage.
 pub(crate) fn usage(body: &Value, now: i64) -> Option<UsageSnapshot> {
     let config = body.get("config").unwrap_or(body);
-    let used = config.get("creditUsagePercent").and_then(number)?;
     let period = config.get("currentPeriod");
     let start = period
         .and_then(|p| p.get("start"))
@@ -208,6 +208,11 @@ pub(crate) fn usage(body: &Value, now: i64) -> Option<UsageSnapshot> {
         .and_then(|p| p.get("end"))
         .and_then(time)
         .or_else(|| config.get("billingPeriodEnd").and_then(time));
+    let used = match config.get("creditUsagePercent") {
+        Some(value) => number(value)?,
+        None if matches!((start, end), (Some(start), Some(end)) if end > start) => 0.0,
+        None => return None,
+    };
     let monthly = period
         .and_then(|p| p.get("type"))
         .and_then(Value::as_str)

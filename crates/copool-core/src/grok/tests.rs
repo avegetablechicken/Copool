@@ -17,6 +17,7 @@ struct Fake {
     /// The share of the period used.
     used: Mutex<f64>,
     usage_error: Mutex<Option<String>>,
+    billing: Mutex<Option<Value>>,
     /// The settings fail, as a server error.
     settings_down: std::sync::atomic::AtomicBool,
     /// Official xAI `/v1/models` list returned for subscription accounts.
@@ -50,6 +51,7 @@ impl Network for Fake {
             .push(format!("{path} {token} {proxy}"));
         let used = *self.used.lock().unwrap();
         let usage_error = self.usage_error.lock().unwrap().clone();
+        let billing = self.billing.lock().unwrap().clone();
         let settings_down = self
             .settings_down
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -64,6 +66,7 @@ impl Network for Fake {
                 return Ok((401, json!({"error": "unauthorized"})));
             }
             Ok(match path {
+                api::USAGE_PATH if billing.is_some() => (200, billing.unwrap()),
                 api::USAGE_PATH => (
                     200,
                     json!({"config": {
@@ -711,6 +714,90 @@ fn usage_and_plan_are_read_as_grok_build_reports_them() {
     assert_eq!(credits_of(Some(Value::Null)), None);
     assert_eq!(credits_of(Some(json!({"val": "NaN"}))), None);
     assert_eq!(credits_of(Some(json!({"val": "lots"}))), None);
+}
+
+#[test]
+fn an_unused_billing_period_can_omit_its_zero_usage() {
+    for kind in ["WEEKLY", "MONTHLY"] {
+        let end = if kind == "WEEKLY" { "08" } else { "31" };
+        let body = json!({"config": {
+            "currentPeriod": {"type": format!("USAGE_PERIOD_TYPE_{kind}"),
+                "start": "2026-12-01T00:00:00Z", "end": format!("2026-12-{end}T00:00:00Z")},
+            "isUnifiedBillingUser": true, "prepaidBalance": {"val": 0}
+        }});
+        let usage = api::usage(&body, 100).unwrap();
+        let window = if kind == "WEEKLY" {
+            usage.one_week
+        } else {
+            usage.one_month
+        }
+        .unwrap();
+        assert_eq!(window.used_percent, 0.0);
+        assert!(window.reset_at.is_some());
+        assert_eq!(usage.credits.unwrap().balance.as_deref(), Some("$0.00"));
+        for invalid in [Value::Null, json!("NaN"), json!("unknown")] {
+            let mut invalid_body = body.clone();
+            invalid_body["config"]["creditUsagePercent"] = invalid;
+            assert!(api::usage(&invalid_body, 100).is_none());
+        }
+    }
+    let legacy = json!({"billingPeriodStart": "2026-12-01T00:00:00Z",
+        "billingPeriodEnd": "2026-12-08T00:00:00Z"});
+    assert_eq!(
+        api::usage(&legacy, 100)
+            .unwrap()
+            .one_week
+            .unwrap()
+            .used_percent,
+        0.0
+    );
+    for body in [
+        json!({}),
+        json!({"config": {}}),
+        json!({"config": null}),
+        json!({"config": {"prepaidBalance": {"val": 0}}}),
+        json!({"config": {"currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY"}}}),
+        json!({"billingPeriodStart": "bad", "billingPeriodEnd": "2026-12-08T00:00:00Z"}),
+        json!({"billingPeriodStart": "2026-12-08T00:00:00Z", "billingPeriodEnd": "2026-12-01T00:00:00Z"}),
+        json!({"billingPeriodStart": "2026-12-01T00:00:00Z", "billingPeriodEnd": "2026-12-01T00:00:00Z"}),
+    ] {
+        assert!(api::usage(&body, 100).is_none(), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn refreshing_an_unused_new_period_replaces_the_previous_usage_and_error() {
+    let h = harness(true).await;
+    let login = sign_in_of("alice", "access-alice", later());
+    h.sign_in(&login);
+    h.app.import_current(Pool::Grok).await.unwrap();
+    let old = cards(&h.app).await.remove(0);
+    assert_eq!(
+        old.usage
+            .as_ref()
+            .unwrap()
+            .one_week
+            .as_ref()
+            .unwrap()
+            .used_percent,
+        7.0
+    );
+    *h.fake.billing.lock().unwrap() = Some(json!({"config": {}}));
+    assert!(h.app.refresh_usage(Pool::Grok, &old.id).await.is_err());
+    assert!(cards(&h.app).await[0].usage_error.is_some());
+    *h.fake.billing.lock().unwrap() = Some(json!({"config": {
+        "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-12-01T00:00:00Z", "end": "2026-12-08T00:00:00Z"},
+        "isUnifiedBillingUser": true, "prepaidBalance": {"val": 0}
+    }}));
+    h.app.refresh_usage(Pool::Grok, &old.id).await.unwrap();
+    let card = cards(&h.app).await.remove(0);
+    assert!(card.usage_error.is_none());
+    let week = card.usage.unwrap().one_week.unwrap();
+    assert_eq!(week.used_percent, 0.0);
+    assert_ne!(week.reset_at, old.usage.unwrap().one_week.unwrap().reset_at);
+    assert_eq!(h.fake.renewals(), 0);
+    assert_eq!(h.live(), login);
 }
 
 #[test]
