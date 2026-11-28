@@ -165,8 +165,9 @@ impl Application {
             let login = codex::normalized_auth_for_write(target.document)?;
             Some(codex::credential(&login, &Identity::default()))
         };
+        let turn = self.switch_turn(Pool::Codex).await;
         drop(_op);
-        self.after_switch(Pool::Codex, credential).await?;
+        self.after_switch(turn, Pool::Codex, credential).await?;
         Ok(true)
     }
     /// Whether following the proxy to the account would switch Codex: to

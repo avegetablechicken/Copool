@@ -532,16 +532,18 @@ impl Application {
             // Codex selects the `config.toml` provider it is named after.
             config::switch(&self.codex_config_path(), &provider.name)?;
             self.publish();
+            let turn = self.switch_turn(Pool::Codex).await;
             drop(_op);
-            let mut execution = self.after_switch(Pool::Codex, None).await?;
+            let mut execution = self.after_switch(turn, Pool::Codex, None).await?;
             execution.provider = Some(provider.name);
             return Ok(execution);
         }
         let target = self.codex_switch_login(id, access).await?;
+        let turn = self.switch_turn(Pool::Codex).await;
         drop(_op);
         let login = codex::normalized_auth_for_write(target.document)?;
         let credential = codex::credential(&login, &Identity::default());
-        self.after_switch(Pool::Codex, Some(credential)).await
+        self.after_switch(turn, Pool::Codex, Some(credential)).await
     }
     /// Writes the account's login to `auth.json`, putting Codex back on its
     /// official provider; undone should the write fail.

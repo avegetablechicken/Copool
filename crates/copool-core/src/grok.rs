@@ -522,9 +522,10 @@ impl Application {
                 },
             )
             .await?;
+        let turn = self.switch_turn(Pool::Grok).await;
         drop(_op);
         let credential = pool_login::grok::credential(&target.document, &Identity::default());
-        self.after_switch(Pool::Grok, Some(credential)).await
+        self.after_switch(turn, Pool::Grok, Some(credential)).await
     }
     /// Refreshes an account's usage, renewing its access token as its
     /// renewal allows; with `renew_now`, only renews it, whatever the choice,

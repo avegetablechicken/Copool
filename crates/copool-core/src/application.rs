@@ -350,11 +350,15 @@ pub struct Application {
     pub(crate) grok: crate::grok::State,
     /// Each pool's background refresh rounds, by `Pool`.
     pub(crate) rounds: [crate::pool::Rounds; Pool::ALL.len()],
+    /// Each pool's switches' turns at their effects, by `Pool`.
+    switch_turns: [tokio::sync::Mutex<()>; Pool::ALL.len()],
     /// Itself, once shared (`into_shared`).
     this: std::sync::OnceLock<std::sync::Weak<Application>>,
     // Release the directory after the rest of the application has been dropped.
     _instance_lock: InstanceLock,
 }
+/// A switch's turn at its effects ([`Application::switch_turn`]).
+pub(crate) struct SwitchTurn<'a>(#[allow(dead_code)] tokio::sync::MutexGuard<'a, ()>);
 pub(crate) struct RefreshGuard<'a> {
     app: &'a Application,
     id: String,
@@ -431,6 +435,7 @@ impl Application {
             antigravity: Default::default(),
             grok: Default::default(),
             rounds: Default::default(),
+            switch_turns: Default::default(),
             this: Default::default(),
             _instance_lock: instance_lock,
         };
@@ -486,11 +491,19 @@ impl Application {
             )
         }));
     }
-    /// The switch's effects, given the Credential of the login switched to:
-    /// none for a provider's card, an error for a login that grants none,
-    /// which each agent to sync reports.
+    /// A switch's turn at its effects, taken while the switch still holds
+    /// its pool's operations lock: the effects of the pool's switches run in
+    /// the order the switches were made, so the agents synced are left with
+    /// the last switch's login, not an earlier one whose sync ended last.
+    pub(crate) async fn switch_turn(&self, pool: Pool) -> SwitchTurn<'_> {
+        SwitchTurn(self.switch_turns[pool as usize].lock().await)
+    }
+    /// The switch's effects, in its turn, given the Credential of the login
+    /// switched to: none for a provider's card, an error for a login that
+    /// grants none, which each agent to sync reports.
     pub(crate) async fn after_switch(
         &self,
+        _turn: SwitchTurn<'_>,
         pool: Pool,
         credential: Option<Result<OAuthCredential>>,
     ) -> Result<SwitchExecution> {

@@ -1827,7 +1827,10 @@ impl Application {
             &pool_login::claude::account_identity(&target.own.account),
         );
         drop(claude_code);
-        let mut execution = self.after_switch(Pool::Claude, Some(credential)).await?;
+        let turn = self.switch_turn(Pool::Claude).await;
+        let mut execution = self
+            .after_switch(turn, Pool::Claude, Some(credential))
+            .await?;
         execution.login_overrides = login_overrides(&location);
         Ok(execution)
     }

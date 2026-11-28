@@ -321,6 +321,68 @@ async fn a_deactivated_workspace_stays_listed_until_deleted_then_hidden() {
     f.app.delete_account(Pool::Codex, &id).await.unwrap();
     assert!(f.app.codex_load().unwrap().accounts.is_empty());
 }
+
+#[tokio::test]
+async fn switches_run_their_effects_in_the_order_they_were_made() {
+    use crate::login_store::suite::Fixture as _;
+    use std::sync::Arc;
+    let fixture = Fixture::open(false).await;
+    let expires = now_unix_seconds() + 3600;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &json!([
+                Fixture::login("alice", "access-alice", expires),
+                Fixture::login("bob", "access-bob", expires)
+            ])
+            .to_string(),
+        )
+        .await
+        .unwrap();
+    let alice = fixture.id_of("alice");
+    let bob = fixture.id_of("bob");
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let synced = Arc::new(Mutex::new(String::new()));
+    let (entered_effect, release_effect, synced_effect) =
+        (entered.clone(), release.clone(), synced.clone());
+    fixture
+        .app
+        .on_switch_effects(Arc::new(move |_, _, credential| {
+            let (entered, release, synced) = (
+                entered_effect.clone(),
+                release_effect.clone(),
+                synced_effect.clone(),
+            );
+            Box::pin(async move {
+                let name = name_of(&credential.unwrap().unwrap().access).unwrap();
+                if name == "access-alice" {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                *synced.lock().unwrap() = name;
+                Ok(crate::SwitchExecution::default())
+            })
+        }));
+    let (first, second) = tokio::join!(fixture.app.switch_account(Pool::Codex, &alice), async {
+        entered.notified().await;
+        // Alice's effects end well after Bob's switch would have run its own.
+        let release = async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            release.notify_one();
+        };
+        tokio::join!(fixture.app.switch_account(Pool::Codex, &bob), release).0
+    });
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(
+        Fixture::access(&fixture.live()).as_deref(),
+        Some("access-bob")
+    );
+    assert_eq!(*synced.lock().unwrap(), "access-bob");
+}
+
 #[tokio::test]
 async fn a_renewal_is_kept_though_its_refresh_is_cancelled() {
     use crate::login_store::suite::Fixture as _;
@@ -371,6 +433,7 @@ async fn a_renewal_is_kept_though_its_refresh_is_cancelled() {
         "rotated-refresh-alice"
     );
 }
+
 #[tokio::test]
 async fn a_deleted_account_is_never_refreshed_in_the_background() {
     use crate::login_store::suite::Fixture as _;

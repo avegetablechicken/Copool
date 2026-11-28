@@ -658,6 +658,7 @@ impl Application {
                 },
             )
             .await?;
+        let turn = self.switch_turn(Pool::Antigravity).await;
         drop(_op);
         let identity = Identity {
             email: target.email,
@@ -665,7 +666,8 @@ impl Application {
             ..Identity::default()
         };
         let credential = pool_login::antigravity::credential(&target.document, &identity);
-        self.after_switch(Pool::Antigravity, Some(credential)).await
+        self.after_switch(turn, Pool::Antigravity, Some(credential))
+            .await
     }
     /// Refreshes an account's usage, renewing its access token as its
     /// renewal allows; with `renew_now`, only renews it, whatever the choice,
