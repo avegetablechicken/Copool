@@ -244,9 +244,65 @@ struct ChatStreamState {
     response_id: String,
     created_at: i64,
     model: String,
-    function_call_index: i64,
-    has_received_arguments_delta: bool,
-    has_tool_call_announced: bool,
+    /// The response's function calls, in the order of their chat `index`.
+    tool_calls: Vec<ChatToolCall>,
+}
+
+/// A function call of the response being streamed: the keys its events
+/// name it by, and what has been sent of it.
+struct ChatToolCall {
+    output_index: Option<u64>,
+    item_id: Option<String>,
+    received_arguments_delta: bool,
+    /// Announced when it was added, and not done yet.
+    open: bool,
+}
+
+impl ChatStreamState {
+    /// The chat index of the call an event names, by its `output_index`,
+    /// then its `item_id`.
+    fn tool_call_named_by(&self, event: &Value) -> Option<usize> {
+        let output_index = event.get("output_index").and_then(Value::as_u64);
+        let item_id = event
+            .get("item_id")
+            .or_else(|| event.get("item").and_then(|item| item.get("id")))
+            .and_then(Value::as_str);
+        output_index
+            .and_then(|wanted| {
+                self.tool_calls
+                    .iter()
+                    .position(|call| call.output_index == Some(wanted))
+            })
+            .or_else(|| {
+                item_id.and_then(|wanted| {
+                    self.tool_calls
+                        .iter()
+                        .position(|call| call.item_id.as_deref() == Some(wanted))
+                })
+            })
+    }
+
+    /// The call an arguments event belongs to: the one it names, else the
+    /// latest, as a stream of one call at a time need not name it.
+    fn tool_call_for_arguments(&self, event: &Value) -> Option<usize> {
+        self.tool_call_named_by(event)
+            .or_else(|| self.tool_calls.len().checked_sub(1))
+    }
+
+    /// Adds the call an output item event carries; returns its chat index.
+    fn add_tool_call(&mut self, event: &Value, open: bool) -> usize {
+        self.tool_calls.push(ChatToolCall {
+            output_index: event.get("output_index").and_then(Value::as_u64),
+            item_id: event
+                .get("item")
+                .and_then(|item| item.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            received_arguments_delta: false,
+            open,
+        });
+        self.tool_calls.len() - 1
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,10 +323,7 @@ impl Default for ChatStreamState {
             response_id: String::new(),
             created_at: 0,
             model: String::new(),
-            // OpenAI tool call chunk indices are zero-based.
-            function_call_index: -1,
-            has_received_arguments_delta: false,
-            has_tool_call_announced: false,
+            tool_calls: Vec::new(),
         }
     }
 }
@@ -3818,16 +3871,15 @@ fn translate_sse_event_to_chat_chunk(event: &SseEvent, state: &mut ChatStreamSta
                 return Vec::new();
             }
 
-            state.function_call_index += 1;
-            state.has_received_arguments_delta = false;
-            state.has_tool_call_announced = true;
+            // OpenAI tool call chunk indices are zero-based.
+            let index = state.add_tool_call(&parsed, true);
 
             vec![build_chat_chunk(
                 state,
                 json!({
                     "role": "assistant",
                     "tool_calls": [{
-                        "index": state.function_call_index,
+                        "index": index,
                         "id": item.get("call_id").and_then(Value::as_str).unwrap_or_default(),
                         "type": "function",
                         "function": {
@@ -3841,12 +3893,15 @@ fn translate_sse_event_to_chat_chunk(event: &SseEvent, state: &mut ChatStreamSta
             )]
         }
         "response.function_call_arguments.delta" => {
-            state.has_received_arguments_delta = true;
+            let Some(index) = state.tool_call_for_arguments(&parsed) else {
+                return Vec::new();
+            };
+            state.tool_calls[index].received_arguments_delta = true;
             vec![build_chat_chunk(
                 state,
                 json!({
                     "tool_calls": [{
-                        "index": state.function_call_index,
+                        "index": index,
                         "function": {
                             "arguments": parsed.get("delta").and_then(Value::as_str).unwrap_or_default(),
                         }
@@ -3857,7 +3912,10 @@ fn translate_sse_event_to_chat_chunk(event: &SseEvent, state: &mut ChatStreamSta
             )]
         }
         "response.function_call_arguments.done" => {
-            if state.has_received_arguments_delta {
+            let Some(index) = state.tool_call_for_arguments(&parsed) else {
+                return Vec::new();
+            };
+            if state.tool_calls[index].received_arguments_delta {
                 return Vec::new();
             }
 
@@ -3865,7 +3923,7 @@ fn translate_sse_event_to_chat_chunk(event: &SseEvent, state: &mut ChatStreamSta
                 state,
                 json!({
                     "tool_calls": [{
-                        "index": state.function_call_index,
+                        "index": index,
                         "function": {
                             "arguments": parsed.get("arguments").and_then(Value::as_str).unwrap_or_default(),
                         }
@@ -3882,18 +3940,27 @@ fn translate_sse_event_to_chat_chunk(event: &SseEvent, state: &mut ChatStreamSta
             if item.get("type").and_then(Value::as_str) != Some("function_call") {
                 return Vec::new();
             }
-            if state.has_tool_call_announced {
-                state.has_tool_call_announced = false;
+            // A call already sent is done; when the event or the latest call
+            // names no key, it is the latest call, while that is still open.
+            let unnamed = parsed.get("output_index").is_none() && item.get("id").is_none();
+            let sent = state.tool_call_named_by(&parsed).or_else(|| {
+                let latest = state.tool_calls.len().checked_sub(1)?;
+                let call = &state.tool_calls[latest];
+                let unkeyed = call.output_index.is_none() && call.item_id.is_none();
+                (call.open && (unnamed || unkeyed)).then_some(latest)
+            });
+            if let Some(index) = sent {
+                state.tool_calls[index].open = false;
                 return Vec::new();
             }
 
-            state.function_call_index += 1;
+            let index = state.add_tool_call(&parsed, false);
             vec![build_chat_chunk(
                 state,
                 json!({
                     "role": "assistant",
                     "tool_calls": [{
-                        "index": state.function_call_index,
+                        "index": index,
                         "id": item.get("call_id").and_then(Value::as_str).unwrap_or_default(),
                         "type": "function",
                         "function": {
@@ -3907,7 +3974,7 @@ fn translate_sse_event_to_chat_chunk(event: &SseEvent, state: &mut ChatStreamSta
             )]
         }
         "response.completed" => {
-            let finish_reason = if state.function_call_index >= 0 {
+            let finish_reason = if !state.tool_calls.is_empty() {
                 "tool_calls"
             } else {
                 "stop"
@@ -5156,6 +5223,101 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
                 .and_then(|value| value.as_i64()),
             Some(0)
         );
+    }
+
+    /// Parallel calls' arguments interleave: each event goes to the call it
+    /// names, by its output index or else its item id.
+    #[test]
+    fn interleaved_tool_arguments_follow_their_own_call() {
+        let mut state = ChatStreamState::default();
+        let mut translate = |data: serde_json::Value| {
+            let event = SseEvent {
+                event: None,
+                data: data.to_string(),
+            };
+            translate_sse_event_to_chat_chunk(&event, &mut state)
+        };
+        let call_index = |chunks: &[serde_json::Value]| {
+            chunks
+                .iter()
+                .map(|chunk| chunk["choices"][0]["delta"]["tool_calls"][0]["index"].clone())
+                .collect::<Vec<_>>()
+        };
+        for index in 0..2 {
+            let added = translate(json!({
+                "type": "response.output_item.added", "output_index": index,
+                "item": {
+                    "type": "function_call", "id": format!("fc_{index}"),
+                    "call_id": format!("call_{index}"), "name": "tool"
+                }
+            }));
+            assert_eq!(call_index(&added), [json!(index)]);
+        }
+        let by_output_index = translate(json!({
+            "type": "response.function_call_arguments.delta", "output_index": 0,
+            "item_id": "fc_0", "delta": "{\"a\":1}"
+        }));
+        assert_eq!(call_index(&by_output_index), [json!(0)]);
+        let by_item_id = translate(json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_0", "delta": "{\"b\":2}"
+        }));
+        assert_eq!(call_index(&by_item_id), [json!(0)]);
+        // The second call streamed no delta: its arguments come whole.
+        let done = translate(json!({
+            "type": "response.function_call_arguments.done", "output_index": 1,
+            "item_id": "fc_1", "arguments": "{\"c\":3}"
+        }));
+        assert_eq!(call_index(&done), [json!(1)]);
+        assert_eq!(
+            done[0]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            "{\"c\":3}"
+        );
+        // The first call's whole arguments repeat what its deltas sent.
+        let repeated = translate(json!({
+            "type": "response.function_call_arguments.done", "output_index": 0,
+            "item_id": "fc_0", "arguments": "{\"a\":1}"
+        }));
+        assert!(repeated.is_empty());
+        for index in [1, 0] {
+            let item_done = translate(json!({
+                "type": "response.output_item.done", "output_index": index,
+                "item": {"type": "function_call", "id": format!("fc_{index}")}
+            }));
+            assert!(item_done.is_empty());
+        }
+    }
+
+    /// A call that names neither key keeps the latest call's index.
+    #[test]
+    fn unnamed_tool_arguments_go_to_the_latest_call() {
+        let mut state = ChatStreamState::default();
+        let mut translate = |data: serde_json::Value| {
+            let event = SseEvent {
+                event: None,
+                data: data.to_string(),
+            };
+            translate_sse_event_to_chat_chunk(&event, &mut state)
+        };
+        translate(json!({
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "call_id": "call_0", "name": "tool"}
+        }));
+        let delta = translate(json!({
+            "type": "response.function_call_arguments.delta", "delta": "{}"
+        }));
+        assert_eq!(delta[0]["choices"][0]["delta"]["tool_calls"][0]["index"], 0);
+        let item_done = translate(json!({
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "call_id": "call_0", "name": "tool"}
+        }));
+        assert!(item_done.is_empty());
+        // A call first seen when done is sent whole, as the next call.
+        let late = translate(json!({
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "call_id": "call_1", "name": "tool", "arguments": "{}"}
+        }));
+        assert_eq!(late[0]["choices"][0]["delta"]["tool_calls"][0]["index"], 1);
     }
 
     #[test]
