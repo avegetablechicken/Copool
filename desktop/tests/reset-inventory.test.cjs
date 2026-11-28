@@ -69,22 +69,13 @@ test("Balance expiry tooltips handle Codex, unknown dates, and stale credits", (
 
 test("Credits and resets keep expiry tooltips while the notice opens a popover", () => {
   // What the footer says is card-view.js's (card-view.test.cjs); here, how
-  // app.js paints it.
-  const fs = require("node:fs"), vm = require("node:vm");
+  // card-face.js paints it.
   const V = require("../ui/card-view.js");
-  // Windows checkout uses CRLF; function boundaries below use LF.
-  const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8").replace(/\r\n/g, "\n");
-  const start = source.indexOf("function accountBalanceText(");
-  const end = source.indexOf("\n}\n", start);
-  assert.ok(start >= 0 && end > start);
-  const fn = source.slice(start, end + 3);
-  const el = (tag, className, text = "") => ({tag, className, textContent: text, children: [],
-    append(...nodes) {this.children.push(...nodes);}, setAttribute(name, value) {this[name] = value;}});
+  const dom = require("./fake-dom.cjs");
   let opened;
-  const context = {el, icon: (name) => ({icon: name}),
-    button: (label, glyph, className, onclick) => Object.assign(el("button", className), {onclick}),
-    showResetPopover: (trigger, lines, wrapping) => {opened = {trigger, lines, wrapping};}};
-  vm.createContext(context);vm.runInContext(fn, context);
+  const context = dom.cardFace({
+    showResetPopover: (trigger, lines, wrapping) => {opened = {trigger, lines, wrapping};},
+  });
   const tr = (key, ...args) => `${key}:${args.join(",")}`;
   const paint = (usage, pool = "codex") =>
     context.accountBalanceText(V.cardView({id: "a", usage}, {pool, locale: "en", tr}).footer);
@@ -101,19 +92,19 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
   assert.equal(resets.children.length, 0);
   assert.equal(notice.tag, "button");
   assert.equal(notice.type, "button");
-  assert.equal(notice.title, undefined);
-  assert.equal(notice["aria-haspopup"], "dialog");
-  assert.equal(notice["aria-expanded"], "false");
-  notice.onclick();
+  assert.equal(notice.title, "");
+  assert.equal(notice.attributes["aria-haspopup"], "dialog");
+  assert.equal(notice.attributes["aria-expanded"], "false");
+  notice.click();
   assert.equal(opened.trigger, notice);
   assert.equal(opened.wrapping, true);
   assert.equal(opened.lines.length, 3);
-  assert.equal(notice["aria-label"], opened.lines.join("\n"));
-  assert.equal(footer.title, undefined);
+  assert.equal(notice.attributes["aria-label"], opened.lines.join("\n"));
+  assert.equal(footer.title, "");
   // Without tooltips, none is set.
   const unavailable = paint({});
-  assert.equal(unavailable.children[0].title, undefined);
-  assert.equal(unavailable.children[2].title, undefined);
+  assert.equal(unavailable.children[0].title, "");
+  assert.equal(unavailable.children[2].title, "");
   assert.equal(unavailable.children.length, 3);
   // Antigravity and Grok: their credits alone.
   const creditsOnly = paint({credits: {balance: "1000"}, resetGrants: [grant("partial", 1, future)]}, "grok");

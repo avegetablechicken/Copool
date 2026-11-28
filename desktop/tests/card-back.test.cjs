@@ -153,10 +153,17 @@ test("a card turned back or superseded while its proxy saves is not turned again
   }
 });
 
-test("which card shows its back is part of what the cards render from", () => {
+test("which card shows its back is part of what the cards render from", async () => {
   // A failed removal closes the back without changing the cards.
-  const renderState = between("function renderAccounts(accounts) {", "if (P.cardsEqual(renderState");
-  assert.match(renderState, /accountsController\.editing\?\.key \?\? null/);
+  const cards = [{ id: "card", proxyUrl: "" }];
+  const { controller } = editor(cards);
+  const face = dom.cardFace({ controller });
+  const front = face.renderState(cards);
+  await edited(controller, "card");
+  const back = face.renderState(cards);
+  assert(!P.cardsEqual(back, front));
+  controller.stopEditing();
+  assert(P.cardsEqual(face.renderState(cards), front));
 });
 
 test("a provider's group edits its provider's proxy, saved once through its first card", async () => {
@@ -419,27 +426,23 @@ test("greeting times are added in order once and removed by value", async () => 
 
 // Which items a card's menu has is card-view.js's (card-view.test.cjs);
 // here, what they run.
-const menu = between("/// A card's menu, at the pointer", "/// The plan tag's tier color");
 test("a card's menu runs its card's actions, a provider's for its group", () => {
   const calls = [];
   const record = (name) => (...args) => (calls.push([name, ...args.map((a) => a?.id ?? a)]), Promise.resolve());
-  const scope = {
-    V,
+  const scope = dom.cardFace({
+    tr: (key) => key,
     cardContext: () => ({ pool: "codex", locale: "en", tr: (key) => key, collapsed: false }),
     providerTitle: () => "Team",
     editCard: record("editCard"),
     refreshUsage: record("refreshUsage"),
     refreshProvider: (group) => calls.push(["refreshProvider", group.key]),
-    sayHi: record("sayHi"),
-    refreshView: record("refreshView"),
+    greet: record("sayHi"),
     renewNow: record("renewNow"),
     switchAccount: record("switchAccount"),
     confirmRemoval: (cards, name, sub2api) => calls.push(["confirmRemoval", cards.map((a) => a.id), name, sub2api]),
     notice: record("notice"),
     signIn: record("signIn"),
-  };
-  vm.createContext(scope);
-  vm.runInContext(menu, scope);
+  });
   const run = (target) =>
     Array.from(scope.cardMenu(target), (item) => {
       if (item.separator) return "—";

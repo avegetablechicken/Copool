@@ -188,6 +188,53 @@ const cardBacks = window.CopoolCardBack.create({
   removeCards: (cards, sub2api) => removeCards(cards, sub2api),
 });
 const { cardBack, editCard, finishEditing, cancelEditing } = cardBacks;
+// A card's front (card-face.js).
+const cardFaces = window.CopoolCardFace.create({
+  el,
+  button,
+  icon,
+  tr,
+  get locale() {
+    return locale;
+  },
+  get pool() {
+    return pool;
+  },
+  get collapsed() {
+    return collapsed;
+  },
+  get resetDisplay() {
+    return resetDisplay;
+  },
+  get preferences() {
+    return preferences;
+  },
+  get controller() {
+    return accountsController;
+  },
+  get switchingId() {
+    return switchingId;
+  },
+  cardContext: () => cardContext(),
+  providerTitle: (account) => providerTitle(account),
+  accountProxy: (account) => accountProxy(account),
+  cardBack: (target) => cardBack(target),
+  modelBrand: (model) => modelBrand(model),
+  showResetPopover: (trigger, lines, wrapping) => showResetPopover(trigger, lines, wrapping),
+  toggleResetDisplay: () => toggleResetDisplay(),
+  getComputedStyle: (node) => getComputedStyle(node),
+  reducedMotion: () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+  notice: (message, error) => notice(message, error),
+  signIn: (workspace, kind) => signIn(workspace, kind),
+  editCard: (key) => editCard(key),
+  refreshUsage: (id) => refreshUsage(id),
+  refreshProvider: (group) => refreshProvider(group),
+  greet: (account) => sayHi(account).then(refreshView).catch((error) => notice(error, true)),
+  renewNow: (account) => renewNow(account),
+  switchAccount: (account) => switchAccount(account),
+  confirmRemoval: (cards, name, sub2api) => confirmRemoval(cards, name, sub2api),
+});
+const { accountCard, providerGroup, cardMenu, refreshTooltip, cardMeters, slideMeters } = cardFaces;
 /// The saved language, else the first supported system language.
 function appLocale() {
   return preferences?.locale
@@ -392,7 +439,6 @@ function confirmAction(title, description, accept, destructive = false) {
     ),
   );
 }
-const METER_HEIGHT = 4; // .meter in style.css
 function usageMode() {
   return preferences?.usageDisplay || "used";
 }
@@ -420,75 +466,9 @@ function toggleResetDisplay() {
   localStorage.setItem("copool.resetDisplay", resetDisplay);
   renderAccounts(accountsCache);
 }
-const meterWindows = new WeakMap();
-function refreshMeterPace(track, now) {
-  const window = meterWindows.get(track);
-  const tone = P.usageTone(window, now);
-  track.classList.toggle("high", tone === "high");
-  track.classList.toggle("full", tone === "full");
-  const title = V.paceTitle(window, { locale, tr, now });
-  if (track.title !== title) track.title = title;
-}
 function refreshVisibleMeterPace() {
   if (document.hidden || $("accounts-page").hidden) return;
-  const now = Date.now() / 1000;
-  for (const track of $("accounts").querySelectorAll(".meter"))
-    refreshMeterPace(track, now);
-}
-/// A card's usage row (card-view.js): its label, meter, value and reset.
-function usageWindow(usage) {
-  const { window: view, title } = usage;
-  const track = el(
-    "div",
-    `meter${view.available && view.tone ? ` ${view.tone}` : ""}`,
-  );
-  meterWindows.set(track, view.paceWindow);
-  track.title = V.paceTitle(view.paceWindow, { locale, tr });
-  track.setAttribute("role", "progressbar");
-  track.setAttribute("aria-label", title);
-  if (view.available)
-    track.setAttribute("aria-valuenow", String(view.progressPercent));
-  track.setAttribute("aria-valuemin", "0");
-  track.setAttribute("aria-valuemax", "100");
-  const fill = el("div", "meter-fill");
-  const metrics = P.progressMetrics(
-    view.available ? view.progressPercent / 100 : 0,
-    0,
-    METER_HEIGHT,
-    0,
-  );
-  fill.hidden = !metrics.showsFill;
-  fill.style.width = `${metrics.fillScale * 100}%`;
-  fill.style.minWidth = `${metrics.grooveHeight}px`;
-  track.append(fill);
-  // A known reset time switches between both forms and shows the other one
-  // on hover, as in OpenQuota.
-  const reset = usage.resettable
-    ? button("", null, "usage-reset", toggleResetDisplay)
-    : el("span", "usage-reset");
-  reset.textContent = usage.reset;
-  if (usage.resettable)
-    reset.addEventListener("mouseenter", () => {
-      reset.title = V.resetLabel(
-        view,
-        resetDisplay === "countdown" ? "exact" : "countdown",
-        { locale, tr, now: Date.now() / 1000 },
-      );
-    });
-  const row = el("div", `usage ${usage.tone}${view.available ? "" : " no-data"}`);
-  row.append(
-    el("span", "usage-label", title),
-    track,
-    el("span", "usage-value", usage.value),
-    reset,
-  );
-  return weeklyNotice(row, usage.notice);
-}
-function compactUsage({ label, text }) {
-  const node = el("span", "usage-value");
-  node.append(`${label} `, el("b", "", text));
-  node.setAttribute("aria-label", `${label}: ${text}`);
-  return node;
+  cardFaces.refreshMeterPaces($("accounts"), Date.now() / 1000);
 }
 // As in Coport: no WebKit context menu (Reload, …) outside text.
 document.addEventListener("contextmenu", (event) => {
@@ -554,31 +534,6 @@ async function renewNow(account) {
   } catch (error) {
     notice(error, true);
   }
-}
-/// A hi or renewal under way, or just done (card-view.js), in the place of
-/// the card's refresh button.
-function taskIndicator(task, full) {
-  const node = el("span", `icon-btn card-task ${task.done ? "done" : "running"}`);
-  node.append(icon(task.glyph));
-  node.title = task.title;
-  node.setAttribute("role", "status");
-  node.setAttribute("aria-label", `${task.title} ${full}`);
-  return node;
-}
-/// Turns the card over to edit it, at its top right, shown on the focused
-/// card as a widget's.
-function editButton(key, name) {
-  const control = button("", "info", "icon-btn card-edit", () => editCard(key));
-  const cardPool = pool;
-  const update = () => {
-    if (pool !== cardPool) return;
-    control.title = V.details(accountsController.flipTarget(key), cardContext());
-  };
-  update();
-  control.onpointerenter = update;
-  control.onfocus = update;
-  control.setAttribute("aria-label", `${tr("accounts.card.edit")} ${name}`);
-  return control;
 }
 /// Says hi with the account (the controller's sayHi), then tells whether
 /// its 5h window started.
@@ -655,211 +610,6 @@ async function turnCard(key, direction, change) {
   await turn.finished.catch(() => {});
   next.classList.remove("flip-raised");
 }
-/// A card's menu, at the pointer: editing it, then what its buttons do and
-/// what it has no button for, and its removal (card-view.js lists them).
-function cardMenu(target) {
-  return cardView(target)
-    .actions.filter((action) => action.menu)
-    .map((action) =>
-      action.kind === "separator"
-        ? { separator: true }
-        : { ...action.menu, run: actionHandler(action, target) },
-    );
-}
-/// The view of the card a flip key names (flipTarget): an account's, maybe
-/// one of a provider's, or a provider's group.
-function cardView(target, context = cardContext()) {
-  return target.group
-    ? V.providerView(target.group, providerTitle(target.group.accounts[0]), context)
-    : V.cardView(target.account, context, !!target.grouped);
-}
-/// What a card's action does, for its account or its provider's group.
-function actionHandler(action, { account, group }) {
-  const cards = group ? group.accounts : [account];
-  switch (action.kind) {
-    case "warning":
-      return () => notice(action.message, true);
-    case "reauthenticate":
-      return () => signIn(action.workspace, "reauthenticate");
-    case "edit":
-      return () => editCard(group ? `sub2api:${group.key}` : account.id);
-    case "refresh":
-      return () => (group ? refreshProvider(group) : refreshUsage(account.id));
-    case "say-hi":
-      return () => sayHi(account).then(refreshView).catch((error) => notice(error, true));
-    case "renew":
-      return () => renewNow(account);
-    case "switch":
-      return () => switchAccount(cards.find((a) => a.id === action.id));
-    case "remove":
-      return () => confirmRemoval(cards, action.name, action.sub2api);
-    default:
-      return () => {};
-  }
-}
-/// The plan tag's tier color on the card or row holding it.
-function setPlanAccent(node, view) {
-  if (view.accent) node.dataset.accent = view.accent;
-}
-/// A card's tags: its plan (named by the core, plan_tags.rs), workspace,
-/// CURRENT and status.
-function cardTags(tags) {
-  const node = el("span", "account-tags");
-  for (const tag of tags) {
-    const span = el("span", tag.className, tag.text);
-    if (tag.title) span.title = tag.title;
-    node.append(span);
-  }
-  return node;
-}
-/// A refresh button's tooltip, followed by how long until the automatic
-/// refresh at `nextAt()`; worked out again as the pointer enters.
-function refreshTooltip(target, base, nextAt) {
-  const update = () => {
-    target.title = V.refreshTitle(base, nextAt(), { locale, tr });
-  };
-  update();
-  target.onpointerenter = update;
-}
-/// A card's buttons at its bottom right, clear of long account names, as
-/// in the SwiftUI card: its usage warning, then Sign in again, or its hi or
-/// renewal under way or refresh, and its switch. `owner` is the account or
-/// provider's group they act for, `full` its name.
-function cardControls(actions, full, owner) {
-  const node = el("span", "block-aside");
-  for (const action of actions) {
-    const shown = action.button;
-    if (shown?.place !== "footer") continue;
-    const run = actionHandler(action, owner);
-    if (action.kind === "warning") {
-      const warning = button("", "warning", "icon-btn error-indicator", run);
-      warning.title = shown.title;
-      warning.setAttribute("aria-label", shown.title);
-      node.append(warning);
-    } else if (action.kind === "reauthenticate") {
-      const signInAgain = button(
-        shown.label,
-        "reauthenticate",
-        shown.compact ? "icon-btn card-reauth" : "btn quiet card-reauth",
-        run,
-      );
-      signInAgain.title = shown.title;
-      signInAgain.setAttribute("aria-label", `${shown.title} ${full}`);
-      signInAgain.disabled = shown.disabled;
-      node.append(signInAgain);
-    } else if (action.kind === "task") {
-      node.append(taskIndicator(shown, full));
-    } else if (action.kind === "refresh") {
-      const refresh = button("", "refresh", "icon-btn card-refresh", run);
-      refresh.setAttribute("aria-label", `${shown.label} ${full}`);
-      refreshTooltip(refresh, shown.label, () => shown.nextAt);
-      refresh.classList.toggle("spinning", shown.spinning);
-      refresh.disabled = shown.disabled;
-      node.append(refresh);
-    } else if (action.kind === "switch") {
-      const control = button("", "switch", "icon-btn card-switch", run);
-      control.dataset.id = action.id;
-      control.dataset.available = String(shown.available);
-      control.title = shown.title;
-      control.setAttribute("aria-label", `${shown.title} ${full}`);
-      control.disabled = shown.disabled;
-      node.append(control);
-    }
-  }
-  return node;
-}
-/// The footer's credits and resets with their expiry tooltips, and the
-/// notice of resets other than full ones, which opens a popover.
-function accountBalanceText(footer) {
-  const footerText = el("span", "account-footer-text");
-  const credits = el("span", "account-credits", footer.credits.text);
-  if (footer.credits.title) credits.title = footer.credits.title;
-  footerText.append(credits);
-  if (!footer.resets) return footerText;
-  const resets = el("span", "account-resets", footer.resets.text);
-  if (footer.resets.title) resets.title = footer.resets.title;
-  footerText.append(" · ", resets);
-  if (footer.warning) {
-    const lines = footer.warning;
-    const warning = button("", "reset-notice", "reset-warning", () => showResetPopover(warning, lines, true));
-    warning.type = "button";
-    warning.setAttribute("aria-label", lines.join("\n"));
-    warning.setAttribute("aria-haspopup", "dialog");
-    warning.setAttribute("aria-expanded", "false");
-    // Sibling of the reset text: the button has no expiry tooltip.
-    footerText.append(warning);
-  }
-  return footerText;
-}
-
-/// An account's card, or its row when the list is collapsed, painted from
-/// its view (card-view.js). A collapsed provider's first row carries the
-/// provider's controls (`owner` its group).
-function accountCard(
-  account,
-  grouped = false,
-  view = V.cardView(account, cardContext(), grouped),
-  owner = { account },
-) {
-  if (!collapsed && accountsController.editing?.key === account.id) {
-    const target = accountsController.flipTarget(account.id);
-    if (target) return cardBack(target);
-  }
-  const controlsName = owner.group ? providerTitle(owner.group.accounts[0]) : view.full;
-  if (collapsed) {
-    const row = el("div", `account-row${view.row.current ? " current running" : ""}`);
-    row.classList.toggle("can-reveal", view.row.canReveal);
-    row.classList.toggle("revealed", view.row.revealed);
-    setPlanAccent(row, view);
-    const name = el("span", "account-row-name", view.name);
-    name.title = view.full;
-    row.append(
-      el("span", view.row.dot ? "dot" : ""),
-      name,
-      view.plan ? el("span", "tag plan", view.plan) : el("span", "tag plan placeholder"),
-      compactUsage(view.compact[0]),
-      compactUsage(view.compact[1]),
-      cardControls(view.actions, controlsName, owner),
-    );
-    if (!grouped) row.dataset.reorderHandle = "";
-    row.dataset.cardId = account.id;
-    row.dataset.flipKey = account.id;
-    return row;
-  }
-  const card = el(
-    grouped ? "div" : "section",
-    grouped
-      ? "account-member"
-      : `block account${view.current ? " current" : ""}`,
-  );
-  setPlanAccent(card, view);
-  card.dataset.cardId = account.id;
-  card.dataset.flipKey = account.id;
-  const head = el("div", "block-head");
-  const name = el("div", "account-name");
-  const title = el("span", "block-title", view.full);
-  title.title = view.full;
-  name.append(title);
-  head.append(cardTags(view.tags));
-  const models = modelSwitch(view, account.id);
-  // The edit button takes the free end of the first line, before the switch.
-  if (view.actions.some((action) => action.button?.place === "head"))
-    (view.headed ? head : name).append(editButton(account.id, view.full));
-  if (models) head.append(models);
-  // A card is dragged by its tags and name, as OpenQuota by its header.
-  if (!grouped) head.dataset.reorderHandle = name.dataset.reorderHandle = "";
-  const footer = el("div", "account-footer");
-  footer.append(accountBalanceText(view.footer), cardControls(view.actions, controlsName, owner));
-  card.append(
-    ...(view.headed ? [head] : []),
-    name,
-    ...view.rows.map(usageWindow),
-    footer,
-  );
-  return card;
-}
-/// The account whose model switch was just clicked, while its card renders.
-let modelsSwapped = null;
 /// A model's mark for the model switch: its pool's from the pool switch, and
 /// Gemini's spark (Simple Icons, CC0) in its gradient.
 function modelBrand(model) {
@@ -880,148 +630,6 @@ function modelBrand(model) {
     "0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 " +
     '2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81"/>';
   return mark;
-}
-/// A card reporting a third-party pool chooses whose windows its usage rows
-/// show, its own or the third party's, with one icon button at the end of its
-/// tag row: both models' marks stacked, the shown model's in front and the
-/// other's faded behind it, which a click brings to the front.
-function modelSwitch(view, accountId) {
-  if (!view.models) return null;
-  const { shown: label, other, thirdParty: third } = view.models;
-  const swapped = modelsSwapped === accountId;
-  const control = button("", null, `model-switch${swapped ? " swapped" : ""}`, () => {
-    // The switch rendered anew trades its marks' places as it appears.
-    modelsSwapped = accountId;
-    try {
-      accountsController.showThirdParty(accountId, !third);
-    } finally {
-      modelsSwapped = null;
-    }
-  });
-  control.type = "button";
-  control.title = label;
-  control.setAttribute("aria-label", label);
-  control.setAttribute("aria-pressed", String(third));
-  control.dataset.modelSwitch = accountId;
-  const behind = el("span", "model-mark behind");
-  behind.append(modelBrand(other));
-  const front = el("span", "model-mark front");
-  front.append(modelBrand(label));
-  control.append(behind, front);
-  return control;
-}
-/// The fills of a card's usage rows, in order, as they look now (partway
-/// through a slide too): their levels in percent and their colors.
-function meterStates(card) {
-  return [...card.querySelectorAll(":scope > .usage .meter-fill")].map((fill) => {
-    const style = getComputedStyle(fill);
-    const track = fill.parentElement.getBoundingClientRect().width;
-    return {
-      fill,
-      level: fill.hidden || !track ? 0 : (fill.getBoundingClientRect().width / track) * 100,
-      background: style.backgroundColor,
-      opacity: style.opacity,
-    };
-  });
-}
-/// The meters of the list's cards that show usage rows, by card.
-function cardMeters(list) {
-  const meters = new Map();
-  for (const card of list.querySelectorAll("[data-card-id]")) {
-    const states = meterStates(card);
-    if (states.length) meters.set(card.dataset.cardId, states);
-  }
-  return meters;
-}
-/// After a render, the meters of cards that showed usage rows before (their
-/// usage refreshed, or switched to another pool's) slide from the levels
-/// they showed to their own, and change color as they go, as a progress bar
-/// does. A row new to its card rises from empty.
-function slideMeters(list, before) {
-  if (!before.size || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-  for (const card of list.querySelectorAll("[data-card-id]")) {
-    const shown = before.get(card.dataset.cardId);
-    if (!shown) continue;
-    meterStates(card).forEach(({ fill, background, opacity }, index) => {
-      const level = fill.hidden ? 0 : parseFloat(fill.style.width) || 0;
-      const from = shown[index] ?? { level: 0, background, opacity };
-      if (
-        Math.abs(from.level - level) < 0.5 &&
-        from.background === background &&
-        from.opacity === opacity
-      )
-        return;
-      const empty = fill.hidden;
-      fill.hidden = false;
-      fill.animate(
-        [
-          { width: `${from.level}%`, backgroundColor: from.background, opacity: from.opacity },
-          { width: `${level}%`, backgroundColor: background, opacity },
-        ],
-        { duration: 420, easing: "cubic-bezier(0.25, 1, 0.5, 1)" },
-      ).onfinish = () => { fill.hidden = empty; };
-    });
-  }
-}
-/// A weekly row's notice that its Sub2api reports no weekly usage: `lines`
-/// (card-view.js) open in a popover.
-function weeklyNotice(row, lines) {
-  if (!lines) return row;
-  const notice = button("", "reset-notice", "reset-warning", () =>
-    showResetPopover(notice, lines, true),
-  );
-  notice.type = "button";
-  notice.setAttribute("aria-label", lines.join("\n"));
-  notice.setAttribute("aria-haspopup", "dialog");
-  notice.setAttribute("aria-expanded", "false");
-  row.querySelector(".usage-value").append(notice);
-  return row;
-}
-/// A Sub2api provider's cards close together in one card, which shows once
-/// whether the provider is in use, with its controls where a single
-/// account's card has them: editing at the top right, refresh and switch at
-/// the bottom right.
-function providerGroup(group) {
-  const flipKey = `sub2api:${group.key}`;
-  if (!collapsed && accountsController.editing?.key === flipKey) return cardBack({ group });
-  const view = V.providerView(group, providerTitle(group.accounts[0]), cardContext());
-  // Collapsed, the first account's row carries the provider's controls.
-  const members = group.accounts.map((account, index) =>
-    accountCard(
-      account,
-      true,
-      view.members[index],
-      view.members[index].controls === "provider" ? { group } : { account },
-    ),
-  );
-  if (collapsed) {
-    const wrapper = el("div", "account-row-group");
-    wrapper.dataset.reorderHandle = "";
-    wrapper.dataset.flipKey = flipKey;
-    wrapper.append(...members);
-    return wrapper;
-  }
-  // A provider's cards are current together.
-  const block = el(
-    "section",
-    `block account account-group${view.current ? " current" : ""}`,
-  );
-  const head = el("div", "block-head");
-  const name = el("span", "block-title", view.title);
-  name.title = view.title;
-  head.append(name, ...view.tags.map((tag) => el("span", tag.className, tag.text)));
-  head.dataset.reorderHandle = "";
-  block.dataset.flipKey = flipKey;
-  const list = el("div", "account-group-members");
-  list.append(...members);
-  const footer = el("div", "account-footer");
-  footer.append(
-    el("span", "account-footer-text"),
-    cardControls(view.actions, view.title, { group }),
-  );
-  head.append(editButton(flipKey, view.title));
-  block.append(head, list, footer);
-  return block;
 }
 /// A card's key in the saved order: a Sub2api provider's cards share one.
 function entryKey(entry) {
@@ -1052,31 +660,7 @@ document.addEventListener(
 );
 function renderAccounts(accounts) {
   if (reorderingAccounts) return;
-  const context = cardContext();
-  const renderState = [
-    accounts,
-    // Relative times change without new data.
-    accounts.map((account) => V.tokenLabel(account, context)),
-    resetDisplay,
-    resetDisplay === "countdown" &&
-      accounts.map((account) => V.cardView(account, context).rows.map((row) => row.reset)),
-    collapsed,
-    locale,
-    preferences?.usageDisplay,
-    accounts.map(accountProxy),
-    // Cards group under their provider, which may load after them.
-    accounts.map(providerTitle),
-    preferences?.accountOrder?.[pool],
-    // What each card has under way, and the pool its model switch shows.
-    accounts.map((account) => accountsController.cardState(account.id)),
-    switchingId,
-    // Which card shows its back: a removal closes it before the cards change,
-    // and they may not change at all when it fails.
-    accountsController.editing?.key ?? null,
-    accountsController.adding,
-    accountsController.authorizing,
-    pool,
-  ];
+  const renderState = cardFaces.renderState(accounts);
   if (P.cardsEqual(renderState, renderedAccountsState)) return;
   renderedAccountsState = structuredClone(renderState);
   accounts = P.visibleAccounts(accounts);

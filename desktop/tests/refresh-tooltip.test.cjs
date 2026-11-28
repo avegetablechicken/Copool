@@ -1,32 +1,12 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require("node:vm");
 const P = require("../ui/presentation.js");
 const V = require("../ui/card-view.js");
 const { Accounts } = require("../ui/controllers.js");
+const dom = require("./fake-dom.cjs");
 
-// Windows checkouts may end lines with CRLF; the slices below look for LF.
-const source = fs
-  .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
-  .replace(/\r\n/g, "\n");
-const body = (name) => {
-  const start = source.indexOf(`function ${name}(`);
-  const end = source.indexOf("\n}\n", start);
-  assert(start >= 0 && end > start, name);
-  return source.slice(start, end + 3);
-};
-function load() {
-  const context = {
-    V,
-    locale: "en",
-    tr: (key, ...args) => (args.length ? `${key}:${args.join(",")}` : key),
-  };
-  vm.createContext(context);
-  vm.runInContext(body("refreshTooltip"), context);
-  return context;
-}
+/// card-face.js in English, its translations naming their arguments.
+const load = (extra = {}) => dom.cardFace(extra);
 
 test("A refresh button tells how long until its next automatic refresh", () => {
   const { refreshTooltip } = load();
@@ -43,13 +23,8 @@ test("A refresh button tells how long until its next automatic refresh", () => {
   assert.equal(button.title, "Refresh\naccounts.refresh.next_due");
 });
 
-// A card's or provider's next refresh is card-view.js's (card-view.test.cjs).
-test("The toolbar follows the full refresh", () => {
-  // The toolbar shows the background's own schedule, not the cards'.
-  assert.match(body("renderToolbar"), /refreshTooltip\([\s\S]*\$\("refresh-all"\)[\s\S]*\(\) => fullRefreshAt/);
-  assert.match(body("refreshView"), /invoke\("next_full_refresh_at", \{ pool \}\)/);
-});
-
+// A card's or provider's next refresh is card-view.js's (card-view.test.cjs),
+// and the toolbar's is the background's own schedule (app.js's fullRefreshAt).
 test("Cmd+1 to Cmd+4 select the pool both pages share, in place on the proxy page but for Grok", () => {
   for (const [page, key, expected] of [
     ["proxy", "2", { pool: "claude", page: null }],
@@ -73,57 +48,33 @@ test("Selecting a pool on either page selects it on both, but Grok only on the a
 });
 
 test("A visible meter changes from red to amber without a data refresh", () => {
-  const classes = new Set();
-  const track = { title: "", classList: {
-    toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); }
-  } };
-  const meterWindows = new WeakMap([[track, {
-    usedPercent: 16, windowSeconds: 18000, resetAt: 1795026520
-  }]]);
+  const face = load({ tr: (key, ...args) => [key, ...args].join(" ") });
+  const window = { usedPercent: 16, windowSeconds: 18000, resetAt: 1795026520 };
+  const [row] = V.cardView({ id: "a", usage: { fiveHour: window } }, {
+    pool: "codex", locale: "en", tr: (key) => key, now: 1795011414,
+  }).rows;
+  const track = face.usageWindow(row).find((node) => node.className.startsWith("meter "));
+  const list = { querySelectorAll: (selector) => (selector === ".meter" ? [track] : []) };
   let now = 1795011414;
-  const context = vm.createContext({
-    P, V, meterWindows, document: { hidden: false }, Date: { now: () => now * 1000 },
-    $: id => id === "accounts" ? { querySelectorAll: () => [track] } : { hidden: false },
-    locale: "en", tr: (key, ...args) => [key, ...args].join(" ")
-  });
-  vm.runInContext(body("refreshMeterPace") + body("refreshVisibleMeterPace"), context);
-  assert.match(source, /setInterval\(refreshVisibleMeterPace, 1000\)/);
-  context.refreshVisibleMeterPace();
-  assert.deepEqual([...classes], ["full"]);
+  face.refreshMeterPaces(list, now);
+  assert.deepEqual([track.classList.contains("full"), track.classList.contains("high")], [true, false]);
   now++;
-  context.refreshVisibleMeterPace();
-  assert.deepEqual([...classes], ["high"]);
+  face.refreshMeterPaces(list, now);
+  assert.deepEqual([track.classList.contains("full"), track.classList.contains("high")], [false, true]);
   assert.equal(track.title, "accounts.window.pace_spare 1");
 });
 
 // Which rows a card shows, its own or its third-party pool's, is
 // card-view.js's (card-view.test.cjs); here, its model switch.
 test("A card's model switch stacks both marks and switches the rows it shows", () => {
-  const swapped = "let modelsSwapped = null;\n";
-  assert(source.includes(swapped), "modelsSwapped");
-  const node = (className, text) => ({
-    className, text, children: [], dataset: {}, attributes: {}, listeners: {},
-    append(...nodes) { this.children.push(...nodes); },
-    setAttribute(name, value) { this.attributes[name] = value; },
-    addEventListener(name, handler) { this.listeners[name] = handler; },
-  });
   // The pool's controller keeps the choice and renders the cards anew.
-  const controller = new Accounts(async () => [], [], () => context.renderAccounts(), () => {}, { pool: "antigravity" });
-  const context = vm.createContext({
-    accountsController: controller,
-    renders: 0,
-    el: (tag, className, text) => node(className, text),
-    button: (label, glyph, className, handler) => {
-      const option = node(className, label);
-      option.addEventListener("click", handler);
-      return option;
-    },
-    modelBrand: (model) => `${model} mark`,
+  const hooks = { renders: 0, render: () => hooks.renders++ };
+  const controller = new Accounts(async () => [], [], () => hooks.render(), () => {}, { pool: "antigravity" });
+  const context = load({
+    pool: "antigravity",
+    controller,
+    cardContext: () => ({ pool: "antigravity", locale: "en", tr: (key) => key, ui: (card) => controller.cardState(card) }),
   });
-  vm.runInContext(
-    swapped + "function renderAccounts() { renders++; }\n" + body("modelSwitch"),
-    context,
-  );
   const window = (usedPercent, windowSeconds) => ({ usedPercent, windowSeconds, resetAt: null });
   const pro = { fiveHour: window(2, 18000), thirdPartyFiveHour: window(12, 18000), thirdPartyOneWeek: window(3, 604800) };
   const view = (id) => V.cardView({ id, usage: pro }, {
@@ -150,22 +101,23 @@ test("A card's model switch stacks both marks and switches the rows it shows", (
   assert.equal(context.modelSwitch(V.cardView({ id: "c", usage: null }, { pool: "antigravity", tr: String }), "c"), null);
   // A click switches to Claude; the switch rendered by its own click trades
   // its marks' places.
-  context.renderAccounts = () => {
-    context.renders++;
+  const shown = context.renderState([{ id: "a", usage: pro }]);
+  hooks.render = () => {
+    hooks.renders++;
     assert.equal(context.modelSwitch(view("a"), "a").className, "model-switch swapped");
     assert.equal(context.modelSwitch(view("b"), "b").className, "model-switch");
   };
   context.modelSwitch(view("a"), "a").listeners.click();
-  assert.equal(context.renders, 1);
+  assert.equal(hooks.renders, 1);
   assert.equal(models(), "[Claude]");
   assert.equal(models("b"), "Gemini");
   assert.equal(context.modelSwitch(view("a"), "a").className, "model-switch");
+  // A switched card renders again: what the cards render from changed.
+  assert(!P.cardsEqual(context.renderState([{ id: "a", usage: pro }]), shown));
   // Another click switches back to Gemini.
   context.modelSwitch(view("a"), "a").listeners.click();
-  assert.equal(context.renders, 2);
+  assert.equal(hooks.renders, 2);
   assert.equal(models(), "Gemini");
-  // A switched card renders again.
-  assert.match(body("renderAccounts"), /accountsController\.cardState\(account\.id\)/);
 });
 
 test("A render slides each card's meters from the levels they showed, changing color as they go", () => {
@@ -193,12 +145,11 @@ test("A render slides each card's meters from the levels they showed, changing c
       return cards;
     },
   });
-  const context = vm.createContext({
-    reduced: false,
+  const motion = { reduced: false };
+  const context = load({
     getComputedStyle: (node) => ({ backgroundColor: node.background, opacity: node.opacity }),
+    reducedMotion: () => motion.reduced,
   });
-  context.window = { matchMedia: () => ({ matches: context.reduced }) };
-  vm.runInContext(body("meterStates") + body("cardMeters") + body("slideMeters"), context);
   const frames = (node) => JSON.parse(JSON.stringify(node.animations.map((a) => a.frames)));
 
   // Levels are what the meters show, partway through a slide too; a card
@@ -244,39 +195,18 @@ test("A render slides each card's meters from the levels they showed, changing c
   assert.equal(c[0].animations.length + d[0].animations.length, 0);
 
   // Reduced motion changes them at once.
-  context.reduced = true;
+  motion.reduced = true;
   const still = [fill("60%")];
   context.slideMeters(list(card("a", still)), before);
   assert.equal(still[0].animations.length, 0);
 
-  // Every render of the same pool's cards slides them, the model switch's
-  // and a usage refresh's alike; another pool's cards appear as they are.
-  const render = body("renderAccounts");
-  const captured = render.indexOf("const meters = renderedLayout?.pool === pool ? cardMeters(list) : new Map();");
-  const cleared = render.indexOf("list.replaceChildren();");
-  const aligned = render.indexOf("alignMeters(list);");
-  const slid = render.indexOf("slideMeters(list, meters);");
-  assert(captured >= 0 && captured < cleared, "meters captured before the cards are replaced");
-  assert(aligned >= 0 && aligned < slid, "meters slide once aligned");
-  assert(!body("modelSwitch").includes("slideMeters"));
 });
 
 // Its lines, naming the version and the pool's upgrade, are card-view.js's.
 test("A weekly row of an outdated Sub2api opens a notice of its lines", () => {
   const opened = [];
-  const node = () => ({
-    attributes: {}, children: [], listeners: {},
-    append(...nodes) { this.children.push(...nodes); },
-    setAttribute(name, value) { this.attributes[name] = value; },
-    addEventListener(name, handler) { this.listeners[name] = handler; },
-  });
-  const context = vm.createContext({
-    el: (tag, className) => Object.assign(node(), { tag, className }),
-    icon: (name) => ({ glyph: name }),
-    showResetPopover: (...args) => opened.push(args),
-  });
-  vm.runInContext(body("button") + body("weeklyNotice"), context);
-  const value = node();
+  const context = load({ showResetPopover: (...args) => opened.push(args) });
+  const value = dom.el("span", "usage-value");
   const row = { querySelector: (selector) => (selector === ".usage-value" ? value : null) };
   // A current Sub2api's row is left as it is.
   assert.equal(context.weeklyNotice(row, null), row);

@@ -80,4 +80,44 @@ function button(label, glyph, className, handler) {
   if (handler) node.addEventListener("click", handler);
   return node;
 }
-module.exports = { Node, el, icon, button };
+/// card-face.js over fake nodes, for a Codex card in English with nothing
+/// under way and idle actions, which `extra` replaces (`host` is it).
+function cardFace(extra = {}) {
+  const tr = (key, ...args) => (args.length ? `${key}:${args.join(",")}` : key);
+  const host = {
+    el,
+    button,
+    icon,
+    tr,
+    locale: "en",
+    pool: "codex",
+    collapsed: false,
+    resetDisplay: "exact",
+    preferences: {},
+    controller: { cardState: () => ({}), flipTarget: () => null, editing: null },
+    switchingId: null,
+    cardContext: () => ({ pool: host.pool, locale: "en", tr: host.tr, collapsed: false }),
+    providerTitle: () => "Team",
+    accountProxy: () => "",
+    cardBack: () => el("section", "account-back"),
+    modelBrand: (model) => `${model} mark`,
+    showResetPopover: () => {},
+    toggleResetDisplay: () => {},
+    getComputedStyle: () => ({}),
+    reducedMotion: () => false,
+    notice: () => {},
+    signIn: () => {},
+    editCard: () => {},
+    refreshUsage: () => {},
+    refreshProvider: () => {},
+    greet: () => {},
+    renewNow: () => {},
+    switchAccount: () => {},
+    confirmRemoval: () => {},
+    ...extra,
+  };
+  const face = require("../ui/card-face.js").create(host);
+  face.host = host;
+  return face;
+}
+module.exports = { Node, el, icon, button, cardFace };

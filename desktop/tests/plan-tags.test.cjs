@@ -1,59 +1,21 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require("node:vm");
 const V = require("../ui/card-view.js");
+const dom = require("./fake-dom.cjs");
 
 // The core names and colors plan tags (plan_tags.rs) and card-view.js puts
-// them in the card's view (card-view.test.cjs); here, how app.js paints them.
-// Windows checkouts may end lines with CRLF; the slices below look for LF.
-const source = fs
-  .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
-  .replace(/\r\n/g, "\n");
-const body = (name) => {
-  const start = source.indexOf(`function ${name}(`);
-  const end = source.indexOf("\n}\n", start);
-  assert(start >= 0 && end > start, name);
-  return source.slice(start, end + 3);
-};
+// them in the card's view (card-view.test.cjs); here, how card-face.js
+// paints them.
 const tr = (key) => key;
 const context = (pool = "codex") => ({ pool, locale: "en", tr, collapsed: false });
 
-/// The app's tag and control painting, drawing plain nodes and recording
-/// its sign-ins.
+/// card-face.js painting plain nodes and recording its sign-ins.
 function app() {
-  const node = (className, text) => ({
-    className, text, children: [], dataset: {}, attributes: {}, listeners: {},
-    classList: { toggle() {} },
-    append(...nodes) { this.children.push(...nodes); },
-    setAttribute(name, value) { this.attributes[name] = value; },
-    addEventListener(name, handler) { this.listeners[name] = handler; },
-  });
-  const scope = {
-    V,
-    signIns: [],
-    el: (tag, className, text) => node(className, text),
-    button: (label, glyph, className, handler) => {
-      const control = node(className, label);
-      control.glyph = glyph;
-      control.addEventListener("click", handler);
-      return control;
-    },
-    notice: () => {},
-    tr,
-  };
-  vm.createContext(scope);
-  vm.runInContext(
-    "function signIn(...args) { signIns.push(args); }\n" +
-      body("setPlanAccent") +
-      body("cardTags") +
-      body("actionHandler") +
-      body("cardControls"),
-    scope,
-  );
-  scope.node = node;
-  return scope;
+  const signIns = [];
+  const face = dom.cardFace({ tr, signIn: (...args) => signIns.push(args) });
+  face.signIns = signIns;
+  face.node = (className) => dom.el("section", className);
+  return face;
 }
 
 test("A card's plan tag shows the label and color the core gives it", () => {
@@ -110,7 +72,6 @@ test("Sign in again pins the workspace only for a card with a workspace tag", ()
 
 test("A card's refresh and switch buttons are painted locked as card-view.js says, without syncButtons", () => {
   const scope = app();
-  scope.refreshTooltip = () => {};
   const paint = (account, extra = {}) => {
     const view = V.cardView(account, { ...context(), ...extra });
     const controls = scope.cardControls(view.actions, view.full, { account }).children;
