@@ -104,6 +104,15 @@ pub(crate) fn round(
     });
     Ask { ids, providers }
 }
+/// The accounts a refresh of the whole pool asks for: all but those deleted,
+/// whose logins are never used again.
+pub(crate) fn whole_pool(cards: &[Card]) -> Vec<String> {
+    cards
+        .iter()
+        .filter(|c| c.provider.is_none() && !c.deleted)
+        .map(|c| c.id.to_owned())
+        .collect()
+}
 /// What the ask at `at` for the cards speeding up (`keys`, card keys) asks
 /// for: their accounts not asked within the sooner interval, `soon`
 /// seconds, and their providers.
@@ -269,6 +278,7 @@ mod tests {
         );
         assert_eq!(ask.ids, ["due"]);
         assert_eq!(next_refresh_at(&deleted, &SCHEDULE, None), None);
+        assert_eq!(whole_pool(&[lately, deleted]), ["lately"]);
     }
 
     #[test]

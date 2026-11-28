@@ -775,9 +775,10 @@ impl<P: LoginPool> Logins<P> {
             self.save(&store)?;
         }
         let current = P::current(&mut store).as_deref() == Some(id);
+        // A deleted account's login is never used again.
         let account = P::accounts(&store)
             .iter()
-            .find(|a| a.id == id)
+            .find(|a| a.id == id && a.standing != Some(Standing::Deleted))
             .ok_or("Account not found")?
             .clone();
         Ok(Begun {

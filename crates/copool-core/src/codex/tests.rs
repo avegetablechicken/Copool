@@ -560,3 +560,36 @@ async fn a_renewal_cancelled_waiting_for_the_store_is_saved_next() {
         "rotated-refresh-alice"
     );
 }
+
+#[tokio::test]
+async fn refreshing_the_whole_pool_leaves_out_a_deleted_account() {
+    use crate::login_store::suite::Fixture as _;
+    let fixture = Fixture::open(false).await;
+    fixture
+        .app
+        .import_json(
+            Pool::Codex,
+            &Fixture::login("alice", "expired-alice", now_unix_seconds() - 1).to_string(),
+        )
+        .await
+        .unwrap();
+    let id = fixture.id_of("alice");
+    fixture
+        .app
+        .release_new_accounts(Pool::Codex, Some(&id))
+        .await
+        .unwrap();
+    fixture
+        .app
+        .codex_logins()
+        .change(|store| {
+            store.accounts[0].standing = Some(Standing::Deactivated);
+            store.accounts[0].updated_at = 0;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    fixture.app.delete_account(Pool::Codex, &id).await.unwrap();
+    fixture.app.refresh_now(Pool::Codex, None).await.unwrap();
+    assert_eq!(fixture.renewals(), 0);
+}

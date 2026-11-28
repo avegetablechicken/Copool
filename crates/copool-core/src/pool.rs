@@ -479,9 +479,16 @@ impl Application {
         providers: Option<&[String]>,
     ) -> Result<()> {
         let accounts = self.accounts(pool).await?;
+        let pauses = self.refresh_pauses(pool);
+        let cards: Vec<_> = accounts
+            .iter()
+            .map(|account| refresh_plan::Card::of(pool, account, &pauses))
+            .collect();
+        let every = refresh_plan::whole_pool(&cards);
+        let ids = ids.unwrap_or(&every);
         let refreshes = accounts
             .iter()
-            .filter(|a| !sub2api::is_card(pool, &a.id) && ids.is_none_or(|ids| ids.contains(&a.id)))
+            .filter(|a| !sub2api::is_card(pool, &a.id) && ids.contains(&a.id))
             .map(|account| async move {
                 self.refresh_usage(pool, &account.id)
                     .await
