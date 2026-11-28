@@ -286,6 +286,11 @@ where
         Ok(())
     }
 }
+/// Held from reading an agent's JSON logins to writing them back: two
+/// pools' switches syncing the same file would each write back the file as
+/// it was before the other's login, and one login would be lost.
+static JSON_LOGINS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn sync_oauth_json_one(
     credential: &OAuthCredential,
     path: &Path,
@@ -294,6 +299,7 @@ fn sync_oauth_json_one(
     replace_entry: bool,
     include_account_id: bool,
 ) -> Result<(), String> {
+    let _lock = JSON_LOGINS.lock().unwrap_or_else(|e| e.into_inner());
     let mut root: Value = if path.exists() {
         let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         let content = raw.strip_prefix('\u{feff}').unwrap_or(&raw);

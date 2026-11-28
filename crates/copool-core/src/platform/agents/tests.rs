@@ -1435,3 +1435,33 @@ fn sync_opencode_db_rejects_uninitialized_database() {
         .unwrap_err()
         .contains("missing the credential table"));
 }
+
+#[test]
+fn two_pools_syncing_one_json_file_at_once_keep_both_logins() {
+    use std::sync::{Arc, Barrier};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auth.json");
+    for _ in 0..50 {
+        write_json(&path, &json!({})).unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        std::thread::scope(|scope| {
+            for (pool, provider) in [(Pool::Codex, "openai-codex"), (Pool::Claude, "anthropic")] {
+                let barrier = barrier.clone();
+                let path = &path;
+                scope.spawn(move || {
+                    let credential = OAuthCredential {
+                        access: format!("{provider}-access"),
+                        refresh: format!("{provider}-refresh"),
+                        ..Default::default()
+                    };
+                    barrier.wait();
+                    SyncAgent::Pi
+                        .sync_credential(pool, &credential, std::slice::from_ref(path))
+                        .unwrap();
+                });
+            }
+        });
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(saved.get("openai-codex").is_some() && saved.get("anthropic").is_some());
+    }
+}
