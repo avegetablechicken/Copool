@@ -58,6 +58,7 @@ def environment(target):
         raise SystemExit(f'No Visual Studio installation with {arch} C++ tools was found.')
     devcmd = Path(result.stdout.strip()) / 'Common7/Tools/VsDevCmd.bat'
     host = 'arm64' if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64' else 'x64'
+    host_target = next(triple for triple, name in architectures.items() if name == host)
     with tempfile.TemporaryDirectory(prefix='copool-vs-') as directory:
         script = Path(directory) / 'environment.cmd'
         # VsDevCmd's messages go to stderr, kept apart from the variables
@@ -74,11 +75,19 @@ def environment(target):
             os.environ[key] = value
     cargo_home = Path(os.environ.get('CARGO_HOME') or Path.home() / '.cargo')
     os.environ['PATH'] = str(cargo_home / 'bin') + os.pathsep + os.environ['PATH']
-    os.environ['RUSTUP_TOOLCHAIN'] = f'stable-{target}'
+    # The toolchain is the host's, which runs here; a cross build adds the
+    # target's standard library to it and passes `--target`.
+    toolchain = f'stable-{host_target}'
+    os.environ['RUSTUP_TOOLCHAIN'] = toolchain
     try:
         missing = subprocess.run(['rustc', '--version']).returncode != 0
     except FileNotFoundError:
         missing = True
     if missing:
-        raise SystemExit(f'Install Rust with: rustup toolchain install stable-{target} --profile minimal --force-non-host')
+        raise SystemExit(f'Install Rust with: rustup toolchain install {toolchain} --profile minimal')
+    if target != host_target:
+        installed = subprocess.run(['rustup', 'target', 'list', '--installed'],
+                                   capture_output=True, text=True)
+        if installed.returncode or target not in installed.stdout.split():
+            raise SystemExit(f'Add the target with: rustup target add {target} --toolchain {toolchain}')
     return target
