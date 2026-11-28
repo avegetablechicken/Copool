@@ -41,6 +41,30 @@ test("Cmd+1 to Cmd+4 select the pool both pages share, in place on the proxy pag
   assert.equal(P.poolShortcut("accounts", "5"), null);
 });
 
+test("Cmd+N shows the accounts page first only when the pool's page is not shown", () => {
+  const Keys = require("../ui/keys.js");
+  const calls = [];
+  const host = {
+    document: { querySelector: () => null },
+    mac: true,
+    menus: { handleKey: () => false },
+    page: "proxy",
+    showPage: (page) => calls.push(["page", page]),
+    showPool: (pool) => calls.push(["pool", pool]),
+  };
+  const keys = Keys.create(host);
+  const press = (key) => keys.onKeydown({ key, metaKey: true, target: {}, preventDefault() {} });
+  press("2");
+  press("4");
+  host.page = "settings";
+  press("1");
+  assert.deepEqual(calls, [
+    ["pool", "claude"],
+    ["page", "accounts"], ["pool", "grok"],
+    ["page", "accounts"], ["pool", "codex"],
+  ]);
+});
+
 test("Selecting a pool on either page selects it on both, but Grok only on the accounts page", () => {
   assert.deepEqual(P.poolSelection("claude"), { accounts: "claude", proxy: "claude" });
   assert.equal(P.poolSelection("unknown"), null);

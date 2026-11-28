@@ -2,27 +2,13 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const vm = require("node:vm");
 const P = require("../ui/presentation.js");
 const V = require("../ui/card-view.js");
 const CardBack = require("../ui/card-back.js");
+const Keys = require("../ui/keys.js");
 const { Accounts } = require("../ui/controllers.js");
 const dom = require("./fake-dom.cjs");
 
-// Windows checkouts may end lines with CRLF; the markers below are one line.
-const source = fs
-  .readFileSync(path.join(__dirname, "../ui/app.js"), "utf8")
-  .replace(/\r\n/g, "\n");
-/// The app's source from `from` up to `to`, both found.
-function between(from, to) {
-  const start = source.indexOf(from);
-  assert(start >= 0, `${from} found`);
-  const end = source.indexOf(to, start);
-  assert(end > start, `${to} found after ${from}`);
-  return source.slice(start, end);
-}
-// The editing rules are the pool's controller's; card-back.js's editCard
-// and cancelEditing only turn the cards.
 /// One of the Sub2api provider "team"'s cards.
 const member = (n, extra = {}) => ({
   id: `sub2api-team-${n}`,
@@ -248,23 +234,23 @@ test("other cards shown end editing at once without saving, and a turn under way
   assert.equal(saved.length, 0);
 });
 
-/// app.js's keyboard handling over a card back and its controller.
+/// keys.js over a card back and its controller, handling `document`'s
+/// keydown events; `globals` are its host's (`page`, `collapsed`, …).
 function keyboard(back, controller, globals) {
-  const scope = vm.createContext({
-    P,
-    V,
-    accountsController: controller,
+  const host = {
+    mac: true,
+    menus: { handleKey: () => false },
     pool: controller.pool,
     collapsed: false,
-    menus: { handleKey: () => false },
-    TOOLBAR_SHORTCUTS: {},
-    navigator: { userAgent: "Mac" },
+    reordering: false,
+    controller,
+    menuBarNavigation: false,
     editCard: (key) => back.editCard(key),
     cancelEditing: () => back.cancelEditing(),
     ...globals,
-  });
-  vm.runInContext(between("let menuBarNavigation", "/// Refreshes one account"), scope);
-  return scope;
+  };
+  host.document.addEventListener("keydown", Keys.create(host).onKeydown);
+  return host;
 }
 
 test("Escape cancels card editing and only a fresh press can hide the panel", () => {
@@ -274,7 +260,7 @@ test("Escape cancels card editing and only a fresh press can hide the panel", ()
   const { back, controller, saved } = editor([{ id: "card", proxyUrl: "" }]);
   keyboard(back, controller, {
     document,
-    selectedPage: "accounts",
+    page: "accounts",
     invoke: async (command) => commands.push(command),
   });
   function escape(repeat = false) {
@@ -315,8 +301,7 @@ test("Return flips the hovered account card to edit, unless a focused UI element
   const { back, controller } = editor(accounts);
   const scope = keyboard(back, controller, {
     document,
-    selectedPage: "accounts",
-    reorderingAccounts: false,
+    page: "accounts",
     invoke: async () => null,
   });
 
@@ -344,12 +329,12 @@ test("Return flips the hovered account card to edit, unless a focused UI element
   scope.collapsed = true;
   assert.equal(pressEnter().defaultPrevented, false);
   scope.collapsed = false;
-  scope.reorderingAccounts = true;
+  scope.reordering = true;
   assert.equal(pressEnter().defaultPrevented, false);
-  scope.reorderingAccounts = false;
-  scope.selectedPage = "settings";
+  scope.reordering = false;
+  scope.page = "settings";
   assert.equal(pressEnter().defaultPrevented, false);
-  scope.selectedPage = "accounts";
+  scope.page = "accounts";
   assert.equal(controller.editing, null);
 
   // Plain Return on a hovered card flips it into edit mode.

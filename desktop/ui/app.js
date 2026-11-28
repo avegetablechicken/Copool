@@ -307,7 +307,6 @@ function translate() {
   if (typeof accountsController !== "undefined") renderToolbar();
 }
 // Toolbar shortcuts: Cmd (Ctrl elsewhere) with these keys.
-const TOOLBAR_SHORTCUTS = { i: "import-open", n: "add-account", r: "refresh-all" };
 function withShortcut(text, key) {
   const mac = navigator.userAgent.includes("Mac");
   return `${text} (${mac ? "⌘" : "Ctrl+"}${key.toUpperCase()})`;
@@ -1593,118 +1592,38 @@ $("import-open").onclick = () => {
 };
 // Opened by keyboard navigation of the menu bar (macOS 27); see menuBarStep.
 let menuBarNavigation = false;
-// Where ←/→ move the caret.
-const TEXT_ENTRY =
-  'textarea, [contenteditable]:not([contenteditable="false"]), input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"])';
-// Interactive controls that own Return when focused (e.g. via Tab).
-const INTERACTIVE_ELEMENT =
-  'a[href], button, input, select, textarea, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="combobox"], [role="option"], [role="textbox"], [tabindex]:not([tabindex="-1"])';
-/// Whether Return should act on a focused UI element rather than a hovered card.
-function focusOwnsEnter(event) {
-  if (event.target?.closest?.(INTERACTIVE_ELEMENT)) return true;
-  const active = document.activeElement;
-  return Boolean(
-    active &&
-      active !== document.body &&
-      active !== document.documentElement &&
-      active.closest?.(INTERACTIVE_ELEMENT),
-  );
-}
-/// The hovered account card (or provider group) that Return can turn over to
-/// edit, or null when none is hovered, collapsed, already turned over, or has
-/// no settings side.
-function hoveredEditableCard() {
-  if (selectedPage !== "accounts" || collapsed) return null;
-  if (typeof reorderingAccounts !== "undefined" && reorderingAccounts) return null;
-  const list = document.getElementById?.("accounts");
-  if (!list) return null;
-  const hovered = [...list.querySelectorAll("[data-flip-key]:is(:hover, .hover-hold)")];
-  // Innermost first: a grouped account with its own back wins over its group,
-  // while one without a back falls through to its group (as contextmenu does).
-  for (let i = hovered.length - 1; i >= 0; i--) {
-    const node = hovered[i];
-    const key = node.dataset.flipKey;
-    if (node.classList?.contains("account-back") || accountsController.isEditing(key)) {
-      return null;
-    }
-    if (V.hasBack(accountsController.flipTarget(key), pool)) return key;
-  }
-  return null;
-}
-// Coport's panel shortcuts. An open dialog keeps Escape and Return for
-// cancel and submit, as the SwiftUI dialogs did.
-document.addEventListener("keydown", (event) => {
-  if (document.querySelector("dialog[open]")) return;
-  if (menus.handleKey(event)) return;
-  const step = P.menuBarStep(event.key, {
-    navigating: menuBarNavigation,
-    modified: event.metaKey || event.ctrlKey || event.altKey || event.shiftKey,
-    inText: Boolean(event.target.closest?.(TEXT_ENTRY)),
-    handled: event.defaultPrevented || event.isComposing,
-  });
-  if (step) {
-    event.preventDefault();
-    invoke("navigate_menu_bar", { right: step === "right" }).catch(() => {});
-    return;
-  }
-  const mac = navigator.userAgent.includes("Mac");
-  const mod = event.metaKey || event.ctrlKey;
-  const back =
-    !event.shiftKey &&
-    (mac
-      ? event.metaKey && !event.ctrlKey && !event.altKey && event.key === "["
-      : event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft");
-  if (event.key === "Escape") {
-    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
-    event.preventDefault();
-    // Holding Escape through a card flip must not dismiss the panel too.
-    if (event.repeat) return;
-    // Back from a subpage first; on the accounts page, turn an edited card
-    // back without saving, else dismiss like a menu.
-    if (selectedPage !== "accounts") showPage("accounts");
-    else if (accountsController.editing || accountsController.turning) cancelEditing();
-    else invoke("hide_panel").catch(() => {});
-  } else if (
-    event.key === "Enter" &&
-    !event.defaultPrevented &&
-    !event.isComposing &&
-    event.keyCode !== 229 &&
-    !event.repeat &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    !focusOwnsEnter(event)
-  ) {
-    const key = hoveredEditableCard();
-    if (key) {
-      event.preventDefault();
-      editCard(key);
-    }
-  } else if (back) {
-    event.preventDefault();
-    if (selectedPage !== "accounts") showPage("accounts");
-  } else if (mod && event.key === "q") {
-    event.preventDefault();
-    settingsController.quit().catch((error) => notice(error, true));
-  } else if (mod && !event.altKey && !event.shiftKey && ["1", "2", "3", "4"].includes(event.key)) {
-    event.preventDefault();
-    // The pool is shared, so the proxy page switches in place; Grok's
-    // accounts have no proxy page.
-    const shortcut = P.poolShortcut(selectedPage, event.key);
-    if (shortcut.page) showPage(shortcut.page);
-    showPool(shortcut.pool);
-  } else if (mod && event.key === ",") {
-    event.preventDefault();
-    showPage("settings");
-  } else if (mod && !event.altKey && !event.shiftKey && TOOLBAR_SHORTCUTS[event.key]) {
-    // Always handled, so Cmd+R never reloads the page; a disabled button
-    // ignores its shortcut as it ignores clicks.
-    event.preventDefault();
-    if (selectedPage !== "accounts") showPage("accounts");
-    $(TOOLBAR_SHORTCUTS[event.key]).click();
-  }
+// Coport's panel shortcuts (keys.js).
+const keys = window.CopoolKeys.create({
+  document,
+  mac: navigator.userAgent.includes("Mac"),
+  menus,
+  get page() {
+    return selectedPage;
+  },
+  get collapsed() {
+    return collapsed;
+  },
+  get reordering() {
+    return reorderingAccounts;
+  },
+  get pool() {
+    return pool;
+  },
+  get controller() {
+    return accountsController;
+  },
+  get menuBarNavigation() {
+    return menuBarNavigation;
+  },
+  invoke: (command, args) => invoke(command, args),
+  showPage: (page) => showPage(page),
+  showPool: (next) => showPool(next),
+  editCard: (key) => editCard(key),
+  cancelEditing: () => cancelEditing(),
+  quit: () => settingsController.quit().catch((error) => notice(error, true)),
+  click: (id) => $(id).click(),
 });
+document.addEventListener("keydown", keys.onKeydown);
 /// Refreshes one account, or all without an id. As in the Swift app this
 /// takes no panel-wide lock: each card updates and becomes operable again as
 /// its own refresh lands ("copool-changed"), while the others stay usable.
@@ -1933,7 +1852,7 @@ window.__TAURI__.event
     menuBarNavigation = Boolean(payload?.keyboard);
     // Keys start on the panel, not in a text field left focused, where ←/→
     // would not move along the menu bar.
-    if (menuBarNavigation && document.activeElement?.closest?.(TEXT_ENTRY))
+    if (menuBarNavigation && document.activeElement?.closest?.(window.CopoolKeys.TEXT_ENTRY))
       document.activeElement.blur();
     if (panelHiddenAt && Date.now() - panelHiddenAt > PANEL_PAGE_TIMEOUT_MS)
       showPage("accounts", false);
