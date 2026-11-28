@@ -2,6 +2,8 @@
 
 2026-11-29（Windows CI 文件锁与续期测试）：Actions `46161743370` 的 Windows 核心测试有 19 项因 `accounts.json.lock` 报 Access is denied、1 项因续期取消过早失败；同次 macOS/Linux 通过。共享 `store::lock_accounts_file` 原先仅以追加模式打开文件，Windows 的 `File::lock` 不支持此句柄；现增加读取权限，保留追加、不截断及锁的生命周期。锁竞争测试的另一个句柄同样修正，并明确断言 `TryLockError::WouldBlock`，不再把权限错误当作正常竞争。Codex 的三项续期取消测试改为按用量开始或令牌轮换信号取消，保留内存续期、下次保存与新登录优先的断言；移除 30/50 毫秒调度假设，以 10 秒整体超时防止信号未到造成挂起（本地全量测试复现过相邻测试被过早取消后一直等待的问题）。macOS 上 `python3 scripts/test_rust.py --offline` 通过：核心 775 项通过、2 项忽略，desktop 9 项、UI 264 项通过，格式、UI 语法及独立 daemon 检查通过；daemon 仍有既有未使用代码警告。`cargo build -p copool-desktop --locked --offline` 亦通过。本地仅验证 macOS，Windows/Linux 的结果以 `.github/workflows/rust.yml` 对应 Actions 任务为准；未打包或安装，未重建预编译 daemon。
 
+2026-11-28（Codex 空闲窗口的二次确认）：官方 Codex 账号读到疑似 Plus 空闲窗口（用量 0、重置时间≈读取时刻＋5 小时）时会在 1.1 秒后再读一次，重置时间随时钟移动即为占位值、去掉倒计时；Sub2api 的 Codex 卡片原先只读一次，空闲窗口会显示并不存在的倒计时。该确认抽为 `usage::confirm_idle_window`（重置券的地址与解析抽为 `reset_credits_url`、`apply_reset_credits`），官方与 Sub2api 共用，官方行为不变；Sub2api 的 quota 接口每次实时查询 ChatGPT，故可二次读取，卡片的 `fetched_at` 仍为刷新时刻。
+
 2026-11-28（翻面时卡片留在原位）：provider 分组的背面比正面矮，列表滚到末尾附近时翻到背面，滚动位置被列表的新末端拉回，整页上跳、分组落到原位以下（官方卡片的背面更高，不受影响）。`turnCard` 现按布局位置（`offsetTop`，不受翻转与悬停放大的变换影响）把翻过的卡片滚回原位，滚不到时在编辑期间于列表末尾补足空白，编辑结束即撤去（规则为 `presentation.js` 的 `heldScroll`）。已在无头 Chrome 中用模拟接口与虚构卡片逐帧验证：列表不滚动、滚到中间、滚到末尾三种情况下，官方卡片、provider 分组和子卡片翻过去、翻回来都停在原位；未在 macOS WKWebView 中验证。子卡片按回车的规则不变：有背面的编辑自己，否则编辑分组。
 
 2026-11-28（Grok 新周期零用量）：只读核对报错直登账号的 `/billing?format=credits` 响应：HTTP 200，已切换到新的周周期，`currentPeriod` 和计费起止时间完整，但省略了 `creditUsagePercent` 和 `productUsage`，此前被误报为 `Grok reported no usage limit`。现在在计费起止时间可解析且结束晚于开始时，将省略的用量视为 0%；显式无效值、空响应与缺失或无效周期仍拒绝解析。保留周期重置时间和余额；刷新后替换上一周期用量并清除错误。macOS 上 Grok 相关 38 项测试通过（含周/月周期省略零值、无效响应、刷新恢复及不触发令牌续期），未在 Windows/Linux 实测，尚未打包或安装此修复。

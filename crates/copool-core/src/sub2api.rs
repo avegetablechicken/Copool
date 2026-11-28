@@ -2,7 +2,10 @@
 //! client for every pool. What every kind of provider does with its cards
 //! is `provider_accounts.rs`'s.
 use crate::provider_accounts::Account;
-use crate::{codex::config::Definition, pool::Pool, proxy_session, settings::Provider, usage};
+use crate::{
+    codex::config::Definition, models::UsageSnapshot, pool::Pool, proxy_session,
+    settings::Provider, usage, utils::now_unix_seconds,
+};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -380,16 +383,16 @@ impl Connection {
                     format!("{}/admin/accounts/{id}/usage", self.admin_base)
                 }
             };
-            let quota = async {
+            let ask = || async {
                 let response = client
-                    .get(quota_url)
+                    .get(&quota_url)
                     .bearer_auth(&token)
                     .send()
                     .await
                     .map_err(|e| usage::format_reqwest_error(&e))?;
                 payload(response).await
-            }
-            .await;
+            };
+            let quota = ask().await;
             match quota {
                 Ok(value) if pool != Pool::Codex => {
                     let usage = match pool {
@@ -419,7 +422,21 @@ impl Connection {
                         account.email = Some(email.to_owned());
                     }
                     account.account_id = value["account_id"].as_str().map(str::to_owned);
-                    match usage::parse_payload(value, now) {
+                    // Sub2api asks ChatGPT on every quota request: an idle
+                    // Plus window's placeholder is confirmed as the pool's
+                    // own accounts' is, each reading as of its answer.
+                    let first = usage::parse_payload(value, now_unix_seconds());
+                    let confirm = || async {
+                        usage::parse_payload(ask().await.ok()?, now_unix_seconds()).ok()
+                    };
+                    let confirmed = match first {
+                        Ok(first) => Ok(usage::confirm_idle_window(first, confirm).await),
+                        Err(e) => Err(e),
+                    };
+                    match confirmed.map(|usage| UsageSnapshot {
+                        fetched_at: now,
+                        ..usage
+                    }) {
                         Ok(usage) => {
                             account.plan_type = usage.plan_type.clone();
                             account.usage = Some(usage);
@@ -590,6 +607,65 @@ mod tests {
                 .all(|uri| uri.contains("/accounts/1/") || uri.contains("/accounts/2/")));
             server.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn an_idle_codex_plus_window_is_confirmed_as_the_pools_own_are() {
+        use axum::{extract::Request, routing::any, Json, Router};
+        use serde_json::json;
+        use std::sync::{Arc, Mutex};
+
+        let quotas = Arc::new(Mutex::new(0));
+        let asked = quotas.clone();
+        // Sub2api passes ChatGPT's idle Plus window on: empty, resetting
+        // five hours after each quota request.
+        let router = Router::new().fallback(any(move |request: Request| {
+            let asked = asked.clone();
+            async move {
+                let path = request.uri().path().to_owned();
+                let data = if path == "/api/v1/auth/login" {
+                    json!({"access_token": "admin"})
+                } else if path == "/api/v1/admin/accounts" {
+                    json!({"items": [{"id": 1, "status": "active", "platform": "openai",
+                        "type": "oauth"}], "pages": 1})
+                } else {
+                    *asked.lock().unwrap() += 1;
+                    let reset = crate::utils::now_unix_seconds() + 18000;
+                    json!({"plan_type": "plus", "rate_limit": {"primary_window": {
+                        "used_percent": 0, "limit_window_seconds": 18000, "reset_at": reset}}})
+                };
+                Json(json!({"code": 0, "data": data}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/api/v1", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let connection = super::Connection {
+            configuration: crate::settings::Provider {
+                provider_id: "p".into(),
+                username: "admin@example.com".into(),
+                password: "secret".into(),
+                ..Default::default()
+            },
+            definition: crate::codex::config::Definition {
+                id: "p".into(),
+                base_url: None,
+                wire_api: None,
+                env_key: None,
+                requires_openai_auth: None,
+            },
+            admin_base: base,
+        };
+        let fetched = connection
+            .fetch_accounts(Pool::Codex, None, 7)
+            .await
+            .unwrap();
+        let usage = fetched[0].usage.as_ref().unwrap();
+        assert_eq!(usage.five_hour.as_ref().unwrap().reset_at, None);
+        // The reading stays the refresh's.
+        assert_eq!(usage.fetched_at, 7);
+        assert_eq!(*quotas.lock().unwrap(), 2);
+        server.abort();
     }
 
     #[tokio::test]

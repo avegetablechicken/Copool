@@ -89,13 +89,9 @@ pub(crate) async fn fetch_usage_from_urls(
             |value| serde_json::from_value::<UsageApiResponse>(value).map_err(|e| e.to_string()),
         )
         .await?;
-    let mut snapshot = map_usage_payload(result.value);
-    if idle_window_candidate(&snapshot) {
-        // reset_at has whole-second precision. Cross a second boundary so
-        // an immediate confirmation can distinguish a moving placeholder
-        // from a fixed deadline, even when both requests are very fast.
-        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-        let confirmation = client
+    let snapshot = map_usage_payload(result.value);
+    let confirm = || async {
+        let response = client
             .get(&result.endpoint)
             .bearer_auth(access_token)
             .header("ChatGPT-Account-Id", account_id)
@@ -103,38 +99,17 @@ pub(crate) async fn fetch_usage_from_urls(
             .header("User-Agent", "codex-tools-swift/0.1")
             .header("Cache-Control", "no-cache")
             .send()
-            .await;
-        // Confirm only on the endpoint that answered. A failed confirmation
-        // must not discard the successful reading or try other origins.
-        if let Ok(response) = confirmation {
-            if response.status().is_success() {
-                if let Ok(payload) = response.json::<UsageApiResponse>().await {
-                    let mut latest = map_usage_payload(payload);
-                    if moving_idle_window(&snapshot, &latest) {
-                        if let Some(window) = latest.five_hour.as_mut() {
-                            // A rolling placeholder is not an actual reset.
-                            // Preserve the window and quota, but omit its timer.
-                            window.reset_at = None;
-                        }
-                    }
-                    snapshot = latest;
-                }
-            }
-        }
-    }
-    // The /api/codex/usage fallback has no sibling reset endpoint; as in the
-    // Swift usage service, reset credits always come from backend-api/wham.
-    let reset_url = if let Some(origin) = result.endpoint.strip_suffix(CODEX_USAGE_PATH) {
-        Some(format!(
-            "{origin}{BACKEND_API_PREFIX}/wham/rate-limit-reset-credits"
-        ))
-    } else {
-        result
-            .endpoint
-            .rsplit_once('/')
-            .map(|(base, _)| format!("{base}/rate-limit-reset-credits"))
+            .await
+            .ok()
+            .filter(|response| response.status().is_success())?;
+        response
+            .json::<UsageApiResponse>()
+            .await
+            .ok()
+            .map(map_usage_payload)
     };
-    if let Some(reset_url) = reset_url {
+    let mut snapshot = confirm_idle_window(snapshot, confirm).await;
+    if let Some(reset_url) = reset_credits_url(&result.endpoint) {
         if let Ok(response) = client
             .get(reset_url)
             .bearer_auth(access_token)
@@ -147,15 +122,67 @@ pub(crate) async fn fetch_usage_from_urls(
         {
             if response.status().is_success() {
                 if let Ok(value) = response.json::<serde_json::Value>().await {
-                    if let Some(count) = reset_count(&value) {
-                        snapshot.remaining_reset_count = Some(count);
-                        snapshot.reset_expiries = reset_expiries(&value);
-                    }
+                    apply_reset_credits(&mut snapshot, &value);
                 }
             }
         }
     }
     Ok(snapshot)
+}
+
+/// A reading whose five-hour window may be the placeholder ChatGPT reports
+/// for an idle Plus window (empty, resetting five hours from now), read
+/// again through `confirm` across a second boundary: a reset that moved
+/// with the clock is no reset, and the window keeps its quota without a
+/// timer. Each reading's `fetched_at` is when it was answered. A failed
+/// confirmation (`None`) keeps the first reading.
+pub(crate) async fn confirm_idle_window<F, Fut>(first: UsageSnapshot, confirm: F) -> UsageSnapshot
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<UsageSnapshot>>,
+{
+    if !idle_window_candidate(&first) {
+        return first;
+    }
+    // reset_at has whole-second precision. Cross a second boundary so
+    // an immediate confirmation can distinguish a moving placeholder
+    // from a fixed deadline, even when both requests are very fast.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    // Confirm only on the endpoint that answered. A failed confirmation
+    // must not discard the successful reading or try other origins.
+    let Some(mut latest) = confirm().await else {
+        return first;
+    };
+    if moving_idle_window(&first, &latest) {
+        if let Some(window) = latest.five_hour.as_mut() {
+            // A rolling placeholder is not an actual reset.
+            // Preserve the window and quota, but omit its timer.
+            window.reset_at = None;
+        }
+    }
+    latest
+}
+/// Where the reset credits of a usage endpoint are. The /api/codex/usage
+/// fallback has no sibling reset endpoint; as in the Swift usage service,
+/// reset credits always come from backend-api/wham.
+pub(crate) fn reset_credits_url(endpoint: &str) -> Option<String> {
+    if let Some(origin) = endpoint.strip_suffix(CODEX_USAGE_PATH) {
+        Some(format!(
+            "{origin}{BACKEND_API_PREFIX}/wham/rate-limit-reset-credits"
+        ))
+    } else {
+        endpoint
+            .rsplit_once('/')
+            .map(|(base, _)| format!("{base}/rate-limit-reset-credits"))
+    }
+}
+/// Takes the reset credits a reset-credits answer reports, when it reports
+/// how many are left.
+pub(crate) fn apply_reset_credits(snapshot: &mut UsageSnapshot, value: &serde_json::Value) {
+    if let Some(count) = reset_count(value) {
+        snapshot.remaining_reset_count = Some(count);
+        snapshot.reset_expiries = reset_expiries(value);
+    }
 }
 
 fn idle_window_candidate(snapshot: &UsageSnapshot) -> bool {
@@ -497,6 +524,37 @@ mod idle_window_tests {
             now,
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_moving_placeholder_loses_its_timer_and_a_fixed_reset_keeps_it() {
+        let now = now_unix_seconds();
+        let first = reading(now, now + FIVE_HOUR_SECONDS, 0.0);
+        // The reset moved with the clock: a placeholder.
+        let moved = confirm_idle_window(first.clone(), || async {
+            Some(reading(now + 2, now + 2 + FIVE_HOUR_SECONDS, 0.0))
+        })
+        .await;
+        assert_eq!(moved.five_hour.as_ref().unwrap().reset_at, None);
+        assert_eq!(moved.five_hour.as_ref().unwrap().used_percent, 0.0);
+        // It stayed: a window that started.
+        let fixed = confirm_idle_window(first.clone(), || async {
+            Some(reading(now + 2, now + FIVE_HOUR_SECONDS, 0.0))
+        })
+        .await;
+        assert_eq!(
+            fixed.five_hour.as_ref().unwrap().reset_at,
+            Some(now + FIVE_HOUR_SECONDS)
+        );
+        assert_eq!(fixed.fetched_at, now + 2);
+        // A failed confirmation keeps the first reading.
+        let failed = confirm_idle_window(first.clone(), || async { None }).await;
+        assert_eq!(failed.fetched_at, now);
+        assert!(failed.five_hour.unwrap().reset_at.is_some());
+        // A window in use is never asked again.
+        let used = reading(now, now + FIVE_HOUR_SECONDS, 3.0);
+        let kept = confirm_idle_window(used, || async { panic!("asked again") }).await;
+        assert!(kept.five_hour.unwrap().reset_at.is_some());
     }
 
     #[test]
