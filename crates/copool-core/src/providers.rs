@@ -4,7 +4,7 @@
 //! each named after the `config.toml` provider whose gateway it serves.
 use crate::{
     application::{Application, SAY_HI_REQUIRES_PLUS},
-    codex_config,
+    codex::config,
     models::AccountSummary,
     pool::Pool,
     provider_registry::{upstream, Adapter, ProviderRecord, Route},
@@ -91,12 +91,12 @@ impl Application {
     pub fn codex_config_path(&self) -> std::path::PathBuf {
         self.paths.codex_auth.with_file_name("config.toml")
     }
-    pub fn provider_definitions(&self) -> Vec<codex_config::Definition> {
-        codex_config::definitions(&self.codex_config_path())
+    pub fn provider_definitions(&self) -> Vec<config::Definition> {
+        config::definitions(&self.codex_config_path())
     }
     /// The `config.toml` provider a Codex provider is named after; never the
     /// official one.
-    fn codex_definition(&self, name: &str) -> Result<codex_config::Definition> {
+    fn codex_definition(&self, name: &str) -> Result<config::Definition> {
         if name.eq_ignore_ascii_case("openai") {
             return Err(sub2api::PROVIDER_NOT_FOUND.into());
         }
@@ -108,7 +108,7 @@ impl Application {
     /// The id of the Codex provider Codex uses: the one named after the
     /// provider `config.toml` selects, unless that is the official one.
     pub(crate) fn codex_provider_in_use(&self) -> Result<Option<String>> {
-        let selected = codex_config::resolve_path(&self.codex_config_path());
+        let selected = config::resolve_path(&self.codex_config_path());
         if selected.is_official() {
             return Ok(None);
         }
@@ -134,11 +134,11 @@ impl Application {
         let legacy = settings.sub2_api_provider.providers.clone();
         if !legacy.is_empty() {
             let records: Vec<ProviderRecord> = legacy.iter().map(migrated_codex_provider).collect();
-            let mut store = crate::codex_pool::load(&self.paths)?;
+            let mut store = crate::codex::load(&self.paths)?;
             if store.providers.is_empty() {
                 store.providers = records;
                 crate::persistence::write_json(
-                    &self.paths.data_dir.join(crate::codex_pool::FILE),
+                    &self.paths.data_dir.join(crate::codex::FILE),
                     &store,
                 )?;
             }
@@ -419,7 +419,7 @@ impl Application {
 const CODEX_PROVIDERS_MIGRATED: &str = "codexProvidersMigrated";
 /// The Codex pool's providers, as its account store keeps them.
 pub(crate) fn codex_providers(paths: &crate::Paths) -> Result<Vec<ProviderRecord>> {
-    Ok(crate::codex_pool::load(paths)?.providers)
+    Ok(crate::codex::load(paths)?.providers)
 }
 /// A Codex provider the settings kept, as the account store keeps it: named
 /// after its `config.toml` provider, with its cached accounts.
@@ -612,7 +612,7 @@ mod tests {
         earlier.secrets.set(ID, "secret").unwrap();
         let before = earlier.earlier_view();
         let app = earlier.open();
-        let providers = earlier.file(crate::codex_pool::FILE)["providers"].clone();
+        let providers = earlier.file(crate::codex::FILE)["providers"].clone();
         assert_eq!(
             providers,
             json!([{"id": ID, "name": "my", "baseURL": "", "adminBaseURL": "https://admin.test/api/v1",
@@ -719,10 +719,10 @@ mod tests {
         .await
         .unwrap();
         drop(app);
-        let stored = earlier.file(crate::codex_pool::FILE)["providers"].clone();
+        let stored = earlier.file(crate::codex::FILE)["providers"].clone();
         let settings = earlier.file("settings.json");
         drop(earlier.open());
-        assert_eq!(earlier.file(crate::codex_pool::FILE)["providers"], stored);
+        assert_eq!(earlier.file(crate::codex::FILE)["providers"], stored);
         assert_eq!(earlier.file("settings.json"), settings);
         assert_eq!(
             earlier
@@ -743,7 +743,7 @@ mod tests {
         )
         .unwrap();
         drop(earlier.open());
-        assert_eq!(earlier.file(crate::codex_pool::FILE)["providers"], stored);
+        assert_eq!(earlier.file(crate::codex::FILE)["providers"], stored);
         assert_eq!(
             earlier.file("settings.json")["codexProvidersMigrated"],
             true

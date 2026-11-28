@@ -1,4 +1,4 @@
-use crate::{models::UsageSnapshot, workspaces::Metadata};
+use crate::{codex::workspaces::Metadata, models::UsageSnapshot};
 use serde_json::Value;
 use std::{future::Future, pin::Pin};
 pub(crate) type Response<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
@@ -15,7 +15,7 @@ pub(crate) struct Network {
 impl Network {
     pub(crate) fn origin(&self) -> String {
         crate::usage::chatgpt_base_origin(
-            crate::codex_config::chatgpt_base_url(&self.codex_config).as_deref(),
+            crate::codex::config::chatgpt_base_url(&self.codex_config).as_deref(),
         )
     }
 }
@@ -51,7 +51,7 @@ impl AccountNetwork for Network {
                 "https://chatgpt.com/backend-api/accounts".into(),
             ];
             endpoints.dedup();
-            crate::workspaces::Client::new(client, endpoints)
+            crate::codex::workspaces::Client::new(client, endpoints)
                 .fetch(token)
                 .await
         })

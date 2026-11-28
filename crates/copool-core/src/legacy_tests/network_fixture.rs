@@ -1,7 +1,7 @@
 use crate::{
     account_network::{AccountNetwork, Response},
+    codex::workspaces::Metadata,
     models::UsageSnapshot,
-    workspaces::Metadata,
 };
 use serde_json::{json, Value};
 use std::sync::Mutex;

@@ -80,7 +80,7 @@ fn testUsageDebugResponseBodyReturnsRawJSONPayload() {
     );
 }
 
-use crate::codex_config::*;
+use crate::codex::config::*;
 #[test]
 fn testCodexModelProviderResolverUsesActiveProfileProviderAndBaseURL() {
     let p=resolve("model_provider = \"openai\"\nprofile = \"work\"\n[profiles.work]\nmodel_provider = \"my\"\n[model_providers.my]\nbase_url = \"https://sub2.test:6060/v1/\"\n");

@@ -10,7 +10,7 @@
 //! pool's tool stays with the pool.
 use crate::{
     application::Application,
-    codex_config::Definition,
+    codex::config::Definition,
     pool::Pool,
     sub2api::{self, Account, Member},
 };

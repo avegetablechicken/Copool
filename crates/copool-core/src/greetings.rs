@@ -477,7 +477,7 @@ mod tests {
         };
         let app = Application::open_with_secrets(paths.clone(), Arc::new(NoSecrets)).unwrap();
         write_json(
-            &app.paths.data_dir.join(crate::codex_pool::FILE),
+            &app.paths.data_dir.join(crate::codex::FILE),
             &serde_json::json!({"accounts":[{
                 "id":"a", "label":"test", "workspaceId":"a", "plan":"plus",
                 "addedAt":0, "updatedAt":0, "document":{}

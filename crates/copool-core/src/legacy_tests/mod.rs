@@ -47,8 +47,8 @@ fn stored(id: &str, principal: &str, workspace: &str) -> serde_json::Value {
 /// migration to its own store reads them.
 fn save_fixture(app: &crate::Application, value: serde_json::Value) {
     crate::persistence::write_json(&app.paths.data_dir.join("accounts.json"), &value).unwrap();
-    let _ = std::fs::remove_file(app.paths.data_dir.join(crate::codex_pool::FILE));
-    crate::codex_pool::migrate(&app.paths).unwrap();
+    let _ = std::fs::remove_file(app.paths.data_dir.join(crate::codex::FILE));
+    crate::codex::migrate(&app.paths).unwrap();
 }
 
 mod RemoteServerConfigurationTests;

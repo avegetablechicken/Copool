@@ -1,5 +1,5 @@
 use super::http_fixture::serve;
-use crate::workspaces::*;
+use crate::codex::workspaces::*;
 use axum::http::StatusCode;
 use serde_json::json;
 use std::sync::{

@@ -274,11 +274,11 @@ fn configuration(app: State<'_, App>) -> Result<copool_core::settings::Settings,
     app.configuration()
 }
 #[tauri::command]
-fn current_provider(app: State<'_, App>) -> copool_core::codex_config::Definition {
-    copool_core::codex_config::resolve_path(&app.codex_config_path())
+fn current_provider(app: State<'_, App>) -> copool_core::codex::config::Definition {
+    copool_core::codex::config::resolve_path(&app.codex_config_path())
 }
 #[tauri::command]
-fn provider_definitions(app: State<'_, App>) -> Vec<copool_core::codex_config::Definition> {
+fn provider_definitions(app: State<'_, App>) -> Vec<copool_core::codex::config::Definition> {
     app.provider_definitions()
 }
 /// A pool's Sub2api providers, without their secrets.

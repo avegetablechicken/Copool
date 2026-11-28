@@ -28,7 +28,7 @@ pub use application::{
     SwitchExecution,
 };
 pub use models::{AccountSummary, ApiProxyStatus, CreditSnapshot, UsageSnapshot, UsageWindow};
-mod codex_pool;
+pub mod codex;
 mod login_store;
 mod plan_tags;
 mod pool;
@@ -62,10 +62,6 @@ mod repository;
 #[path = "../../../resources/proxyd-src/src/proxy_session.rs"]
 mod proxy_session;
 
-pub mod codex_config;
-
-pub mod workspaces;
-
 pub mod credentials;
 pub mod sub2api;
 mod vault;
@@ -83,11 +79,7 @@ mod remote_runtime;
 
 pub mod tunnel;
 
-mod workspace_directory;
-
 mod account_network;
-
-mod import_login;
 
 pub mod claude;
 

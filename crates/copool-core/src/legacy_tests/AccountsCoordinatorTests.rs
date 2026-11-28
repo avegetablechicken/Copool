@@ -175,7 +175,7 @@ async fn testMigrationTakesWorkspaceMetadataFromAuthJSON() {
 #[test]
 fn testWorkspaceMetadataCancellationPrefersFriendlyMessage() {
     assert_eq!(
-        crate::workspaces::preferred_failure(&[
+        crate::codex::workspaces::preferred_failure(&[
             "https://chatgpt.com/backend-api/accounts -> cancelled".into()
         ])
         .as_deref(),
@@ -185,7 +185,7 @@ fn testWorkspaceMetadataCancellationPrefersFriendlyMessage() {
 #[test]
 fn testWorkspaceMetadataTimeoutPrefersFriendlyMessage() {
     assert_eq!(
-        crate::workspaces::preferred_failure(&[
+        crate::codex::workspaces::preferred_failure(&[
             "https://chatgpt.com/backend-api/accounts -> The request timed out.".into()
         ])
         .as_deref(),
@@ -194,7 +194,7 @@ fn testWorkspaceMetadataTimeoutPrefersFriendlyMessage() {
 }
 #[test]
 fn testWorkspaceMetadataHTMLForbiddenPrefersFriendlyMessage() {
-    assert_eq!(crate::workspaces::preferred_failure(&["https://chatgpt.com/backend-api/accounts -> 403: <html>forbidden</html>".into()]).as_deref(),Some("Workspace discovery was denied. Refresh or re-import this account auth, then try again."));
+    assert_eq!(crate::codex::workspaces::preferred_failure(&["https://chatgpt.com/backend-api/accounts -> 403: <html>forbidden</html>".into()]).as_deref(),Some("Workspace discovery was denied. Refresh or re-import this account auth, then try again."));
 }
 
 #[tokio::test]
@@ -229,7 +229,7 @@ async fn testAccountProxyIsPersistedUsedForRefreshAndCanBeCleared() {
     let saved = app.codex_load().unwrap();
     assert_eq!(saved.accounts[0].proxy_url, "http://127.0.0.1:8080");
     assert_eq!(saved.accounts[1].proxy_url, "socks5://127.0.0.1:1080");
-    let round: crate::codex_pool::Store =
+    let round: crate::codex::Store =
         serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
     assert_eq!(
         round
@@ -600,8 +600,8 @@ fn team(id: &str, workspace: &str, name: Option<&str>) -> Value {
     }
     a
 }
-fn metadata(id: &str, name: &str, structure: &str) -> crate::workspaces::Metadata {
-    crate::workspaces::Metadata {
+fn metadata(id: &str, name: &str, structure: &str) -> crate::codex::workspaces::Metadata {
+    crate::codex::workspaces::Metadata {
         account_id: id.into(),
         workspace_name: Some(name.into()),
         structure: Some(structure.into()),
@@ -722,7 +722,7 @@ async fn testRefreshAllUsageSeriallyStreamsPartialAccountUpdates() {
     let paths = app.paths.clone();
     app.on_change(std::sync::Arc::new(move || {
         count.lock().unwrap().push(
-            crate::codex_pool::load(&paths)
+            crate::codex::load(&paths)
                 .unwrap()
                 .accounts
                 .iter()
@@ -996,7 +996,7 @@ async fn testTrayMenuModelRecurringRefreshDoesNotTriggerWorkspaceMetadataLookup(
         json!({"accounts":[team("a","a",None)],"currentAccountId":"a"}),
     );
     // Each round finds the account last refreshed an interval ago or more.
-    let path = app.paths.data_dir.join(crate::codex_pool::FILE);
+    let path = app.paths.data_dir.join(crate::codex::FILE);
     for tick in [0, 1, 6] {
         let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         saved["accounts"][0]["updatedAt"] = json!(0);

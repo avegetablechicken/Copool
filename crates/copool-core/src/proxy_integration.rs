@@ -1,8 +1,8 @@
-use crate::{application::Paths, codex_config, models::StoredAccount};
+use crate::{application::Paths, codex::config, models::StoredAccount};
 use serde_json::json;
 use std::fs;
 
-fn api_key(definition: &codex_config::Definition, paths: &Paths) -> Option<String> {
+fn api_key(definition: &config::Definition, paths: &Paths) -> Option<String> {
     if let Some(name) = &definition.env_key {
         if let Ok(value) = std::env::var(name) {
             if !value.trim().is_empty() {
@@ -224,12 +224,12 @@ pub(crate) fn candidates(paths: &Paths) -> Result<Vec<StoredAccount>, String> {
 }
 pub(crate) fn candidates_with_keys(
     paths: &Paths,
-    resolve_key: impl Fn(&codex_config::Definition) -> Option<String>,
+    resolve_key: impl Fn(&config::Definition) -> Option<String>,
 ) -> Result<Vec<StoredAccount>, String> {
     let providers = crate::providers::codex_providers(paths)?;
     let config = paths.codex_auth.with_file_name("config.toml");
-    let defs = codex_config::definitions(&config);
-    let current = codex_config::resolve_path(&config);
+    let defs = config::definitions(&config);
+    let current = config::resolve_path(&config);
     let mut result = vec![];
     // Each provider by the `config.toml` provider it is named after.
     for provider in providers {

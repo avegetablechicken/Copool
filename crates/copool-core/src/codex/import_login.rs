@@ -1,5 +1,5 @@
 use crate::{
-    account_network, codex_pool::CodexLogins, login_store::LoginPool, pool_login::codex,
+    account_network, codex::CodexLogins, login_store::LoginPool, pool_login::codex,
     utils::now_unix_seconds, Application,
 };
 use serde_json::Value;
@@ -16,7 +16,7 @@ impl Application {
         if workspace.is_some_and(|id| id != extracted.account_id) {
             return Err("error.oauth.workspace_mismatch".into());
         }
-        let same = |a: &crate::codex_pool::Stored| CodexLogins::same_login(&a.document, &document);
+        let same = |a: &crate::codex::Stored| CodexLogins::same_login(&a.document, &document);
         let store = self.codex_load()?;
         let existing = store.accounts.iter().find(|a| same(a)).cloned();
         // A new account waits for a manual refresh unless the user opted in.
@@ -84,7 +84,7 @@ impl Application {
             if let Ok(rows) = self.network.workspaces(&token, &proxy).await {
                 if let Some(row) = rows.iter().find(|row| {
                     row.account_id.eq_ignore_ascii_case(&extracted.account_id)
-                        && crate::workspace_directory::visible(row)
+                        && crate::codex::workspace_directory::visible(row)
                 }) {
                     name = row.workspace_name.clone();
                 }

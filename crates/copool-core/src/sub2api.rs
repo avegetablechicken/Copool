@@ -1,7 +1,7 @@
 //! Sub2api providers, whose OAuth accounts join a pool as cards: one
 //! client for both pools, and what both do with their providers' cards.
 use crate::{
-    codex_config::Definition,
+    codex::config::Definition,
     models::{AccountSummary, UsageSnapshot},
     pool::Pool,
     proxy_session,
@@ -783,7 +783,7 @@ mod tests {
                     password: "secret".into(),
                     ..Default::default()
                 },
-                definition: crate::codex_config::Definition {
+                definition: crate::codex::config::Definition {
                     id: "p".into(),
                     base_url: None,
                     wire_api: None,
@@ -869,7 +869,7 @@ mod tests {
                 password: password.into(),
                 ..Default::default()
             },
-            definition: crate::codex_config::Definition {
+            definition: crate::codex::config::Definition {
                 id: "p".into(),
                 base_url: None,
                 wire_api: None,

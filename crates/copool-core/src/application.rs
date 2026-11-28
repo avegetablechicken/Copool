@@ -440,7 +440,7 @@ impl Application {
             _instance_lock: instance_lock,
         };
         app.mark_kept_tunnel_token()?;
-        crate::codex_pool::migrate(&app.paths)?;
+        crate::codex::migrate(&app.paths)?;
         crate::claude::migrate(&app.paths)?;
         app.migrate_codex_providers()?;
         app.preferences()?;
@@ -522,14 +522,14 @@ impl Application {
         // Always resolved here: the engine's own fallback reads ~/.codex, not
         // the Codex configuration Copool uses.
         storage.upstream_base_url = Some(crate::usage::chatgpt_base_origin(
-            crate::codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
+            crate::codex::config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
         ));
         // The pool keeps its logins, renews them and refreshes their usage.
         storage.read_store = false;
         storage.refresh_usage = false;
         let paths = self.paths.clone();
         storage.provider_candidates = Some(Arc::new(move || {
-            let mut candidates = crate::codex_pool::proxy_candidates(&paths)?;
+            let mut candidates = crate::codex::proxy_candidates(&paths)?;
             candidates.extend(crate::proxy_integration::candidates(&paths)?);
             Ok(candidates)
         }));

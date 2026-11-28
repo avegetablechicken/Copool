@@ -9,7 +9,7 @@ async fn testImportCurrentAuthKeepsDistinctPrincipalsForSameAccountID() {
         app.import_current(Pool::Codex).await.unwrap();
     }
     let saved: Value = serde_json::from_slice(
-        &std::fs::read(app.paths.data_dir.join(crate::codex_pool::FILE)).unwrap(),
+        &std::fs::read(app.paths.data_dir.join(crate::codex::FILE)).unwrap(),
     )
     .unwrap();
     let mut keys = saved["accounts"]
@@ -74,7 +74,7 @@ async fn testListAccountsFollowsAuthChangedOutsideCopool() {
     assert_eq!(accounts.iter().filter(|a| a.is_current).count(), 1);
     assert_eq!(accounts.iter().find(|a| a.is_current).unwrap().id, "acct-2");
     let saved: Value = serde_json::from_slice(
-        &std::fs::read(app.paths.data_dir.join(crate::codex_pool::FILE)).unwrap(),
+        &std::fs::read(app.paths.data_dir.join(crate::codex::FILE)).unwrap(),
     )
     .unwrap();
     assert_eq!(saved["currentAccountId"], "acct-2");
@@ -107,7 +107,7 @@ async fn testImportCurrentAuthPrefersExactPrincipalMatchOverLegacyWildcardRow() 
     .unwrap();
     app.import_current(Pool::Codex).await.unwrap();
     let saved: Value = serde_json::from_slice(
-        &std::fs::read(app.paths.data_dir.join(crate::codex_pool::FILE)).unwrap(),
+        &std::fs::read(app.paths.data_dir.join(crate::codex::FILE)).unwrap(),
     )
     .unwrap();
     let accounts = saved["accounts"].as_array().unwrap();

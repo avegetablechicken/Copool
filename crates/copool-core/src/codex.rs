@@ -2,12 +2,16 @@
 //! through `crate::login_store`, and the one Codex uses, its `auth.json`.
 //! An account is one workspace of a ChatGPT login (`pool_login::codex`);
 //! its workspace may be deactivated, and the pool keeps a directory of the
-//! workspaces it has seen (`crate::workspace_directory`). Its Sub2api
+//! workspaces it has seen (`workspace_directory`). Its Sub2api
 //! providers are kept beside the accounts (`crate::providers`).
+pub mod config;
+mod import_login;
+mod workspace_directory;
+pub mod workspaces;
+
 use crate::{
     account_network,
     application::{Application, Paths, SwitchExecution},
-    codex_config,
     login_store::{Account, Asked, LoginPool, Logins, Standing},
     models::{AccountSummary, Renewal, StoredAccount, UsageSnapshot, RENEWAL_OFF},
     persistence::write_json,
@@ -219,7 +223,7 @@ pub(crate) fn proxy_candidates(paths: &Paths) -> Result<Vec<StoredAccount>> {
     let store = load(paths)?;
     let settings = crate::repository::load_settings(&paths.data_dir.join("settings.json"))?;
     let official =
-        codex_config::resolve_path(&paths.codex_auth.with_file_name("config.toml")).is_official();
+        config::resolve_path(&paths.codex_auth.with_file_name("config.toml")).is_official();
     let current = store
         .current_account_id
         .as_deref()
@@ -413,7 +417,7 @@ impl Application {
     /// current while Codex is on a provider, whose cards then are.
     pub(crate) async fn codex_accounts(&self) -> Result<Vec<AccountSummary>> {
         let store = self.codex_logins().followed().await?;
-        let official = codex_config::resolve_path(&self.codex_config_path()).is_official();
+        let official = config::resolve_path(&self.codex_config_path()).is_official();
         let mut summaries: Vec<_> = store
             .accounts
             .iter()
@@ -536,7 +540,7 @@ impl Application {
                 return Err("Account is deactivated".into());
             }
             // Codex selects the `config.toml` provider it is named after.
-            codex_config::switch(&self.codex_config_path(), &provider.name)?;
+            config::switch(&self.codex_config_path(), &provider.name)?;
             self.publish();
             drop(_op);
             let mut execution = self.after_switch(Pool::Codex, None).await?;
@@ -566,16 +570,16 @@ impl Application {
                 KeychainAccess::Interactive,
                 "auth-before-switch.json",
                 |_| {
-                    let selected = codex_config::resolve_path(&config);
+                    let selected = config::resolve_path(&config);
                     if selected.is_official() {
                         return Ok(None);
                     }
-                    codex_config::switch(&config, "openai")?;
+                    config::switch(&config, "openai")?;
                     Ok(Some(selected.id))
                 },
                 |left: Option<String>| {
                     if let Some(provider) = left {
-                        let _ = codex_config::switch(&config, &provider);
+                        let _ = config::switch(&config, &provider);
                     }
                 },
                 |_| {},
@@ -603,7 +607,7 @@ impl Application {
         }
         let credential = if let Some(provider) = auth.get("copoolProvider") {
             let provider = provider["id"].as_str().ok_or("Invalid provider")?;
-            codex_config::switch(&self.codex_config_path(), provider)?;
+            config::switch(&self.codex_config_path(), provider)?;
             self.publish();
             None
         } else {
@@ -618,7 +622,7 @@ impl Application {
     /// Whether following the proxy to the account would switch Codex: to
     /// another provider, or to a known account it does not use.
     fn codex_proxy_switches(&self, id: &str, auth: &Value) -> Result<bool> {
-        let config = codex_config::resolve_path(&self.codex_config_path());
+        let config = config::resolve_path(&self.codex_config_path());
         if let Some(provider) = auth.get("copoolProvider") {
             let provider = provider["id"].as_str().ok_or("Invalid provider")?;
             return Ok(!config.id.eq_ignore_ascii_case(provider));
@@ -670,7 +674,7 @@ impl Application {
             Err("Provided authentication token is expired".into())
         } else {
             let base = crate::usage::chatgpt_base_origin(
-                codex_config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
+                config::chatgpt_base_url(&self.codex_config_path()).as_deref(),
             );
             crate::proxy_service::say_hi(&base, auth, &self.account_proxy(&account.proxy_url)?)
                 .await
@@ -848,334 +852,4 @@ impl Application {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        account_network::{AccountNetwork, Response},
-        workspaces::Metadata,
-    };
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use std::sync::Mutex;
-
-    /// A token, its claims readable: `token` names it to the tests.
-    fn token(name: &str, expires: Option<i64>) -> String {
-        let mut claims = json!({"token": name});
-        if let Some(expires) = expires {
-            claims["exp"] = expires.into();
-        }
-        format!(
-            "e30.{}.test",
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
-        )
-    }
-    fn name_of(token: &str) -> Option<String> {
-        let claims = codex::decode_jwt_payload(token).ok()?;
-        claims["token"].as_str().map(str::to_owned)
-    }
-    fn timestamp(at: i64) -> String {
-        chrono::DateTime::from_timestamp(at, 0)
-            .unwrap()
-            .to_rfc3339()
-    }
-
-    /// ChatGPT, answering by the access token: those named "expired..." are
-    /// refused, and a renewal of `user`'s login hands out "fresh-<user>".
-    #[derive(Default)]
-    struct Fake {
-        renewals: Mutex<usize>,
-        /// What Codex writes to `auth.json` while a renewal is asked.
-        meanwhile: Mutex<Option<(std::path::PathBuf, Value)>>,
-    }
-    impl AccountNetwork for Fake {
-        fn usage<'a>(&'a self, auth: &'a Value, _: &'a str) -> Response<'a, UsageSnapshot> {
-            Box::pin(async move {
-                let access = codex::extract_auth(auth)?.access_token;
-                if name_of(&access).is_some_and(|n| n.starts_with("expired")) {
-                    return Err("token_expired".into());
-                }
-                Ok(
-                    serde_json::from_value(json!({"fetchedAt": now_unix_seconds(),
-                    "fiveHour": {"usedPercent": 10, "windowSeconds": 18000},
-                    "oneWeek": {"usedPercent": 20, "windowSeconds": 604800}}))
-                    .unwrap(),
-                )
-            })
-        }
-        fn refresh<'a>(&'a self, auth: &'a Value, _: &'a str) -> Response<'a, Value> {
-            *self.renewals.lock().unwrap() += 1;
-            if let Some((path, document)) = self.meanwhile.lock().unwrap().take() {
-                write_json(&path, &document).unwrap();
-            }
-            Box::pin(async move {
-                let user = codex::extract_auth(auth)?.principal_id.unwrap_or_default();
-                let mut renewed = auth.clone();
-                let now = now_unix_seconds();
-                renewed["tokens"]["access_token"] =
-                    token(&format!("fresh-{user}"), Some(now + 3600)).into();
-                renewed["last_refresh"] = timestamp(now).into();
-                Ok(renewed)
-            })
-        }
-        fn workspaces<'a>(&'a self, _: &'a str, _: &'a str) -> Response<'a, Vec<Metadata>> {
-            Box::pin(async { Ok(vec![]) })
-        }
-    }
-
-    /// The Codex pool as the store's suite drives it.
-    struct Fixture {
-        app: Application,
-        fake: std::sync::Arc<Fake>,
-        _dir: tempfile::TempDir,
-    }
-    impl crate::login_store::suite::Fixture for Fixture {
-        const POOL: Pool = Pool::Codex;
-        const LIVE_UNREADABLE: &'static str = <CodexLogins as LoginPool>::LIVE_UNREADABLE;
-        async fn open(request_new_accounts: bool) -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            let mut app = Application::open(Paths {
-                data_dir: dir.path().join("data"),
-                codex_auth: dir.path().join("codex/auth.json"),
-            })
-            .unwrap();
-            let fake = std::sync::Arc::new(Fake::default());
-            app.network = fake.clone();
-            let preferences = crate::Preferences {
-                request_new_accounts,
-                ..app.preferences().unwrap()
-            };
-            app.save_preferences(preferences).await.unwrap();
-            Self {
-                app,
-                fake,
-                _dir: dir,
-            }
-        }
-        fn app(&self) -> &Application {
-            &self.app
-        }
-        /// `user`'s login to their workspace, refreshed an hour before its
-        /// token expires.
-        fn login(user: &str, access: &str, expires: i64) -> Value {
-            let id = format!(
-                "e30.{}.test",
-                URL_SAFE_NO_PAD.encode(
-                    serde_json::to_vec(
-                        &json!({"sub": user, "email": format!("{user}@example.test"),
-                        "https://api.openai.com/auth": {"chatgpt_account_id": format!("ws-{user}"),
-                            "chatgpt_plan_type": "plus"}})
-                    )
-                    .unwrap()
-                )
-            );
-            json!({"auth_mode": "chatgpt", "last_refresh": timestamp(expires - 3600),
-                "tokens": {"access_token": token(access, Some(expires)),
-                    "refresh_token": format!("refresh-{user}"), "id_token": id,
-                    "account_id": format!("ws-{user}")}})
-        }
-        fn with_refresh(login: &Value, refresh: &str) -> Value {
-            let mut login = login.clone();
-            login["tokens"]["refresh_token"] = refresh.into();
-            login
-        }
-        fn without_expiry(login: &Value) -> Value {
-            let mut login = login.clone();
-            let access = login["tokens"]["access_token"].as_str().unwrap().to_owned();
-            login["tokens"]["access_token"] = token(&name_of(&access).unwrap(), None).into();
-            login
-        }
-        fn no_login() -> Value {
-            json!({"tokens": {"access_token": "", "account_id": "ws-x"}})
-        }
-        fn access(document: &Value) -> Option<String> {
-            name_of(&CodexLogins::access_token(document)?)
-        }
-        fn renewed(user: &str) -> String {
-            format!("fresh-{user}")
-        }
-        fn sign_in(&self, login: &Value) {
-            write_json(&self.app.paths.codex_auth, login).unwrap();
-        }
-        fn live(&self) -> Value {
-            self.app.codex_read_live().unwrap().unwrap()
-        }
-        fn corrupt_live(&self) {
-            fs::write(&self.app.paths.codex_auth, b"not a login").unwrap();
-        }
-        fn delay_live_reads(&self, ms: u64) {
-            self.app
-                .codex_live_read_delay_ms
-                .store(ms, std::sync::atomic::Ordering::Relaxed);
-        }
-        fn meanwhile(&self, login: Value) {
-            *self.fake.meanwhile.lock().unwrap() = Some((self.app.paths.codex_auth.clone(), login));
-        }
-        fn renewals(&self) -> usize {
-            *self.fake.renewals.lock().unwrap()
-        }
-        fn id_of(&self, user: &str) -> String {
-            let email = format!("{user}@example.test");
-            self.app
-                .codex_load()
-                .unwrap()
-                .accounts
-                .into_iter()
-                .find(|a| a.email.as_deref() == Some(email.as_str()))
-                .unwrap()
-                .id
-        }
-        fn stored(&self, id: &str) -> Value {
-            self.app
-                .codex_load()
-                .unwrap()
-                .accounts
-                .into_iter()
-                .find(|a| a.id == id)
-                .unwrap()
-                .document
-        }
-        fn current(&self) -> Option<String> {
-            self.app.codex_load().unwrap().current_account_id
-        }
-    }
-    crate::login_store::login_store_suite!(super::Fixture);
-
-    /// An account file's document (`{"accounts": [...]}`, as an earlier
-    /// version or a remote node keeps it) imports each account's login,
-    /// `authJson`, and nothing else of it.
-    #[tokio::test]
-    async fn an_account_files_logins_are_imported_without_the_rest() {
-        use crate::login_store::suite::Fixture as _;
-        let pool = Fixture::open(false).await;
-        let expires = now_unix_seconds() + 3600;
-        let document = json!({"version": 1, "currentAccountId": "b", "accounts": [
-            {"id": "a", "label": "Kept label", "proxyURL": "socks5://127.0.0.1:1080",
-                "authJson": Fixture::login("alice", "access-alice", expires)},
-            {"id": "b", "authJson": Fixture::login("bob", "access-bob", expires)}]});
-        let app = pool.app();
-        assert_eq!(
-            app.codex_import_json(&document.to_string()).await.unwrap(),
-            2
-        );
-        let store = app.codex_load().unwrap();
-        let mut emails: Vec<_> = store
-            .accounts
-            .iter()
-            .filter_map(|a| a.email.clone())
-            .collect();
-        emails.sort();
-        assert_eq!(emails, ["alice@example.test", "bob@example.test"]);
-        let alice = store
-            .accounts
-            .iter()
-            .find(|a| a.email.as_deref() == Some("alice@example.test"))
-            .unwrap();
-        assert_ne!(alice.id, "a");
-        assert_ne!(alice.label, "Kept label");
-        assert_eq!(alice.proxy_url, "");
-        assert_eq!(store.current_account_id, None);
-        // An entry without a usable login fails the whole document.
-        let broken = json!({"accounts": [{"authJson": Fixture::no_login()}]});
-        assert!(app.codex_import_json(&broken.to_string()).await.is_err());
-        assert_eq!(app.codex_load().unwrap().accounts.len(), 2);
-    }
-
-    /// The accounts `accounts.json` kept move to the pool's file once, as
-    /// they were: their workspace, standing, renewal choice and wait, the
-    /// account current, the providers and the workspace directory.
-    /// `accounts.json` stays as it was.
-    #[test]
-    fn the_accounts_json_store_moves_to_the_pools_file_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = Paths {
-            data_dir: dir.path().join("data"),
-            codex_auth: dir.path().join("codex/auth.json"),
-        };
-        let login = |user: &str| {
-            <Fixture as crate::login_store::suite::Fixture>::login(
-                user,
-                "access",
-                now_unix_seconds() + 3600,
-            )
-        };
-        let old = json!({"version": 1, "currentAccountId": "b", "accounts": [
-            {"id": "a", "label": "A", "accountId": "old-ws", "authJson": login("alice"),
-                "addedAt": 1, "updatedAt": 2, "renewal": "never", "firstRequestPending": true,
-                "teamName": "Team A", "proxyURL": "socks5://127.0.0.1:1080"},
-            {"id": "b", "label": "B", "accountId": "ws-bob", "authJson": login("bob"),
-                "addedAt": 1, "updatedAt": 2, "workspaceStatus": "deactivated",
-                "displayStatus": "deactivated"},
-            {"id": "c", "label": "C", "accountId": "ws-carol", "authJson": login("carol"),
-                "addedAt": 1, "updatedAt": 2, "workspaceStatus": "deactivated",
-                "displayStatus": "deleted"}],
-            "providers": [{"id": "p", "name": "my"}],
-            "workspaceDirectory": [{"workspaceId": "ws-x", "visibility": "deleted"}],
-            "currentSelection": {"cardId": "b", "selectedAt": 1, "sourceDeviceId": "macos-local"}});
-        fs::create_dir_all(&paths.data_dir).unwrap();
-        write_json(&paths.store(), &old).unwrap();
-        let before = fs::read(paths.store()).unwrap();
-        migrate(&paths).unwrap();
-        let store = load(&paths).unwrap();
-        let a = &store.accounts[0];
-        // The login names its workspace; the rest is as kept.
-        assert_eq!(a.own.workspace_id, "ws-alice");
-        assert_eq!(a.own.team_name.as_deref(), Some("Team A"));
-        assert_eq!(a.email.as_deref(), Some("alice@example.test"));
-        assert_eq!(a.renewal, Some(Renewal::Never));
-        assert!(a.first_request_pending);
-        assert_eq!(a.proxy_url, "socks5://127.0.0.1:1080");
-        assert_eq!(a.standing, None);
-        assert_eq!(store.accounts[1].standing, Some(Standing::Deactivated));
-        assert_eq!(store.accounts[2].standing, Some(Standing::Deleted));
-        assert_eq!(store.current_account_id.as_deref(), Some("b"));
-        assert_eq!(store.providers[0].name, "my");
-        assert_eq!(store.workspace_directory[0]["workspaceId"], "ws-x");
-        assert_eq!(fs::read(paths.store()).unwrap(), before);
-        // Once: a later run keeps what the pool's file holds.
-        write_json(&paths.store(), &json!({"accounts": []})).unwrap();
-        migrate(&paths).unwrap();
-        assert_eq!(load(&paths).unwrap().accounts.len(), 3);
-    }
-
-    /// A deactivated workspace's account is listed so, cannot be switched
-    /// to nor used by the proxy, and once deleted stays hidden, its
-    /// workspace remembered as gone.
-    #[tokio::test]
-    async fn a_deactivated_workspace_stays_listed_until_deleted_then_hidden() {
-        use crate::login_store::suite::Fixture as _;
-        let f = Fixture::open(true).await;
-        let login = Fixture::login("alice", "access-alice", now_unix_seconds() + 3600);
-        f.app
-            .import_json(Pool::Codex, &login.to_string())
-            .await
-            .unwrap();
-        let id = f.id_of("alice");
-        f.app
-            .codex_logins()
-            .change(|store| {
-                let account = &mut store.accounts[0];
-                Logins::<CodexLogins>::record_usage(
-                    account,
-                    &Err("workspace_deactivated".into()),
-                    1,
-                );
-                Ok(())
-            })
-            .await
-            .unwrap();
-        let card = &f.app.accounts(Pool::Codex).await.unwrap()[0];
-        assert_eq!(
-            (card.display_status.as_str(), card.available),
-            ("deactivated", false)
-        );
-        assert!(f.app.switch_account(Pool::Codex, &id).await.is_err());
-        assert!(proxy_candidates(&f.app.paths).unwrap().is_empty());
-        f.app.delete_account(Pool::Codex, &id).await.unwrap();
-        let store = f.app.codex_load().unwrap();
-        assert_eq!(store.accounts[0].standing, Some(Standing::Deleted));
-        assert_eq!(store.workspace_directory[0]["workspaceId"], "ws-alice");
-        assert_eq!(store.workspace_directory[0]["visibility"], "deleted");
-        // Deleted once more, it is gone.
-        f.app.delete_account(Pool::Codex, &id).await.unwrap();
-        assert!(f.app.codex_load().unwrap().accounts.is_empty());
-    }
-}
+mod tests;

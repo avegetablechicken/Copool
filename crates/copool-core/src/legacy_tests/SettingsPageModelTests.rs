@@ -121,7 +121,7 @@ async fn testSaveSub2APIProviderStoresPasswordOutsideSettings() {
         Some("test-secret")
     );
     // Nor where the providers are kept now, nor where they were.
-    for file in ["settings.json", crate::codex_pool::FILE, "accounts.json"] {
+    for file in ["settings.json", crate::codex::FILE, "accounts.json"] {
         let raw = std::fs::read_to_string(app.paths.data_dir.join(file)).unwrap();
         assert!(!raw.contains("test-secret"), "{file}");
     }
@@ -305,7 +305,7 @@ async fn testManualSub2APIRefreshUsesCardProviderWithoutConfirmation() {
         .iter()
         .any(|p| p.ends_with("/42/quota")));
     assert_eq!(
-        crate::codex_config::resolve_path(&app.codex_config_path()).id,
+        crate::codex::config::resolve_path(&app.codex_config_path()).id,
         "openai"
     );
     assert!(app
@@ -362,7 +362,7 @@ async fn testAccountsPageSwitchesToSub2APIAccountProvider() {
     // Codex selects the provider by the name its configuration gives it.
     assert_eq!(execution.provider.as_deref(), Some("my"));
     assert_eq!(
-        crate::codex_config::resolve_path(&app.codex_config_path()).id,
+        crate::codex::config::resolve_path(&app.codex_config_path()).id,
         "my"
     );
     assert_eq!(
@@ -387,7 +387,7 @@ async fn testAccountsPageSwitchesProviderToOpenAIForLocalAccount() {
     let id = app.accounts(Pool::Codex).await.unwrap()[0].id.clone();
     app.switch_account(Pool::Codex, &id).await.unwrap();
     assert_eq!(
-        crate::codex_config::resolve_path(&app.codex_config_path()).id,
+        crate::codex::config::resolve_path(&app.codex_config_path()).id,
         "openai"
     );
     let auth: Value =
@@ -480,7 +480,7 @@ async fn testManualRefreshUpdatesAllSub2APIProvidersWithOfficialDefault() {
         .any(|p| p.ends_with("/7/quota")));
     assert_eq!(app.accounts(Pool::Codex).await.unwrap().len(), 2);
     assert_eq!(
-        crate::codex_config::resolve_path(&app.codex_config_path()).id,
+        crate::codex::config::resolve_path(&app.codex_config_path()).id,
         "openai"
     );
 }
@@ -569,7 +569,7 @@ async fn testSmartSwitchIncludesSub2APIProviderCandidate() {
     super::save_fixture(&app, json!({"accounts":[local], "providers":providers}));
     app.smart_switch(Pool::Codex).await.unwrap();
     assert_eq!(
-        crate::codex_config::resolve_path(&app.codex_config_path()).id,
+        crate::codex::config::resolve_path(&app.codex_config_path()).id,
         "my"
     );
     assert_eq!(

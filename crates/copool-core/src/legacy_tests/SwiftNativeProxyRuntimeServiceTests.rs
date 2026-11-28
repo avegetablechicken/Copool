@@ -61,11 +61,10 @@ async fn testLoadCandidatesSkipsAProviderNoneOfWhoseAccountsSub2APIStillServes()
 }
 /// Puts a provider in the Codex account store, in place of one with its id.
 fn store_provider(app: &Application, p: &ProviderRecord) {
-    let mut store = crate::codex_pool::load(&app.paths).unwrap();
+    let mut store = crate::codex::load(&app.paths).unwrap();
     store.providers.retain(|v| v.id != p.id);
     store.providers.push(p.clone());
-    crate::persistence::write_json(&app.paths.data_dir.join(crate::codex_pool::FILE), &store)
-        .unwrap();
+    crate::persistence::write_json(&app.paths.data_dir.join(crate::codex::FILE), &store).unwrap();
 }
 #[tokio::test]
 async fn testLoadCandidatesIncludesImportedSub2APIProviderUsingLoginShellFallback() {
@@ -182,7 +181,7 @@ async fn testRecordSuccessfulProviderCandidateUsesProviderSwitchHandler() {
         .await
         .unwrap();
     assert_eq!(
-        crate::codex_config::resolve_path(&app.codex_config_path()).id,
+        crate::codex::config::resolve_path(&app.codex_config_path()).id,
         "my"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
