@@ -325,7 +325,24 @@ fn rewriting(raw: &str, provider: &str) -> Result<String, String> {
     lines.insert(insertion, format!("model_provider = {quoted}"));
     Ok(lines.join("\n"))
 }
+/// The file a path names, through any symbolic links: a config kept in
+/// dotfiles stays linked, its target replaced.
+fn followed(path: &Path) -> std::path::PathBuf {
+    let mut path = path.to_path_buf();
+    // As many links as the system follows.
+    for _ in 0..40 {
+        let Ok(next) = fs::read_link(&path) else {
+            break;
+        };
+        path = match path.parent() {
+            Some(parent) if next.is_relative() => parent.join(next),
+            _ => next,
+        };
+    }
+    path
+}
 pub fn switch(path: &Path, provider: &str) -> Result<(), String> {
+    let path = &followed(path);
     let raw = match fs::read_to_string(path) {
         Ok(v) => v,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -381,5 +398,25 @@ mod tests {
     #[test]
     fn updating_rejects_a_config_it_cannot_parse() {
         assert!(updating("model_provider = \n", "new").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn switching_keeps_a_linked_config_linked() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("dotfiles")).unwrap();
+        let target = dir.path().join("dotfiles/config.toml");
+        let link = dir.path().join("config.toml");
+        std::fs::write(&target, "model_provider = \"relay\"\n").unwrap();
+        std::os::unix::fs::symlink("dotfiles/config.toml", &link).unwrap();
+        switch(&link, "openai").unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "model_provider = \"openai\"\n"
+        );
     }
 }
