@@ -241,7 +241,7 @@ test("Escape cancels card editing and only a fresh press can hide the panel", ()
   const { scope, controller, saved } = editor([{ id: "card", proxyUrl: "" }], {
     document,
     selectedPage: "accounts",
-    openMenu: null,
+    menus: { handleKey: () => false },
     TOOLBAR_SHORTCUTS: {},
     navigator: { userAgent: "Mac" },
     invoke: async (command) => commands.push(command),
@@ -286,7 +286,7 @@ test("Return flips the hovered account card to edit, unless a focused UI element
     document,
     selectedPage: "accounts",
     reorderingAccounts: false,
-    openMenu: null,
+    menus: { handleKey: () => false },
     TOOLBAR_SHORTCUTS: {},
     navigator: { userAgent: "Mac" },
     invoke: async () => null,

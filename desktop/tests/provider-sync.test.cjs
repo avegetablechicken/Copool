@@ -1,19 +1,8 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const vm = require("node:vm");
 const { Providers } = require("../ui/controllers.js");
 const P = require("../ui/presentation.js");
-const appSource = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8")
-  .replace(/\r\n/g, "\n");
-/// The app's source from `from` up to `to`, both found.
-function appBetween(from, to) {
-  const start = appSource.indexOf(from);
-  assert(start >= 0, `${from} found`);
-  const end = appSource.indexOf(to, start);
-  assert(end > start, `${to} found after ${from}`);
-  return appSource.slice(start, end);
-}
+const Menus = require("../ui/menus.js");
 test("Import shows provider sync only for pools with saved providers", () => {
   const calls = [];
   const providerControllers = {
@@ -59,18 +48,13 @@ test("Add unofficial provider offers the pools as children of Sub2API", () => {
 });
 
 test("Menu hover suppresses stale focus without moving focus; keyboard restores it", () => {
-  const start = appSource.indexOf("function configureMenuNavigation(");
-  const end = appSource.indexOf("\nfunction showMenu", start);
-  assert(start >= 0 && end > start, "configureMenuNavigation found");
   const handlers = {};
   const classes = new Set();
   const menu = {
     classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name) },
     addEventListener: (name, handler) => { handlers[name] = handler; },
   };
-  const scope = {};
-  vm.createContext(scope);
-  vm.runInContext(appSource.slice(start, end), scope);
+  const scope = Menus;
   scope.configureMenuNavigation(menu);
   handlers.pointerover();
   assert.ok(classes.has("pointer-navigation"));
@@ -102,9 +86,7 @@ test("Menu hover suppresses stale focus without moving focus; keyboard restores 
   assert.ok(childClasses.has("inactive-menu"), "returning focus restores only the parent");
 });
 
-const layoutScope = {};
-vm.createContext(layoutScope);
-vm.runInContext(appBetween("function menuPairLayout(", "function showMenu("), layoutScope);
+const layoutScope = Menus;
 for (const [name, panel, parentWidth, childWidth, preferred] of [
   ["Codex", { left: 0, right: 640 }, 260, 150, 30],
   ["long Claude label", { left: 0, right: 460 }, 420, 300, 35],
@@ -145,7 +127,7 @@ test("Different pool labels and provider counts produce the same menu origins", 
         if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this);
       }
       setAttribute(key, value) { this.attrs[key] = value; }
-      addEventListener() {}
+      addEventListener(name, handler) { (this.listeners ??= {})[name] = handler; }
       querySelector(selector) {
         return selector.includes("aria-checked") ? null : this.children.find(x => x.tag === "button");
       }
@@ -166,12 +148,9 @@ test("Different pool labels and provider counts produce the same menu origins", 
         return { left, right: left + this.offsetWidth, top, bottom: top + this.offsetHeight };
       }
     }
-    const scope = {
-      el: (tag, classes, text) => new Node(tag, classes, text),
-      document: { body: new Node("body"), querySelector: () => ({ getBoundingClientRect: () => panel }) },
-    };
-    vm.createContext(scope);
-    vm.runInContext(appBetween("let openMenu = null;", 'document.addEventListener("pointerdown", (event) => {'), scope);
+    const document = { body: new Node("body"), querySelector: () => ({ getBoundingClientRect: () => panel }) };
+    const menus = Menus.create({ document, el: (tag, classes, text) => new Node(tag, classes, text) });
+    const scope = { document, showMenu: menus.show };
     const trigger = new Node("button");
     trigger.id = "import-open";
     trigger.getBoundingClientRect = () => ({ left: 24, top: 40, bottom: 62 });
@@ -217,27 +196,52 @@ test("Card menus retain room for their labels at the right edge", () => {
 
 test("Crossing parent rows toward Add time can cancel pending dismissal", () => {
   let callback;
-  let removed = 0;
   let cancelled = 0;
-  const scope = {
+  const timers = {
     setTimeout(fn, delay) { assert.equal(delay, 350); callback = fn; return 1; },
     clearTimeout() { cancelled++; callback = null; },
-    child: { menu: { remove() { removed++; } }, trigger: { setAttribute() {} } },
   };
-  vm.createContext(scope);
-  vm.runInContext(appBetween("let openSubmenu = null;", "function closeMenu("), scope);
-  vm.runInContext("openSubmenu = child", scope);
-  scope.deferSubmenuDismiss();
-  assert.equal(removed, 0, "crossing another row must not immediately close the child");
-  scope.cancelSubmenuDismiss();
+  // Menus with rows that know their own button and a body that keeps them.
+  const node = (tag) => ({
+    tag, style: {}, children: [], listeners: {}, offsetWidth: 100, offsetHeight: 40,
+    classList: { add() {}, remove() {}, toggle() {} },
+    append(child) { this.children.push(child); child.parent = this; },
+    prepend() {},
+    remove() { this.removed = true; this.parent.children = this.parent.children.filter((x) => x !== this); },
+    setAttribute() {},
+    addEventListener(name, handler) { this.listeners[name] = handler; },
+    querySelector() { return null; },
+    contains: () => false,
+    closest() { return this.tag === "button" ? this : null; },
+    focus() {},
+    getBoundingClientRect: () => ({ left: 0, right: 100, top: 0, bottom: 40 }),
+  });
+  const panel = { left: 0, right: 400, top: 0, bottom: 400 };
+  const document = { body: node("body"), querySelector: () => ({ getBoundingClientRect: () => panel }) };
+  const menus = Menus.create({ document, el: (tag) => node(tag), timers });
+  menus.show(node("button"), [
+    { label: "Every day", run() {} },
+    { label: "Times", children: [{ label: "Add time", run() {} }] },
+  ]);
+  const [menu] = document.body.children;
+  const [other, parent] = menu.children;
+  const open = () => {
+    cancelled = 0;
+    parent.onpointerenter();
+    return document.body.children[1];
+  };
+  let child = open();
+  menu.listeners.pointerover({ target: other });
+  assert.equal(child.removed, undefined, "crossing another row must not immediately close the child");
+  child.listeners.pointerenter();
   assert.equal(cancelled, 1, "entering the child or returning to its parent cancels dismissal");
   assert.equal(callback, null);
-  assert.equal(removed, 0);
-  scope.deferSubmenuDismiss();
+  assert.equal(child.removed, undefined);
+  menu.listeners.pointerover({ target: other });
   callback();
-  assert.equal(removed, 1, "remaining on a different row eventually closes the child");
-  vm.runInContext("openSubmenu = child", scope);
-  scope.deferSubmenuDismiss();
-  scope.closeSubmenu();
+  assert.equal(child.removed, true, "remaining on a different row eventually closes the child");
+  child = open();
+  menu.listeners.pointerover({ target: other });
+  menus.close();
   assert.equal(callback, null, "closing the menu cancels its pending timer");
 });

@@ -341,7 +341,7 @@ function renderAgentSync() {
 }
 /// Choose the provider first, then the pool whose form to open.
 $("provider-add").onclick = ({ currentTarget: trigger }) => {
-  if (openMenu?.trigger === trigger) {
+  if (menus.isOpenFor(trigger)) {
     closeMenu(true);
     return;
   }

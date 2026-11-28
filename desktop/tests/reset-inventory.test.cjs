@@ -123,40 +123,28 @@ test("Credits and resets keep expiry tooltips while the notice opens a popover",
 
 
 test("Reset popover fits the panel and toggles closed with focus restored", () => {
-  const fs = require("node:fs"), vm = require("node:vm");
-  // Windows checkout uses CRLF; function boundaries below use LF.
-  const source = fs.readFileSync(require("node:path").join(__dirname, "../ui/app.js"), "utf8").replace(/\r\n/g, "\n");
-  const body = (name) => {
-    const start = source.indexOf(`function ${name}(`);
-    const end = source.indexOf("\n}\n", start);
-    assert.ok(start >= 0 && end > start, name);
-    return source.slice(start, end + 3);
-  };
+  const Menus = require("../ui/menus.js");
   const panel = {left: 0, right: 300, top: 0, bottom: 200};
   let appended;
-  const context = {
-    openMenu: null, closeSubmenu() {},
-    document: {body: {append(node) {appended = node;}}, querySelector() {return {getBoundingClientRect: () => panel};}},
-    el: (tag, className, text) => ({tag, className, text, style: {}, children: [], offsetWidth: 150, offsetHeight: 60,
-      append(node) {this.children.push(node);}, setAttribute(key, value) {this[key] = value;},
-      focus() {this.focused = true;}, remove() {this.removed = true;}}),
-  };
+  const document = {body: {append(node) {appended = node;}}, querySelector() {return {getBoundingClientRect: () => panel};}};
+  const el = (tag, className, text) => ({tag, className, text, style: {}, children: [], offsetWidth: 150, offsetHeight: 60,
+    append(node) {this.children.push(node);}, setAttribute(key, value) {this[key] = value;},
+    focus() {this.focused = true;}, remove() {this.removed = true;}});
   const trigger = {getAttribute: () => "Full reset × 1, Fable reset × 2",
     getBoundingClientRect: () => ({left: 270, top: 180, bottom: 192}),
     setAttribute(key, value) {this[key] = value;}, focus() {this.focused = true;}};
-  vm.createContext(context);
-  vm.runInContext(body("closeMenu") + body("menuLeft") + body("showResetPopover"), context);
-  context.showResetPopover(trigger, ["Full reset × 1", "Fable reset × 2"]);
+  const menus = Menus.create({document, el});
+  menus.showResetPopover(trigger, ["Full reset × 1", "Fable reset × 2"]);
   assert.equal(appended.role, "dialog");
   assert.equal(appended.style.left, "142px");
   assert.equal(appended.style.top, "116px");
   assert.equal(appended.children.length, 2);
   assert.equal(appended.focused, true);
   assert.equal(trigger["aria-expanded"], "true");
-  assert.equal(context.openMenu.menu, appended);
-  context.showResetPopover(trigger, []);
+  assert.equal(menus.isOpenFor(trigger), true);
+  menus.showResetPopover(trigger, []);
   assert.equal(appended.removed, true);
-  assert.equal(context.openMenu, null);
+  assert.equal(menus.isOpen, false);
   assert.equal(trigger["aria-expanded"], "false");
   assert.equal(trigger.focused, true);
 });
