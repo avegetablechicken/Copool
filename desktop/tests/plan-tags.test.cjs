@@ -51,7 +51,7 @@ test("Sign in again pins the workspace only for a card with a workspace tag", ()
     const control = controls.children.find((c) => c.glyph === "reauthenticate");
     assert(control, "Sign in again shown");
     assert.equal(control.attributes["aria-label"], "accounts.card.sign_in_again dev@example.com");
-    control.listeners.click();
+    control.click();
     return [...scope.signIns.pop()];
   };
   const expired = {
@@ -83,4 +83,22 @@ test("A card's refresh and switch buttons are painted locked as card-view.js say
   assert.deepEqual(paint({ ...card, available: false }), [false, true]);
   assert.deepEqual(paint(card, { switchingId: "a" }), [false, true]);
   assert.deepEqual(paint(card, { ui: () => ({ refreshing: true }) }), [true, false]);
+});
+
+test("An outdated Sub2api's weekly row carries its notice, which opens the popover", () => {
+  const popovers = [];
+  const scope = dom.cardFace({ tr, showResetPopover: (...args) => popovers.push(args) });
+  const view = V.cardView(
+    { id: "sub2api:p:1", outdatedSub2apiVersion: "0.1.9", usage: { fiveHour: { usedPercent: 10 }, oneWeek: {} } },
+    context(),
+  );
+  const weekly = view.rows.find((row) => row.tone === "one-week");
+  assert(weekly.notice, "the weekly row has a notice");
+  const row = scope.usageWindow(weekly);
+  const notice = row.querySelector(".usage-value").children.find((c) => c.glyph === "reset-notice");
+  assert(notice, "the notice sits beside the weekly value");
+  assert.equal(notice.attributes["aria-label"], weekly.notice.join("\n"));
+  notice.click();
+  assert.equal(popovers.length, 1);
+  assert.equal(popovers[0][0], notice);
 });

@@ -131,7 +131,7 @@ test("A card's model switch stacks both marks and switches the rows it shows", (
     assert.equal(context.modelSwitch(view("a"), "a").className, "model-switch swapped");
     assert.equal(context.modelSwitch(view("b"), "b").className, "model-switch");
   };
-  context.modelSwitch(view("a"), "a").listeners.click();
+  context.modelSwitch(view("a"), "a").click();
   assert.equal(hooks.renders, 1);
   assert.equal(models(), "[Claude]");
   assert.equal(models("b"), "Gemini");
@@ -139,7 +139,7 @@ test("A card's model switch stacks both marks and switches the rows it shows", (
   // A switched card renders again: what the cards render from changed.
   assert(!P.cardsEqual(context.renderState([{ id: "a", usage: pro }]), shown));
   // Another click switches back to Gemini.
-  context.modelSwitch(view("a"), "a").listeners.click();
+  context.modelSwitch(view("a"), "a").click();
   assert.equal(hooks.renders, 2);
   assert.equal(models(), "Gemini");
 });
@@ -246,7 +246,7 @@ test("A weekly row of an outdated Sub2api opens a notice of its lines", () => {
   assert.equal(notice.children[0].glyph, "reset-notice");
   assert.equal(notice.attributes["aria-label"], lines.join("\n"));
   assert.equal(notice.attributes["aria-haspopup"], "dialog");
-  notice.listeners.click();
+  notice.click();
   assert.equal(opened.length, 1);
   assert.equal(opened[0][0], notice);
   assert.deepEqual([...opened[0][1]], lines);

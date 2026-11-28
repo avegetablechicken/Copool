@@ -110,7 +110,6 @@ for (const [name, panel, parentWidth, childWidth, preferred] of [
 test("Different pool labels and provider counts produce the same menu origins", () => {
   function render(label, providers, right = 360) {
     const panel = { left: 0, right, top: 0, bottom: 500 };
-    const all = [];
     class Node {
       constructor(tag, classes = "", text = "") {
         this.tag = tag;
@@ -120,14 +119,13 @@ test("Different pool labels and provider counts produce the same menu origins", 
         this.children = [];
         this.attrs = {};
         this.classList = { add() {}, remove() {}, toggle() {} };
-        all.push(this);
       }
       append(child) { this.children.push(child); child.parent = this; }
       remove() {
         if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this);
       }
       setAttribute(key, value) { this.attrs[key] = value; }
-      addEventListener(name, handler) { (this.listeners ??= {})[name] = handler; }
+      addEventListener(name, handler) { ((this.listeners ??= {})[name] ??= []).push(handler); }
       querySelector(selector) {
         return selector.includes("aria-checked") ? null : this.children.find(x => x.tag === "button");
       }
@@ -205,11 +203,13 @@ test("Crossing parent rows toward Add time can cancel pending dismissal", () => 
   const node = (tag) => ({
     tag, style: {}, children: [], listeners: {}, offsetWidth: 100, offsetHeight: 40,
     classList: { add() {}, remove() {}, toggle() {} },
-    append(child) { this.children.push(child); child.parent = this; },
+    append(child) { this.children.push(child); child.parent = this; child.removed = undefined; },
     prepend() {},
     remove() { this.removed = true; this.parent.children = this.parent.children.filter((x) => x !== this); },
     setAttribute() {},
-    addEventListener(name, handler) { this.listeners[name] = handler; },
+    // Every handler is kept and run, as the DOM does.
+    addEventListener(name, handler) { (this.listeners[name] ??= []).push(handler); },
+    fire(name, event = {}) { for (const handler of this.listeners[name] ?? []) handler(event); },
     querySelector() { return null; },
     contains: () => false,
     closest() { return this.tag === "button" ? this : null; },
@@ -231,17 +231,57 @@ test("Crossing parent rows toward Add time can cancel pending dismissal", () => 
     return document.body.children[1];
   };
   let child = open();
-  menu.listeners.pointerover({ target: other });
+  menu.fire("pointerover", { target: other });
   assert.equal(child.removed, undefined, "crossing another row must not immediately close the child");
-  child.listeners.pointerenter();
+  child.fire("pointerenter");
   assert.equal(cancelled, 1, "entering the child or returning to its parent cancels dismissal");
   assert.equal(callback, null);
   assert.equal(child.removed, undefined);
-  menu.listeners.pointerover({ target: other });
+  menu.fire("pointerover", { target: other });
   callback();
   assert.equal(child.removed, true, "remaining on a different row eventually closes the child");
   child = open();
-  menu.listeners.pointerover({ target: other });
+  menu.fire("pointerover", { target: other });
   menus.close();
   assert.equal(callback, null, "closing the menu cancels its pending timer");
+});
+
+test("The arrows reach a menu's first row down and its last up when none is focused", () => {
+  const document = { activeElement: null };
+  const node = (tag) => ({
+    tag, style: {}, children: [], listeners: {}, offsetWidth: 100, offsetHeight: 40, disabled: false,
+    classList: { add() {}, remove() {}, toggle() {} },
+    append(...children) { for (const child of children) { this.children.push(child); child.parent = this; } },
+    prepend() {},
+    remove() { this.parent.children = this.parent.children.filter((x) => x !== this); },
+    setAttribute() {},
+    getAttribute: () => null,
+    addEventListener(name, handler) { (this.listeners[name] ??= []).push(handler); },
+    buttons() { return this.children.flatMap((c) => (c.tag === "button" ? [c] : c.buttons?.() ?? [])); },
+    querySelector(selector) { return selector.startsWith("button") ? this.buttons()[0] ?? null : null; },
+    querySelectorAll(selector) { return selector === "button" ? this.buttons() : []; },
+    contains(other) { return other === this || this.children.some((c) => c.contains?.(other)); },
+    closest() { return null; },
+    focus() { document.activeElement = this; },
+    getBoundingClientRect: () => ({ left: 0, right: 100, top: 0, bottom: 40 }),
+  });
+  const panel = { left: 0, right: 400, top: 0, bottom: 400 };
+  Object.assign(document, { body: node("body"), querySelector: () => ({ getBoundingClientRect: () => panel }) });
+  const menus = Menus.create({ document, el: (tag) => node(tag), timers: { setTimeout() {}, clearTimeout() {} } });
+  menus.show(node("button"), [
+    { label: "First", run() {} },
+    { label: "Second", run() {} },
+    { label: "Last", run() {} },
+  ]);
+  const rows = document.body.children[0].buttons();
+  assert.equal(rows.length, 3);
+  const key = (name) => menus.handleKey({ key: name, preventDefault() {} });
+  document.activeElement = null;
+  key("ArrowUp");
+  assert.equal(document.activeElement, rows[2]);
+  document.activeElement = null;
+  key("ArrowDown");
+  assert.equal(document.activeElement, rows[0]);
+  key("ArrowUp");
+  assert.equal(document.activeElement, rows[2]);
 });

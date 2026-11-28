@@ -43,10 +43,11 @@ const poolControllers = Object.fromEntries(
   ]),
 );
 let accountsController = poolControllers[pool];
-let lastProxyNotice;
-/// Each pool's API proxy page; only the shown one renders.
+/// Each pool's API proxy page; only the shown one renders, and shows each of
+/// its notices once, however often the pools are switched.
 const proxyControllers = Object.fromEntries(
   PROXY_POOLS.map((target) => {
+    let shownNotice;
     const controller = new window.CopoolControllers.Proxy(
       poolInvoke(target),
       () => {
@@ -55,9 +56,9 @@ const proxyControllers = Object.fromEntries(
         renderProxy();
         renderRemoteStates();
         syncButtons();
-        if (proxyController.notice && proxyController.notice !== lastProxyNotice) {
-          lastProxyNotice = proxyController.notice;
-          const n = lastProxyNotice;
+        if (proxyController.notice && proxyController.notice !== shownNotice) {
+          shownNotice = proxyController.notice;
+          const n = shownNotice;
           notice(n.message || tr(n.key, ...(n.args || [])), n.style === "error");
         }
       },
@@ -1038,7 +1039,6 @@ initializeFeatures = async () => {
   renderTunnelControls();
 };
 function renderPendingWorkspaces() {
-  const entries = accountsController.directory;
   const root = $("pending-workspaces");
   root.replaceChildren();
   const presentation = accountsController.presentation(collapsed);
@@ -1050,8 +1050,6 @@ function renderPendingWorkspaces() {
   block.append(head);
   if (presentation.pendingError)
     block.append(el("p", "error", presentation.pendingError));
-  if (accountsController.pendingError)
-    block.append(el("p", "error", accountsController.pendingError));
   block.append(
     el("p", "setting-description", tr("accounts.pending.subtitle")),
   );

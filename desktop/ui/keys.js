@@ -70,7 +70,7 @@
       const step = P.menuBarStep(event.key, {
         navigating: host.menuBarNavigation,
         modified: event.metaKey || event.ctrlKey || event.altKey || event.shiftKey,
-        inText: Boolean(event.target.closest?.(TEXT_ENTRY)),
+        inText: Boolean(event.target?.closest?.(TEXT_ENTRY)),
         handled: event.defaultPrevented || event.isComposing,
       });
       if (step) {
@@ -128,7 +128,7 @@
       } else if (mod && event.key === ",") {
         event.preventDefault();
         host.showPage("settings");
-      } else if (mod && !event.altKey && !event.shiftKey && TOOLBAR_SHORTCUTS[event.key]) {
+      } else if (mod && !event.altKey && !event.shiftKey && Object.hasOwn(TOOLBAR_SHORTCUTS, event.key)) {
         // Always handled, so Cmd+R never reloads the page; a disabled button
         // ignores its shortcut as it ignores clicks.
         event.preventDefault();

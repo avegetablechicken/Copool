@@ -106,7 +106,8 @@
       closeMenu();
       const menu = el("div", `select-menu reset-popover${wrapping ? " wrapping" : ""}`);
       menu.setAttribute("role", "dialog");
-      menu.setAttribute("aria-label", trigger.getAttribute("aria-label"));
+      const label = trigger.getAttribute("aria-label");
+      if (label) menu.setAttribute("aria-label", label);
       menu.tabIndex = -1;
       for (const line of lines) menu.append(el("div", "", line));
       document.body.append(menu);
@@ -293,8 +294,11 @@
             ? 0
             : event.key === "End"
               ? items.length - 1
-              : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) %
-                items.length;
+              : index < 0
+                // With no item focused, the first item down, the last up.
+                ? (event.key === "ArrowDown" ? 0 : items.length - 1)
+                : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) %
+                  items.length;
         items[next]?.focus();
       }
       return true;

@@ -464,7 +464,6 @@ test("a card's menu runs its card's actions, a provider's for its group", () => 
 });
 
 test("refresh intervals offer the one set and speed up to a fifth, no sooner than 30 s", () => {
-  const P = require("../ui/presentation.js");
   assert.deepEqual(P.refreshChoices("codex", 10).seconds, [10, 30, 60, 300, 600]);
   assert.deepEqual(P.refreshChoices("claude", 300).fullEvery, [1, 2, 3, 6, 12]);
   // A value set elsewhere stays selectable, in order.

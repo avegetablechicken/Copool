@@ -18,7 +18,7 @@ let locale = "en";
 let noticeTimer;
 let nativeIcons = {};
 let iconFrame = 0;
-const { ACCOUNT_POOLS, PROXY_POOLS } = P;
+const { ACCOUNT_POOLS, PROXY_POOLS, PROXY_PREFERENCES } = P;
 // The pools with Sub2api providers: every account pool.
 const PROVIDER_POOLS = ACCOUNT_POOLS;
 // The account pool on the accounts page: Codex, Claude Code, Antigravity or
@@ -29,12 +29,6 @@ let pool = ACCOUNT_POOLS.includes(localStorage.getItem("copool.pool"))
 // The pool whose API proxy the proxy page shows: the accounts page's, or
 // the last one with a proxy while that is Grok.
 let proxyPool = PROXY_POOLS.includes(pool) ? pool : "codex";
-/// The preferences of each pool's proxy on the proxy page.
-const PROXY_PREFERENCES = {
-  codex: { port: "proxyPort", autoStart: "autoStartProxy" },
-  antigravity: { port: "antigravityProxyPort", autoStart: "antigravityAutoStartProxy" },
-  claude: { port: "claudeProxyPort", autoStart: "claudeAutoStartProxy" },
-};
 // Reset times as the date and time or as the time left, as OpenQuota toggles
 // them by clicking either.
 let resetDisplay =
@@ -187,7 +181,7 @@ const cardBacks = window.CopoolCardBack.create({
   greet: (account) => sayHi(account).then(refreshView).catch((error) => notice(error, true)),
   removeCards: (cards, sub2api) => removeCards(cards, sub2api),
 });
-const { cardBack, editCard, finishEditing, cancelEditing } = cardBacks;
+const { cardBack, editCard, cancelEditing } = cardBacks;
 // A card's front (card-face.js).
 const cardFaces = window.CopoolCardFace.create({
   el,
@@ -1084,8 +1078,10 @@ function renderProxy() {
 async function refreshView() {
   const controller = accountsController;
   const proxies = proxyController;
-  const [, proxy, fullRefresh] = await Promise.all([
-    controller.load(),
+  const {
+    accounts,
+    answers: [proxy, fullRefresh],
+  } = await controller.loadAlong([
     proxies.invoke("proxy_status"),
     invoke("next_full_refresh_at", { pool }),
     refreshFeatureState(),
@@ -1093,8 +1089,7 @@ async function refreshView() {
   // A pool switched during the load renders through its own refresh.
   if (controller === accountsController) {
     fullRefreshAt = fullRefresh;
-    // A newer load may have finished while the other requests were pending.
-    accountsCache = controller.accounts;
+    accountsCache = accounts;
     renderAccounts(accountsCache);
     await renderPendingWorkspaces();
   }
@@ -1715,11 +1710,10 @@ $("proxy-key-refresh").onclick = () =>
 const portSave = new window.CopoolControllers.PendingSave();
 $("proxy-port").oninput = () => {
   portSave.cancel();
-  const port = Number($("proxy-port").value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
-  const key = PROXY_PREFERENCES[proxyPool].port;
+  const patch = P.portPatch(proxyPool, $("proxy-port").value);
+  if (!patch) return;
   portSave.schedule(proxyPool, () =>
-    queuePreferenceSave({ [key]: port }).catch((error) => notice(error, true)),
+    queuePreferenceSave(patch).catch((error) => notice(error, true)),
   );
 };
 $("toggle-key").onclick = () => {

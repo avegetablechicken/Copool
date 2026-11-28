@@ -797,6 +797,44 @@ test("A load answered after a later one leaves the later one's cards", async () 
   assert.equal(model.accounts[0].isCurrent, false);
 });
 
+test("A page refresh shows the cards of a load finished while its other requests were pending", async () => {
+  // As app.js's refreshView: an older refresh, slow on another request,
+  // never shows the previous CURRENT tag again.
+  let current = true;
+  const invoke = async (command) => (command === "accounts" ? [{ id: "a", isCurrent: current }] : []);
+  const model = new Accounts(invoke, []);
+  let finish;
+  const slow = new Promise((resolve) => (finish = resolve));
+  const older = model.loadAlong([slow, "status"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  current = false;
+  const newer = await model.loadAlong([]);
+  assert.equal(newer.accounts[0].isCurrent, false);
+  finish("feature state");
+  const { accounts, answers } = await older;
+  assert.equal(accounts[0].isCurrent, false);
+  assert.deepEqual(answers, ["feature state", "status"]);
+});
+
+test("Refreshing one of a provider's cards shows all of them refreshing", async () => {
+  let finish;
+  const invoke = (command) =>
+    command === "refresh_provider" ? new Promise((resolve) => (finish = resolve)) : Promise.resolve([]);
+  const cards = [
+    { id: "p1", refresh: { key: "sub2api:team" } },
+    { id: "p2", refresh: { key: "sub2api:team" } },
+    { id: "own", refresh: { key: "own" } },
+  ];
+  const model = new Accounts(invoke, structuredClone(cards));
+  const refreshing = model.refreshCard("p1");
+  assert.deepEqual([...model.refreshingIds].sort(), ["p1", "p2"]);
+  // Its sibling, refreshing with it, refreshes no second time.
+  assert.equal(await model.refreshCard("p2"), false);
+  finish();
+  assert.equal(await refreshing, true);
+  assert.equal(model.refreshingIds.size, 0);
+});
+
 test("Refreshing a provider's only card refreshes the entire provider", async () => {
   const calls = [];
   const invoke = async (command, args) => {

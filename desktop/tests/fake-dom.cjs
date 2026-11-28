@@ -18,8 +18,11 @@ class Node {
     this.classList = {
       add: (...names) => (this.className = [...new Set([...classes(), ...names])].join(" ")),
       remove: (...names) => (this.className = [...classes()].filter((n) => !names.includes(n)).join(" ")),
-      toggle: (name, on = !classes().has(name)) =>
-        on ? this.classList.add(name) : this.classList.remove(name),
+      toggle: (name, on = !classes().has(name)) => {
+        if (on) this.classList.add(name);
+        else this.classList.remove(name);
+        return Boolean(on);
+      },
       contains: (name) => classes().has(name),
     };
   }
@@ -39,13 +42,20 @@ class Node {
   getAttribute(name) {
     return this.attributes[name] ?? null;
   }
+  /// Every handler is kept, run in the order added, as the DOM does.
   addEventListener(name, handler) {
-    this.listeners[name] = handler;
+    (this.listeners[name] ??= []).push(handler);
   }
-  /// What a click on it runs.
+  /// Runs its handlers of `name` with `event`.
+  dispatch(name, event = {}) {
+    for (const handler of this.listeners[name] ?? []) handler(event);
+  }
+  /// What a click on it runs: nothing while it is disabled, as a disabled
+  /// button takes no click.
   click() {
+    if (this.disabled) return;
     this.onclick?.();
-    this.listeners.click?.();
+    this.dispatch("click");
   }
   /// Its text and its children's, as textContent reads.
   get text() {
@@ -63,6 +73,21 @@ class Node {
   }
   findAll(test) {
     return [...this.nodes()].filter(test);
+  }
+  /// The nodes under it matching a class (".name") or tag selector, the
+  /// only ones the UI modules ask the fakes for; any other is an error
+  /// rather than no match.
+  querySelectorAll(selector) {
+    const matches = /^\.([\w-]+)$/.test(selector)
+      ? (node) => node.classList.contains(selector.slice(1))
+      : /^[a-z]+$/.test(selector)
+        ? (node) => node.tag === selector
+        : null;
+    if (!matches) throw new Error(`fake-dom does not match ${selector}`);
+    return [...this.nodes()].slice(1).filter(matches);
+  }
+  querySelector(selector) {
+    return this.querySelectorAll(selector)[0] ?? null;
   }
   /// The node under it with this data-back-field, as a card's back names its
   /// controls.
@@ -96,7 +121,7 @@ function cardFace(extra = {}) {
     preferences: {},
     controller: { cardState: () => ({}), flipTarget: () => null, editing: null },
     switchingId: null,
-    cardContext: () => ({ pool: host.pool, locale: "en", tr: host.tr, collapsed: false }),
+    cardContext: () => ({ pool: host.pool, locale: host.locale, tr: host.tr, collapsed: host.collapsed }),
     providerTitle: () => "Team",
     accountProxy: () => "",
     cardBack: () => el("section", "account-back"),

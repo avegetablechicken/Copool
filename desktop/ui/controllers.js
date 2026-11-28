@@ -39,10 +39,11 @@
       this.timer = this.timers.setTimeout(() => this.flush(), this.delay);
     }
     /// Saves `run` now, after any save waiting for another owner; one waiting
-    /// for this owner is replaced.
+    /// for this owner is replaced. A save scheduled while the other owner's
+    /// is made is newer, and stays.
     async now(owner, run) {
       if (this.pending && this.pending.owner !== owner) await this.flush();
-      this.cancel();
+      else this.cancel();
       return run();
     }
     /// Makes the save waiting, if any.
@@ -468,6 +469,13 @@
         throw error;
       }
     }
+    /// Loads the cards along with the page's `others` requests, then gives
+    /// the cards as they are once all are in, with the others' answers: a
+    /// later load may have finished while the others were pending.
+    async loadAlong(others) {
+      const [, ...answers] = await Promise.all([this.load(), ...others]);
+      return { accounts: this.accounts, answers };
+    }
     async refresh(id = null) {
       // Refreshing all waits for every refresh; one account only for itself.
       const busy = id === null ? this.refreshing : this.busy(id);
@@ -671,7 +679,9 @@
     refreshCard(id = null) {
       const account = id === null ? null : this.accounts.find((a) => a.id === id);
       const provider = account ? P.providerKey(account) : null;
-      return provider === null ? this.refresh(id) : this.refreshProvider(provider, [id]);
+      if (provider === null) return this.refresh(id);
+      const ids = this.accounts.filter((a) => P.providerKey(a) === provider).map((a) => a.id);
+      return this.refreshProvider(provider, ids);
     }
     /// Every card of one Sub2api provider in a single pass; only its cards
     /// show as refreshing.
