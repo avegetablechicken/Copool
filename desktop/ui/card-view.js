@@ -248,13 +248,18 @@
   function usageRows(windows, thirdParty, ctx) {
     const { tr, pool } = ctx;
     const remaining = ctx.mode === "remaining";
+    const valueFormat = remaining ? "accounts.window.remaining_format" : "accounts.window.used_format";
+    // Reserve both possible value formats even when a model's windows are
+    // hidden, so switching between 9%, 100% and no data cannot resize meters.
+    const valueSizing = { full: tr(valueFormat, "100%"), empty: tr("accounts.window.no_data") };
     const row = (window, title, tone, notice = null) => ({
       tone,
       title,
       window,
       value: window.available
-        ? tr(remaining ? "accounts.window.remaining_format" : "accounts.window.used_format", `${window.primaryPercent}%`)
-        : tr("accounts.window.no_data"),
+        ? tr(valueFormat, `${window.primaryPercent}%`)
+        : valueSizing.empty,
+      valueSizing,
       reset: resetLabel(window, ctx.resetDisplay, ctx),
       // A known reset time switches between both forms and shows the other
       // one on hover, as in OpenQuota.

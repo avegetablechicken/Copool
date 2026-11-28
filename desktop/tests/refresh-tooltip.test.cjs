@@ -144,6 +144,34 @@ test("A card's model switch stacks both marks and switches the rows it shows", (
   assert.equal(models(), "Gemini");
 });
 
+test("Usage rows reserve the same value width across model switches, digit counts and missing data", () => {
+  const account = {
+    id: "active", isCurrent: true,
+    usage: {
+      fiveHour: { usedPercent: 100 }, oneWeek: { usedPercent: 9 },
+      thirdPartyFiveHour: { usedPercent: 40 }, thirdPartyOneWeek: null,
+    },
+  };
+  const face = load();
+  for (const mode of ["used", "remaining"]) {
+    const ctx = { pool: "antigravity", mode, tr: (key, ...args) => [key, ...args].join(" ") };
+    const expected = {
+      full: `accounts.window.${mode === "used" ? "used" : "remaining"}_format 100%`,
+      empty: "accounts.window.no_data",
+    };
+    for (const thirdParty of [false, true]) {
+      const view = V.cardView(account, { ...ctx, ui: () => ({ thirdParty }) });
+      for (const row of view.rows) {
+        assert.deepEqual(row.valueSizing, expected);
+        const value = face.usageWindow(row).querySelector(".usage-value");
+        assert.equal(value.text, row.value);
+        assert.equal(value.dataset.sizingFull, expected.full);
+        assert.equal(value.dataset.sizingEmpty, expected.empty);
+      }
+    }
+  }
+});
+
 test("A render slides each card's meters from the levels they showed, changing color as they go", () => {
   // A fill on a 200px track, drawn at its width unless an animation holds it.
   const fill = (width, hidden = false, background = "gray", opacity = "0.55", drawn = width) => ({

@@ -228,7 +228,7 @@ const cardFaces = window.CopoolCardFace.create({
   switchAccount: (account) => switchAccount(account),
   confirmRemoval: (cards, name, sub2api) => confirmRemoval(cards, name, sub2api),
 });
-const { accountCard, providerGroup, cardMenu, refreshTooltip, cardMeters, slideMeters } = cardFaces;
+const { accountCard, providerGroup, cardMenu, refreshTooltip, alignMeters, cardMeters, slideMeters } = cardFaces;
 /// The saved language, else the first supported system language.
 function appLocale() {
   return preferences?.locale
@@ -1005,19 +1005,6 @@ function saveAccountOrder(order) {
     renderedAccountsState = undefined;
     renderAccounts(accountsCache);
   });
-}
-/// Gives every usage row the widest label and value, so all meters line up.
-function alignMeters(list) {
-  list.style.removeProperty("--usage-label-width");
-  list.style.removeProperty("--usage-value-width");
-  const widest = (selector) =>
-    Math.ceil(
-      Math.max(0, ...[...list.querySelectorAll(selector)].map((n) => n.scrollWidth)),
-    );
-  const label = widest(".usage .usage-label");
-  const value = widest(".usage .usage-value");
-  if (label) list.style.setProperty("--usage-label-width", `${label}px`);
-  if (value) list.style.setProperty("--usage-value-width", `${value}px`);
 }
 /// A secret's ends with the middle hidden, short enough for one line.
 function maskSecret(value) {

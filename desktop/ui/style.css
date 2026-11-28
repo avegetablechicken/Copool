@@ -2035,7 +2035,7 @@ html.linux.composited:where([data-theme="dark"]) .tooltip {
 
 .usage {
   display: grid;
-  /* Shared column widths line up the meters of every card (set by app.js). */
+  /* Shared column widths line up the meters of every card (card-face.js). */
   grid-template-columns:
     var(--usage-label-width, 40px) minmax(0, 1fr)
     var(--usage-value-width, auto);
@@ -2056,6 +2056,25 @@ html.linux.composited:where([data-theme="dark"]) .tooltip {
 
 .usage .usage-value {
   text-align: right;
+}
+
+/* Invisible, zero-height lines reserve the widest percentage and no-data
+   label in this language. The list's shared column width then stays stable
+   when any card switches models or its usage changes digit count. */
+.usage .usage-value::before,
+.usage .usage-value::after {
+  display: block;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
+.usage .usage-value::before {
+  content: attr(data-sizing-full);
+}
+
+.usage .usage-value::after {
+  content: attr(data-sizing-empty);
 }
 
 .usage.no-data .usage-value {

@@ -83,10 +83,13 @@
           );
         });
       const row = el("div", `usage ${usage.tone}${view.available ? "" : " no-data"}`);
+      const value = el("span", "usage-value", usage.value);
+      value.dataset.sizingFull = usage.valueSizing.full;
+      value.dataset.sizingEmpty = usage.valueSizing.empty;
       row.append(
         el("span", "usage-label", title),
         track,
-        el("span", "usage-value", usage.value),
+        value,
         reset,
       );
       return weeklyNotice(row, usage.notice);
@@ -356,6 +359,19 @@
       control.append(behind, front);
       return control;
     }
+    /// Gives every usage row the widest label and value, so all meters line up.
+    function alignMeters(list) {
+      list.style.removeProperty("--usage-label-width");
+      list.style.removeProperty("--usage-value-width");
+      const widest = (selector) =>
+        Math.ceil(
+          Math.max(0, ...[...list.querySelectorAll(selector)].map((n) => n.scrollWidth)),
+        );
+      const label = widest(".usage .usage-label");
+      const value = widest(".usage .usage-value");
+      if (label) list.style.setProperty("--usage-label-width", `${label}px`);
+      if (value) list.style.setProperty("--usage-value-width", `${value}px`);
+    }
     /// The fills of a card's usage rows, in order, as they look now (partway
     /// through a slide too): their levels in percent and their colors.
     function meterStates(card) {
@@ -520,6 +536,7 @@
       usageWindow,
       modelSwitch,
       weeklyNotice,
+      alignMeters,
       meterStates,
       cardMeters,
       slideMeters,
