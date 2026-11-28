@@ -2344,6 +2344,48 @@ fn is_valid_codex_version(value: &str) -> bool {
         })
 }
 
+/// The store's lock while its accounts are read, changed and written back:
+/// in this process, and, where the accounts are `accounts.json`, on
+/// `accounts.json.lock`, which Copool's sync of a remote node also takes
+/// while it checks that the accounts are as it last read them and replaces
+/// them (`remote::sync_command`). A renewal saved here is then never replaced
+/// by an upload merged before it.
+pub(crate) struct StoreLock {
+    _file: Option<std::fs::File>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+async fn lock_store(storage: &ProxyStorageContext) -> StoreLock {
+    let guard = storage.store_lock.clone().lock_owned().await;
+    let file = if storage.read_store {
+        let path = storage.data_dir.join("accounts.json.lock");
+        let locked = tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)?;
+            file.lock()?;
+            Ok::<_, std::io::Error>(file)
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|locked| locked);
+        match locked {
+            Ok(file) => Some(file),
+            Err(error) => {
+                log::warn!("The account store was changed without its file lock: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    StoreLock {
+        _file: file,
+        _guard: guard,
+    }
+}
+
 async fn load_proxy_candidates(
     storage: &ProxyStorageContext,
 ) -> Result<Vec<ProxyCandidate>, String> {
@@ -2700,7 +2742,7 @@ async fn persist_candidate_usage_result(
     account_id: &str,
     result: Result<UsageSnapshot, String>,
 ) {
-    let _guard = storage.store_lock.lock().await;
+    let _guard = lock_store(storage).await;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = match load_store_from_path(&store_path) {
         Ok(store) => store,
@@ -2890,7 +2932,7 @@ async fn persist_refreshed_candidate_auth(
     from: &Value,
     refreshed_auth_json: &Value,
 ) -> Result<Value, String> {
-    let _guard = storage.store_lock.lock().await;
+    let _guard = lock_store(storage).await;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = load_store_from_path(&store_path)?;
 
@@ -3198,7 +3240,7 @@ async fn read_persisted_api_proxy_key(
         return Ok(None);
     }
 
-    let _guard = storage.store_lock.lock().await;
+    let _guard = lock_store(storage).await;
     let store = load_store_from_path(&account_store_path_from_data_dir(&storage.data_dir))?;
     let legacy_value = store
         .settings
@@ -3223,7 +3265,7 @@ async fn ensure_persisted_api_proxy_key(storage: &ProxyStorageContext) -> Result
         return Ok(new_key);
     }
 
-    let _guard = storage.store_lock.lock().await;
+    let _guard = lock_store(storage).await;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = load_store_from_path(&store_path)?;
 
@@ -3253,7 +3295,7 @@ async fn regenerate_persisted_api_proxy_key(
         return Ok(new_key);
     }
 
-    let _guard = storage.store_lock.lock().await;
+    let _guard = lock_store(storage).await;
     let store_path = account_store_path_from_data_dir(&storage.data_dir);
     let mut store = load_store_from_path(&store_path)?;
     store.settings.api_proxy_api_key = Some(new_key.clone());
@@ -5461,6 +5503,29 @@ data: {"type":"response.completed","response":{"id":"resp_123","created_at":1,"m
             candidates,
             [("never", false), ("always", true), ("always", true)]
         );
+    }
+
+    /// The store's lock is also its file lock, which Copool's sync of a
+    /// remote node waits for.
+    #[tokio::test]
+    async fn the_store_lock_holds_the_accounts_file_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = new_proxy_storage_context(
+            dir.path().to_path_buf(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            false,
+        );
+        let other = || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.path().join("accounts.json.lock"))
+                .unwrap()
+        };
+        let guard = super::lock_store(&storage).await;
+        assert!(other().try_lock().is_err());
+        drop(guard);
+        assert!(other().try_lock().is_ok());
     }
 
     /// A request refused with a login another request has since renewed

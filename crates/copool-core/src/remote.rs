@@ -151,23 +151,32 @@ pub(crate) fn parse_snapshot(output: &str) -> (String, Option<Value>) {
         None => (output.trim().to_owned(), None),
     }
 }
-/// Refuses to go on when the remote accounts are no longer the snapshot: the
-/// daemon rotated a token since, and the upload must be merged again.
+/// Takes the daemon's lock on its accounts (`accounts.json.lock`, which it
+/// holds while it changes them), then refuses to go on when the remote
+/// accounts are no longer the snapshot: the daemon rotated a token since,
+/// and the upload must be merged again. The lock is held, on descriptor 9,
+/// until the accounts are replaced ([`RELEASE`]), so the daemon cannot
+/// rotate one between the check and the replacement. Without `flock`, as on
+/// a system without util-linux, only the check is made.
 fn unchanged_since(dir: &str, checksum: &str) -> String {
     format!(
-        "F={}; CURRENT=\"\"; [ -f \"$F\" ] && CURRENT=$(cksum < \"$F\"); if [ \"$CURRENT\" != {} ]; then echo {ACCOUNTS_CHANGED} >&2; exit 75; fi; ",
-        quote(&format!("{dir}/accounts.json")),
-        quote(checksum)
+        "mkdir -p {d} || exit 1; exec 9>>{lock} || exit 1; if command -v flock >/dev/null 2>&1; then flock 9 || exit 1; fi; F={f}; CURRENT=\"\"; [ -f \"$F\" ] && CURRENT=$(cksum < \"$F\"); if [ \"$CURRENT\" != {} ]; then echo {ACCOUNTS_CHANGED} >&2; exit 75; fi; ",
+        quote(checksum),
+        d = quote(dir),
+        lock = quote(&format!("{dir}/accounts.json.lock")),
+        f = quote(&format!("{dir}/accounts.json")),
     )
 }
+/// Lets the daemon change its accounts again ([`unchanged_since`]): before
+/// a restart, which waits for the daemon to stop.
+const RELEASE: &str = "exec 9>&-; ";
 pub(crate) fn install_command(
     server: &RemoteServerConfig,
     unit: &str,
     stage: &str,
     checksum: &str,
 ) -> String {
-    let mut command = unchanged_since(&server.remote_dir, checksum);
-    command += &format!(
+    let mut command = format!(
         "mkdir -p {}; TARGET_DIR={}; TARGET_PORT={}; TARGET_UNIT={}; ",
         quote(&server.remote_dir),
         quote(&server.remote_dir),
@@ -176,6 +185,9 @@ pub(crate) fn install_command(
     );
     command.push_str(&format!("for UNIT_PATH in {UNIT_DIRS}; do "));
     command.push_str(r#"[ -f "$UNIT_PATH" ] || continue; UNIT_NAME=$(basename "$UNIT_PATH"); [ "$UNIT_NAME" = "$TARGET_UNIT" ] && continue; WORK_DIR=$(sed -n 's/^WorkingDirectory=//p' "$UNIT_PATH" | head -n 1); PORT=$(sed -n 's/^ExecStart=.* --port \([0-9][0-9]*\).*$/\1/p' "$UNIT_PATH" | head -n 1); if [ "$WORK_DIR" = "$TARGET_DIR" ] || [ "$PORT" = "$TARGET_PORT" ]; then systemctl stop "$UNIT_NAME" >/dev/null 2>&1 || true; systemctl disable "$UNIT_NAME" >/dev/null 2>&1 || true; rm -f "/etc/systemd/system/$UNIT_NAME" "/lib/systemd/system/$UNIT_NAME" "/usr/lib/systemd/system/$UNIT_NAME"; fi; done; "#);
+    // Checked once no other unit's daemon is to be stopped: one waiting for
+    // the lock would hold up its stop.
+    command.push_str(&unchanged_since(&server.remote_dir, checksum));
     for (name, mode, dest) in [
         (
             "codex-tools-proxyd",
@@ -190,13 +202,15 @@ pub(crate) fn install_command(
         (unit, 644, format!("/etc/systemd/system/{unit}")),
     ] {
         // Its mode set before it leaves the private stage: the logins are
-        // never readable by others where they land.
+        // never readable by others where they land. A step that fails stops
+        // the install, which reports it; the stage is removed by Copool.
         let staged = quote(&format!("{stage}/{name}"));
         command.push_str(&format!(
-            "chmod {mode} {staged}; mv {staged} {}; ",
+            "chmod {mode} {staged} && mv {staged} {} || exit 1; ",
             quote(&dest),
         ));
     }
+    command.push_str(RELEASE);
     command.push_str(&format!("rm -rf {}; systemctl daemon-reload; systemctl enable {} >/dev/null 2>&1 || true; if systemctl is-active --quiet {}; then systemctl restart {}; else systemctl start {}; fi",quote(stage),quote(unit),quote(unit),quote(unit),quote(unit)));
     command
 }
@@ -208,7 +222,8 @@ pub(crate) fn sync_command(
     checksum: &str,
 ) -> String {
     let mut command = unchanged_since(dir, checksum);
-    command+=&format!("DIR={}; UNIT={}; mkdir -p \"$DIR\"; chmod 600 {staged}; mv {staged} \"$DIR/accounts.json\"; rm -rf {}; ",quote(dir),quote(unit),quote(stage),staged=quote(&format!("{stage}/accounts.json")));
+    // A step that fails stops the sync, which reports it.
+    command+=&format!("DIR={}; UNIT={}; chmod 600 {staged} && mv {staged} \"$DIR/accounts.json\" || exit 1; {RELEASE}rm -rf {}; ",quote(dir),quote(unit),quote(stage),staged=quote(&format!("{stage}/accounts.json")));
     command.push_str(if restart{r#"if [ -f "/etc/systemd/system/$UNIT" ] || [ -f "/lib/systemd/system/$UNIT" ] || [ -f "/usr/lib/systemd/system/$UNIT" ]; then systemctl restart "$UNIT"; fi;"#}else{"true"});
     command
 }

@@ -174,6 +174,100 @@ fn testSyncRefusesAccountsTheDaemonWroteSinceTheSnapshot() {
         .success());
     assert_eq!(std::fs::read_to_string(&remote).unwrap(), "first");
 }
+#[cfg(unix)]
+#[test]
+fn testSyncWaitsForTheDaemonsLockToCheckTheAccounts() {
+    let has_flock = std::process::Command::new("sh")
+        .args(["-c", "command -v flock"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_flock {
+        return;
+    }
+    let d = tempfile::tempdir().unwrap();
+    let (dir, stage) = (d.path().join("srv"), d.path().join("stage"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&stage).unwrap();
+    let remote = dir.join("accounts.json");
+    std::fs::write(&remote, "older").unwrap();
+    let output = std::process::Command::new("sh")
+        .args(["-c", &format!("cksum < '{}'", remote.display())])
+        .output()
+        .unwrap();
+    let checksum = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    std::fs::write(stage.join("accounts.json"), "uploaded").unwrap();
+    // The daemon is changing its accounts as the sync starts.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("accounts.json.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let sync = std::process::Command::new("sh")
+        .args([
+            "-c",
+            &sync_command(
+                dir.to_str().unwrap(),
+                "unit",
+                stage.to_str().unwrap(),
+                false,
+                &checksum,
+            ),
+        ])
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    std::fs::write(&remote, "renewed").unwrap();
+    drop(lock);
+    let refused = sync.wait_with_output().unwrap();
+    assert_eq!(refused.status.code(), Some(75));
+    assert_eq!(std::fs::read_to_string(&remote).unwrap(), "renewed");
+}
+#[cfg(unix)]
+#[test]
+fn testSyncAndInstallReportAnAccountsFileNotInstalled() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let (dir, stage, bin) = (
+        d.path().join("srv"),
+        d.path().join("stage"),
+        d.path().join("bin"),
+    );
+    for path in [&stage, &bin] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    // A read-only file system refuses every move.
+    let mv = bin.join("mv");
+    std::fs::write(
+        &mv,
+        "#!/bin/sh\necho 'mv: read-only file system' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&mv, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // No unit of this machine's is touched.
+    let systemctl = bin.join("systemctl");
+    std::fs::write(&systemctl, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let run = |command: &str| {
+        std::process::Command::new("sh")
+            .args(["-c", command])
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .output()
+            .unwrap()
+    };
+    let (dir_s, stage_s) = (dir.to_str().unwrap(), stage.to_str().unwrap());
+    std::fs::write(stage.join("accounts.json"), "uploaded").unwrap();
+    let synced = run(&sync_command(dir_s, "unit", stage_s, false, ""));
+    assert!(!synced.status.success());
+    assert!(!dir.join("accounts.json").exists());
+    let mut server = draft("server-1");
+    server.remote_dir = dir_s.into();
+    server.listen_port = 1;
+    let installed = run(&install_command(&server, "unit", stage_s, ""));
+    assert!(!installed.status.success());
+    assert!(!dir.join("accounts.json").exists());
+}
 #[test]
 fn testDeploymentPlanUninstallCommandStopsDisablesAndRemovesServiceArtifacts() {
     let s = uninstall_command("/srv/codex", "unit", false);
