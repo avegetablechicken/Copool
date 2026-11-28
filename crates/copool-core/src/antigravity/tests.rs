@@ -1153,7 +1153,23 @@ async fn a_hi_starts_each_idle_five_hour_window() {
             assert_eq!(models, [model]);
         }
     }
-    // Other pools have no third-party pool to greet.
+    // A card reporting no third-party pool's usage has none to greet.
+    {
+        let _lock = h.app.antigravity.logins.store.lock().await;
+        let mut store = h.app.antigravity_load().unwrap();
+        let usage = store.accounts[0].usage.as_mut().unwrap();
+        usage.third_party_five_hour = None;
+        usage.third_party_one_week = None;
+        h.app.antigravity_save(&store).unwrap();
+    }
+    h.fake.messages.lock().unwrap().clear();
+    assert!(h
+        .app
+        .say_hi_to(Pool::Antigravity, &id, Some(true))
+        .await
+        .is_err());
+    assert!(h.fake.messages.lock().unwrap().is_empty());
+    // Nor does a card of another pool.
     assert!(h.app.say_hi_to(Pool::Codex, &id, Some(true)).await.is_err());
 }
 

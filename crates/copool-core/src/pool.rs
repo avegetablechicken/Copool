@@ -412,9 +412,10 @@ impl Application {
     }
     /// Says hi as `say_hi` does, to the card's own pool alone, or with
     /// `third_party` to its third-party pool alone, as the card's model
-    /// switch has chosen; only an Antigravity account has the latter.
+    /// switch has chosen; only a card reporting a third-party pool's usage
+    /// has the latter.
     pub async fn say_hi_to(&self, pool: Pool, id: &str, third_party: Option<bool>) -> Result<()> {
-        if third_party == Some(true) && (pool != Pool::Antigravity || sub2api::is_card(pool, id)) {
+        if third_party == Some(true) && !self.has_third_party(pool, id).await? {
             return Err("This card has no third-party pool to say hi to".into());
         }
         let _greeting = self.begin_greeting(pool, id)?;
@@ -433,6 +434,18 @@ impl Application {
                 Hello::Expired(error) => return Err(error),
             }
         }
+    }
+    /// Whether the card reports a third-party pool's usage beside its own,
+    /// as its model switch shows.
+    async fn has_third_party(&self, pool: Pool, id: &str) -> Result<bool> {
+        let cards = self.ops(pool).usage_cards().await?;
+        Ok(cards
+            .iter()
+            .find(|card| card.id == id)
+            .and_then(|card| card.usage.as_ref())
+            .is_some_and(|usage| {
+                usage.third_party_five_hour.is_some() || usage.third_party_one_week.is_some()
+            }))
     }
     /// A refresh the user asked for: one card, or the whole pool, which then
     /// stands in for its next background round. It may ask for the Keychain
