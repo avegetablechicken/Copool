@@ -979,9 +979,11 @@
       this.notice = null;
       this.lastAppliedSnapshot = null;
       this.lastSyncedConfiguration = null;
-      // Counts the tunnel's saves begun and ended: odd while one is under
-      // way (configurationRead).
+      // The tunnel's saves begun, and those under way (configurationRead).
       this.tunnelSaves = 0;
+      this.tunnelSaving = 0;
+      // The latest of them to have been held (updateTunnel).
+      this.tunnelHeld = 0;
       this.schedule = options.schedule || setTimeout;
       this.clearSchedule = options.clearSchedule || clearTimeout;
       this.successDelay = options.successDelay ?? 3000;
@@ -1006,10 +1008,10 @@
     /// tunnel ended, or while one was under way, may hold the tunnel as it
     /// was, and leaves the tunnel as it is.
     configurationRead() {
-      return this.tunnelSaves % 2 ? -1 : this.tunnelSaves;
+      return this.tunnelSaving ? -1 : this.tunnelSaves;
     }
     applyLocal(proxy, configuration, tunnel, read = this.configurationRead()) {
-      const stale = read !== this.tunnelSaves;
+      const stale = read !== this.tunnelSaves || this.tunnelSaving > 0;
       const cf = stale ? {} : configuration.cloudflared || {};
       // A field the configuration leaves out keeps what the app held, not
       // the draft, which may hold an edit not yet saved.
@@ -1073,17 +1075,19 @@
       // The draft keeps what was edited since the app last held it, until it
       // is saved: a snapshot read before then would undo the edit.
       const held = this.lastSyncedConfiguration?.cloudflared;
-      if (!stale)
+      // Stale, nothing of the tunnel is taken, the token's place either.
+      if (!stale) {
         for (const [key, value] of Object.entries(synced))
           if (!held || this.tunnelConfiguration[key] === held[key])
             this.tunnelConfiguration[key] = value;
-      this.tunnelConfiguration.hasAPIToken = !!named.hasAPIToken;
-      for (const [local, remote] of [
-        ["apiToken", "apiToken"],
-        ["accountId", "accountID"],
-        ["zoneId", "zoneID"],
-      ])
-        if (named[remote]) this.tunnelConfiguration[local] = named[remote];
+        this.tunnelConfiguration.hasAPIToken = !!named.hasAPIToken;
+        for (const [local, remote] of [
+          ["apiToken", "apiToken"],
+          ["accountId", "accountID"],
+          ["zoneId", "zoneID"],
+        ])
+          if (named[remote]) this.tunnelConfiguration[local] = named[remote];
+      }
       this.remoteStatuses = snapshot.remoteStatuses || this.remoteStatuses;
       this.remoteServers = snapshot.remoteServers || this.remoteServers;
       this.remoteDiscoveries =
@@ -1183,12 +1187,17 @@
     async updateTunnel(patch = {}) {
       Object.assign(this.tunnelConfiguration, patch);
       const value = structuredClone(this.tunnelConfiguration);
-      this.tunnelSaves++;
+      const save = ++this.tunnelSaves;
+      this.tunnelSaving++;
       try {
         await this.invoke("save_tunnel_configuration", { value });
-        this.holdTunnel(value);
+        // A save ending after a later one is not what the app holds.
+        if (save > this.tunnelHeld) {
+          this.tunnelHeld = save;
+          this.holdTunnel(value);
+        }
       } finally {
-        this.tunnelSaves++;
+        this.tunnelSaving--;
       }
       this.onUpdate();
     }

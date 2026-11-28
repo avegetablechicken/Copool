@@ -615,3 +615,51 @@ test("a configuration asked for before a tunnel save ended leaves the tunnel as 
   model.applyLocal({ running: true, port: 8787 }, moved, tunnel, after);
   assert.equal(model.tunnelConfiguration.namedHostname, "elsewhere.example.com");
 });
+
+test("a stale configuration keeps the tunnel's token saved in the Keychain", async () => {
+  const config = () => ({
+    cloudflared: {
+      enabled: true, tunnelMode: "named", useHTTP2: false, namedHostname: "tunnel.example.com",
+      accountId: "acct", zoneId: "zone", hasAPIToken: true,
+    },
+  });
+  const status = { running: true, port: 8787 };
+  const tunnel = { installed: true, running: false };
+  const model = new Proxy(async () => {});
+  model.applyLocal(status, config(), tunnel);
+  assert.equal(model.canStartTunnel, true);
+  const read = model.configurationRead();
+  await model.updateTunnel({ useHTTP2: true });
+  model.applyLocal(status, config(), tunnel, read);
+  assert.equal(model.tunnelConfiguration.hasAPIToken, true);
+  assert.equal(model.canStartTunnel, true);
+});
+
+test("tunnel saves under way together leave the tunnel to the last", async () => {
+  const config = (host) => ({
+    cloudflared: { enabled: true, tunnelMode: "named", namedHostname: host },
+  });
+  const status = { running: true, port: 8787 };
+  const tunnel = { installed: true, running: false };
+  const requests = [];
+  const model = new Proxy(
+    (command, args) => new Promise((resolve) => requests.push({ args, resolve })),
+  );
+  model.applyLocal(status, config("old.example.com"), tunnel);
+  // A hostname changed, then changed back, both saves under way.
+  const first = model.updateTunnel({ namedHostname: "intermediate.example.com" });
+  const undo = model.updateTunnel({ namedHostname: "old.example.com" });
+  model.applyLocal(status, config("intermediate.example.com"), tunnel, model.configurationRead());
+  assert.equal(model.tunnelConfiguration.namedHostname, "old.example.com");
+  // The later save ends first; the earlier one is not held after it.
+  requests[1].resolve();
+  await undo;
+  requests[0].resolve();
+  await first;
+  assert.equal(model.lastSyncedConfiguration.cloudflared.namedHostname, "old.example.com");
+  model.applyLocal(status, config("old.example.com"), tunnel, model.configurationRead());
+  const next = model.updateTunnel({ useHTTP2: true });
+  requests[2].resolve();
+  await next;
+  assert.equal(requests[2].args.value.namedHostname, "old.example.com");
+});
